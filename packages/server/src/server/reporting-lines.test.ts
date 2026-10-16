@@ -256,3 +256,52 @@ describe("reporting lines", () => {
     ).resolves.toMatchObject({ allowed: false });
   });
 });
+
+it("FU-164 refuses new work from the parent until the done hold is cleared", async () => {
+  const held = agent("work-held", "Completed worker", {
+    "fulcra.reports-to": lead.id,
+    "fulcra.hold": "done",
+  });
+  const store: LineStore = {
+    get: async (id) => (id === held.id ? held : (byId.get(id) ?? null)),
+    list: async () => [...byId.values(), held],
+  };
+  expect(send(lead, held)).toMatchObject({
+    allowed: false,
+    reason: expect.stringContaining("Clear fulcra.hold"),
+  });
+  await expect(checkPromptLine(store, lead.id, held.id)).rejects.toThrow("Clear fulcra.hold");
+  expect(
+    await decideSend(store, { agentId: lead.id, serverId: MINI }, held.id, MINI),
+  ).toMatchObject({ allowed: false });
+  expect(await checkPromptLine(store, undefined, held.id)).toBe(held.id);
+  held.labels!["fulcra.hold"] = "";
+  expect(await checkPromptLine(store, lead.id, held.id)).toBe(held.id);
+});
+
+it("FU-164 applies the done hold to a remote parent and a role parent", () => {
+  const held = agent("work-held", "Completed worker", {
+    "fulcra.reports-to": `lead-remote@${BOOK}`,
+    "fulcra.hold": "done",
+  });
+  expect(
+    checkReportingLine({
+      sender: { agentId: "lead-remote", serverId: BOOK },
+      senderAgent: null,
+      target: held,
+      senderParent: null,
+      localServerId: MINI,
+    }),
+  ).toMatchObject({ allowed: false });
+  held.labels!["fulcra.reports-to"] = "role:main-assistant";
+  expect(
+    checkReportingLine({
+      sender: { agentId: "holder" },
+      senderAgent: agent("holder", "Main"),
+      target: held,
+      senderParent: null,
+      localServerId: MINI,
+      mainAssistantId: "holder",
+    }),
+  ).toMatchObject({ allowed: false });
+});

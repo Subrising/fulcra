@@ -6,6 +6,8 @@ import { expect, test, vi } from "vitest";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import { AgentManager } from "./agent-manager.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ensureAgentLoaded } from "./agent-loading.js";
 import { startAgentRun } from "./agent-prompt.js";
 import { AgentStorage } from "./agent-storage.js";
@@ -236,6 +238,9 @@ test("FU-153 websocket archive requires confirmation and resume restores one ori
     const archived = (await context.daemon.agentStorage.get(agent.id))!;
     expect(archived.archivedAt).toBeTruthy();
     expect(archived.persistence).toBeTruthy();
+    await expect(client.resumeAgent(archived.persistence!)).rejects.toThrow("Confirm in the app");
+    await expect(client.refreshAgent(agent.id)).rejects.toThrow("Confirm in the app");
+    await client.refreshAgent(agent.id, undefined, { confirmed: true });
     const [resumed, second] = await Promise.all([
       client.resumeAgent(archived.persistence!),
       client.resumeAgent(archived.persistence!),
@@ -254,7 +259,40 @@ test("FU-153 websocket archive requires confirmation and resume restores one ori
     await client.archiveAgent(agent.id, { confirmed: true });
     const { execFile } = await import("node:child_process");
     const { promisify } = await import("node:util");
-    const result = await promisify(execFile)(
+    await expect(
+      promisify(execFile)(
+        process.execPath,
+        [
+          "--conditions=source",
+          "--import",
+          "tsx",
+          fileURLToPath(new URL("../../../../cli/src/index.ts", import.meta.url)),
+          "agent",
+          "restore",
+          agent.id,
+          "--host",
+          `127.0.0.1:${context.port}`,
+          "--json",
+        ],
+        {
+          env: {
+            ...process.env,
+            PASEO_AGENT_ID: "",
+            PASEO_AGENT_CALLER_WITNESS: "",
+            PASEO_HOME: context.paseoHome,
+            FULCRA_COMMAND_CENTRE: "0",
+          },
+        },
+      ),
+    ).rejects.toThrow("Confirm in the app");
+    expect((await context.daemon.agentStorage.get(agent.id))?.archivedAt).toBeTruthy();
+    await client.refreshAgent(agent.id, undefined, { confirmed: true });
+    expect((await context.daemon.agentStorage.get(agent.id))?.archivedAt).toBeNull();
+    const worker = await client.createAgent({
+      config: { provider: "codex", cwd: context.paseoHome },
+    });
+    await client.archiveAgent(worker.id);
+    const restored = await promisify(execFile)(
       process.execPath,
       [
         "--conditions=source",
@@ -263,15 +301,23 @@ test("FU-153 websocket archive requires confirmation and resume restores one ori
         fileURLToPath(new URL("../../../../cli/src/index.ts", import.meta.url)),
         "agent",
         "restore",
-        agent.id,
+        worker.id,
         "--host",
         `127.0.0.1:${context.port}`,
         "--json",
       ],
-      { env: { ...process.env, PASEO_HOME: context.paseoHome, FULCRA_COMMAND_CENTRE: "0" } },
+      {
+        env: {
+          ...process.env,
+          PASEO_AGENT_ID: "",
+          PASEO_AGENT_CALLER_WITNESS: "",
+          PASEO_HOME: context.paseoHome,
+          FULCRA_COMMAND_CENTRE: "0",
+        },
+      },
     );
-    expect(JSON.parse(result.stdout)).toMatchObject({ agentId: agent.id, status: "restored" });
-    expect((await context.daemon.agentStorage.get(agent.id))?.archivedAt).toBeNull();
+    expect(JSON.parse(restored.stdout)).toMatchObject({ agentId: worker.id, status: "restored" });
+    expect((await context.daemon.agentStorage.get(worker.id))?.archivedAt).toBeNull();
   } finally {
     await client.close();
     await context.close();
@@ -350,6 +396,14 @@ test("agent sockets cannot relabel a lead to bypass archive confirmation", async
       await user.archiveAgent(lead.id, { confirmed: true });
       const archived = (await context.daemon.agentStorage.get(lead.id))!;
       expect(archived.archivedAt).toEqual(expect.any(String));
+      await expect(worker.refreshAgent(lead.id)).rejects.toThrow("Confirm in the app");
+      await expect(worker.refreshAgent(lead.id, undefined, { confirmed: true })).rejects.toThrow(
+        "confirmation from the app",
+      );
+      await expect(worker.resumeAgent(archived.persistence!)).rejects.toThrow("Confirm in the app");
+      await expect(
+        worker.resumeAgent(archived.persistence!, undefined, { confirmed: true }),
+      ).rejects.toThrow("confirmation from the app");
       await expect(
         manager.trustedPlugins.agentInput(() =>
           manager.updateAgentMetadata(lead.id, { labels: { "fulcra.role": "implementation" } }),
@@ -407,6 +461,8 @@ test.each([
       if (kind === "active") await context.daemon.agentManager.closeAgent(agent.id);
       else await user.archiveAgent(agent.id, { confirmed: kind === "lead" });
       const original = (await context.daemon.agentStorage.get(agent.id))!;
+      const restore = () =>
+        user.resumeAgent(original.persistence!, undefined, { confirmed: kind === "lead" });
       expect(original.persistence).toEqual(expect.objectContaining({ provider: "codex" }));
       const resume =
         failure === "provider"
@@ -414,9 +470,7 @@ test.each([
           : vi.spyOn(context.daemon.agentManager, "hydrateTimelineFromProvider");
       resume.mockRejectedValue(new Error("Fixture load failed"));
       try {
-        await expect(user.resumeAgent(original.persistence!)).rejects.toThrow(
-          "Fixture load failed",
-        );
+        await expect(restore()).rejects.toThrow("Fixture load failed");
         expect((await context.daemon.agentStorage.get(agent.id))?.archivedAt).toBe(
           original.archivedAt,
         );
@@ -424,7 +478,7 @@ test.each([
       } finally {
         resume.mockRestore();
       }
-      const retried = await user.resumeAgent(original.persistence!);
+      const retried = await restore();
       expect(retried.id).toBe(agent.id);
       expect((await context.daemon.agentStorage.get(agent.id))?.archivedAt ?? null).toBeNull();
     } finally {
@@ -433,3 +487,46 @@ test.each([
     }
   },
 );
+
+test("resume injects a live MCP connection after stored runtime credentials are removed", async () => {
+  const { createTestPaseoDaemon } = await import("../test-utils/paseo-daemon.js");
+  const clients = createTestAgentClients({ supportsMcpServers: true });
+  const provider = clients.claude!;
+  const resume = provider.resumeSession.bind(provider);
+  let connected = false;
+  provider.resumeSession = async (handle, overrides, context, options) => {
+    const server = overrides?.mcpServers?.paseo;
+    if (!server || server.type !== "http") throw new Error("Runtime MCP connection missing");
+    const mcp = new Client({ name: "resume-fixture", version: "1.0.0" });
+    try {
+      await mcp.connect(
+        new StreamableHTTPClientTransport(new URL(server.url), {
+          requestInit: { headers: server.headers },
+        }),
+      );
+      const tools = await mcp.listTools();
+      connected = tools.tools.length > 0;
+    } finally {
+      await mcp.close();
+    }
+    return resume(handle, overrides, context, options);
+  };
+  const daemon = await createTestPaseoDaemon({ agentClients: clients });
+  const { agentManager, agentStorage } = daemon.daemon;
+  try {
+    const agent = await agentManager.createAgent(
+      { provider: "claude", cwd: daemon.paseoHome },
+      undefined,
+      { workspaceId: undefined },
+    );
+    await agentManager.closeAgent(agent.id);
+    await agentManager.flush();
+    const record = await agentStorage.get(agent.id);
+    expect(record?.config?.mcpServers?.paseo).toBeUndefined();
+    expect(record?.persistence?.metadata?.mcpServers).toBeUndefined();
+    await ensureAgentLoaded(agent.id, { agentManager, agentStorage, logger: createTestLogger() });
+    expect(connected).toBe(true);
+  } finally {
+    await daemon.close();
+  }
+});

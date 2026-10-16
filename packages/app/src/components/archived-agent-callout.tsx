@@ -7,6 +7,8 @@ import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-
 import { KeyboardTranslateView } from "@/keyboard/shift";
 import { Button } from "@/components/ui/button";
 import type { Theme } from "@/styles/theme";
+import { touchTargetStyles } from "@/hooks/use-touch-targets";
+import { confirmProtectedRestore } from "@/utils/confirm-protected-archive";
 import { toErrorMessage } from "@/utils/error-messages";
 
 interface ArchivedAgentCalloutProps {
@@ -26,7 +28,12 @@ export function ArchivedAgentCallout({ serverId, agentId }: ArchivedAgentCallout
     setIsUnarchiving(true);
     setUnarchiveError(null);
     try {
-      await client.refreshAgent(agentId);
+      const confirmed = await confirmProtectedRestore({
+        client,
+        agentId,
+        supported: client.getLastServerInfoMessage()?.features?.agentArchiveSafety === true,
+      });
+      await client.refreshAgent(agentId, undefined, { confirmed });
     } catch (error) {
       setUnarchiveError(toErrorMessage(error));
       setIsUnarchiving(false);
@@ -42,6 +49,7 @@ export function ArchivedAgentCallout({ serverId, agentId }: ArchivedAgentCallout
               <Text style={styles.calloutText}>{t("agentPanel.archived.callout")}</Text>
               <Button
                 size="sm"
+                style={touchTargetStyles.icon}
                 variant="secondary"
                 onPress={handleUnarchive}
                 disabled={!isConnected || isUnarchiving}

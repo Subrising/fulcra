@@ -289,10 +289,13 @@ it.each([false, true])(
       if (reconnect) act(() => connectionChanged({ status: "connected" }));
       // No rerender or effect cleanup occurred. The production listener owns invalidation.
       await act(async () => completePreparation([]));
-      expect(state.registry.installCatalog).not.toHaveBeenCalled();
-      expect(policy).toBe("unknown");
-      expect(client.getPagedPluginCatalog).toHaveBeenCalledOnce();
-      if (reconnect) {
+      if (!reconnect) {
+        expect(state.registry.installCatalog).not.toHaveBeenCalled();
+        expect(policy).toBe("unknown");
+        expect(client.getPagedPluginCatalog).toHaveBeenCalledOnce();
+      } else {
+        // The raw reconnect refreshes the catalog without React rendering or a new snapshot.
+        expect(client.getPagedPluginCatalog).toHaveBeenCalledTimes(2);
         await act(async () => snapshot());
         expect(client.getPagedPluginCatalog).toHaveBeenCalledTimes(2);
         expect(state.registry.installCatalog).toHaveBeenCalledExactlyOnceWith("same-host", [], {

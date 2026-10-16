@@ -22,7 +22,13 @@ const status = z.union([
   // FU-112: the token was revoked or is invalid. `reason` is the CLI's own one-line text; there is no reset time.
   z.object({ state: z.literal("revoked"), reason: z.string().max(200) }).strict(),
   z.object({ state: z.literal("signing-in") }).strict(),
-  z.object({ state: z.literal("limited"), until: z.string().max(40) }).strict(),
+  z
+    .object({
+      state: z.literal("limited"),
+      until: z.string().max(40),
+      source: z.string().max(128).optional(),
+    })
+    .strict(),
 ]);
 const account = z
   .object({

@@ -15,6 +15,7 @@ import { AgentManager } from "./agent-manager.js";
 import { AgentStorage } from "./agent-storage.js";
 import {
   startAgentRun,
+  SteerUnavailableError,
   type AgentRunController,
   formatSystemNotificationPrompt,
   isSystemInjectedEnvelope,
@@ -1040,4 +1041,32 @@ test("the dispatcher switch restores native finish delivery after a worker repor
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+test("idle-only prompts refuse a busy receiver without steering or replacing its turn", async () => {
+  const stream = vi.fn();
+  const replace = vi.fn();
+  const steer = vi.fn();
+  const controller = {
+    withInput: async (
+      _id: string,
+      _kind: string,
+      _message: unknown,
+      run: (handle: TrustedOperationHandle) => Promise<unknown>,
+    ) => run(Object.freeze({}) as TrustedOperationHandle),
+    getAgent: () => ({ lifecycle: "running" }),
+    tryRunOutOfBand: () => false,
+    hasInFlightRun: () => true,
+    streamAgent: stream,
+    replaceAgentRun: replace,
+    steerOrReplaceActiveTurn: steer,
+  } as unknown as AgentRunController;
+  await expect(
+    startAgentRun(controller, "lead", "check READY work", createTestLogger(), {
+      replaceRunning: false,
+    }),
+  ).rejects.toBeInstanceOf(SteerUnavailableError);
+  expect(stream).not.toHaveBeenCalled();
+  expect(replace).not.toHaveBeenCalled();
+  expect(steer).not.toHaveBeenCalled();
 });

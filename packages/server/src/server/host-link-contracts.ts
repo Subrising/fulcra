@@ -49,6 +49,7 @@ export const HostLinkConfigSchema = z
             ...lifetime,
             machine: z.enum(["mac", "pc"]),
             reporters: z.array(name).max(256),
+            shareLimits: z.boolean().optional(),
           })
           .strict(),
       )
@@ -62,7 +63,7 @@ export const HostLinkConfigSchema = z
             token: credential("hlink1"),
             ...lifetime,
             leads: z.array(name).max(256),
-            operations: z.array(z.enum(["spawn", "notice"])).max(2),
+            operations: z.array(z.enum(["spawn", "notice", "limits"])).max(3),
             workloads: z.array(z.enum(["standard", "heavy", "gpu"])).max(3),
             workspaces: z.record(name, z.string().min(1).max(4096)),
             profiles: z.record(name, HostLinkProfileSchema),
@@ -92,6 +93,15 @@ export const HostLinkSpawnSchema = z
     workload: z.enum(["standard", "heavy", "gpu"]),
     workspace: name,
     profile: name,
+    notifyOnFinish: z.boolean().optional(),
+    expected: z
+      .object({
+        provider: z.string().min(1),
+        model: z.string().min(1).optional(),
+        modeId: z.string().min(1).optional(),
+      })
+      .strict()
+      .optional(),
     title: z.string().min(1).max(200),
     prompt: z.string().min(1).max(32000),
   })
@@ -110,7 +120,26 @@ const origin = {
   sourceProvider: z.string().min(1).max(256),
   sourceMode: z.string().min(1).max(256),
 };
+export const HostAccountLimitSchema = z
+  .object({
+    accountId: z.string().uuid(),
+    limitKind: z.enum(["session", "weekly"]),
+    resetAt: z.string().datetime(),
+    observedAt: z.string().datetime(),
+  })
+  .strict();
+export type HostAccountLimit = z.infer<typeof HostAccountLimitSchema>;
+export const RemoteAccountLimitSchema = HostAccountLimitSchema.extend({ source: name }).strict();
+export const RemoteAccountLimitsSchema = z
+  .object({ v: z.literal(1), observations: z.array(RemoteAccountLimitSchema).max(2048) })
+  .strict();
+export const HostAccountLimitWireSchema = HostAccountLimitSchema.extend({
+  kind: z.literal("account_limit"),
+  ...identity,
+  destination: name,
+}).strict();
 export const HostLinkWireSchema = z.discriminatedUnion("kind", [
+  HostAccountLimitWireSchema,
   HostLinkSpawnSchema.extend(origin).strict(),
   HostLinkNoticeSchema.extend({
     ...origin,
@@ -130,6 +159,7 @@ export const HostLinkWorkerRequestSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
   z.object({ kind: z.literal("inspect"), agentId: name }).strict(),
+  z.object({ kind: z.literal("notices"), agentId: name }).strict(),
 ]);
 export type HostLinkWorkerRequest = z.infer<typeof HostLinkWorkerRequestSchema>;
 export const HostLinkReceiptSchema = z
@@ -143,6 +173,27 @@ export const HostLinkReceiptSchema = z
   })
   .strict();
 export type HostLinkReceipt = z.infer<typeof HostLinkReceiptSchema>;
+export const HostLinkWorkerNoticeSchema = z
+  .object({
+    id: name,
+    kind: z.enum(["finished", "failed", "permission"]),
+    text: z.string().min(1).max(4000),
+  })
+  .strict();
+export type HostLinkWorkerNotice = z.infer<typeof HostLinkWorkerNoticeSchema>;
+export const HostLinkWorkerNoticesSchema = z
+  .object({
+    serverId: name,
+    agentId: name,
+    complete: z.boolean(),
+    notices: z.array(HostLinkWorkerNoticeSchema).max(128),
+  })
+  .strict();
+const receivedNotice = HostLinkWorkerNoticeSchema.extend({
+  state: z.enum(["queued", "sending", "delivered", "uncertain", "exhausted", "suppressed"]),
+  attempts: z.number().int().min(0).max(8),
+  nextAt: z.number().finite().nonnegative(),
+}).strict();
 export const HostLinkJournalSchema = z.record(
   z.string(),
   z
@@ -155,6 +206,31 @@ export const HostLinkJournalSchema = z.record(
       profile: HostLinkProfileSchema.nullable(),
       cwd: z.string().nullable(),
       receipt: HostLinkReceiptSchema,
+      wire: HostLinkWireSchema.optional(),
+      sourceSessionId: z.string().nullable().optional(),
+      sourceGrant: z.string().optional(),
+      noticeGrant: z.string().optional(),
+      notifyOnFinish: z.boolean().optional(),
+      started: z.boolean().optional(),
+      complete: z.boolean().optional(),
+      notices: z
+        .array(
+          HostLinkWorkerNoticeSchema.extend({
+            permissionRequestId: z.string().optional(),
+            notBefore: z.number().finite().nonnegative().optional(),
+            resolved: z.boolean().optional(),
+          }).strict(),
+        )
+        .max(128)
+        .optional(),
+      receivedNotices: z.array(receivedNotice).max(128).optional(),
+      watch: z
+        .object({
+          failures: z.number().int().min(0).max(8),
+          nextAt: z.number().finite().nonnegative(),
+        })
+        .strict()
+        .optional(),
     })
     .strict(),
 );

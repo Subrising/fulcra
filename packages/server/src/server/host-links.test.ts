@@ -1,6 +1,8 @@
 import express from "express";
 import { mkdtemp, rm, chmod } from "node:fs/promises";
 import {
+  watch,
+  utimesSync,
   realpathSync,
   fsyncSync,
   fstatSync,
@@ -13,13 +15,29 @@ import path from "node:path";
 import type { Server } from "node:http";
 import { afterEach, expect, test, vi } from "vitest";
 import {
+  HostLinkError,
   HostLinks,
   type HostLinkChat,
   type HostLinkCreate,
   type HostLinkRoleNotice,
+  type HostLinkFinishDelivery,
 } from "./host-links.js";
+import { startHostLimitSharing } from "./host-limit-sharing.js";
 import { mountHostLinkRoutes } from "./host-link-routes.js";
 import { HostLinkReceiptSchema, type HostLinkConfig } from "./host-link-contracts.js";
+import {
+  accountStatus,
+  addAccount,
+  assign,
+  choose,
+  markAccountLimited,
+  publicView,
+  readAccounts,
+  rotate,
+  setAccount,
+  update,
+} from "../../../../control/orca-organization/server/accounts.mjs";
+import { createPoolUsage } from "../../../../control/orca-organization/server/pool-usage.js";
 import { writePrivateFileAtomicSync } from "./private-files.js";
 import {
   isAgentMcpRequestAuthorized,
@@ -81,6 +99,7 @@ async function fixture() {
   const created: HostLinkCreate[] = [];
   const notices: string[] = [];
   const prompts: string[] = [];
+  const finishNotices: Array<{ agentId: string; messageId: string; text: string }> = [];
   const chats = new Map<string, HostLinkChat>([
     [
       "lead",
@@ -97,13 +116,30 @@ async function fixture() {
   ]);
   const state = {
     holder: "main",
+    linkDown: false,
+    noticeReads: 0,
+    deliveryDown: false,
+    failAfterHandoff: false,
+    beforeFinish: async () => {},
     protected: true,
+    now: Date.parse("2026-10-15T12:00:00Z"),
     failCreate: false,
     beforeNotice: () => {},
     afterCreate: () => {},
   };
   const deps = {
     home: path.join(root, "target"),
+    now: () => state.now,
+    finish: async (input: HostLinkFinishDelivery): Promise<void | "suppressed"> => {
+      input.check();
+      if (state.deliveryDown) throw new Error("Local delivery is unavailable.");
+      await state.beforeFinish();
+      if (input.prepare && !(await input.prepare())) return "suppressed";
+      input.check();
+      input.beforeHandoff();
+      finishNotices.push({ agentId: input.agentId, messageId: input.messageId, text: input.text });
+      if (state.failAfterHandoff) throw new Error("Provider acknowledgement lost.");
+    },
     serverId: "target",
     protected: () => state.protected,
     chat: async (id: string) => chats.get(id) ?? null,
@@ -147,8 +183,16 @@ async function fixture() {
         throw new Error("Worker changed.");
     },
   };
-  const target = new HostLinks(deps);
+  let target = new HostLinks(deps);
   const targetApp = express();
+  targetApp.use((req, res, next) => {
+    if (req.path === "/api/host-links/worker") state.noticeReads++;
+    if (state.linkDown && req.path === "/api/host-links/worker") {
+      res.status(503).json({ error: "Link offline" });
+      return;
+    }
+    next();
+  });
   mountHostLinkRoutes(targetApp, () => target);
   const targetListener = await listen(targetApp);
   const targetConfig = emptyConfig();
@@ -188,12 +232,8 @@ async function fixture() {
   });
   sourceConfig.routes = { standard: "link", gpu: "link", heavy: "link", mainAssistant: "link" };
   const sourceHome = path.join(root, "source");
-  const source = new HostLinks({
-    ...deps,
-    home: sourceHome,
-    serverId: "source",
-    mainAssistant: () => null,
-  });
+  const sourceDeps = { ...deps, home: sourceHome, serverId: "source", mainAssistant: () => null };
+  let source = new HostLinks(sourceDeps);
   const sourceApp = express();
   mountHostLinkRoutes(sourceApp, () => source);
   const sourceListener = await listen(sourceApp);
@@ -231,6 +271,18 @@ async function fixture() {
     deps,
     source,
     target,
+    finishNotices,
+    sourceHome,
+    restartSource: () => {
+      source.stopNotifications();
+      source = new HostLinks(sourceDeps);
+      return source;
+    },
+    restartTarget: () => {
+      target.stopNotifications();
+      target = new HostLinks(deps);
+      return target;
+    },
     targetConfig,
     sourceConfig,
     sourceListener,
@@ -584,4 +636,1025 @@ test("host-link credentials cannot authenticate to general HTTP, WebSocket, or M
     headers: { authorization: `Bearer ${linkToken}` },
   });
   expect(response.status).toBe(401);
+});
+
+test("FU-170 bound native creation selects the requested host and retains one HTTP worker", async () => {
+  const f = await fixture();
+  // Explicit host choice does not depend on workload routes.
+  f.sourceConfig.routes = {};
+  f.save();
+  const first = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    expected: { provider: "codex", model: "gpt-test", modeId: "auto" },
+  });
+  expect(first.state).toBe("created");
+  expect(f.created).toHaveLength(1);
+  expect(f.created[0]?.parent).toBe("lead@source");
+  const second = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    expected: { provider: "codex", model: "gpt-test", modeId: "auto" },
+  });
+  expect(second).toEqual(first);
+  expect(f.created).toHaveLength(1);
+});
+
+test.each([
+  ["unknown-host", "The requested host has no unique host link."],
+  ["unknown-caller", "This chat has no host-link spawn grant."],
+  ["missing-link", "This chat cannot use the requested host link."],
+  ["revoked", "The host-link grant is inactive."],
+  ["expired", "The host-link grant is inactive."],
+  ["ambiguous", "The requested host has no unique host link."],
+  ["no-spawn", "This chat cannot create remote workers."],
+  ["wrong-profile", "The destination refused the host-link request."],
+  ["wrong-model", "The destination refused the host-link request."],
+  ["wrong-mode", "The destination refused the host-link request."],
+])("FU-170 native remote creation refuses %s without provider input", async (kind, message) => {
+  const f = await fixture();
+  if (kind === "missing-link") f.sourceConfig.chats[0]!.links = [];
+  if (kind === "revoked") f.sourceConfig.chats[0]!.revoked = true;
+  if (kind === "expired") f.sourceConfig.chats[0]!.expiresAt = 1;
+  if (kind === "ambiguous")
+    f.sourceConfig.outgoing.push({
+      ...f.sourceConfig.outgoing[0]!,
+      id: "other",
+      token: `hlink1.${"D".repeat(43)}`,
+    });
+  if (kind === "no-spawn") f.sourceConfig.chats[0]!.operations = ["notice"];
+  f.save();
+  const result = f.source.spawnForAgent(
+    kind === "unknown-caller" ? "other" : "lead",
+    kind === "unknown-host" ? "missing" : "target",
+    {
+      ...spawn,
+      expected: {
+        provider: kind === "wrong-profile" ? "claude" : "codex",
+        model: kind === "wrong-model" ? "other" : "gpt-test",
+        modeId: kind === "wrong-mode" ? "full-access" : "auto",
+      },
+    },
+  );
+  await expect(result).rejects.toBeInstanceOf(HostLinkError);
+  await expect(result).rejects.toMatchObject({ code: "refused", message });
+  expect(f.created).toHaveLength(0);
+});
+
+function retainedReturn(fixtureHome: string) {
+  return Object.values(
+    JSON.parse(readFileSync(path.join(fixtureHome, "host-links-outbox.json"), "utf8")) as Record<
+      string,
+      {
+        watch?: { failures: number; nextAt: number };
+        receivedNotices?: Array<{ id: string; state: string; text: string }>;
+      }
+    >,
+  )[0]!;
+}
+
+test.each(["finished", "failed"] as const)(
+  "FU-170 returns one durable %s notice to the calling lead",
+  async (kind) => {
+    const f = await fixture();
+    const receipt = await f.source.spawnForAgent("lead", "target", {
+      ...spawn,
+      notifyOnFinish: true,
+    });
+    f.target.recordWorkerStarted(receipt.agentId!);
+    f.target.recordWorkerNotice(
+      receipt.agentId!,
+      kind,
+      "turn-1",
+      kind === "failed" ? "Fixture tool failed" : "Fixture task completed",
+    );
+    f.target.recordWorkerNotice(receipt.agentId!, kind, "turn-1", "Duplicate event");
+    await f.source.syncNotifications();
+    await f.source.flushNotificationDeliveries();
+    expect(f.finishNotices).toHaveLength(1);
+    expect(f.finishNotices[0]).toMatchObject({
+      agentId: "lead",
+      text: expect.stringContaining(kind),
+    });
+    expect(retainedReturn(f.sourceHome).receivedNotices?.[0]?.state).toBe("delivered");
+    const source = f.restartSource();
+    f.restartTarget();
+    f.state.now += 10000;
+    await source.syncNotifications();
+    await source.flushNotificationDeliveries();
+    expect(f.finishNotices).toHaveLength(1);
+  },
+);
+
+test("FU-170 permission checkpoints do not consume the final notice", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(
+    receipt.agentId!,
+    "permission",
+    "permission-1",
+    "Approve fixture permission-1",
+  );
+  f.state.now += 2001;
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  expect(f.finishNotices[0]?.text).toContain("permission-1");
+  f.target.recordWorkerNotice(
+    receipt.agentId!,
+    "permission",
+    "permission-1",
+    "Approve fixture permission-1",
+  );
+  f.state.now += 10000;
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Fixture task completed");
+  f.state.now += 10000;
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(2);
+  expect(f.finishNotices[1]?.text).toContain("finished");
+  expect(f.finishNotices[0]?.messageId).not.toBe(f.finishNotices[1]?.messageId);
+});
+
+test("FU-170 retains a notice while the link is down and resumes after restart", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Retained result");
+  f.state.linkDown = true;
+  await f.source.syncNotifications();
+  expect(f.finishNotices).toHaveLength(0);
+  expect(retainedReturn(f.sourceHome).watch?.failures).toBe(1);
+  f.restartTarget();
+  const source = f.restartSource();
+  f.state.linkDown = false;
+  f.state.now += 60001;
+  await source.syncNotifications();
+  await source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  expect(f.finishNotices[0]?.text).toContain("Retained result");
+  expect(retainedReturn(f.sourceHome).watch?.failures).toBe(0);
+});
+
+test("FU-170 retries a home notice that never reached the provider across restart", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Home queue result");
+  f.state.deliveryDown = true;
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(retainedReturn(f.sourceHome).receivedNotices?.[0]?.state).toBe("queued");
+  expect(f.finishNotices).toHaveLength(0);
+  const source = f.restartSource();
+  f.state.deliveryDown = false;
+  f.state.now += 60001;
+  await source.syncNotifications();
+  await source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  expect(retainedReturn(f.sourceHome).receivedNotices?.[0]?.state).toBe("delivered");
+});
+
+test("FU-170 retains an uncertain native handoff without replay after restart", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Uncertain receipt result");
+  f.state.failAfterHandoff = true;
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  expect(retainedReturn(f.sourceHome).receivedNotices?.[0]).toMatchObject({
+    state: "uncertain",
+    text: "Uncertain receipt result",
+  });
+  const source = f.restartSource();
+  f.state.failAfterHandoff = false;
+  f.state.now += 60001;
+  await source.syncNotifications();
+  await source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+});
+
+test("FU-170 keeps a bounded retry count across source restarts", async () => {
+  const f = await fixture();
+  const request = { ...spawn, notifyOnFinish: true };
+  const receipt = await f.source.spawnForAgent("lead", "target", request);
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Retry budget result");
+  f.state.linkDown = true;
+  let source = f.source;
+  for (let attempt = 1; attempt <= 8; attempt++) {
+    await source.syncNotifications();
+    expect(retainedReturn(f.sourceHome).watch?.failures).toBe(attempt);
+    source = f.restartSource();
+    f.state.now += 60001;
+  }
+  f.state.linkDown = false;
+  await source.syncNotifications();
+  expect(retainedReturn(f.sourceHome).watch?.failures).toBe(8);
+  expect(f.finishNotices).toHaveLength(0);
+  expect(f.created).toHaveLength(1);
+  await source.spawnForAgent("lead", "target", request);
+  await source.syncNotifications();
+  await source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  expect(f.created).toHaveLength(1);
+});
+
+test.each([
+  "grant",
+  "lead-session",
+  "grant-links",
+  "grant-operations",
+  "link-revoked",
+  "incoming-revoked",
+])("FU-170 refuses changed %s before home provider input", async (kind) => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Retained restricted result");
+  if (kind === "grant") {
+    f.sourceConfig.chats[0]!.revoked = true;
+    f.save();
+  } else if (kind === "grant-links") {
+    f.sourceConfig.chats[0]!.links = [];
+    f.save();
+  } else if (kind === "grant-operations") {
+    f.sourceConfig.chats[0]!.operations = ["notice"];
+    f.save();
+  } else if (kind === "link-revoked") {
+    f.sourceConfig.outgoing[0]!.revoked = true;
+    f.save();
+  } else if (kind === "incoming-revoked") {
+    f.targetConfig.incoming[0]!.revoked = true;
+    f.save();
+  } else f.chats.get("lead")!.sessionId = "replacement-session";
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(0);
+});
+
+test.each(["before-read", "before-handoff"])(
+  "FU-170 delivers after chat and link renewal %s",
+  async (when) => {
+    const f = await fixture();
+    const receipt = await f.source.spawnForAgent("lead", "target", {
+      ...spawn,
+      notifyOnFinish: true,
+    });
+    f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Renewed result");
+    const renew = async () => {
+      f.sourceConfig.chats[0]!.token = `hchat1.${"Z".repeat(43)}`;
+      f.sourceConfig.chats[0]!.expiresAt += 100000;
+      f.sourceConfig.outgoing[0]!.token = `hlink1.${"Y".repeat(43)}`;
+      f.sourceConfig.outgoing[0]!.expiresAt += 100000;
+      f.targetConfig.incoming[0]!.token = f.sourceConfig.outgoing[0]!.token;
+      f.targetConfig.incoming[0]!.expiresAt += 100000;
+      f.save();
+    };
+    if (when === "before-read") await renew();
+    else f.state.beforeFinish = renew;
+    const source = f.restartSource();
+    await source.syncNotifications();
+    await source.flushNotificationDeliveries();
+    expect(f.finishNotices).toHaveLength(1);
+    expect(f.finishNotices[0]?.text).toContain("Renewed result");
+    expect(retainedReturn(f.sourceHome).receivedNotices?.[0]?.state).toBe("delivered");
+  },
+);
+
+test.each(["before-read", "before-handoff"])(
+  "FU-170 delivers after limit sharing changes %s",
+  async (when) => {
+    const f = await fixture();
+    const receipt = await f.source.spawnForAgent("lead", "target", {
+      ...spawn,
+      notifyOnFinish: true,
+    });
+    f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Shared limit result");
+    const renew = async () => {
+      f.sourceConfig.outgoing[0]!.shareLimits = true;
+      f.targetConfig.incoming[0]!.operations.push("limits");
+      f.save();
+    };
+    if (when === "before-read") await renew();
+    else f.state.beforeFinish = renew;
+    const source = f.restartSource();
+    await source.syncNotifications();
+    await source.flushNotificationDeliveries();
+    expect(f.finishNotices).toHaveLength(1);
+    expect(f.finishNotices[0]?.text).toContain("Shared limit result");
+    expect(retainedReturn(f.sourceHome).receivedNotices?.[0]?.state).toBe("delivered");
+  },
+);
+
+test("FU-170 refuses revocation at the return notice handoff", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Revoked result");
+  f.state.beforeFinish = async () => {
+    f.sourceConfig.chats[0]!.revoked = true;
+    f.save();
+  };
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(0);
+  expect(retainedReturn(f.sourceHome).receivedNotices?.[0]?.state).toBe("queued");
+});
+
+test("FU-170 keeps a finish that arrives before the creation reply", async () => {
+  const f = await fixture();
+  f.state.afterCreate = () =>
+    f.target.recordWorkerNotice(f.created[0]!.agentId, "finished", "turn-fast", "Fast result");
+  await f.source.spawnForAgent("lead", "target", { ...spawn, notifyOnFinish: true });
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  expect(f.finishNotices[0]?.text).toContain("Fast result");
+});
+
+test("FU-170 reconciles a lost creation reply before returning the retained finish", async () => {
+  const f = await fixture();
+  f.state.afterCreate = () => f.targetListener.server.closeAllConnections();
+  await expect(
+    f.source.spawnForAgent("lead", "target", { ...spawn, notifyOnFinish: true }),
+  ).rejects.toThrow("uncertain");
+  expect(f.created).toHaveLength(1);
+  f.target.recordWorkerNotice(
+    f.created[0]!.agentId,
+    "finished",
+    "turn-1",
+    "Result after response loss",
+  );
+  f.state.afterCreate = () => {};
+  const source = f.restartSource();
+  await source.syncNotifications();
+  await source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  expect(f.created).toHaveLength(1);
+});
+
+test("FU-170 runtime carries a real worker finish across HTTP into the lead's provider", async () => {
+  const { AgentManager } = await import("./agent/agent-manager.js");
+  const { AgentStorage } = await import("./agent/agent-storage.js");
+  const { createHostLinkRuntime } = await import("./host-link-runtime.js");
+  const { createTestAgentClients } = await import("./test-utils/fake-agent-client.js");
+  const { createTestLogger } = await import("../test-utils/test-logger.js");
+  const { heldSendsFor } = await import("./held-sends.js");
+  const root = realpathSync(await mkdtemp(path.join(tmpdir(), "host-link-runtime-")));
+  cleanups.push(() => rm(root, { recursive: true, force: true }));
+  const logger = createTestLogger();
+  const leadInputs: unknown[] = [];
+  const workerInputs: unknown[] = [];
+  let noticeArrived!: () => void;
+  const notified = new Promise<void>((resolve) => {
+    noticeArrived = resolve;
+  });
+  const sourceHome = path.join(root, "source");
+  const targetHome = path.join(root, "target");
+  const sourceStorage = new AgentStorage(path.join(sourceHome, "agents"), logger);
+  const targetStorage = new AgentStorage(path.join(targetHome, "agents"), logger);
+  const sourceManager = new AgentManager({
+    clients: createTestAgentClients({
+      onStartTurn: (prompt) => {
+        leadInputs.push(prompt);
+        noticeArrived();
+      },
+    }),
+    registry: sourceStorage,
+    logger,
+  });
+  const targetManager = new AgentManager({
+    clients: createTestAgentClients({ onStartTurn: (prompt) => workerInputs.push(prompt) }),
+    registry: targetStorage,
+    logger,
+  });
+  const sourceRuntime = await createHostLinkRuntime({
+    home: sourceHome,
+    serverId: "source",
+    protected: () => true,
+    agentManager: sourceManager,
+    agentStorage: sourceStorage,
+    logger,
+    workspace: async () => "workspace-source",
+  });
+  const targetRuntime = await createHostLinkRuntime({
+    home: targetHome,
+    serverId: "target",
+    protected: () => true,
+    agentManager: targetManager,
+    agentStorage: targetStorage,
+    logger,
+    workspace: async () => "workspace-target",
+  });
+  cleanups.push(async () => {
+    sourceRuntime.close();
+    targetRuntime.close();
+    heldSendsFor(sourceManager, logger).close();
+    heldSendsFor(targetManager, logger).close();
+    for (const manager of [sourceManager, targetManager]) {
+      for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
+      await manager.flush();
+    }
+  });
+  const targetApp = express();
+  mountHostLinkRoutes(targetApp, () => targetRuntime.service);
+  const targetListener = await listen(targetApp);
+  const lead = await sourceManager.createAgent(
+    { provider: "codex", model: "gpt-test", modeId: "full-access", cwd: root },
+    undefined,
+    { workspaceId: "workspace-source" },
+  );
+  const sourceConfig = emptyConfig();
+  sourceConfig.chats.push({
+    agentId: lead.id,
+    token: chatToken,
+    operations: ["spawn"],
+    links: ["link"],
+    expiresAt: 2000000000000,
+    revoked: false,
+  });
+  sourceConfig.outgoing.push({
+    id: "link",
+    serverId: "target",
+    token: linkToken,
+    url: targetListener.url,
+    machine: "mac",
+    reporters: [],
+    expiresAt: 2000000000000,
+    revoked: false,
+  });
+  const targetConfig = emptyConfig();
+  targetConfig.incoming.push({
+    id: "link",
+    serverId: "source",
+    token: linkToken,
+    leads: [lead.id],
+    operations: ["spawn"],
+    workloads: ["standard"],
+    workspaces: { job: root },
+    profiles: {
+      worker: {
+        provider: "codex",
+        model: "gpt-test",
+        modeId: "full-access",
+        parents: ["codex:full-access"],
+      },
+    },
+    maxWorkers: 1,
+    expiresAt: 2000000000000,
+    revoked: false,
+  });
+  writePrivateFileAtomicSync(
+    path.join(sourceHome, "host-links.json"),
+    JSON.stringify(sourceConfig),
+  );
+  writePrivateFileAtomicSync(
+    path.join(targetHome, "host-links.json"),
+    JSON.stringify(targetConfig),
+  );
+  sourceRuntime.start();
+  let finish!: () => void;
+  const ended = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const unsubscribe = targetManager.subscribe(
+    (event) => {
+      if (event.type === "agent_stream" && event.event.type === "turn_completed") finish();
+    },
+    { replayState: false },
+  );
+  try {
+    const receipt = await sourceRuntime.service.spawnForAgent(lead.id, "target", {
+      ...spawn,
+      notifyOnFinish: true,
+    });
+    await ended;
+    await notified;
+    await sourceRuntime.service.flushNotificationDeliveries();
+    expect(leadInputs).toHaveLength(1);
+    await targetManager.setLabels(receipt.agentId!, { "fulcra.hold": "done" });
+    await expect(
+      targetRuntime.service.worker(receipt.token, {
+        kind: "prompt",
+        agentId: receipt.agentId,
+        messageId: "22222222-2222-4222-8222-222222222222",
+        prompt: "Start another task.",
+      }),
+    ).rejects.toMatchObject({
+      name: "HostLinkError",
+      code: "refused",
+      message: "The worker is held as done.",
+    });
+    expect(workerInputs).toHaveLength(1);
+    expect(String(leadInputs[0])).toContain(receipt.agentId!);
+    expect(String(leadInputs[0])).toContain("finished");
+    expect(retainedReturn(sourceHome).receivedNotices?.[0]?.state).toBe("delivered");
+    await sourceRuntime.service.syncNotifications();
+    await sourceRuntime.service.flushNotificationDeliveries();
+    expect(leadInputs).toHaveLength(1);
+  } finally {
+    unsubscribe();
+  }
+}, 30000);
+
+test("FU-170 crash recovery retains an attempted notice without replay", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Crash boundary result");
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  const file = path.join(f.sourceHome, "host-links-outbox.json");
+  const journal = JSON.parse(readFileSync(file, "utf8"));
+  Object.values(journal).forEach((entry: unknown) => {
+    const record = entry as { receivedNotices: Array<{ state: string }> };
+    record.receivedNotices[0]!.state = "sending";
+  });
+  writePrivateFileAtomicSync(file, JSON.stringify(journal), { durable: true });
+  const source = f.restartSource();
+  await source.syncNotifications();
+  await source.flushNotificationDeliveries();
+  expect(retainedReturn(f.sourceHome).receivedNotices?.[0]).toMatchObject({
+    state: "uncertain",
+    text: "Crash boundary result",
+  });
+  expect(f.finishNotices).toHaveLength(1);
+});
+
+test("FU-170 a stopped source cannot continue a pending notice read", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Stopped source result");
+  const pending = f.source.syncNotifications();
+  f.source.stopNotifications();
+  await pending;
+  expect(f.state.noticeReads).toBe(0);
+  expect(retainedReturn(f.sourceHome).watch?.failures).toBe(0);
+  const source = f.restartSource();
+  await source.syncNotifications();
+  await source.flushNotificationDeliveries();
+  expect(f.state.noticeReads).toBe(1);
+  expect(f.finishNotices).toHaveLength(1);
+});
+
+test("FU-167 and FU-170 suppress a remote request resolved during the grace period", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(
+    receipt.agentId!,
+    "permission",
+    "quick-permission",
+    "Transient permission",
+  );
+  const early = await f.post(`${f.targetListener.url}/api/host-links/worker`, receipt.token!, {
+    kind: "notices",
+    agentId: receipt.agentId,
+  });
+  expect(early.body).toMatchObject({ notices: [] });
+  f.target.resolveWorkerPermission(receipt.agentId!, "quick-permission");
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Task result");
+  f.state.now += 2001;
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  expect(f.finishNotices[0]?.text).toContain("finished");
+  expect(f.finishNotices[0]?.text).not.toContain("Transient permission");
+});
+
+test("FU-167 and FU-170 suppress a resolved remote request while the lead is busy", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "permission", "held-permission", "Held permission");
+  f.state.now += 2001;
+  let queued!: () => void;
+  let release!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    queued = resolve;
+  });
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  f.state.beforeFinish = async () => {
+    queued();
+    await held;
+  };
+  await f.source.syncNotifications();
+  await waiting;
+  f.target.resolveWorkerPermission(receipt.agentId!, "held-permission");
+  release();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(0);
+  expect(retainedReturn(f.sourceHome).receivedNotices?.[0]?.state).toBe("suppressed");
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Final result");
+  f.state.now += 10000;
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  expect(f.finishNotices[0]?.text).toContain("finished");
+});
+
+const sharedAccount = "55555555-5555-4555-8555-555555555555";
+async function limitFixture() {
+  const f = await fixture();
+  const sourcePool = path.join(f.root, "source", "command-centre");
+  const targetPool = path.join(f.root, "target", "command-centre");
+  for (const pool of [sourcePool, targetPool]) {
+    await addAccount(pool, { provider: "claude", name: "Work" }, f.state.now);
+    await update(pool, (s) => {
+      s.accounts[0].id = sharedAccount;
+    });
+  }
+  f.sourceConfig.outgoing[0].shareLimits = true;
+  f.targetConfig.incoming[0].operations.push("limits");
+  f.save();
+  return { ...f, sourcePool, targetPool };
+}
+
+for (const limitKind of ["session", "weekly"] as const) {
+  test(`shares a ${limitKind} pool limit over HTTP and expires at the reset`, async () => {
+    const f = await limitFixture();
+    const resetAt = new Date(f.state.now + 3600000).toISOString();
+    await assign(f.sourcePool, "pooled-session", "claude", f.state.now);
+    await rotate(
+      f.sourcePool,
+      "pooled-session",
+      "claude",
+      { kind: limitKind, resetAt },
+      f.state.now,
+    );
+    expect(await f.source.shareAccountLimits()).toEqual({ delivered: 1, failed: 0 });
+    expect(await f.source.shareAccountLimits()).toEqual({ delivered: 0, failed: 0 });
+    expect(publicView(readAccounts(f.sourcePool), f.state.now).accounts[0].status).toEqual({
+      state: "limited",
+      until: resetAt,
+      source: "local",
+    });
+    const target = readAccounts(f.targetPool);
+    expect(publicView(target, f.state.now).accounts[0]).toMatchObject({
+      limitKind,
+      status: { state: "limited", until: resetAt, source: "source" },
+    });
+    expect(choose(target, "claude", f.state.now)).toBeNull();
+    const launch = await assign(f.targetPool, "new-session", "claude", f.state.now);
+    expect(launch).toMatchObject({ allLimited: true, earliestReset: resetAt });
+    const persisted = readFileSync(path.join(f.targetPool, "accounts", "accounts.json"), "utf8");
+    expect(persisted).not.toContain("remoteLimits");
+    expect(persisted).not.toContain("usageObservedAt");
+    expect(readAccounts(f.targetPool).accounts[0].limitedUntil).toBeNull();
+    // A new service instance reads the same retained remote state.
+    expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now)).toMatchObject({
+      source: "source",
+    });
+    f.state.now = Date.parse(resetAt);
+    expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now)).toEqual({
+      state: "ok",
+    });
+    expect(choose(readAccounts(f.targetPool), "claude", f.state.now)?.id).toBe(sharedAccount);
+    expect(await f.source.shareAccountLimits()).toEqual({ delivered: 0, failed: 0 });
+  });
+}
+
+test("fresh local limits and cleared limits win over an older remote observation", async () => {
+  const f = await limitFixture();
+  const remoteReset = new Date(f.state.now + 7 * 86400000).toISOString();
+  await markAccountLimited(
+    f.sourcePool,
+    sharedAccount,
+    { kind: "weekly", resetAt: remoteReset },
+    f.state.now,
+  );
+  f.state.now += 1000;
+  const localReset = new Date(f.state.now + 3600000).toISOString();
+  await markAccountLimited(
+    f.targetPool,
+    sharedAccount,
+    { kind: "session", resetAt: localReset },
+    f.state.now,
+  );
+  expect(await f.source.shareAccountLimits()).toEqual({ delivered: 1, failed: 0 });
+  expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now)).toEqual({
+    state: "limited",
+    until: localReset,
+    source: "local",
+  });
+  // The same remote observation can arrive late or repeat after a local clear.
+  await setAccount(f.targetPool, sharedAccount, { clearLimit: true });
+  expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now)).toEqual({
+    state: "ok",
+  });
+  // The reset of the older remote window cannot bring the cleared limit back.
+  f.state.now = Date.parse(localReset);
+  expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now)).toEqual({
+    state: "ok",
+  });
+});
+
+test.each(["local", "source"])(
+  "the later %s limit sets status and earliest reset",
+  async (winner) => {
+    const f = await limitFixture();
+    const shortReset = new Date(f.state.now + 3600000).toISOString();
+    const longReset = new Date(f.state.now + 5 * 86400000).toISOString();
+    await markAccountLimited(
+      f.targetPool,
+      sharedAccount,
+      {
+        kind: winner === "local" ? "weekly" : "session",
+        resetAt: winner === "local" ? longReset : shortReset,
+      },
+      f.state.now,
+    );
+    f.state.now += 1000;
+    await markAccountLimited(
+      f.sourcePool,
+      sharedAccount,
+      {
+        kind: winner === "source" ? "weekly" : "session",
+        resetAt: winner === "source" ? longReset : shortReset,
+      },
+      f.state.now,
+    );
+    expect(await f.source.shareAccountLimits()).toEqual({ delivered: 1, failed: 0 });
+    const accounts = readAccounts(f.targetPool);
+    expect(publicView(accounts, f.state.now).accounts[0]).toMatchObject({
+      limitKind: "weekly",
+      status: { state: "limited", until: longReset, source: winner },
+    });
+    expect(await assign(f.targetPool, "new-session", "claude", f.state.now)).toMatchObject({
+      allLimited: true,
+      earliestReset: longReset,
+    });
+  },
+);
+
+test("a suppressed limit observation is sent once until its key changes", async () => {
+  const f = await limitFixture();
+  await update(f.targetPool, (store) => {
+    store.accounts = [];
+  });
+  const resetAt = new Date(f.state.now + 3600000).toISOString();
+  await markAccountLimited(f.sourcePool, sharedAccount, { kind: "session", resetAt }, f.state.now);
+  expect(await f.source.shareAccountLimits()).toEqual({ delivered: 1, failed: 0 });
+  expect(await f.source.shareAccountLimits()).toEqual({ delivered: 0, failed: 0 });
+  f.state.now += 1000;
+  await markAccountLimited(f.sourcePool, sharedAccount, { kind: "weekly", resetAt }, f.state.now);
+  expect(await f.source.shareAccountLimits()).toEqual({ delivered: 1, failed: 0 });
+  expect(await f.source.shareAccountLimits()).toEqual({ delivered: 0, failed: 0 });
+});
+
+test("a fresh local usage reading overrides an older remote limit and reports its source in usage", async () => {
+  const f = await limitFixture();
+  const resetAt = new Date(f.state.now + 3600000).toISOString();
+  await markAccountLimited(f.sourcePool, sharedAccount, { kind: "session", resetAt }, f.state.now);
+  await f.source.shareAccountLimits();
+  const usage = createPoolUsage(
+    () => f.targetPool,
+    () => f.state.now,
+  );
+  expect(await usage.fetch({ accountId: sharedAccount, provider: "claude" })).toMatchObject({
+    status: "unavailable",
+    problem: { detail: expect.stringContaining("Source: remote host source") },
+  });
+  f.state.now += 1000;
+  writePrivateFileAtomicSync(
+    path.join(f.targetPool, "accounts", "usage-reports.json"),
+    JSON.stringify({
+      v: 1,
+      reports: [
+        {
+          accountId: sharedAccount,
+          provider: "claude",
+          status: "ok",
+          observedAt: new Date(f.state.now).toISOString(),
+          fiveHour: { usedPct: 20, resetsAt: resetAt },
+          weekly: null,
+        },
+      ],
+    }),
+  );
+  expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now)).toEqual({
+    state: "ok",
+  });
+  expect(await usage.fetch({ accountId: sharedAccount, provider: "claude" })).toMatchObject({
+    status: "available",
+  });
+});
+
+test("limit sharing retries an offline link without changing local limits", async () => {
+  const f = await limitFixture();
+  const resetAt = new Date(f.state.now + 3600000).toISOString();
+  await markAccountLimited(f.sourcePool, sharedAccount, { kind: "session", resetAt }, f.state.now);
+  const url = f.sourceConfig.outgoing[0].url;
+  f.sourceConfig.outgoing[0].url = "http://127.0.0.1:1";
+  f.save();
+  expect(await f.source.shareAccountLimits()).toEqual({ delivered: 0, failed: 1 });
+  expect(accountStatus(readAccounts(f.sourcePool).accounts[0], f.state.now).state).toBe("limited");
+  expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now).state).toBe("ok");
+  f.sourceConfig.outgoing[0].url = url;
+  f.save();
+  expect(await f.source.shareAccountLimits()).toEqual({ delivered: 1, failed: 0 });
+  expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now).source).toBe("source");
+  expect(await f.target.shareAccountLimits()).toEqual({ delivered: 0, failed: 0 });
+});
+
+test.each([undefined, false])(
+  "limit sharing stays off when shareLimits is %s",
+  async (shareLimits) => {
+    const f = await limitFixture();
+    f.sourceConfig.outgoing[0]!.shareLimits = shareLimits;
+    f.save();
+    const resetAt = new Date(f.state.now + 3600000).toISOString();
+    await markAccountLimited(
+      f.sourcePool,
+      sharedAccount,
+      { kind: "session", resetAt },
+      f.state.now,
+    );
+    expect(await f.source.shareAccountLimits()).toEqual({ delivered: 0, failed: 0 });
+    expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now)).toEqual({
+      state: "ok",
+    });
+  },
+);
+
+test("limit sharing requires link authority and ignores unknown, expired, and invalid observations", async () => {
+  const f = await limitFixture();
+  const wire = {
+    kind: "account_limit",
+    messageId,
+    destination: "target",
+    accountId: sharedAccount,
+    limitKind: "weekly",
+    resetAt: new Date(f.state.now + 86400000).toISOString(),
+    observedAt: new Date(f.state.now).toISOString(),
+  };
+  const receive = (body: unknown, token = linkToken) =>
+    f.post(`${f.targetListener.url}/api/host-links/receive`, token, body);
+  expect((await receive(wire, chatToken)).status).toBe(403);
+  expect((await receive({ ...wire, token: "synthetic-secret" })).status).toBe(400);
+  expect((await receive({ ...wire, destination: "other" })).status).toBe(403);
+  expect(
+    (await receive({ ...wire, accountId: "66666666-6666-4666-8666-666666666666" })).body,
+  ).toMatchObject({ state: "suppressed" });
+  expect(
+    (await receive({ ...wire, resetAt: new Date(f.state.now).toISOString() })).body,
+  ).toMatchObject({ state: "suppressed" });
+  expect(
+    (await receive({ ...wire, resetAt: new Date(f.state.now + 9 * 86400000).toISOString() })).body,
+  ).toMatchObject({ state: "suppressed" });
+  expect(
+    (await receive({ ...wire, observedAt: new Date(f.state.now + 120000).toISOString() })).body,
+  ).toMatchObject({ state: "suppressed" });
+  f.targetConfig.incoming[0].operations = ["spawn", "notice"];
+  f.save();
+  expect((await receive(wire)).status).toBe(403);
+  f.targetConfig.incoming[0].operations.push("limits");
+  f.targetConfig.incoming[0].revoked = true;
+  f.save();
+  expect((await receive(wire)).status).toBe(403);
+  expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now).state).toBe("ok");
+});
+
+test("local quota windows share only known account IDs and do not forward remote observations", async () => {
+  const f = await limitFixture();
+  const resetAt = new Date(f.state.now + 3600000).toISOString();
+  writePrivateFileAtomicSync(
+    path.join(f.sourcePool, "accounts", "usage-reports.json"),
+    JSON.stringify({
+      v: 1,
+      reports: [
+        {
+          accountId: sharedAccount,
+          provider: "claude",
+          status: "limited",
+          observedAt: new Date(f.state.now).toISOString(),
+          fiveHour: { usedPct: 100, resetsAt: resetAt },
+          weekly: null,
+        },
+      ],
+    }),
+  );
+  expect(await f.source.shareAccountLimits()).toEqual({ delivered: 1, failed: 0 });
+  f.targetConfig.outgoing.push({
+    ...f.sourceConfig.outgoing[0],
+    id: "reverse",
+    serverId: "source",
+    url: f.sourceListener.url,
+  });
+  f.save();
+  expect(await f.target.shareAccountLimits()).toEqual({ delivered: 0, failed: 0 });
+  const stored = JSON.parse(
+    readFileSync(path.join(f.targetPool, "accounts", "remote-limits.json"), "utf8"),
+  );
+  expect(stored.observations).toEqual([
+    {
+      accountId: sharedAccount,
+      limitKind: "session",
+      resetAt,
+      observedAt: new Date(f.state.now).toISOString(),
+      source: "source",
+    },
+  ]);
+});
+
+test("the running exchange sends startup limits and later file changes", async () => {
+  const f = await limitFixture();
+  const resetAt = new Date(f.state.now + 3600000).toISOString();
+  const waitForObservation = (expectedReset: string) =>
+    new Promise<void>((resolve) => {
+      const watcher = watch(path.join(f.targetPool, "accounts"), (_event, file) => {
+        if (
+          file === "remote-limits.json" &&
+          accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now).until === expectedReset
+        ) {
+          watcher.close();
+          resolve();
+        }
+      });
+      cleanups.push(async () => {
+        watcher.close();
+      });
+    });
+  await markAccountLimited(f.sourcePool, sharedAccount, { kind: "session", resetAt }, f.state.now);
+  const startup = waitForObservation(resetAt);
+  const warnings: string[] = [];
+  const close = startHostLimitSharing(f.source, path.join(f.root, "source"), () =>
+    warnings.push("failed"),
+  );
+  cleanups.push(async () => close());
+  await startup;
+  expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now).until).toBe(resetAt);
+  f.state.now += 1000;
+  const weeklyReset = new Date(f.state.now + 86400000).toISOString();
+  const later = waitForObservation(weeklyReset);
+  await markAccountLimited(
+    f.sourcePool,
+    sharedAccount,
+    { kind: "weekly", resetAt: weeklyReset },
+    f.state.now,
+  );
+  await later;
+  expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now).until).toBe(
+    weeklyReset,
+  );
+  close();
+  expect(warnings).toEqual([]);
+});
+
+test("editing a legacy account cannot make its old limit override a newer local observation", async () => {
+  const f = await limitFixture();
+  const createdAt = new Date(f.state.now).toISOString();
+  const remoteReset = new Date(f.state.now + 86400000).toISOString();
+  await update(f.sourcePool, (s) => {
+    s.accounts[0].limitedUntil = remoteReset;
+    s.accounts[0].limitKind = "weekly";
+  });
+  f.state.now += 1000;
+  const localReset = new Date(f.state.now + 3600000).toISOString();
+  await markAccountLimited(
+    f.targetPool,
+    sharedAccount,
+    { kind: "session", resetAt: localReset },
+    f.state.now,
+  );
+  await setAccount(f.sourcePool, sharedAccount, { name: "Renamed" });
+  const mtime = new Date(f.state.now + 1000);
+  utimesSync(path.join(f.sourcePool, "accounts", "accounts.json"), mtime, mtime);
+  expect(await f.source.shareAccountLimits()).toEqual({ delivered: 1, failed: 0 });
+  expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now)).toEqual({
+    state: "limited",
+    until: localReset,
+    source: "local",
+  });
+  const stored = JSON.parse(
+    readFileSync(path.join(f.targetPool, "accounts", "remote-limits.json"), "utf8"),
+  );
+  expect(stored.observations[0].observedAt).toBe(createdAt);
 });

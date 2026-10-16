@@ -4,7 +4,7 @@ import path from "node:path";
 
 // Fulcra 0.2.17 (FU-101): the open items of the project ledgers (`ledger` command), read-only. A ledger is
 // <dir>/<project>/OPEN-ITEMS.md, a table with the columns id | item | kind | owner | status | evidence | source.
-// Only the id, owner and status are read; the item text is never sent anywhere from here.
+// Only IDs, owners, statuses, and kinds are read. Item text is never sent.
 
 export interface LedgerRow {
   project: string;
@@ -83,24 +83,31 @@ export async function readOpenLedgerRows(dir: string, strict = false): Promise<L
 }
 
 /**
- * The open rows a chat owns: the owner names the chat's title, or the first 8 characters of its ID in brackets, as
- * `ledger set --owner "<title> (<short id>)"` writes it.
+ * Match the lead title, full ID, short ID in brackets, or owner-selected project label.
  */
 export function rowsOwnedBy(
   rows: readonly LedgerRow[],
-  chat: { id: string; title: string },
+  chat: { id: string; title: string; labels?: Record<string, string> | null },
 ): LedgerRow[] {
   const short = `(${chat.id.slice(0, 8)})`.toLowerCase();
   const title = chat.title.trim().toLowerCase();
   return rows.filter((row) => {
     const owner = row.owner.toLowerCase();
-    return owner.includes(short) || (title.length >= 4 && owner === title);
+    return (
+      owner === chat.id.toLowerCase() ||
+      owner.includes(`(${chat.id.toLowerCase()})`) ||
+      owner.includes(short) ||
+      (title.length >= 4 && owner === title) ||
+      [chat.labels?.["fulcra.project"], chat.labels?.project].some(
+        (project) => !!project?.trim() && owner === project.trim().toLowerCase(),
+      )
+    );
   });
 }
 
 interface NudgeRowSelection {
   rows: readonly LedgerRow[];
-  chat: { id: string; title: string };
+  chat: { id: string; title: string; labels?: Record<string, string> | null };
   skipOwners?: readonly string[];
 }
 
@@ -114,8 +121,9 @@ export function rowsEligibleForNudge({
     const kind = row.kind?.trim() ?? "";
     return (
       !isNudgeOwnerSkipped(row.owner, skipOwners) &&
-      !/^(DONE|MOVED|BLOCKED|STANDING)\b/i.test(status) &&
-      !/^(RULE|STANDING)\b/i.test(kind)
+      !/^(DONE|MOVED|DECIDE|STANDING)\b/i.test(status) &&
+      !/^(?:(?:OPEN|IN PROGRESS)\b)?[\s:(,–—-]*BLOCKED\b/i.test(status) &&
+      !/^(RULE|DECIDE|STANDING)\b/i.test(kind)
     );
   });
 }

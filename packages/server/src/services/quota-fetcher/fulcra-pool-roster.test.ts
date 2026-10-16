@@ -234,6 +234,7 @@ describe("native pool usage source", () => {
       details: [
         { id: "observed-at", value: "2026-10-11T23:59:00Z" },
         { id: "pool-hold", value: until },
+        { id: "limit-source", value: "local" },
       ],
     });
     writeFileSync(
@@ -264,6 +265,7 @@ it("native pool usage crosses the plugin subprocess and WebSocket with one bound
   await writeFile(
     path.join(poolRoot, "accounts", "accounts.json"),
     JSON.stringify({
+      v: 1,
       accounts: [
         { id: work, provider: "claude", name: "Work", enabled: true },
         { id: off, provider: "claude", name: "Off", enabled: false },
@@ -289,6 +291,14 @@ it("native pool usage crosses the plugin subprocess and WebSocket with one bound
     ),
     path.join(pluginRoot, "server", "pool-usage.ts"),
   );
+  for (const file of ["accounts.mjs", "owned.mjs"]) {
+    await cp(
+      fileURLToPath(
+        new URL(`../../../../../control/orca-organization/server/${file}`, import.meta.url),
+      ),
+      path.join(pluginRoot, "server", file),
+    );
+  }
   await writeFile(
     path.join(pluginRoot, "paseo-plugin.json"),
     JSON.stringify({ id: "pool", requirements: { paseo: ">=0.11.0-beta.5" } }),
@@ -344,6 +354,31 @@ it("native pool usage crosses the plugin subprocess and WebSocket with one bound
       "fulcra-pool",
       "fulcra-pool",
     ]);
+    const remoteReset = new Date(Date.now() + 3600000).toISOString();
+    await writeFile(
+      path.join(poolRoot, "accounts", "remote-limits.json"),
+      JSON.stringify({
+        v: 1,
+        observations: [
+          {
+            accountId: work,
+            limitKind: "weekly",
+            resetAt: remoteReset,
+            observedAt: new Date().toISOString(),
+            source: "paired-host",
+          },
+        ],
+      }),
+    );
+    const remote = await client.listUsageReports({ agentId: agent.id, forceRefresh: true });
+    expect(remote.reports[0]?.report).toMatchObject({
+      status: "available",
+      details: [
+        { id: "observed-at" },
+        { id: "pool-hold", value: remoteReset },
+        { id: "limit-source", value: "remote host paired-host" },
+      ],
+    });
     await writeFile(path.join(poolRoot, "accounts", "usage-reports.json"), "invalid snapshot");
     const failed = await client.listUsageReports({ agentId: agent.id, forceRefresh: true });
     expect(failed.reports[0]?.report.status).toBe("unavailable");

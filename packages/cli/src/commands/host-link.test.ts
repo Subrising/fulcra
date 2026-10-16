@@ -1,8 +1,68 @@
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, test } from "vitest";
-import { hostLinkEndpoint, saveHostLinkReceipt } from "./host-link.js";
+import { expect, test, vi } from "vitest";
+import {
+  createHostLinkCommand,
+  hostLinkEndpoint,
+  hostLinkNoticeStatus,
+  saveHostLinkReceipt,
+} from "./host-link.js";
+
+test("host-link status counts uncertain notices, exhausted notices, and exhausted watches without credentials", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "host-link-status-"));
+  const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  try {
+    expect(await hostLinkNoticeStatus(root)).toEqual({
+      uncertain: 0,
+      exhausted: 0,
+      exhaustedWatches: 0,
+    });
+    await writeFile(
+      path.join(root, "host-links-outbox.json"),
+      JSON.stringify({
+        first: {
+          notifyOnFinish: true,
+          complete: true,
+          receipt: { token: "synthetic-secret" },
+          receivedNotices: [{ state: "uncertain" }, { state: "exhausted" }, { state: "delivered" }],
+        },
+        second: {
+          notifyOnFinish: true,
+          complete: false,
+          watch: { failures: 8 },
+          receivedNotices: [{ state: "exhausted" }, { state: "queued" }],
+        },
+        third: { notifyOnFinish: true, complete: true, watch: { failures: 8 } },
+        unrelated: { notifyOnFinish: false, receivedNotices: [{ state: "uncertain" }] },
+      }),
+      { mode: 0o600 },
+    );
+    await createHostLinkCommand().parseAsync(["status", "--home", root], { from: "user" });
+    expect(output).toHaveBeenCalledExactlyOnceWith(
+      '{"uncertain":1,"exhausted":2,"exhaustedWatches":1}\n',
+    );
+    await writeFile(path.join(root, "host-links-outbox.json"), "{}");
+    expect(await hostLinkNoticeStatus(root)).toEqual({
+      uncertain: 0,
+      exhausted: 0,
+      exhaustedWatches: 0,
+    });
+    await writeFile(path.join(root, "host-links-outbox.json"), '{"broken":null}');
+    await expect(hostLinkNoticeStatus(root)).rejects.toThrow(
+      "The host-link notice journal requires repair.",
+    );
+    if (process.platform !== "win32") {
+      await chmod(path.join(root, "host-links-outbox.json"), 0o644);
+      await expect(hostLinkNoticeStatus(root)).rejects.toThrow(
+        "Use a private, bounded host-link file.",
+      );
+    }
+  } finally {
+    output.mockRestore();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("host-link CLI refuses remote HTTP and credentials in URLs", () => {
   expect(hostLinkEndpoint("https://example.test", "dispatch")).toBe(

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, test } from "vitest";
-import { REPORTS_TO_LABEL, REPORTS_TO_OWNER } from "@getpaseo/protocol/agent-labels";
+import { REPORTS_TO_LABEL, REPORTS_TO_OWNER, SEAT_LABEL } from "@getpaseo/protocol/agent-labels";
 import type { AgentManager, AgentManagerEvent } from "./agent/agent-manager.js";
 import type { AgentStorage } from "./agent/agent-storage.js";
 import { createTestLogger } from "../test-utils/test-logger.js";
@@ -12,8 +12,10 @@ import {
   COMBINED_LIST_LIMIT,
   NUDGE_MESSAGE_PREFIX,
   PERMISSION_COMMAND_CHARS,
+  PERMISSION_NOTICE_GRACE_MS,
   REPORT_UP_SNIPPET_CHARS,
   ReportUpService,
+  type ReportUpDeps,
   reportUpSwitches,
 } from "./report-up.js";
 import { noteAgentMessage, resetAgentMessageLogForTests } from "./agent-message-log.js";
@@ -34,6 +36,7 @@ interface FakeChat {
   lastMessage?: string;
   cwd?: string;
   lifecycle?: string;
+  archivedAt?: string;
   backgroundWork?: { count: number };
 }
 
@@ -52,6 +55,8 @@ function fixture(
     minIntervalMinutes?: number;
     now?: number;
     statePath?: string;
+    ledgerDir?: string;
+    readLedger?: ReportUpDeps["readLedger"];
     ledger?: Array<{ project: string; id: string; owner: string; status: string; kind?: string }>;
     remoteNotice?: (
       workerId: string,
@@ -62,10 +67,15 @@ function fixture(
 ) {
   const clock = { now: options.now ?? Date.now() };
   const timers: Array<{ run: () => void; ms: number }> = [];
+  for (const chat of chats) chat.lifecycle ??= "idle";
   const byId = new Map(chats.map((chat) => [chat.id, chat]));
+  const pending = new Map<string, Map<string, { id: string }>>();
   const delivered: Array<{ leadId: string; prompt: string }> = [];
   const manager = {
     getAgent: (id: string) => byId.get(id) ?? null,
+    listAgents: () => [...byId.values()],
+    hasInFlightRun: (id: string) => byId.get(id)?.lifecycle === "running",
+    getPendingPermissions: (id: string) => [...(pending.get(id)?.values() ?? [])],
     getLastAssistantMessage: async (id: string) => byId.get(id)?.lastMessage ?? null,
     nativeReportOwnsFinish: () => false,
   } as unknown as AgentManager;
@@ -92,15 +102,26 @@ function fixture(
     logger: createTestLogger(),
     now: () => clock.now,
     ...(options.statePath ? { statePath: options.statePath } : {}),
-    readLedger: () => options.ledger ?? [],
+    ...(options.ledgerDir ? { ledgerDir: options.ledgerDir } : {}),
+    readLedger:
+      options.readLedger ??
+      (() => (options.ledgerDir ? readOpenLedgerRows(options.ledgerDir) : (options.ledger ?? []))),
     setTimer: (run, ms) => timers.push({ run, ms }),
     deliver: async (leadId, prompt) => {
       await options.deliver?.(leadId, prompt);
       delivered.push({ leadId, prompt });
     },
   });
-  const stream = (agentId: string, event: object) =>
+  const stream = (agentId: string, event: object) => {
+    const permission = event as { type: string; request?: { id: string }; requestId?: string };
+    if (permission.type === "permission_requested") {
+      if (!pending.has(agentId)) pending.set(agentId, new Map());
+      pending.get(agentId)!.set(permission.request!.id, permission.request!);
+    }
+    if (permission.type === "permission_resolved")
+      pending.get(agentId)?.delete(permission.requestId!);
     service.onEvent({ type: "agent_stream", agentId, event } as AgentManagerEvent);
+  };
   const turn = (agentId: string, userMessage: object = { text: "do the task" }) => {
     stream(agentId, { type: "turn_started", provider: "claude" });
     stream(agentId, {
@@ -119,13 +140,23 @@ function fixture(
     });
     stream(agentId, { type: "turn_failed", provider: "claude", error });
   };
-  const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+  const flushPermissionGrace = () => {
+    for (let index = timers.length - 1; index >= 0; index--) {
+      if (timers[index]!.ms === PERMISSION_NOTICE_GRACE_MS) timers.splice(index, 1)[0]!.run();
+    }
+  };
+  const settle = () => {
+    flushPermissionGrace();
+    return new Promise((resolve) => setTimeout(resolve, 20));
+  };
   return {
     service,
     delivered,
     stream,
     turn,
     settle,
+    flushPermissionGrace,
+    pending,
     clock,
     timers,
     failedTurn,
@@ -145,6 +176,14 @@ function nativeFixture(chats: FakeChat[], options: Parameters<typeof fixture>[1]
     logger,
   );
   const hooks = new PluginService(logger, config, "0.11.0-beta.5");
+  hooks.on("agent.permission_requested", ({ agent, request }) => {
+    if (!f.pending.has(agent.id)) f.pending.set(agent.id, new Map());
+    f.pending.get(agent.id)!.set(request.id, request);
+  });
+  hooks.on("agent.permission_resolved", ({ agent, requestId }) =>
+    f.pending.get(agent.id)?.delete(requestId),
+  );
+  hooks.on("agent.closed", ({ agent }) => f.pending.delete(agent.id));
   const off = f.service.observeNative(hooks);
   const agent = (id: string) => ({
     id,
@@ -372,6 +411,67 @@ describe("report-up and permission prompts", () => {
     request: { id, name: "Bash", input: { command } },
   });
 
+  test("resolved bypass tool requests stay quiet during the grace period", async () => {
+    const f = fixture([lead, worker()]);
+    f.stream(WORKER, ask("transient", "echo fixture"));
+    expect(f.delivered).toEqual([]);
+    expect(f.timers.map((timer) => timer.ms)).toEqual([PERMISSION_NOTICE_GRACE_MS]);
+    f.stream(WORKER, { type: "permission_resolved", requestId: "transient" });
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+    f.service.stop();
+  });
+
+  test.each(["Bash", "AskUserQuestion", "request_user_input"])(
+    "a pending %s prompt alerts once after the grace period",
+    async (name) => {
+      const chat = { ...worker(), config: { modeId: "bypassPermissions" } };
+      const f = fixture([lead, chat]);
+      const event = { type: "permission_requested", request: { id: "hook", name } };
+      f.stream(WORKER, event);
+      f.stream(WORKER, event);
+      expect(f.delivered).toEqual([]);
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+      expect(f.delivered[0]!.prompt).toContain(`Tool: ${name}`);
+      f.service.stop();
+    },
+  );
+
+  test("resolution during the grace callback cancels the notice before dispatch", async () => {
+    const f = fixture([lead, worker()]);
+    f.stream(WORKER, ask("during-read", "echo fixture"));
+    f.flushPermissionGrace();
+    f.stream(WORKER, { type: "permission_resolved", requestId: "during-read" });
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+    f.service.stop();
+  });
+
+  test("the current pending list wins when a resolution event was missed", async () => {
+    const f = fixture([lead, worker()]);
+    f.stream(WORKER, ask("missing-resolution", "echo fixture"));
+    f.pending.get(WORKER)!.clear();
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+    f.service.stop();
+  });
+
+  test("close and service stop cancel pending permission notices", async () => {
+    const f = fixture([lead, worker()]);
+    f.stream(WORKER, ask("closed", "echo fixture"));
+    f.service.onEvent({
+      type: "agent_state",
+      agent: { id: WORKER, lifecycle: "closed" },
+    } as AgentManagerEvent);
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+    f.stream(WORKER, ask("stopped", "echo fixture"));
+    f.service.stop();
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+  });
+
   test("a new prompt sends the lead one notice with the chat, tool, command and folder", async () => {
     const chat: FakeChat = { ...worker(), cwd: "/work/game" };
     const f = fixture([lead, chat]);
@@ -397,6 +497,23 @@ describe("report-up and permission prompts", () => {
     f.stream(WORKER, ask("req-2", "ls"));
     await f.settle();
     expect(f.delivered).toHaveLength(2);
+  });
+
+  test("a resolved notice held at the lead's usage limit is removed", async () => {
+    const f = fixture([
+      { ...lead, lastMessage: "Claude AI usage limit reached|0000000000" },
+      worker(),
+    ]);
+    f.turn(LEAD);
+    await f.settle();
+    f.stream(WORKER, ask("held", "echo fixture"));
+    await f.settle();
+    f.stream(WORKER, { type: "permission_resolved", requestId: "held" });
+    f.clock.now += 3600_000;
+    for (const timer of f.timers) timer.run();
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+    f.service.stop();
   });
 
   test("a chat with no lead, or with the owner as lead, tells nobody", async () => {
@@ -482,6 +599,7 @@ describe("report-up limit state across a restart", () => {
           enabled: switches.finishedTurns,
           otherEnabled: switches.otherNotices,
         });
+        after.pending.set(WORKER, new Map([["req-1", { id: "req-1" }]]));
         after.clock.now = NOW + 6 * 3600_000;
         for (const timer of after.timers) timer.run();
         await after.settle();
@@ -658,22 +776,23 @@ describe("idle-lead nudge", () => {
   });
 
   test.each(["paused", "blocked", "done"])(
-    "a %s worker is excluded until its durable hold is cleared",
+    "a %s worker is excluded from suggestions while READY work can still wake the lead",
     async (hold) => {
       const heldWorker = idleWorker();
       heldWorker.labels["fulcra.hold"] = hold;
       const f = fixture([lead, heldWorker], { ledger: owned });
       f.turn(LEAD);
       await f.settle();
-      expect(f.delivered).toEqual([]);
+      expect(f.delivered).toHaveLength(1);
+      expect(f.delivered[0]!.prompt).toContain("Create a worker if needed");
       f.clock.now += 60 * 60_000;
       heldWorker.labels["fulcra.hold"] = "";
       f.turn(LEAD);
       await f.settle();
-      expect(f.delivered).toHaveLength(1);
+      expect(f.delivered).toHaveLength(2);
       f.turn(LEAD);
       await f.settle();
-      expect(f.delivered).toHaveLength(1);
+      expect(f.delivered).toHaveLength(2);
     },
   );
 
@@ -735,6 +854,34 @@ describe("idle-lead nudge", () => {
     f.turn(LEAD);
     await f.settle();
     expect(f.delivered).toHaveLength(1);
+  });
+
+  test("blocked status prefixes keep a worker-free lead quiet until READY work appears", async () => {
+    const ledger = [
+      "BLOCKED: dependency",
+      "OPEN: BLOCKED: dependency",
+      "OPEN (BLOCKED on owner): dependency",
+      "IN PROGRESS: BLOCKED dependency",
+    ].map((status, index) => ({
+      project: owned[0]!.project,
+      owner: owned[0]!.owner,
+      id: `FU-${20 + index}`,
+      status,
+    }));
+    const f = fixture([lead], { ledger, enabled: false });
+    try {
+      f.turn(LEAD);
+      await f.settle();
+      expect(f.delivered).toEqual([]);
+      ledger.push({ ...owned[0]!, status: "OPEN: unblock the BLOCKED dialog" });
+      f.turn(LEAD);
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+      expect(f.delivered[0]!.prompt).toContain("1 open ledger item: FU-12.");
+      expect(f.delivered[0]!.prompt).not.toMatch(/FU-2[0-3]/);
+    } finally {
+      f.service.stop();
+    }
   });
 
   test("the default empty owner exclusion list accepts title-only ledger owners", async () => {
@@ -870,7 +1017,7 @@ describe("idle-lead nudge", () => {
     expect(f.delivered).toHaveLength(1);
   });
 
-  test("background jobs exclude only busy workers from the nudge", async () => {
+  test("any background job in the project prevents a nudge", async () => {
     const busy = { ...idleWorker(), backgroundWork: { count: 1 } };
     const f = fixture([lead, busy], { ledger: owned });
     f.turn(LEAD);
@@ -891,9 +1038,7 @@ describe("idle-lead nudge", () => {
     );
     g.turn(LEAD);
     await g.settle();
-    expect(g.delivered).toHaveLength(1);
-    expect(g.delivered[0]!.prompt).toContain("Other (idle-other)");
-    expect(g.delivered[0]!.prompt).not.toContain("Builder");
+    expect(g.delivered).toEqual([]);
   });
 
   test("background jobs do not suppress permission and limit notices", async () => {
@@ -948,8 +1093,7 @@ describe("idle-lead nudge", () => {
     await f.settle();
     f.turn(LEAD);
     await f.settle();
-    expect(f.delivered).toHaveLength(1);
-    expect(f.delivered[0]!.prompt).not.toContain("Late (late-worker)");
+    expect(f.delivered.filter((d) => d.prompt.includes("You are idle"))).toEqual([]);
     f.clock.now += 60 * 60_000;
     late.lifecycle = "idle";
     f.stream(late.id, { type: "turn_completed", provider: "claude" });
@@ -957,8 +1101,8 @@ describe("idle-lead nudge", () => {
     f.turn(LEAD);
     await f.settle();
     const nudges = f.delivered.filter((d) => d.prompt.includes("You are idle"));
-    expect(nudges).toHaveLength(2);
-    expect(nudges[1]!.prompt).toContain("Late (late-worker)");
+    expect(nudges).toHaveLength(1);
+    expect(nudges[0]!.prompt).toContain("Late (late-worker)");
   });
 
   test("background count zero changes the idle worker fingerprint after an earlier nudge", async () => {
@@ -971,13 +1115,13 @@ describe("idle-lead nudge", () => {
     const f = fixture([lead, idleWorker(), busy], { ledger: owned });
     f.turn(LEAD);
     await f.settle();
-    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered).toHaveLength(0);
     f.clock.now += 60 * 60_000;
     busy.backgroundWork.count = 0;
     f.turn(LEAD);
     await f.settle();
-    expect(f.delivered).toHaveLength(2);
-    expect(f.delivered[1]!.prompt).toContain("Busy (busy-worker)");
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.prompt).toContain("Busy (busy-worker)");
   });
 
   test("a new owned open item changes the ledger fingerprint", async () => {
@@ -1052,7 +1196,253 @@ describe("idle-lead nudge", () => {
     expect(f.delivered).toHaveLength(1);
   });
 
-  test("it sends nothing without an idle worker, without open items it owns, or when disabled", async () => {
+  test("ledger file events wake a lead without a turn and close with the service", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nudge-watch-"));
+    mkdirSync(join(dir, "fixture"));
+    const file = join(dir, "fixture", "OPEN-ITEMS.md");
+    let wake!: () => void;
+    const delivered = new Promise<void>((resolve) => {
+      wake = resolve;
+    });
+    const f = fixture([lead], { ledgerDir: dir, enabled: false, deliver: async () => wake() });
+    const row = (id: string) => `| ${id} | Work | FIX | Lead (11111111) | OPEN | — | fixture |\n`;
+    try {
+      writeFileSync(file, row("FX-1"));
+      writeFileSync(file, row("FX-1") + row("FX-2"));
+      await delivered;
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+      expect(f.delivered[0]!.prompt).toContain("FX-1, FX-2");
+      expect(f.timers).toEqual([]);
+      f.service.stop();
+      writeFileSync(file, row("FX-3"));
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(f.delivered).toHaveLength(1);
+    } finally {
+      f.service.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a late ledger read cannot restore READY work removed by a newer file event", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nudge-stale-ledger-"));
+    mkdirSync(join(dir, "fixture"));
+    let started!: () => void;
+    let updated!: () => void;
+    let release!: (rows: typeof owned) => void;
+    const firstRead = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const nextRead = new Promise<void>((resolve) => {
+      updated = resolve;
+    });
+    const stale = new Promise<typeof owned>((resolve) => {
+      release = resolve;
+    });
+    let reads = 0;
+    const f = fixture([lead], {
+      ledgerDir: dir,
+      enabled: false,
+      readLedger: () => {
+        if (reads++ === 0) {
+          started();
+          return stale;
+        }
+        updated();
+        return [];
+      },
+    });
+    try {
+      f.turn(LEAD);
+      await firstRead;
+      writeFileSync(join(dir, "fixture", "OPEN-ITEMS.md"), "");
+      await nextRead;
+      release(owned);
+      await f.settle();
+      expect(f.delivered).toEqual([]);
+    } finally {
+      release([]);
+      f.service.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a running role report blocks all matching lead seats when the role is ambiguous", async () => {
+    const first = { ...lead, labels: { [SEAT_LABEL]: "main-assistant" } };
+    const second = {
+      ...lead,
+      id: "other-lead",
+      title: "Other",
+      labels: { [SEAT_LABEL]: "main-assistant" },
+    };
+    const active = {
+      ...worker({ [REPORTS_TO_LABEL]: "role:main-assistant" }),
+      lifecycle: "running",
+    };
+    const f = fixture([first, second, active], { ledger: owned, enabled: false });
+    try {
+      f.turn(LEAD);
+      await f.settle();
+      expect(f.delivered).toEqual([]);
+      active.lifecycle = "idle";
+      f.turn(WORKER);
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+      expect(f.delivered[0]!.leadId).toBe(LEAD);
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  test("READY work can wake an idle lead without any worker", async () => {
+    const f = fixture([lead], { ledger: owned, enabled: false });
+    try {
+      f.turn(LEAD);
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+      expect(f.delivered[0]!.prompt).toContain("Create a worker if needed");
+      expect(f.timers).toEqual([]);
+      f.clock.now += 2 * 3600_000;
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  test("a project label blocks a nudge even without a reporting line", async () => {
+    const projectLead = {
+      ...lead,
+      labels: { "fulcra.project": "fixture", "fulcra.role": "orchestration" },
+    };
+    const peer = {
+      id: "peer",
+      title: "Peer",
+      labels: { "fulcra.project": "fixture" },
+      lifecycle: "running",
+    };
+    const f = fixture([projectLead, peer], {
+      enabled: false,
+      ledger: [{ project: "fixture", id: "FX-1", owner: "fixture", status: "OPEN" }],
+    });
+    try {
+      f.turn(LEAD);
+      await f.settle();
+      expect(f.delivered).toEqual([]);
+      f.stream(peer.id, { type: "turn_started" });
+      peer.lifecycle = "idle";
+      f.stream(peer.id, { type: "turn_completed" });
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+      expect(f.delivered[0]!.leadId).toBe(LEAD);
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  test("an archived project worker still blocks the nudge until its run stops", async () => {
+    const active = { ...worker(), lifecycle: "running", archivedAt: new Date().toISOString() };
+    const f = fixture([lead, active], { ledger: owned, enabled: false });
+    try {
+      f.turn(LEAD);
+      await f.settle();
+      expect(f.delivered).toEqual([]);
+      active.lifecycle = "closed";
+      f.turn(LEAD);
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  test.each(["failed", "canceled"])(
+    "a %s lead stays quiet while its project peers remain eligible",
+    async (outcome) => {
+      const peerId = "33333333-3333-4333-8333-333333333333";
+      const peer = { ...lead, id: peerId, title: "Peer" };
+      const rows = [...owned, { ...owned[0]!, id: "FU-13", owner: `Peer (${peerId})` }];
+      const f = fixture([lead, peer, idleWorker()], { ledger: rows, enabled: false });
+      try {
+        f.stream(LEAD, { type: "turn_started" });
+        f.stream(LEAD, { type: `turn_${outcome}`, error: "Fixture failure" });
+        await f.settle();
+        expect(f.delivered.map((entry) => entry.leadId)).toEqual([peerId]);
+        f.turn(WORKER);
+        await f.settle();
+        expect(f.delivered.map((entry) => entry.leadId)).toEqual([peerId]);
+        f.turn(LEAD);
+        await f.settle();
+        expect(f.delivered.map((entry) => entry.leadId)).toEqual([peerId, LEAD]);
+      } finally {
+        f.service.stop();
+      }
+    },
+  );
+
+  test("a ledger event makes a stopped lead eligible again", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nudge-stopped-ledger-"));
+    mkdirSync(join(dir, "fixture"));
+    const file = join(dir, "fixture", "OPEN-ITEMS.md");
+    let wake!: () => void;
+    const delivered = new Promise<void>((resolve) => {
+      wake = resolve;
+    });
+    const g = fixture([lead], { ledgerDir: dir, enabled: false, deliver: async () => wake() });
+    try {
+      g.stream(LEAD, { type: "turn_started" });
+      g.stream(LEAD, { type: "turn_canceled" });
+      await g.settle();
+      expect(g.delivered).toEqual([]);
+      writeFileSync(file, "| FX-1 | Work | FIX | Lead (11111111) | OPEN | — | fixture |\n");
+      await delivered;
+      await g.settle();
+      expect(g.delivered).toHaveLength(1);
+      expect(g.delivered[0]!.leadId).toBe(LEAD);
+    } finally {
+      g.service.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a canceled worker turn checks its idle lead without a finish notice", async () => {
+    const f = fixture([lead, idleWorker()], { ledger: owned, enabled: false });
+    try {
+      f.stream(WORKER, { type: "turn_started" });
+      f.stream(WORKER, { type: "turn_canceled", reason: "interrupted" });
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+      expect(f.delivered[0]!.prompt).toContain("You are idle");
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  test("a deferred nudge waits for the next worker event after its interval", async () => {
+    const ledger = [...owned];
+    const f = fixture([lead, idleWorker()], { ledger, enabled: false, now: 10_000 });
+    try {
+      f.turn(LEAD);
+      await f.settle();
+      ledger.push({ ...owned[0]!, id: "FU-13" });
+      f.turn(WORKER);
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+      expect(f.timers).toEqual([]);
+      f.clock.now += 3600_000;
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+      f.turn(WORKER);
+      await f.settle();
+      expect(f.delivered).toHaveLength(2);
+      expect(f.delivered[1]!.prompt).toContain("FU-13");
+      expect(f.timers).toEqual([]);
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  test("it sends nothing while project work runs, without owned READY items, or when disabled", async () => {
     for (const setup of [
       fixture([lead, { ...worker(), lifecycle: "running" }], { ledger: owned }),
       fixture([lead, idleWorker()], { ledger: [] }),
@@ -1074,7 +1464,7 @@ describe("idle-lead nudge", () => {
     }
   });
 
-  test("a lead that ended on a usage limit is not nudged, and a worker's own end is not a lead nudge", async () => {
+  test("a limited lead stays quiet, while a worker end checks its idle lead", async () => {
     const limitedLead: FakeChat = {
       ...lead,
       lastMessage: "You've hit your session limit · resets 3pm (Australia/Brisbane)",
@@ -1089,7 +1479,7 @@ describe("idle-lead nudge", () => {
     const g = fixture([lead, idleWorker()], { ledger: owned });
     g.turn(WORKER);
     await g.settle();
-    expect(g.delivered.filter((d) => d.prompt.includes("You are idle"))).toHaveLength(0);
+    expect(g.delivered.filter((d) => d.prompt.includes("You are idle"))).toHaveLength(1);
   });
 });
 
@@ -1104,6 +1494,33 @@ describe("ledger items", () => {
     "| FU-4 | Other | BUILD | Someone else | OPEN | — | the owner |",
   ].join("\n");
 
+  test.each([
+    ["BLOCKED: x", []],
+    ["OPEN: BLOCKED: x", []],
+    ["OPEN (BLOCKED on owner): x", []],
+    ["OPEN, BLOCKED", []],
+    ["OPEN — BLOCKED", []],
+    ["IN PROGRESS, BLOCKED", []],
+    ["IN PROGRESS – BLOCKED", []],
+    ["OPEN - not blocked", ["FU-1"]],
+    ["OPEN (blocker removed)", ["FU-1"]],
+    ["OPENBLOCKED", ["FU-1"]],
+    ["IN PROGRESS: BLOCKED x", []],
+    ["open: blocked: x", []],
+    ["in progress - ( blocked: x", []],
+    ["OPEN: unblock the BLOCKED dialog", ["FU-1"]],
+    ["OPEN: fix the BLOCKED dialog", ["FU-1"]],
+    ["OPEN: BLOCKEDNESS in the dialog", ["FU-1"]],
+  ])("READY selection checks only the blocked status prefix in %s", (status, expected) => {
+    const rows = parseOpenRows(
+      "fixture",
+      `| FU-1 | Fix | FIX | Lead (11111111) | ${status} | — | fixture |`,
+    );
+    expect(
+      rowsEligibleForNudge({ rows, chat: { id: LEAD, title: "Lead" } }).map((row) => row.id),
+    ).toEqual(expected);
+  });
+
   test("reads only the rows that are not DONE or MOVED, and matches the owner by short id or title", () => {
     const rows = parseOpenRows("fulcra", table);
     expect(rows.map((row) => row.id)).toEqual(["FU-1", "FU-4"]);
@@ -1112,6 +1529,21 @@ describe("ledger items", () => {
       rowsOwnedBy(rows, { id: "22222222-x", title: "Someone else" }).map((row) => row.id),
     ).toEqual(["FU-4"]);
     expect(rowsOwnedBy(rows, { id: "33333333-x", title: "Le" })).toEqual([]);
+  });
+
+  test("READY selection accepts full IDs and lead project labels, and excludes DECIDE rows", () => {
+    const rows = [
+      { project: "fixture", id: "FX-1", owner: LEAD, status: "OPEN" },
+      { project: "fixture", id: "FX-2", owner: "fixture", status: "OPEN" },
+      { project: "fixture", id: "FX-3", owner: "fixture", status: "OPEN", kind: "DECIDE" },
+      { project: "fixture", id: "FX-4", owner: LEAD, status: "DECIDE: owner input" },
+    ];
+    expect(
+      rowsEligibleForNudge({
+        rows,
+        chat: { id: LEAD, title: "Lead", labels: { "fulcra.project": "fixture" } },
+      }).map((row) => row.id),
+    ).toEqual(["FX-1", "FX-2"]);
   });
 
   test("reads rule kinds and excludes standing, blocked, and human-owned rows from nudges", () => {
@@ -1925,5 +2357,123 @@ test("CLI run inherits project labels when a worker uses a separate folder", asy
   } finally {
     await client.close();
     await daemon.close();
+  }
+}, 30000);
+
+test("a real daemon suppresses a short permission wait and delivers a pending request once", async () => {
+  const { createTestPaseoDaemon } = await import("./test-utils/paseo-daemon.js");
+  const { createTestAgentClient } = await import("./test-utils/fake-agent-client.js");
+  const { DaemonClient } = await import("./test-utils/daemon-client.js");
+  const { vi } = await import("vitest");
+  const notices: unknown[] = [];
+  const daemon = await createTestPaseoDaemon({
+    agentClients: {
+      claude: createTestAgentClient("claude"),
+      codex: createTestAgentClient("codex", { onStartTurn: (prompt) => notices.push(prompt) }),
+    },
+  });
+  const client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws` });
+  try {
+    await client.connect();
+    await client.patchDaemonConfig({
+      reportUpOnTurnEnd: undefined,
+      idleLeadNudge: false,
+      autoResumeOnLimit: false,
+    });
+    const manager = daemon.daemon.agentManager;
+    const parent = await manager.createAgent(
+      {
+        provider: "codex",
+        cwd: daemon.paseoHome,
+        modeId: "full-access",
+        title: "Lead",
+      },
+      undefined,
+      {},
+    );
+    const child = await manager.createAgent(
+      { provider: "claude", cwd: daemon.paseoHome, modeId: "default", title: "Worker" },
+      undefined,
+      { labels: { [REPORTS_TO_LABEL]: parent.id } },
+    );
+    const transient = manager.runAgent(child.id, "echo hello");
+    await vi.waitFor(() => expect(manager.getPendingPermissions(child.id)).toHaveLength(1));
+    const shortRequest = manager.getPendingPermissions(child.id)[0]!;
+    await client.respondToPermission(child.id, shortRequest.id, { behavior: "allow" });
+    await transient;
+    await new Promise((resolve) => setTimeout(resolve, PERMISSION_NOTICE_GRACE_MS + 100));
+    expect(notices).toEqual([]);
+
+    const waiting = manager.runAgent(child.id, "echo hello");
+    await vi.waitFor(() => expect(manager.getPendingPermissions(child.id)).toHaveLength(1));
+    expect(notices).toEqual([]);
+    await vi.waitFor(() => expect(notices).toHaveLength(1), {
+      timeout: PERMISSION_NOTICE_GRACE_MS + 3000,
+    });
+    expect(notices[0]).toContain("is waiting for permission");
+    expect(notices[0]).toContain("Tool: Bash");
+    const pending = manager.getPendingPermissions(child.id)[0]!;
+    await client.respondToPermission(child.id, pending.id, { behavior: "allow" });
+    await waiting;
+    expect(manager.getPendingPermissions(child.id)).toEqual([]);
+    expect(notices).toHaveLength(1);
+  } finally {
+    await client.close();
+    await daemon.close();
+  }
+}, 30000);
+
+// This exercises native provider input, rather than the service's delivery adapter.
+test("worker completion and ledger changes wake idle leads through the isolated daemon", async () => {
+  const { createTestPaseoDaemon } = await import("./test-utils/paseo-daemon.js");
+  const { createTestAgentClient } = await import("./test-utils/fake-agent-client.js");
+  const { DaemonClient } = await import("./test-utils/daemon-client.js");
+  const { vi } = await import("vitest");
+  const dir = mkdtempSync(join(tmpdir(), "nudge-daemon-ledger-"));
+  mkdirSync(join(dir, "fixture"));
+  const file = join(dir, "fixture", "OPEN-ITEMS.md");
+  const row = (id: string, owner: string) =>
+    `| ${id} | Work | FIX | ${owner} | OPEN | — | fixture |\n`;
+  writeFileSync(file, row("FX-1", LEAD));
+  vi.stubEnv("FULCRA_LEDGER_DIR", dir);
+  const prompts: unknown[] = [];
+  const daemon = await createTestPaseoDaemon({
+    agentClients: {
+      codex: createTestAgentClient("codex", { onStartTurn: (prompt) => prompts.push(prompt) }),
+    },
+  });
+  const client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws` });
+  try {
+    await client.connect();
+    await client.patchDaemonConfig({
+      reportUpOnTurnEnd: false,
+      idleLeadNudge: true,
+      autoResumeOnLimit: false,
+    });
+    const manager = daemon.daemon.agentManager;
+    const config = { provider: "codex" as const, cwd: daemon.paseoHome, modeId: "full-access" };
+    await manager.createAgent({ ...config, title: "Lead" }, LEAD, {});
+    await manager.createAgent({ ...config, title: "Worker" }, WORKER, {
+      labels: { [REPORTS_TO_LABEL]: LEAD },
+    });
+    await manager.runAgent(WORKER, "Complete fixture work");
+    await vi.waitFor(() => expect(prompts).toHaveLength(2));
+    expect(prompts[1]).toContain("You are idle. You own 1 open ledger item: FX-1");
+    await vi.waitFor(() => expect(manager.hasInFlightRun(LEAD)).toBe(false));
+    const next = await manager.createAgent({ ...config, title: "Next lead" }, undefined, {});
+    writeFileSync(file, row("FX-1", LEAD) + row("FX-2", next.id));
+    await vi.waitFor(() => expect(prompts).toHaveLength(3));
+    expect(prompts[2]).toContain("You are idle. You own 1 open ledger item: FX-2");
+    expect(prompts[2]).toContain("Create a worker if needed");
+    await vi.waitFor(() => expect(manager.hasInFlightRun(next.id)).toBe(false));
+    const { readLeadEvents } = await import("./lead-events.js");
+    const events = readLeadEvents(daemon.paseoHome).sessions;
+    expect(events[LEAD]?.turns.nudge).toBe(1);
+    expect(events[next.id]?.turns.nudge).toBe(1);
+  } finally {
+    await client.close();
+    await daemon.close();
+    vi.unstubAllEnvs();
+    rmSync(dir, { recursive: true, force: true });
   }
 }, 30000);

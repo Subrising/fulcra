@@ -4,6 +4,7 @@ Status: source implementation. Live Mac-to-Mac and Mac-to-PC acceptance remains 
 
 FU-105 — Cross-host worker notices: Fulcra sends `role:main-assistant` notices to its configured host when no local chat holds that role.
 FU-76 — Cross-host spawn creates a worker through a directed link and a destination-owned profile.
+FU-170 — Native creation returns retained finish, error, and permission notices to the calling lead.
 
 The approved review separates reporting lines from creation ancestry (`PASEO-VS-FULCRA-2026-10-12.md:38`).
 Its delivery and suppression constraints appear at lines 350 and 369–372.
@@ -40,6 +41,7 @@ Grant changes, revocation, and expiry block later admissions and old worker cred
 They do not prove that earlier provider work stopped.
 The provider creation fence checks the prepared model, mode, provider, directory, and current grant after plugin preparation.
 Queued worker prompts recheck the grant, reporting line, and permission mode before provider input.
+The `fulcra.hold=done` label refuses later worker prompts.
 
 ## Configuration
 
@@ -61,7 +63,8 @@ An empty operation list grants nothing.
 | `incoming` | Link `id`, source `serverId`, `token`, named `leads`, `operations`, `workloads`, `workspaces`, `profiles`, and `maxWorkers` |
 | `routes`   | Link IDs for `standard`, `heavy`, `gpu`, and `mainAssistant`                                                                |
 
-`operations` permits `spawn`, `notice`, or both.
+Chat `operations` permits `spawn`, `notice`, or both.
+Incoming link `operations` also permits `limits` for account limit observations.
 A notice-only incoming link needs empty `workloads`, `workspaces`, and `profiles`, plus `maxWorkers: 0`.
 The outgoing and matching incoming entry use the same link credential.
 Each local chat and link identity needs a different credential.
@@ -137,11 +140,84 @@ Lead success notices remain suppressed; failed lead turns can cross the link.
 Retained remote children also count for success suppression.
 A notice cannot claim role authority through its text.
 
+## Native worker creation
+
+Agent-scoped `create_agent` accepts an optional destination `serverId`.
+Omit it, or select the local server ID, to keep local creation.
+For a remote host, supply `hostLink` with `messageId`, `workload`, `workspace`, and `profile`.
+Use one retained UUID for retries. Workspace and profile identifiers name destination grants, not source paths or accounts.
+The provider, explicit model, and explicit mode must match the destination profile.
+Local workspace placement, labels, features, and detached creation are refused for remote requests.
+
+The source uses the bound caller's existing chat grant and one directed link to that server ID.
+Unknown hosts, ambiguous links, missing grants, and inactive grants refuse creation.
+The tool returns host, worker, request, and receipt state. It does not return credentials.
+The private source outbox keeps the worker receipt for owner control through the host-link interface.
+A pending or uncertain result requires receipt reconciliation before another creation.
+
+Remote `notifyOnFinish` defaults to `true`. Set it to `false` to disable return notices.
+The destination retains permission checkpoints and the first finish or error under the worker receipt.
+Permission notices use the same grace period as local alerts. Resolved requests do not wake the lead.
+Held permission notices recheck the remote request before provider input.
+The home daemon reads these events with its retained worker credential through the same directed link.
+No reverse link, callback URL, daemon password, or worker-visible link credential is required.
+Notices name the original calling chat, rather than the current main assistant.
+
+The home daemon commits a receipt before notification input. Stable event IDs suppress duplicate network replies and repeated worker events.
+Queued notices survive restart. They wait for the lead's active turn and keep daemon input provenance.
+Notice recovery starts after session revival. A running revived worker keeps its subscription.
+Changed authority, archived callers, and changed provider sessions refuse delivery. Notices never restore an archived lead.
+Credential rotation and expiry renewal preserve return notices while the grants remain active.
+
+Healthy subscriptions check for retained events every ten seconds. Network failures use eight persisted attempts with delays capped at sixty seconds.
+The home daemon reads at most four workers concurrently. It has no timer when no eligible work remains.
+After retry exhaustion, repeat the same native creation request with its original UUID to renew the retry budget.
+This reuses the worker and notice receipts. It never starts a replacement worker or replays a delivered notice.
+
+Each worker keeps up to 127 permission checkpoints and one terminal notice within the existing journal storage limits.
+Do not delete receipt files to clear capacity or retry a request.
+The private source outbox retains notice text and delivery state for owner inspection.
+Run `fulcra host-link status --home <source-home>` to count uncertain notices, exhausted deliveries, and exhausted watches.
+An exhausted watch means the home daemon stopped checking that worker for notices.
+A failed or interrupted provider handoff has state `uncertain`. It requires reconciliation; the daemon never replays it automatically.
+This preserves the native input safety rule when provider acceptance cannot be proved after a crash.
+
+## Shared account limits
+
+Set `shareLimits: true` on each outgoing link that must share account limits.
+Add `limits` to its matching incoming link's `operations`.
+These grants are independent of chat grants, worker profiles, and reporting routes.
+Existing link configurations keep their previous authority.
+
+The daemon shares session (5-hour) and weekly limits from the local pool and quota readings.
+The payload contains an account UUID, limit kind, observation time, and reset time.
+The receiver derives the source host from the authenticated link.
+It ignores unknown account UUIDs and expired observations.
+Account UUIDs must match across the pools; display names do not establish identity.
+No account credential, account name, or provider home crosses the link.
+
+Remote observations stay separate from local pool records and survive daemon restarts.
+A newer local observation, including a local clear or usage reading, takes precedence.
+Equal observation times favor the local host.
+Remote holds expire at their reset and never trigger an account switch or replay a turn.
+The account CLI and pooled usage details identify the limit source.
+
+The daemon sends retained local limits at startup and sends changes from pool file events.
+It retries failed links once per minute without changing the local account state.
+Each pass has a 15-second network deadline per link.
+It never forwards a remote observation.
+A receiver accepts at most eight days until reset and one minute of clock skew.
+Keep paired host clocks synchronized.
+The existing Windows durability restriction also applies to limit sharing.
+
 ## Verification boundary
 
 Run focused tests through the existing test scripts and queue.
-The source tests use real HTTP, private files, durable receipts, and two isolated daemons with test providers.
+The source tests use real HTTP, private files, durable receipts, and isolated agent runtimes with test providers.
 They cover admission, initial input, credential refusal, permission restrictions, retries, response loss, and role moves during held delivery.
+Return-notice cases cover finish, error, permission, restart, link recovery, duplicate suppression, and the real runtime-to-provider handoff.
+
+Account limit tests cover sharing, reset expiry, local precedence, source details, and offline retry over HTTP.
 They do not prove installed Mac-to-Mac or Mac-to-PC provider execution.
 The merge owner must obtain the required fresh security review before integration.
 Do not install or restart live daemons to run this batch's tests.

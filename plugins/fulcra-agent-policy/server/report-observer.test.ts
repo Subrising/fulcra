@@ -58,3 +58,17 @@ describe("report observer provenance", () => {
     expect(f.ends).toMatchObject([{ failed: true, failure: "usage limit", fromNudge: true }]);
   });
 });
+
+test("resolution and close invalidate the exact pending request", () => {
+  const f = fixture();
+  const first = { id: "same", name: "Bash" };
+  const second = { id: "same", name: "AskUserQuestion" };
+  f.observer.permissionRequested("worker", first);
+  expect(f.observer.hasPermission("worker", first)).toBe(true);
+  f.observer.permissionResolved("worker", first.id);
+  f.observer.permissionRequested("worker", second);
+  expect(f.observer.hasPermission("worker", first)).toBe(false);
+  expect(f.observer.hasPermission("worker", second)).toBe(true);
+  f.observer.close("worker");
+  expect(f.observer.hasPermission("worker", second)).toBe(false);
+});

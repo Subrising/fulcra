@@ -179,6 +179,57 @@ describe("AgentStorage", () => {
     });
   });
 
+  test("a stopped turn keeps one pending notice across restart", async () => {
+    const parentId = "11111111-1111-4111-8111-111111111111";
+    const child = createManagedAgent({ id: "22222222-2222-4222-8222-222222222222" });
+    child.labels = { "paseo.parent-agent-id": parentId };
+    await storage.applySnapshot(child);
+    const armed = await storage.armFinishNotice(child, parentId, "report-up");
+    await storage.recordFinishNotice(child.id, "stopped-turn", "stopped");
+    const recovered = new AgentStorage(storagePath, logger);
+    expect(await recovered.getFinishNotice(child.id)).toMatchObject({
+      status: "pending",
+      reason: "stopped",
+      messageId: armed.messageId,
+    });
+    expect(await recovered.recordFinishNotice(child.id, "different-turn", "stopped")).toBeNull();
+    await recovered.settleFinishNotice(child.id, armed.messageId, "delivered", "report-up");
+    expect(await recovered.recordFinishNotice(child.id, "stopped-turn", "stopped")).toBeNull();
+  });
+
+  test("a cancelled finish notice survives restart and permits rearming without dropping pending results", async () => {
+    const parentId = "11111111-1111-4111-8111-111111111111";
+    const child = createManagedAgent({ id: "22222222-2222-4222-8222-222222222222" });
+    child.labels = { "paseo.parent-agent-id": parentId };
+    await storage.applySnapshot(child);
+    const first = await storage.armFinishNotice(child, parentId, "report-up");
+    expect(await storage.recordFinishNotice(child.id, "cancelled-turn", "cancelled")).toMatchObject(
+      { status: "cancelled", messageId: first.messageId },
+    );
+    expect(await storage.recordFinishNotice(child.id, "cancelled-turn", "finished")).toBeNull();
+    const recovered = new AgentStorage(storagePath, logger);
+    expect(await recovered.getFinishNotice(child.id)).toMatchObject({
+      status: "cancelled",
+      messageId: first.messageId,
+    });
+    const next = (await recovered.rearmFinishNotice(child.id, parentId))!;
+    expect(next.status).toBe("armed");
+    expect(next.messageId).not.toBe(first.messageId);
+    await recovered.recordFinishNotice(child.id, "finished-turn", "finished");
+    expect(await recovered.recordFinishNotice(child.id, "cancelled-turn", "cancelled")).toBeNull();
+    expect(await recovered.getFinishNotice(child.id)).toMatchObject({
+      status: "pending",
+      messageId: next.messageId,
+      turnId: "finished-turn",
+    });
+    await recovered.settleFinishNotice(child.id, next.messageId, "delivered", "report-up");
+    expect(await recovered.recordFinishNotice(child.id, "finished-turn", "cancelled")).toBeNull();
+    expect(await recovered.getFinishNotice(child.id)).toMatchObject({
+      status: "delivered",
+      messageId: next.messageId,
+    });
+  });
+
   test("actual snapshot persistence omits live recorded usage across restart", async () => {
     await storage.applySnapshot(
       createManagedAgent({
@@ -199,6 +250,83 @@ describe("AgentStorage", () => {
     expect(record).not.toHaveProperty("lastUsage");
     expect(JSON.stringify(record)).not.toContain("recorded");
   });
+
+  test("runtime MCP credentials stay out of new and archived records", async () => {
+    const internal = {
+      type: "http" as const,
+      url: "http://127.0.0.1:6767/mcp/agents?callerAgentId=fixture",
+      headers: { Authorization: "fixture-credential", "X-Paseo-Report-Origin": "fixture-witness" },
+    };
+    const external = { type: "stdio" as const, command: "fixture-mcp" };
+    const agent = createManagedAgent({
+      id: "runtime-mcp",
+      config: { mcpServers: { paseo: internal, external } },
+      persistence: {
+        provider: "claude",
+        sessionId: "fixture-session",
+        metadata: { cwd: "/tmp/project", mcpServers: { paseo: internal, external } },
+      },
+    });
+    await storage.applySnapshot(agent);
+    const record = await storage.get(agent.id);
+    expect(record?.config?.mcpServers).toEqual({ external });
+    expect(record?.persistence?.metadata?.mcpServers).toEqual({ external });
+    await storage.upsert({ ...record!, archivedAt: "2026-10-15T00:00:00Z" });
+    const [project] = await fs.readdir(storagePath);
+    const content = await fs.readFile(path.join(storagePath, project, `${agent.id}.json`), "utf8");
+    expect(content.includes("fixture-credential")).toBe(false);
+    expect(content.includes("fixture-witness")).toBe(false);
+    expect(agent.persistence?.metadata?.mcpServers).toHaveProperty("paseo");
+  });
+
+  test.each([false, true])(
+    "load rewrites legacy runtime MCP credentials; archived=%s",
+    async (archived) => {
+      const project = path.join(storagePath, "legacy");
+      await fs.mkdir(project, { recursive: true });
+      const file = path.join(project, "legacy-agent.json");
+      const internal = {
+        type: "sse",
+        url: "http://127.0.0.1:6767/mcp/agents",
+        headers: { authorization: "fixture-old-credential" },
+      };
+      const finishNotice = archived
+        ? {
+            parentId: "00000000-0000-4000-8000-000000000001",
+            owner: "report-up" as const,
+            status: "pending" as const,
+            messageId: "fixture-finish-notice",
+          }
+        : undefined;
+      await fs.writeFile(
+        file,
+        JSON.stringify({
+          id: "legacy-agent",
+          provider: "claude",
+          cwd: "/tmp/legacy-project",
+          createdAt: "2026-10-01T00:00:00Z",
+          updatedAt: "2026-10-01T00:00:00Z",
+          archivedAt: archived ? "2026-10-02T00:00:00Z" : null,
+          finishNotice,
+          config: { mcpServers: { paseo: internal } },
+          persistence: {
+            provider: "claude",
+            sessionId: "legacy-session",
+            metadata: { cwd: "/tmp/legacy-project", mcpServers: { paseo: internal } },
+          },
+        }),
+      );
+      const fresh = new AgentStorage(storagePath, logger);
+      const record = await fresh.get("legacy-agent");
+      expect(record?.finishNotice).toEqual(finishNotice);
+      expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
+      expect(record?.config?.mcpServers).toBeUndefined();
+      expect(record?.persistence?.metadata).toEqual({ cwd: "/tmp/legacy-project" });
+      const rewritten = await fs.readFile(file, "utf8");
+      expect(rewritten.includes("fixture-old-credential")).toBe(false);
+      expect(JSON.parse(rewritten).updatedAt).toBe("2026-10-01T00:00:00Z");
+    },
+  );
 
   test("applySnapshot persists configs and snapshot metadata", async () => {
     await storage.applySnapshot(

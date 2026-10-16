@@ -144,6 +144,7 @@ Users can also detach an existing subagent from the subagents track. Detach is d
 
 `notifyOnFinish` defaults to `true` for agent-scoped creation and background prompt follow-ups because most delegated work needs to report back to the creating agent. Set it to `false` only for truly fire-and-forget agents or prompts.
 The child record keeps its finish notice owner and message ID. Report-up owns finish notices by default. `daemon.nativeFinishNotices` enables native ownership only when the parent accepts queued native turns and report rates are initialized. This setting is unsupported in 0.2.19.1. A refused, cancelled, uncertain, or missing native wake uses report-up with the same message ID, including after restart.
+A cancelled worker turn clears its armed finish notice without notifying the parent. The next native prompt can arm a new notice.
 Permission and close notices for these children use the ordinary route. A child message does not replace a finish notice.
 Permission requests are notification checkpoints, not the end of that subscription. The caller is notified again after a permission response when the child finishes, errors, or requests another permission.
 The permission notification includes the normalized request plus the child and request IDs, so the caller can inspect it and respond without fetching agent status.
@@ -176,12 +177,20 @@ This setting does not change reporting rights or authorize permission responses.
 
 ## Idle-lead nudges
 
-An idle lead receives a nudge when its eligible idle-worker set gains a member or a new owned open item appears.
+An idle lead receives a nudge when its eligible worker set grows or new READY ledger work appears.
+No session in that project can be running. READY work can wake a lead that has no workers.
+Project labels and reporting lines identify related sessions. Running turns and background jobs block the nudge.
+Turn-end events and debounced ledger-file changes check these conditions.
 Each lead receives at most one nudge per `daemon.idleLeadNudgeMinIntervalMinutes`. The default is 60 minutes.
-The delivery time persists across daemon restarts. Work added during the interval waits for the lead's next idle event after it ends.
+The delivery time persists across daemon restarts. Work added during the interval waits for the next event after it ends.
+No polling or interval retry timer wakes the lead.
+The ledger watch stops on error until daemon restart; turn-end checks remain active.
 A change that only removes workers or closes items sends no nudge.
-Paused, blocked, or done workers, background jobs, blocked items, and standing rules are excluded.
-Ledger ownership still matches session titles or short IDs.
+Blocked items, DECIDE rows, and standing rules are excluded.
+Blocked statuses can start with `OPEN` or `IN PROGRESS`, followed by separators and `BLOCKED`.
+The word `BLOCKED` later in task text does not exclude a row.
+Ownership matches the lead's title, full or short ID, or project label.
+Paused, blocked, or done workers stay out of the suggested worker list. The lead can create another worker for READY work.
 
 Use the durable worker hold label:
 
@@ -193,7 +202,9 @@ fulcra agent update SESSION_ID --label fulcra.hold=
 ```
 
 Set `done` when you accept a worker's final report. The board places that worker in Done.
-Clear the hold before you give it a new job. The empty value clears the hold. The label controls nudge eligibility; use Stop to interrupt a running turn.
+Clear the hold before you give it a new job. Parent prompts through MCP or the CLI refuse workers held as `done`.
+A refused prompt keeps the hold, so failed delivery cannot move a completed worker back into the active set.
+The empty value clears the hold. Use Stop to interrupt a running turn.
 
 Set a positive whole number of minutes to change the interval:
 
@@ -240,7 +251,11 @@ The provider still owns the underlying runtime. Paseo keeps an agent record so t
 Archive is a **soft delete**: the agent record stays on disk with `archivedAt` set, the runtime is closed, and the agent disappears from active lists. Archive is **global** — it lives on the server and propagates to every connected client.
 
 The app asks you to confirm a lead, owner, or session with open ledger items before archive.
-CLI, MCP, and automatic archive refuse these sessions. Open reporting workers, unread reports,
+CLI, MCP, and automatic archive refuse these sessions.
+Protected restore uses the same lead and ledger ownership check. Agent callers cannot confirm it.
+A capable app must send explicit restore confirmation. Unconfirmed CLI restore and handle-based resume refuse protected archived sessions.
+
+Open reporting workers, unread reports,
 and pending messages block archive even after confirmation. Unknown report state also blocks it.
 Archive checks the full target set before cancellation or archive effects.
 

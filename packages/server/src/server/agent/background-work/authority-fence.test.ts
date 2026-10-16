@@ -11,7 +11,7 @@ import type { AgentClient, AgentSession, AgentStreamEvent } from "../agent-sdk-t
 
 // MULTIHOST-DESIGN §6.3: background work is display only. It may reach the agent snapshot, the
 // workspace status bucket and the app; it must never change the agent's status, and nothing in
-// admission, trusted plugins or management may read it. Idle nudges can exclude busy workers.
+// admission, trusted plugins or management may read it. Idle nudges can exclude busy project sessions.
 
 const SERVER_ROOT = path.resolve(__dirname, "../..");
 const MENTION = /backgroundWork|background_work|BackgroundWork/;
@@ -26,7 +26,7 @@ const ALLOWED = new Map<string, string>([
   ["agent/background-work/process-tree.ts", "the process sample"],
   ["agent/background-work/sampler.ts", "the process sampler"],
   ["workspace-directory.ts", "folds it into the workspace status bucket"],
-  ["report-up.ts", "excludes workers with background jobs from idle nudges only"],
+  ["report-up.ts", "excludes sessions with background jobs from idle nudges only"],
   ["bootstrap.ts", "starts the sampler"],
   ["agent/providers/mock-load-test-agent.ts", "test-only provider: `paseo-e2e background <n>`"],
 ]);
@@ -50,13 +50,13 @@ describe("background work keeps lifecycle and authority separate", () => {
     expect(mentioning).toEqual([...ALLOWED.keys()].sort());
 
     const reportSource = fs.readFileSync(path.join(SERVER_ROOT, "report-up.ts"), "utf8");
-    const idleStart = reportSource.indexOf("  private async idleWorkersOf(");
-    const idleEnd = reportSource.indexOf("\n  /**", idleStart);
-    expect(idleStart).toBeGreaterThan(0);
-    expect(idleEnd).toBeGreaterThan(idleStart);
-    expect(MENTION.test(reportSource.slice(0, idleStart) + reportSource.slice(idleEnd))).toBe(
-      false,
-    );
+    let outsideNudges = reportSource;
+    for (const method of ["idleWorkersOf", "nudgeWorkerReady", "nudgeSessionBusy"]) {
+      const block = new RegExp(`\\n  private (?:async )?${method}\\([\\s\\S]*?\\n  \\}`, "g");
+      expect(outsideNudges.match(block), method).toHaveLength(1);
+      outsideNudges = outsideNudges.replace(block, "");
+    }
+    expect(MENTION.test(outsideNudges)).toBe(false);
 
     const mustNotRead = [
       ...fs

@@ -1,3 +1,4 @@
+import { PERMISSION_NOTICE_GRACE_MS } from "./permission-notice.js";
 import {
   LeadEventDispatcher,
   leadEventsFor,
@@ -17,7 +18,8 @@ export type {
   LimitedChat,
 } from "../../../../plugins/fulcra-agent-policy/server/report-notices.mjs";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, watch, type FSWatcher } from "node:fs";
+import { isArchiveLead } from "./agent/archive-policy.js";
 import path from "node:path";
 import { writePrivateFileAtomicSync } from "./private-files.js";
 import type { Logger } from "pino";
@@ -139,6 +141,8 @@ export interface ReportUpDeps {
   statePath?: string;
   /** The open ledger rows; tests replace it. Default: the project ledgers under FULCRA_LEDGER_DIR or ~/shared-vault. */
   readLedger?: () => readonly LedgerRow[] | Promise<readonly LedgerRow[]>;
+  /** Production watches this directory. Tests can use an isolated ledger directory. */
+  ledgerDir?: string;
 }
 
 type NoticeKind =
@@ -152,6 +156,7 @@ type NoticeKind =
 interface HeldReport {
   prompt: string;
   kind: NoticeKind;
+  permission?: { workerId: string; requestId: string };
 }
 
 class ReportUpDisabledError extends Error {
@@ -198,6 +203,7 @@ export async function leadChatOf(
   return { id };
 }
 
+export { PERMISSION_NOTICE_GRACE_MS } from "./permission-notice.js";
 const NUDGE_DELIVERY_TIMEOUT_MS = 60_000;
 interface PendingNudge {
   handoff?: object;
@@ -213,6 +219,7 @@ interface NudgeState {
   workerIds: string[];
   itemIds: string[];
   itemOwners: string[];
+  projects: string[];
   needsDelivery: boolean;
   deferred?: boolean;
 }
@@ -231,6 +238,10 @@ export class ReportUpService {
   private readonly nudgeStates = new Map<string, NudgeState>();
   private readonly nudging = new Map<string, PendingNudge>();
   private nudgeGeneration = 0;
+  private ledgerRevision = 0;
+  private readonly nudgeStopped = new Set<string>();
+  private ledgerWatcher?: FSWatcher;
+  private ledgerDebounce?: ReturnType<typeof setTimeout>;
   private readonly nudgeDeliveredAt = new Map<string, number>();
 
   constructor(private readonly deps: ReportUpDeps) {
@@ -248,12 +259,44 @@ export class ReportUpService {
       },
       onEnded: (input) => this.onTurnEnd(input),
       onPermission: (id, request) => {
-        void this.notifyPermission(id, request).catch((err: unknown) =>
-          this.deps.logger.warn({ err, agentId: id }, "Permission notice failed"),
-        );
+        // Bypass and hook answers can resolve a request before a person can act on it.
+        this.schedule(() => {
+          void this.notifyPermission(id, request).catch((err: unknown) =>
+            this.deps.logger.warn({ err, agentId: id }, "Permission notice failed"),
+          );
+        }, PERMISSION_NOTICE_GRACE_MS);
       },
     });
     this.load();
+    if (deps.ledgerDir) {
+      try {
+        this.ledgerWatcher = watch(deps.ledgerDir, { recursive: true }, (_event, file) => {
+          if (this.stopped) return;
+          if (
+            file &&
+            path.dirname(String(file)) !== "." &&
+            path.basename(String(file)) !== "OPEN-ITEMS.md"
+          )
+            return;
+          this.ledgerRevision++;
+          this.nudgeStopped.clear();
+          for (const id of this.nudging.keys()) this.cancelNudge(id, "Project ledger changed");
+          clearTimeout(this.ledgerDebounce);
+          this.ledgerDebounce = setTimeout(() => {
+            this.ledgerDebounce = undefined;
+            this.checkIdleLeads();
+          }, 100);
+          this.ledgerDebounce.unref();
+        });
+        this.ledgerWatcher.on("error", (err) => {
+          this.ledgerWatcher?.close();
+          this.deps.logger.warn({ err }, "Ledger watch stopped; turn-end checks remain active");
+        });
+        this.ledgerWatcher.unref();
+      } catch (err) {
+        this.deps.logger.warn({ err }, "Ledger watch unavailable; turn-end checks remain active");
+      }
+    }
   }
 
   /** Reads the kept state: limits that have not passed, and reports still held. Held reports are released after the reset. */
@@ -345,6 +388,13 @@ export class ReportUpService {
     if (event.type === "agent_state" && event.agent.lifecycle === "idle")
       this.retryRefusedFinishesOnIdle(event.agent.id);
     if (event.type === "agent_stream") this.observer.onStream(event.agentId, event.event);
+    if (event.type === "agent_stream" && event.event.type === "turn_canceled") {
+      this.stopNudge(event.agentId);
+      this.checkIdleLeads();
+      void this.deliverStoppedFinish(event.agentId).catch((err: unknown) =>
+        this.deps.logger.warn({ err, agentId: event.agentId }, "Stopped worker notice failed"),
+      );
+    }
   }
 
   private retryRefusedFinishesOnIdle(parentId: string): void {
@@ -393,6 +443,8 @@ export class ReportUpService {
 
   stop(): void {
     this.stopped = true;
+    this.ledgerWatcher?.close();
+    clearTimeout(this.ledgerDebounce);
     this.observer.stop();
     for (const pending of this.nudging.values())
       pending.abort.abort(new Error("Idle nudge service stopped"));
@@ -421,11 +473,10 @@ export class ReportUpService {
 
   private onTurnEnd(input: ReportTurnEnd): void {
     if (this.stopped) return;
-    const { agentId, failed } = input;
-    if (!failed)
-      void this.nudgeIdleLead(agentId).catch((err: unknown) =>
-        this.deps.logger.warn({ err, agentId }, "Idle-lead nudge failed"),
-      );
+    const { agentId } = input;
+    if (input.failed) this.stopNudge(agentId);
+    else this.nudgeStopped.delete(agentId);
+    this.checkIdleLeads();
     void this.handleOwnedFinish(input)
       .then((handled) => {
         if (!handled) this.onUnownedTurnEnd(input);
@@ -434,6 +485,17 @@ export class ReportUpService {
       .catch((err: unknown) =>
         this.deps.logger.warn({ err, agentId }, "Owned finish notice failed"),
       );
+  }
+
+  private stopNudge(agentId: string): void {
+    this.nudgeStopped.add(agentId);
+    this.cancelNudge(agentId, "Receiver turn stopped or failed");
+  }
+
+  private async deliverStoppedFinish(agentId: string): Promise<void> {
+    const notice = await this.deps.agentStorage.getFinishNotice?.(agentId);
+    if (notice?.status === "pending" && notice.reason === "stopped")
+      await this.deliverOwnedFinish(agentId, notice, false);
   }
 
   private onUnownedTurnEnd(input: ReportTurnEnd): void {
@@ -576,7 +638,8 @@ export class ReportUpService {
     notice: FinishNotice,
     recovery: boolean,
   ): Promise<boolean> {
-    if (notice.owner !== "native" || notice.reason === "closed") return false;
+    if (notice.owner !== "native" || notice.reason === "closed" || notice.reason === "stopped")
+      return false;
     const outcome = recovery
       ? await this.deps.agentManager.nativeFinishReceiptStatus(notice.messageId).catch((err) => {
           this.deps.logger.warn({ err, childId }, "Native finish receipt could not be read");
@@ -619,6 +682,26 @@ export class ReportUpService {
     return null;
   }
 
+  private async ownedFinishPrompt(
+    worker: LineAgent,
+    notice: FinishNotice,
+    observedLast?: string | null,
+  ): Promise<string> {
+    if (notice.reason === "stopped")
+      return formatSystemNotificationPrompt(
+        `Agent ${worker.id} (${titleOf(worker)}): worker turn stopped.`,
+      );
+    if (notice.reason === "closed")
+      return formatSystemNotificationPrompt(`Agent ${worker.id} (${titleOf(worker)}) was closed.`);
+    const lastMessage =
+      observedLast === undefined
+        ? await this.deps.agentManager.getLastAssistantMessage(worker.id).catch(() => null)
+        : observedLast;
+    return formatSystemNotificationPrompt(
+      formatReportUpNotice({ worker, failed: notice.reason === "errored", lastMessage }),
+    );
+  }
+
   private async deliverOwnedFinish(
     childId: string,
     notice: FinishNotice,
@@ -648,20 +731,8 @@ export class ReportUpService {
       )
         throw new OwnedFinishLineChanged(currentParentId, "reporting line unavailable");
       const finalCheck = this.captureOwnedFinalCheck(childId, notice, reportsTo(worker));
-      const lastMessage =
-        observedLast === undefined
-          ? await this.deps.agentManager.getLastAssistantMessage(childId).catch(() => null)
-          : observedLast;
-      const body =
-        notice.reason === "closed"
-          ? `Agent ${childId} (${titleOf(worker)}) was closed.`
-          : formatReportUpNotice({
-              worker,
-              failed: notice.reason === "errored",
-              lastMessage,
-            });
-      const prompt = formatSystemNotificationPrompt(body);
-      const durableDefault = notice.owner === "report-up";
+      const prompt = await this.ownedFinishPrompt(worker, notice, observedLast);
+      const durableDefault = notice.owner === "report-up" || notice.reason === "stopped";
       const send = async () => {
         finalCheck();
         if (durableDefault) {
@@ -801,17 +872,22 @@ export class ReportUpService {
   }
 
   /**
-   * A lead that is idle while it owns open ledger items and has idle workers gets one message that lists them.
-   * Event-driven: it runs when the lead's turn ends. Nothing is sent when there are no idle workers, no open items,
+   * An idle lead with READY ledger work receives a nudge when its project has no running sessions.
+   * Turn-end and ledger events check it. Nothing is sent without eligible items,
    * when the lead is at a usage limit, or when eligible work has not grown since its last observation.
    */
-  private async nudgeIdleLead(leadId: string): Promise<void> {
+  private async nudgeIdleLead(
+    leadId: string,
+    rows: readonly LedgerRow[],
+    ledgerRevision: number,
+  ): Promise<void> {
     if (!this.nudgeEnabled()) {
       this.cancelNudge(leadId, "Idle nudge was turned off");
       return;
     }
     await new Promise((resolve) => setImmediate(resolve));
-    if (this.observer.isOpen(leadId) || this.limitOf(leadId)) return;
+    if (this.nudgeStopped.has(leadId) || this.observer.isOpen(leadId) || this.limitOf(leadId))
+      return;
     const lead = await this.store.get(leadId);
     const live = this.deps.agentManager.getAgent(leadId);
     if (!lead || lead.archivedAt || live?.internal) return;
@@ -823,17 +899,18 @@ export class ReportUpService {
     const stop = classifyEndingAssistantMessage(last, this.now());
     if (stop && stop.kind !== "network") return;
     const workers = await this.idleWorkersOf(leadId);
-    const owned = rowsEligibleForNudge({
-      rows: await (this.deps.readLedger ?? (() => readOpenLedgerRows(defaultLedgerDir())))(),
-      chat: { id: leadId, title: titleOf(lead) },
-      skipOwners: this.nudgeSkipOwners(),
-    });
+    const owned = this.ownedReadyRows(lead, rows);
+    if (ledgerRevision !== this.ledgerRevision) return;
     const state = this.observeNudge(leadId, workers, owned);
     const fingerprint = state.fingerprint;
-    if (!workers.length || !owned.length) {
+    if (!owned.length) {
       state.needsDelivery = false;
       state.deferred = false;
-      this.cancelNudge(leadId, "Idle nudge has no eligible workers or owned open items");
+      this.cancelNudge(leadId, "Idle nudge has no owned READY items");
+      return;
+    }
+    if (!this.projectIdle(leadId, state.projects)) {
+      this.cancelNudge(leadId, "Project work is running");
       return;
     }
     if (this.observer.isOpen(leadId)) return;
@@ -848,6 +925,112 @@ export class ReportUpService {
       fingerprint,
       formatSystemNotificationPrompt(formatNudge(workers, owned)),
     );
+  }
+
+  private ownedReadyRows(lead: LineAgent, rows: readonly LedgerRow[]): LedgerRow[] {
+    return rowsEligibleForNudge({
+      rows,
+      chat: {
+        id: lead.id,
+        title: titleOf(lead),
+        labels:
+          isArchiveLead({ labels: lead.labels ?? {} }) ||
+          lead.labels?.["fulcra.role"] === "project-lead"
+            ? lead.labels
+            : undefined,
+      },
+      skipOwners: this.nudgeSkipOwners(),
+    });
+  }
+
+  /** Turn-end and ledger events share the existing per-lead fingerprint and delivery lane. */
+  private checkIdleLeads(): void {
+    if (!this.nudgeEnabled()) return;
+    const ledgerRevision = this.ledgerRevision;
+    void this.store
+      .list()
+      .then(async (chats) => {
+        const rows = this.deps.readLedger
+          ? await this.deps.readLedger()
+          : await readOpenLedgerRows(this.deps.ledgerDir ?? defaultLedgerDir());
+        const parents = new Set(
+          (
+            await Promise.all(
+              chats
+                .filter((chat) => !chat.archivedAt && reportsTo(chat))
+                .map((chat) => this.leadOf(chat)),
+            )
+          ).flatMap((lead) => ("id" in lead ? [lead.id] : [])),
+        );
+        return Promise.all(
+          chats.map(async (chat) => {
+            if (this.stopped || chat.archivedAt) return;
+            if (
+              reportsTo(chat) &&
+              !isArchiveLead({ labels: chat.labels ?? {} }) &&
+              chat.labels?.["fulcra.role"] !== "project-lead" &&
+              !parents.has(chat.id)
+            )
+              return;
+            await this.nudgeIdleLead(chat.id, rows, ledgerRevision);
+          }),
+        );
+      })
+      .catch((err: unknown) => this.deps.logger.warn({ err }, "Idle-lead nudge failed"));
+  }
+
+  private projectIdle(leadId: string, projects: readonly string[], admittingLead = false): boolean {
+    const agents = this.deps.agentManager.listAgents();
+    const lead = this.deps.agentManager.getAgent(leadId);
+    if (!lead || lead.archivedAt || lead.internal) return false;
+    if (lead.lifecycle !== "idle" && (!admittingLead || lead.lifecycle !== "running")) return false;
+    const names = new Set(
+      [...projects, lead.labels?.["fulcra.project"], lead.labels?.project].filter(Boolean),
+    );
+    for (const agent of agents) {
+      if (admittingLead && agent.id === leadId) continue;
+      if (!this.nudgeSessionBusy(agent.id)) continue;
+      if (
+        agent.id === leadId ||
+        [agent.labels?.["fulcra.project"], agent.labels?.project].some(
+          (name) => name && names.has(name),
+        )
+      )
+        return false;
+      if (this.reportsThrough(agent, leadId, agents)) return false;
+    }
+    return true;
+  }
+
+  private nudgeSessionBusy(id: string): boolean {
+    const live = this.deps.agentManager.getAgent(id);
+    return (
+      live?.lifecycle === "running" ||
+      this.observer.isOpen(id) ||
+      this.deps.agentManager.hasInFlightRun(id) ||
+      (live?.backgroundWork?.count ?? 0) > 0
+    );
+  }
+
+  private reportsThrough(agent: LineAgent, leadId: string, agents: readonly LineAgent[]): boolean {
+    const byId = new Map(agents.map((entry) => [entry.id, entry]));
+    let current: LineAgent | undefined = agent;
+    const seen = new Set<string>();
+    while (current && !seen.has(current.id)) {
+      seen.add(current.id);
+      const ref = reportsTo(current);
+      if (!ref) break;
+      const leadSeat = byId.get(leadId)?.labels?.[SEAT_LABEL];
+      if (leadSeat && ref === `${ROLE_REF_PREFIX}${leadSeat}`) return true;
+      const holder = ref.startsWith(ROLE_REF_PREFIX)
+        ? findRoleHolder(agents, ref.slice(ROLE_REF_PREFIX.length))
+        : null;
+      const [id, server] = (holder && "id" in holder ? holder.id : ref).split("@", 2);
+      if (server && server !== this.deps.localServerId) break;
+      if (id === leadId) return true;
+      current = id ? byId.get(id) : undefined;
+    }
+    return false;
   }
 
   private prepareNudgeGeneration(leadId: string, fingerprint: string): boolean {
@@ -888,6 +1071,7 @@ export class ReportUpService {
       workerIds,
       itemIds,
       itemOwners,
+      projects: [...new Set(items.map((item) => item.project))],
       fingerprint,
       needsDelivery: gained || retry || Boolean(previous?.deferred),
       deferred: previous?.deferred,
@@ -934,8 +1118,12 @@ export class ReportUpService {
       this.nudging.get(leadId)?.generation === pending.generation &&
       this.nudgeStates.get(leadId)?.fingerprint === fingerprint &&
       !pending.abort.signal.aborted &&
+      !this.nudgeStopped.has(leadId) &&
       this.nudgeAllowed(leadId) &&
       this.now() - pending.startedAt < NUDGE_DELIVERY_TIMEOUT_MS &&
+      // The manager registers this nudge as running before its final provider check.
+      // Idle-only admission protects the receiver; project peers must remain idle.
+      this.projectIdle(leadId, state?.projects ?? [], Boolean(pending.handoff)) &&
       (state?.workerIds.every((id) => this.nudgeWorkerReady({ id })) ?? false) &&
       (state?.itemOwners.every((owner) => !isNudgeOwnerSkipped(owner, this.nudgeSkipOwners())) ??
         false);
@@ -976,6 +1164,8 @@ export class ReportUpService {
 
   /** Tells the lead once that a chat is waiting for permission. Nothing is allowed or denied here. */
   private async notifyPermission(workerId: string, request: PermissionRequest): Promise<void> {
+    const current = () => this.permissionCurrent(workerId, request);
+    if (!current()) return;
     const owned = await this.deps.agentStorage.getFinishNotice?.(workerId);
     if (!owned && !this.otherEnabled()) return;
     const live = this.deps.agentManager.getAgent(workerId);
@@ -985,9 +1175,10 @@ export class ReportUpService {
       formatPermissionNotice({
         worker,
         request,
-        cwd: (live as { cwd?: string } | null)?.cwd ?? (worker as { cwd?: string }).cwd ?? null,
+        cwd: live?.cwd ?? null,
       }),
     );
+    if (!current()) return;
     if (await this.deps.remoteNotice?.(workerId, prompt, "permission")) return;
     const lead = await this.leadOf(worker);
     if ("skip" in lead) return;
@@ -1000,7 +1191,17 @@ export class ReportUpService {
       this.deps.localServerId,
     );
     if (!decision?.allowed) return;
-    await this.toLead(workerId, lead.id, prompt, owned ? "owned-permission" : "permission");
+    await this.toLead(
+      workerId,
+      lead.id,
+      prompt,
+      owned ? "owned-permission" : "permission",
+      current,
+      {
+        workerId,
+        requestId: request.id,
+      },
+    );
   }
 
   private now(): number {
@@ -1071,12 +1272,14 @@ export class ReportUpService {
     leadId: string,
     prompt: string,
     kind: NoticeKind = "report-up",
+    current: () => boolean = () => true,
+    permission?: HeldReport["permission"],
   ): Promise<void> {
-    if (!this.noticeEnabled(kind)) return;
+    if (!this.noticeEnabled(kind) || !current()) return;
     const leadLimit = this.limitOf(leadId);
     if (leadLimit) {
       const held = this.held.get(leadId) ?? [];
-      held.push({ prompt, kind });
+      held.push({ prompt, kind, ...(permission ? { permission } : {}) });
       if (held.length > MAX_HELD_REPORTS) held.shift();
       this.held.set(leadId, held);
       this.save();
@@ -1094,8 +1297,8 @@ export class ReportUpService {
     }
     // Held until the lead's turn ends, one queue per lead, in order (held-sends.ts).
     heldSendsFor(this.deps.agentManager, this.deps.logger).hold(leadId, async () => {
-      if (!this.noticeEnabled(kind)) return;
-      await this.send(leadId, prompt, kind);
+      if (!this.noticeEnabled(kind) || !current()) return;
+      await this.send(leadId, prompt, kind, current);
       this.deps.logger.info({ agentId: workerId, lead: leadId, kind }, "Report-up delivered");
     });
   }
@@ -1123,11 +1326,45 @@ export class ReportUpService {
     }
   }
 
+  private permissionCurrent(workerId: string, request: PermissionRequest): boolean {
+    return (
+      this.observer.hasPermission(workerId, request) && this.permissionPending(workerId, request.id)
+    );
+  }
+
+  private permissionPending(workerId: string, requestId: string): boolean {
+    const worker = this.deps.agentManager.getAgent(workerId);
+    if (!worker || worker.archivedAt || worker.internal) return false;
+    try {
+      return this.deps.agentManager
+        .getPendingPermissions(workerId)
+        .some((request) => request.id === requestId);
+    } catch {
+      return false;
+    }
+  }
+
+  private heldNoticeCurrent(report: HeldReport): boolean {
+    return (
+      this.noticeEnabled(report.kind) &&
+      (!report.permission ||
+        this.permissionPending(report.permission.workerId, report.permission.requestId))
+    );
+  }
+
   private async deliverHeld(leadId: string, held: readonly HeldReport[]): Promise<void> {
-    const enabled = held.filter((report) => this.noticeEnabled(report.kind));
+    const enabled = held.filter((report) => this.heldNoticeCurrent(report));
     if (!enabled.length) return;
     if (this.limitOf(leadId)) {
-      for (const report of enabled) await this.toLead(leadId, leadId, report.prompt, report.kind);
+      for (const report of enabled)
+        await this.toLead(
+          leadId,
+          leadId,
+          report.prompt,
+          report.kind,
+          () => this.heldNoticeCurrent(report),
+          report.permission,
+        );
       return;
     }
     const body = enabled.map(({ prompt }) => prompt.trim()).join("\n\n");
@@ -1138,10 +1375,13 @@ export class ReportUpService {
       if (enabled.some((report) => report.kind === "finished-turn")) kind = "finished-turn";
       else if (enabled.every((report) => report.kind === enabled[0]!.kind)) kind = enabled[0]!.kind;
       try {
-        await this.send(leadId, notice, kind);
+        await this.send(leadId, notice, kind, undefined, undefined, undefined, () => {
+          if (!enabled.every((report) => this.heldNoticeCurrent(report)))
+            throw new ReportUpDisabledError();
+        });
       } catch (err) {
         // The final check refused input. Retry only the notices that remain enabled, with no provider input repeated.
-        const remaining = enabled.filter((report) => this.noticeEnabled(report.kind));
+        const remaining = enabled.filter((report) => this.heldNoticeCurrent(report));
         if (err instanceof ReportUpDisabledError && remaining.length < enabled.length) {
           await this.deliverHeld(leadId, remaining);
           return;
@@ -1361,7 +1601,7 @@ export class ReportUpService {
     leadId: string,
     prompt: string,
     kind: NoticeKind,
-    currentNudge?: () => boolean,
+    currentNotice?: () => boolean,
     captureHandoff?: (handle: object) => void,
     ownedMessageId?: string,
     ownedFinalCheck?: () => void,
@@ -1373,7 +1613,7 @@ export class ReportUpService {
       ownedFinalCheck?.();
       if (ownedMessageId && agentManager.hasSubmittedFinishMessageNow(leadId, ownedMessageId))
         throw new OwnedFinishAlreadyDelivered();
-      if (currentNudge && !currentNudge()) throw new Error("Idle nudge generation expired");
+      if (currentNotice && !currentNotice()) throw new Error("Notice is no longer current");
     };
     const causes = {
       "idle-nudge": "nudge",
@@ -1399,8 +1639,9 @@ export class ReportUpService {
             ? `${NUDGE_MESSAGE_PREFIX}${randomUUID()}`
             : `${FINISH_NOTIFICATION_MESSAGE_PREFIX}report-up:${randomUUID()}`),
         runOptions: { [FINAL_INPUT_CHECK]: finalCheck },
-        activeTurnBehavior: "steer",
-        steerOnly: true,
+        ...(kind === "idle-nudge"
+          ? { queuedOnly: true }
+          : { activeTurnBehavior: "steer" as const, steerOnly: true }),
         unarchive: false,
         logger,
       });
@@ -1451,6 +1692,7 @@ export function startReportUp(input: {
   }
   const service = new ReportUpService({
     remoteNotice: input.remoteNotice,
+    ledgerDir: defaultLedgerDir(),
     agentManager: input.agentManager,
     agentStorage: input.agentStorage,
     isEnabled: () =>
@@ -1508,7 +1750,11 @@ export function startReportUp(input: {
         service.onEvent(event);
         return;
       }
-      if (input.hooks && (event.type !== "agent_stream" || event.event.type !== "timeline")) return;
+      if (
+        input.hooks &&
+        (event.type !== "agent_stream" || !["timeline", "turn_canceled"].includes(event.event.type))
+      )
+        return;
       service.onEvent(event);
     },
     { replayState: false },

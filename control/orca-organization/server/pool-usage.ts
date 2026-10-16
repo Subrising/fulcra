@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import { accountLimit, readAccounts } from "./accounts.mjs";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import {
   toneFromUsedPct,
@@ -98,8 +99,15 @@ export function createPoolUsage(root: () => string, now = Date.now) {
             (r) => r.accountId === account.id && r.provider === account.provider,
           )
         : undefined;
-      const until = Date.parse(account.limitedUntil ?? "");
-      const held = Number.isFinite(until) && until > now();
+      let limit: ReturnType<typeof accountLimit>;
+      try {
+        const stored = readAccounts(root()).accounts.find((a) => a.id === account.id);
+        limit = stored ? accountLimit(stored, now()) : null;
+      } catch {
+        return unavailable("Pool limit data is unavailable.");
+      }
+      const held = limit !== null;
+      const source = limit?.source === "local" ? "local" : `remote host ${limit?.source}`;
       if (
         !row ||
         row.status === "unavailable" ||
@@ -109,7 +117,7 @@ export function createPoolUsage(root: () => string, now = Date.now) {
       )
         return unavailable(
           held
-            ? `This account is held until ${account.limitedUntil}. Usage is unavailable.`
+            ? `This account is held until ${limit!.until}. Source: ${source}. Usage is unavailable.`
             : "Usage is unavailable for this pooled account.",
         );
       const windows = (
@@ -142,9 +150,10 @@ export function createPoolUsage(root: () => string, now = Date.now) {
                 {
                   id: "pool-hold",
                   label: "Pool hold",
-                  value: account.limitedUntil!,
+                  value: limit!.until,
                   tone: "danger" as const,
                 },
+                { id: "limit-source", label: "Limit source", value: source },
               ]
             : []),
         ],
