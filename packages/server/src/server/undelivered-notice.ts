@@ -21,6 +21,7 @@ export interface UndeliveredNoticeInput {
   sender: { agentId: string; serverId?: string };
   targetId: string;
   reason: string;
+  count?: number;
 }
 
 export function tellSenderUndelivered(input: UndeliveredNoticeInput): void {
@@ -32,8 +33,13 @@ export function tellSenderUndelivered(input: UndeliveredNoticeInput): void {
   );
   if (!local || !agentManager.getAgent(sender.agentId)) return;
   const title = agentManager.getAgent(targetId)?.config.title?.trim() || targetId.slice(0, 8);
+  const subject =
+    input.count === undefined
+      ? "Your message"
+      : `Your ${input.count} message${input.count === 1 ? "" : "s"}`;
+  const verb = input.count === undefined || input.count === 1 ? "was" : "were";
   const prompt = formatSystemNotificationPrompt(
-    `Your message to ${title} (${targetId}) was not delivered: ${reason}`,
+    `${subject} to ${title} (${targetId}) ${verb} not delivered: ${reason}`,
   );
   try {
     heldSendsFor(agentManager, logger).hold(sender.agentId, () =>
