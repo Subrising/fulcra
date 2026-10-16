@@ -16,6 +16,7 @@ import {
   progressBoardRpc,
   readyItems,
   recentDone,
+  unknownDone,
   type ProgressBoard,
 } from "../shared/progress-board";
 
@@ -67,6 +68,7 @@ export function ProgressBoardView({
   const wide = width >= 1100 && !layout.compact;
   const now = Date.now();
   const [doneDays, setDoneDays] = useState(1);
+  const [earlierOpen, setEarlierOpen] = useState(false);
   const [moreDone, setMoreDone] = useState<ReadonlySet<string>>(new Set());
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const summary = (text: string) =>
@@ -105,56 +107,65 @@ export function ProgressBoardView({
     selected === "all"
       ? "All hosts"
       : (hosts.find((host) => host.serverId === selected)?.label ?? "Selected computer");
-  const rows = (project: ProgressBoard["projects"][number], section: Section) => {
+  const rows = (project: ProgressBoard["projects"][number], section: Section, earlier = false) => {
     if (section === "running")
       return project.jobs.filter(
         (job) => job.status === "running" || job.status === "initializing",
       );
-    if (section === "done") return recentDone(project.items, now, doneDays);
+    if (section === "done")
+      return earlier ? unknownDone(project.items) : recentDone(project.items, now, doneDays);
     if (section === "next") return readyItems(project.items);
     return project.items.filter((item) => /^BLOCKED\b/i.test(item.status));
   };
-  function section(section: Section) {
-    const count = projects.reduce((sum, project) => sum + rows(project, section).length, 0);
+  function renderSection(section: Section, earlier = false) {
+    const count = projects.reduce(
+      (sum, project) => sum + rows(project, section, earlier).length,
+      0,
+    );
     const empty: Record<Section, string> = {
       running: "No sessions are running on the connected computers.",
-      done: `No work closed in the last ${doneDays === 1 ? "24 hours" : "7 days"}.`,
+      done: `No recorded completions in the last ${doneDays === 1 ? "24 hours" : "7 days"}.`,
       next: "No open work is ready in the available project lists.",
       blocked: "No work is marked blocked in the available project lists.",
     };
     return (
-      <View testID={`board-section-${section}`} style={{ gap: 16, minWidth: 0 }}>
-        <View
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 10,
-            borderBottomWidth: 1,
-            borderColor: c.border,
-            paddingBottom: 14,
-          }}
-        >
-          <Text
-            accessibilityRole="header"
+      <View
+        testID={earlier ? "board-closed-earlier-items" : `board-section-${section}`}
+        style={{ gap: 16, minWidth: 0 }}
+      >
+        {!earlier && (
+          <View
             style={{
-              ...body,
-              fontSize: 21,
-              lineHeight: 28,
-              fontWeight: "700",
-              color: colors[section],
-              flex: 1,
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 10,
+              borderBottomWidth: 1,
+              borderColor: c.border,
+              paddingBottom: 14,
             }}
           >
-            {labels[section]}
-          </Text>
-          <Text
-            accessibilityLabel={`${count} ${labels[section].toLowerCase()}`}
-            style={{ ...body, color: colors[section], fontWeight: "700", fontSize: 20 }}
-          >
-            {count}
-          </Text>
-        </View>
-        {section === "done" && (
+            <Text
+              accessibilityRole="header"
+              style={{
+                ...body,
+                fontSize: 21,
+                lineHeight: 28,
+                fontWeight: "700",
+                color: colors[section],
+                flex: 1,
+              }}
+            >
+              {labels[section]}
+            </Text>
+            <Text
+              accessibilityLabel={`${count} ${labels[section].toLowerCase()}`}
+              style={{ ...body, color: colors[section], fontWeight: "700", fontSize: 20 }}
+            >
+              {count}
+            </Text>
+          </View>
+        )}
+        {section === "done" && !earlier && (
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
             <WorkButton
               theme={theme}
@@ -179,156 +190,147 @@ export function ProgressBoardView({
                 : "Connect a computer with sessions or a project list to see work here."}
           </Text>
         )}
-        {section === "done" &&
-          projects.some((project) =>
-            rows(project, "done").some(
-              (item) => "completedSource" in item && item.completedSource === "file",
-            ),
-          ) && <Text style={muted}>Approximate times use the project list’s last change.</Text>}
+        {earlier && <Text style={muted}>These items have no recorded close date.</Text>}
         {projects.map((project) => {
-          const entries = rows(project, section);
+          const entries = rows(project, section, earlier);
+          const listKey = `${earlier ? "unknown:" : ""}${project.id}`;
           if (!entries.length) return null;
           return (
             <View key={project.id} style={{ gap: 0, minWidth: 0 }}>
               <Text style={{ ...muted, fontWeight: "700", paddingBottom: 6 }}>
                 {plain(project.name)} · {entries.length}
               </Text>
-              {(section === "done" && !moreDone.has(project.id)
-                ? entries.slice(0, 10)
-                : entries
-              ).map((entry) => {
-                if ("title" in entry) {
-                  const contents = (
-                    <View style={{ gap: 6, minWidth: 0 }}>
-                      <Text style={{ ...body, fontWeight: "600" }}>{plain(entry.title)}</Text>
-                      <Text style={{ ...muted, color: colors.running }}>
-                        {modelName(entry.model)} · {entry.machine} ·
-                        {entry.startedAt
-                          ? `Running for ${ageLabel(entry.startedAt, now)}`
-                          : "Start time unavailable"}
-                      </Text>
-                      <Text style={muted}>
-                        {entry.result
-                          ? summary(plain(entry.result))
-                          : "No activity text received yet."}
-                      </Text>
-                      {!!entry.permissions && (
-                        <Text style={{ ...muted, color: colors.blocked }}>
-                          Waiting for permission
+              {(section === "done" && !moreDone.has(listKey) ? entries.slice(0, 10) : entries).map(
+                (entry) => {
+                  if ("title" in entry) {
+                    const contents = (
+                      <View style={{ gap: 6, minWidth: 0 }}>
+                        <Text style={{ ...body, fontWeight: "600" }}>{plain(entry.title)}</Text>
+                        <Text style={{ ...muted, color: colors.running }}>
+                          {modelName(entry.model)} · {entry.machine} ·
+                          {entry.startedAt
+                            ? `Running for ${ageLabel(entry.startedAt, now)}`
+                            : "Start time unavailable"}
                         </Text>
-                      )}
-                    </View>
-                  );
-                  return navigation ? (
-                    <Pressable
+                        <Text style={muted}>
+                          {entry.result
+                            ? summary(plain(entry.result))
+                            : "No activity text received yet."}
+                        </Text>
+                        {!!entry.permissions && (
+                          <Text style={{ ...muted, color: colors.blocked }}>
+                            Waiting for permission
+                          </Text>
+                        )}
+                      </View>
+                    );
+                    return navigation ? (
+                      <Pressable
+                        key={entry.id}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Open session: ${plain(entry.title)}`}
+                        onPress={() =>
+                          navigation.openAgent({
+                            agentId: entry.id,
+                            serverId: "hostId" in entry ? String(entry.hostId) : undefined,
+                          })
+                        }
+                        style={{
+                          paddingVertical: 16,
+                          minHeight: 48,
+                          minWidth: 48,
+                          borderBottomWidth: 1,
+                          borderColor: c.border,
+                        }}
+                      >
+                        {contents}
+                      </Pressable>
+                    ) : (
+                      <View key={entry.id} style={{ paddingVertical: 16 }}>
+                        {contents}
+                      </View>
+                    );
+                  }
+                  const itemKey = `${project.id}:${entry.id}`;
+                  const isExpanded = expanded.has(itemKey);
+                  return (
+                    <View
                       key={entry.id}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Open session: ${plain(entry.title)}`}
-                      onPress={() =>
-                        navigation.openAgent({
-                          agentId: entry.id,
-                          serverId: "hostId" in entry ? String(entry.hostId) : undefined,
-                        })
-                      }
                       style={{
+                        gap: 6,
                         paddingVertical: 16,
-                        minHeight: 48,
-                        minWidth: 48,
                         borderBottomWidth: 1,
                         borderColor: c.border,
                       }}
                     >
-                      {contents}
-                    </Pressable>
-                  ) : (
-                    <View key={entry.id} style={{ paddingVertical: 16 }}>
-                      {contents}
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`${isExpanded ? "Hide" : "Show"} full item: ${summary(plain(entry.item))}`}
+                        accessibilityState={{ expanded: isExpanded }}
+                        onPress={() =>
+                          setExpanded((previous) => {
+                            const next = new Set(previous);
+                            if (next.has(itemKey)) next.delete(itemKey);
+                            else next.add(itemKey);
+                            return next;
+                          })
+                        }
+                        style={{ minHeight: 48, minWidth: 48, justifyContent: "center" }}
+                      >
+                        <Text style={{ ...body, fontWeight: "500" }}>
+                          {isExpanded ? plain(entry.item) : summary(plain(entry.item))}
+                        </Text>
+                      </Pressable>
+                      {section === "done" ? (
+                        <Text style={{ ...muted, color: colors.done }}>
+                          {entry.evidence && entry.evidence !== "—"
+                            ? isExpanded
+                              ? plain(entry.evidence)
+                              : evidenceLine(entry.evidence)
+                            : "No evidence recorded."}
+                        </Text>
+                      ) : (
+                        <Text style={muted}>{plain(entry.owner) || "Owner unavailable"}</Text>
+                      )}
+                      {section === "done" && !earlier && entry.completedAt && (
+                        <Text style={muted}>
+                          Closed {ageLabel(entry.completedAt, now)} ago
+                          {entry.completedSource === "git" ? " · from file history" : ""}
+                        </Text>
+                      )}
+                      {section === "blocked" && (
+                        <>
+                          <Text style={{ ...body, color: colors.blocked }}>
+                            {plain(
+                              entry.status
+                                .replace(/^BLOCKED\s*:?\s*/i, "")
+                                .replace(/\s*blocked\s+(?:at|since)\s*:?\s*\d{4}-\S+/i, ""),
+                            ) || "No block reason recorded."}
+                          </Text>
+                          <Text style={muted}>
+                            {entry.blockedAt
+                              ? `Blocked for ${ageLabel(entry.blockedAt, now)}${entry.blockedApprox ? " · approx" : ""}`
+                              : "Block start time not recorded."}
+                          </Text>
+                        </>
+                      )}
                     </View>
                   );
-                }
-                const itemKey = `${project.id}:${entry.id}`;
-                const isExpanded = expanded.has(itemKey);
-                return (
-                  <View
-                    key={entry.id}
-                    style={{
-                      gap: 6,
-                      paddingVertical: 16,
-                      borderBottomWidth: 1,
-                      borderColor: c.border,
-                    }}
-                  >
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`${isExpanded ? "Hide" : "Show"} full item: ${summary(plain(entry.item))}`}
-                      accessibilityState={{ expanded: isExpanded }}
-                      onPress={() =>
-                        setExpanded((previous) => {
-                          const next = new Set(previous);
-                          if (next.has(itemKey)) next.delete(itemKey);
-                          else next.add(itemKey);
-                          return next;
-                        })
-                      }
-                      style={{ minHeight: 48, minWidth: 48, justifyContent: "center" }}
-                    >
-                      <Text style={{ ...body, fontWeight: "500" }}>
-                        {isExpanded ? plain(entry.item) : summary(plain(entry.item))}
-                      </Text>
-                    </Pressable>
-                    {section === "done" ? (
-                      <Text style={{ ...muted, color: colors.done }}>
-                        {entry.evidence && entry.evidence !== "—"
-                          ? isExpanded
-                            ? plain(entry.evidence)
-                            : evidenceLine(entry.evidence)
-                          : "No evidence recorded."}
-                      </Text>
-                    ) : (
-                      <Text style={muted}>{plain(entry.owner) || "Owner unavailable"}</Text>
-                    )}
-                    {section === "done" && entry.completedAt && (
-                      <Text style={muted}>
-                        Closed {ageLabel(entry.completedAt, now)} ago
-                        {entry.completedSource === "file"
-                          ? " · approx"
-                          : entry.completedSource === "git"
-                            ? " · from file history"
-                            : ""}
-                      </Text>
-                    )}
-                    {section === "blocked" && (
-                      <>
-                        <Text style={{ ...body, color: colors.blocked }}>
-                          {plain(
-                            entry.status
-                              .replace(/^BLOCKED\s*:?\s*/i, "")
-                              .replace(/\s*blocked\s+(?:at|since)\s*:?\s*\d{4}-\S+/i, ""),
-                          ) || "No block reason recorded."}
-                        </Text>
-                        <Text style={muted}>
-                          {entry.blockedAt
-                            ? `Blocked for ${ageLabel(entry.blockedAt, now)}${entry.blockedApprox ? " · approx" : ""}`
-                            : "Block start time not recorded."}
-                        </Text>
-                      </>
-                    )}
-                  </View>
-                );
-              })}
+                },
+              )}
               {section === "done" && entries.length > 10 && (
                 <WorkButton
                   theme={theme}
                   label={
-                    moreDone.has(project.id)
+                    moreDone.has(listKey)
                       ? "Show fewer closed items"
                       : `Show all ${entries.length} closed items`
                   }
                   onPress={() =>
                     setMoreDone((previous) => {
                       const next = new Set(previous);
-                      if (next.has(project.id)) next.delete(project.id);
-                      else next.add(project.id);
+                      if (next.has(listKey)) next.delete(listKey);
+                      else next.add(listKey);
                       return next;
                     })
                   }
@@ -337,6 +339,45 @@ export function ProgressBoardView({
             </View>
           );
         })}
+        {section === "done" &&
+          !earlier &&
+          (() => {
+            const count = projects.reduce(
+              (sum, project) => sum + unknownDone(project.items).length,
+              0,
+            );
+            if (!count) return null;
+            return (
+              <View
+                testID="board-closed-earlier"
+                style={{ gap: 12, borderTopWidth: 1, borderColor: c.border, paddingTop: 12 }}
+              >
+                <Pressable
+                  testID="board-closed-earlier-toggle"
+                  accessibilityRole="button"
+                  accessibilityLabel={`${earlierOpen ? "Hide" : "Show"} closed earlier (date unknown)`}
+                  accessibilityState={{ expanded: earlierOpen }}
+                  onPress={() => setEarlierOpen((open) => !open)}
+                  style={{
+                    minWidth: 48,
+                    minHeight: 48,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 12,
+                  }}
+                >
+                  <Text style={{ ...body, flex: 1, fontWeight: "600" }}>
+                    Closed earlier (date unknown)
+                  </Text>
+                  <Text style={muted}>{earlierOpen ? "Hide" : "Show"}</Text>
+                  <Text testID="board-closed-earlier-count" style={{ ...muted, fontWeight: "700" }}>
+                    {count}
+                  </Text>
+                </Pressable>
+                {earlierOpen && renderSection("done", true)}
+              </View>
+            );
+          })()}
       </View>
     );
   }
@@ -424,10 +465,12 @@ export function ProgressBoardView({
           minWidth: 0,
         }}
       >
-        <View style={{ flex: wide ? 1.15 : undefined, minWidth: 0 }}>{section("running")}</View>
-        <View style={{ flex: wide ? 1 : undefined, minWidth: 0 }}>{section("next")}</View>
-        <View style={{ flex: wide ? 1 : undefined, minWidth: 0 }}>{section("blocked")}</View>
-        <View style={{ flex: wide ? 1 : undefined, minWidth: 0 }}>{section("done")}</View>
+        <View style={{ flex: wide ? 1.15 : undefined, minWidth: 0 }}>
+          {renderSection("running")}
+        </View>
+        <View style={{ flex: wide ? 1 : undefined, minWidth: 0 }}>{renderSection("next")}</View>
+        <View style={{ flex: wide ? 1 : undefined, minWidth: 0 }}>{renderSection("blocked")}</View>
+        <View style={{ flex: wide ? 1 : undefined, minWidth: 0 }}>{renderSection("done")}</View>
       </View>
     </ScrollView>
   );

@@ -23,7 +23,11 @@ Record how each snapshot was obtained. Fixture data do not prove live host integ
 Check 375×812, 768×1024, 1440×900, and 812×375 in both themes.
 Fail on overflow, overlaps, clipped text, sideways scrolling, or controls below 48×48 pixels.
 Inspect the Running now, Next, Blocked, and Done captures.
-Check both Done filters. Check each host through its native session API.
+Check both Done filters. File times and observed dates must never enter their counts.
+Check the collapsed `Closed earlier (date unknown)` group and its separate count.
+Expand it and check that no item has an elapsed-time label.
+Test committed row dates in a ledger repository and an enclosing vault.
+Check each host through its native session API.
 Do not infer running work from the number of retained sessions.
 Check the model ID against the native session record.
 The default output is `docs/qa-evidence/progress-board/`. A folder argument overrides it.
