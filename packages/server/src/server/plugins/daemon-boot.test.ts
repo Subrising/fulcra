@@ -164,7 +164,7 @@ describe("W1 row 9: clean-exit seal inputs", () => {
     expect(callers).toEqual([
       [
         "bootstrap.ts",
-        "await trustedPlugins.shutdownClosure(() => closeAllAgents(logger, agentManager, agentStorage));",
+        "trustedPlugins.shutdownClosure(() => closeAllAgents(logger, agentManager, agentStorage)),",
       ],
     ]);
     const text = readFileSync(path.join(root, "bootstrap.ts"), "utf8");

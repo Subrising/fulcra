@@ -304,7 +304,14 @@ function executeGitCommand<Output>(
       const maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
       const acceptExitCodes = options.acceptExitCodes ?? [0];
       const command = formatGitCommand(args);
-      const envOverlay = mergeEnvOverlays(options.env, options.envOverlay);
+      const envOverlay = { ...mergeEnvOverlays(options.env, options.envOverlay) };
+      if (process.platform !== "win32") {
+        // GUI relaunches can supply only the app's bundled bin directory.
+        const path = envOverlay.PATH ?? process.env.PATH ?? "";
+        envOverlay.PATH = [path, "/usr/local/bin", "/opt/homebrew/bin", "/usr/bin", "/bin"]
+          .filter(Boolean)
+          .join(":");
+      }
       const startedAt = Date.now();
       beginGitCommandMetric(metricsState);
       const logger = typeof options.logger?.trace === "function" ? options.logger : undefined;

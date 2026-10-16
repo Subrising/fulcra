@@ -571,7 +571,8 @@ describe("runGitCommand", () => {
         timeout: 30_000,
         maxOutputBytes: 20 * 1024 * 1024,
         acceptExitCodes: [0, 1],
-        envOverlayKeys: ["GIT_OPTIONAL_LOCKS"],
+        envOverlayKeys:
+          process.platform === "win32" ? ["GIT_OPTIONAL_LOCKS"] : ["GIT_OPTIONAL_LOCKS", "PATH"],
       }),
       "Spawning git command",
     );

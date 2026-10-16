@@ -1,3 +1,4 @@
+import { trackOwnedDetachedProcess } from "./tree-kill.js";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { spawnProcess as spawnCli, execCommand as execCli } from "@getpaseo/plugin/server";
 import { createExternalCommandProcessEnv, type ProcessEnvRecord } from "../server/paseo-env.js";
@@ -42,11 +43,13 @@ export function spawnProcess(
           ...(envOverlay ? [envOverlay] : []),
         );
 
-  return spawnCli(command, args, {
+  const child = spawnCli(command, args, {
     ...spawnOptions,
     env: childEnv,
     signal: options?.signal,
   });
+  if (spawnOptions.detached) trackOwnedDetachedProcess(child);
+  return child;
 }
 
 export async function execCommand(
