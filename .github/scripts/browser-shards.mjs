@@ -1,4 +1,4 @@
-export const BROWSER_SHARDS = 16;
+export const BROWSER_SHARDS = 32;
 
 export function balanceTests(tests, seconds, count = BROWSER_SHARDS) {
   const buckets = Array.from({ length: count }, () => ({ seconds: 0, tests: [] }));

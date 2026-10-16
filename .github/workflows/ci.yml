@@ -570,7 +570,7 @@ jobs:
           tar -czf browser-inputs.tgz -T browser-input-paths.txt
 
   playwright-1:
-    name: playwright (shard 1/16)
+    name: playwright (shard 1/32)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -645,7 +645,7 @@ jobs:
           echo "Diagnostic artifact \`playwright-results\` could not be uploaded, commonly Actions storage quota. This did not affect any test, build or packaging result; the job log is unchanged." >> "$GITHUB_STEP_SUMMARY"
 
   playwright-2:
-    name: playwright (shard 2/16)
+    name: playwright (shard 2/32)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -658,7 +658,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-3:
-    name: playwright (shard 3/16)
+    name: playwright (shard 3/32)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -671,7 +671,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-4:
-    name: playwright (shard 4/16)
+    name: playwright (shard 4/32)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -684,7 +684,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-5:
-    name: playwright (shard 5/16)
+    name: playwright (shard 5/32)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -697,7 +697,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-6:
-    name: playwright (shard 6/16)
+    name: playwright (shard 6/32)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -710,7 +710,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-7:
-    name: playwright (shard 7/16)
+    name: playwright (shard 7/32)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -723,7 +723,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-8:
-    name: playwright (shard 8/16)
+    name: playwright (shard 8/32)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -736,7 +736,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-9:
-    name: playwright (shard 9/16)
+    name: playwright (shard 9/32)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -749,7 +749,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-10:
-    name: playwright (shard 10/16)
+    name: playwright (shard 10/32)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -762,7 +762,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-11:
-    name: playwright (shard 11/16)
+    name: playwright (shard 11/32)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -775,7 +775,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-12:
-    name: playwright (shard 12/16)
+    name: playwright (shard 12/32)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -788,7 +788,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-13:
-    name: playwright (shard 13/16)
+    name: playwright (shard 13/32)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -801,7 +801,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-14:
-    name: playwright (shard 14/16)
+    name: playwright (shard 14/32)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -814,7 +814,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-15:
-    name: playwright (shard 15/16)
+    name: playwright (shard 15/32)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -827,13 +827,221 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-16:
-    name: playwright (shard 16/16)
+    name: playwright (shard 16/32)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:
       PLAYWRIGHT_ARTIFACT: "16"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-17:
+    name: playwright (shard 17/32)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "17"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-18:
+    name: playwright (shard 18/32)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "18"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-19:
+    name: playwright (shard 19/32)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "19"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-20:
+    name: playwright (shard 20/32)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "20"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-21:
+    name: playwright (shard 21/32)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "21"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-22:
+    name: playwright (shard 22/32)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "22"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-23:
+    name: playwright (shard 23/32)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "23"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-24:
+    name: playwright (shard 24/32)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "24"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-25:
+    name: playwright (shard 25/32)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "25"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-26:
+    name: playwright (shard 26/32)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "26"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-27:
+    name: playwright (shard 27/32)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "27"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-28:
+    name: playwright (shard 28/32)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "28"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-29:
+    name: playwright (shard 29/32)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "29"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-30:
+    name: playwright (shard 30/32)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "30"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-31:
+    name: playwright (shard 31/32)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "31"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-32:
+    name: playwright (shard 32/32)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "32"
       E2E_STATIC_WEB: "1"
       E2E_REPORT_CI: "1"
       E2E_USE_BUILT_DAEMON: "1"
@@ -1024,6 +1232,22 @@ jobs:
       - playwright-14
       - playwright-15
       - playwright-16
+      - playwright-17
+      - playwright-18
+      - playwright-19
+      - playwright-20
+      - playwright-21
+      - playwright-22
+      - playwright-23
+      - playwright-24
+      - playwright-25
+      - playwright-26
+      - playwright-27
+      - playwright-28
+      - playwright-29
+      - playwright-30
+      - playwright-31
+      - playwright-32
       - browser-prepare
       - browser-recovery
       - relay-tests
