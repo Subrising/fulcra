@@ -1,0 +1,50 @@
+[
+  {
+    "viewport": {
+      "width": 375,
+      "height": 812
+    },
+    "small": [],
+    "clipped": [],
+    "overflow": [],
+    "overlaps": [],
+    "sideways": false,
+    "controls": 102
+  },
+  {
+    "viewport": {
+      "width": 768,
+      "height": 1024
+    },
+    "small": [],
+    "clipped": [],
+    "overflow": [],
+    "overlaps": [],
+    "sideways": false,
+    "controls": 118
+  },
+  {
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "small": [],
+    "clipped": [],
+    "overflow": [],
+    "overlaps": [],
+    "sideways": false,
+    "controls": 116
+  },
+  {
+    "viewport": {
+      "width": 812,
+      "height": 375
+    },
+    "small": [],
+    "clipped": [],
+    "overflow": [],
+    "overlaps": [],
+    "sideways": false,
+    "controls": 107
+  }
+]

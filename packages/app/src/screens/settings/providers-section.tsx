@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { useIsCompactFormFactor } from "@/constants/layout";
+import { touchTargetStyles } from "@/hooks/use-touch-targets";
 import { useToast } from "@/contexts/toast-api-context";
 import { settingsStyles } from "@/styles/settings";
 import { useHostRuntimeIsConnected } from "@/runtime/host-runtime";
@@ -234,21 +235,18 @@ function ProviderRow({
             <ProviderIcon size={theme.iconSize.md} color={theme.colors.foreground} />
             <View style={styles.textColumn}>
               <View style={styles.titleRow}>
-                <Text style={settingsStyles.rowTitle} numberOfLines={1}>
-                  {def.label}
-                </Text>
+                <Text style={settingsStyles.rowTitle}>{def.label}</Text>
                 {!isCompact ? <Text style={styles.separator}>·</Text> : null}
                 <StatusIndicator status={providerStatus} compact={isCompact} />
               </View>
               {providerError && !isCompact ? (
-                <Text style={styles.errorText} numberOfLines={3}>
-                  {providerError}
-                </Text>
+                <Text style={styles.errorText}>{providerError}</Text>
               ) : null}
             </View>
           </View>
           <View style={styles.trailingControls}>
             <Switch
+              style={touchTargetStyles.icon}
               value={enabled}
               onValueChange={handleToggleValueChange}
               disabled={isToggling || isRemoving}
@@ -556,6 +554,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   titleRow: {
     flexDirection: "row",
+    flexWrap: "wrap",
     alignItems: "center",
     gap: theme.spacing[2],
   },
@@ -588,15 +587,15 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.spacing[1],
   },
   menuButton: {
-    width: 32,
-    height: 32,
+    width: 48,
+    height: 48,
     borderRadius: theme.borderRadius.lg,
     alignItems: "center",
     justifyContent: "center",
   },
   menuSlot: {
-    width: 32,
-    height: 32,
+    width: 48,
+    height: 48,
   },
   menuButtonHovered: {
     backgroundColor: theme.colors.surface2,

@@ -4,6 +4,7 @@
 // Needs the gh CLI with GH_TOKEN (contents: write, pull-requests: write) and a full-history checkout.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const MANIFEST = ".github/upstream-watch.json";
 const ORIGIN = process.env.WATCH_ORIGIN || "origin";
@@ -34,42 +35,66 @@ const log = (m) => console.log(`[upstream-watch] ${m}`);
 
 const strip = (tag) => tag.replace(/^v/, "");
 
-function latestRelease(repo) {
-  const tag = ghTry("api", `repos/${repo}/releases/latest`, "--jq", ".tag_name");
-  if (tag) {
-    const body = ghTry("api", `repos/${repo}/releases/latest`, "--jq", ".body") ?? "";
-    const url = ghTry("api", `repos/${repo}/releases/latest`, "--jq", ".html_url") ?? "";
-    return { tag, version: strip(tag), body, url };
-  }
-  // No releases: fall back to the default-branch head.
-  const branch = gh("api", `repos/${repo}`, "--jq", ".default_branch");
-  const sha = gh("api", `repos/${repo}/commits/${branch}`, "--jq", ".sha");
-  const msg = gh("api", `repos/${repo}/commits/${branch}`, "--jq", ".commit.message");
+function versionParts(value) {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(value);
+  if (!match) return null;
+  const parts = match.slice(1).map(Number);
+  return parts.every(Number.isSafeInteger) ? parts : null;
+}
+
+export function compareVersions(left, right) {
+  const a = versionParts(left),
+    b = versionParts(right);
+  if (!a || !b) throw new Error("A stable upstream version is required");
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] - b[i];
+  return 0;
+}
+
+export function stableTagsSince(refs, baseline) {
+  return [
+    ...new Set(
+      refs.split("\n").flatMap((line) => {
+        const tag = /\trefs\/tags\/([^\s]+)$/.exec(line)?.[1];
+        return tag &&
+          versionParts(tag) &&
+          SAFE_VERSION.test(strip(tag)) &&
+          compareVersions(tag, baseline) > 0
+          ? [tag]
+          : [];
+      }),
+    ),
+  ].sort(compareVersions);
+}
+
+function releaseForTag(repo, tag) {
+  const raw = ghTry("api", `repos/${repo}/releases/tags/${tag}`);
+  const release = raw ? JSON.parse(raw) : null;
   return {
-    tag: sha,
-    version: sha.slice(0, 7),
-    body: `Head of \`${branch}\`: ${msg}`,
-    url: `https://github.com/${repo}/commit/${sha}`,
-    head: true,
+    tag,
+    version: strip(tag),
+    body: release?.body ?? "",
+    url: release?.html_url ?? `https://github.com/${repo}/tree/${tag}`,
   };
 }
 
+function pendingReleases(cfg) {
+  // Package versions retain the Paseo base, independently of the Fulcra app release.
+  const baseline =
+    cfg.kind === "merge"
+      ? JSON.parse(git("show", `${ORIGIN}/${BASE}:package.json`)).version
+      : cfg.version;
+  const refs = git("ls-remote", "--tags", `https://github.com/${cfg.repo}.git`);
+  return stableTagsSince(refs, baseline).map((tag) => releaseForTag(cfg.repo, tag));
+}
+
 // sync/* branches are bot-owned: a leftover branch without a PR (e.g. PR creation was refused) is re-pushed, not skipped.
-function alreadyHandled(_branch, title) {
-  const prs = ghTry(
-    "pr",
-    "list",
-    "--state",
-    "all",
-    "--search",
-    `"${title}" in:title`,
-    "--json",
-    "number,title",
-    "--jq",
-    `[.[]|select(.title=="${title}")]|length`,
+function alreadyHandled(_branch, title, marker) {
+  // Listing PRs avoids search-index delays after creation and also finds manual intake PRs.
+  const prs = JSON.parse(
+    gh("pr", "list", "--state", "all", "--limit", "1000", "--json", "number,title,body"),
   );
-  if (prs && Number(prs) > 0) return `a PR titled "${title}" exists`;
-  return null;
+  const existing = prs.find((pr) => pr.title === title || (marker && pr.body?.includes(marker)));
+  return existing ? `PR #${existing.number} already covers this tag` : null;
 }
 
 const trim = (s, n = 3500) =>
@@ -129,21 +154,18 @@ function syncPaseo(cfg, rel) {
   const title = `Sync paseo ${rel.version}`;
   const branch = `sync/paseo-${rel.version}`;
   gitTry("remote", "add", "upstream", `https://github.com/${cfg.repo}.git`);
-  git("fetch", "--no-tags", "upstream", `refs/tags/${rel.tag}:refs/tags/${rel.tag}`);
-  const merged = gitTry(
-    "merge-base",
-    "--is-ancestor",
-    `refs/tags/${rel.tag}^{commit}`,
-    `${ORIGIN}/${BASE}`,
-  );
+  const ref = `refs/remotes/upstream/tags/${rel.tag}`;
+  git("fetch", "--no-tags", "upstream", `refs/tags/${rel.tag}:${ref}`);
+  const merged = gitTry("merge-base", "--is-ancestor", `${ref}^{commit}`, `${ORIGIN}/${BASE}`);
   if (merged !== null) return log(`paseo ${rel.version}: already in ${BASE}`);
-  const skip = alreadyHandled(branch, title);
+  const marker = `<!-- upstream-watch:paseo:${rel.tag} -->`;
+  const skip = alreadyHandled(branch, title, marker);
   if (skip) return log(`paseo ${rel.version}: skipped, ${skip}`);
-  const ahead = git("rev-list", "--count", `${ORIGIN}/${BASE}..refs/tags/${rel.tag}`);
-  const stat = git("diff", "--shortstat", `${ORIGIN}/${BASE}...refs/tags/${rel.tag}`);
+  const ahead = git("rev-list", "--count", `${ORIGIN}/${BASE}..${ref}`);
+  const stat = git("diff", "--shortstat", `${ORIGIN}/${BASE}...${ref}`);
   const dirs = [
     ...new Set(
-      git("diff", "--name-only", `${ORIGIN}/${BASE}...refs/tags/${rel.tag}`)
+      git("diff", "--name-only", `${ORIGIN}/${BASE}...${ref}`)
         .split("\n")
         .map((f) => f.split("/").slice(0, 2).join("/")),
     ),
@@ -152,7 +174,7 @@ function syncPaseo(cfg, rel) {
     return log(`[dry-run] would merge paseo ${rel.tag} (${ahead} commits, ${stat}) into ${branch}`);
 
   git("checkout", "-B", branch, `${ORIGIN}/${BASE}`);
-  gitTry("merge", "--no-ff", "--no-commit", `refs/tags/${rel.tag}`);
+  gitTry("merge", "--no-ff", "--no-commit", ref);
   const conflicts = git("diff", "--name-only", "--diff-filter=U").split("\n").filter(Boolean);
   const heldWorkflows = holdWorkflowsAt(`${ORIGIN}/${BASE}`);
   git("add", "-A");
@@ -163,7 +185,8 @@ function syncPaseo(cfg, rel) {
     `Sync paseo ${rel.version}${conflicts.length ? " (unresolved conflicts)" : ""}`,
   );
 
-  const body = `## Sync paseo ${rel.version}
+  const body = `${marker}
+## Sync paseo ${rel.version}
 
 Upstream release: ${rel.url}
 ${ahead} upstream commits not yet in Fulcra. ${stat}.
@@ -193,7 +216,8 @@ function syncPin(name, cfg, rel) {
   const title = `Sync ${name} ${rel.version}`;
   const branch = `sync/${name}-${rel.version}`;
   if (rel.version === cfg.version) return log(`${name} ${rel.version}: already pinned`);
-  const skip = alreadyHandled(branch, title);
+  const marker = `<!-- upstream-watch:${name}:${rel.tag} -->`;
+  const skip = alreadyHandled(branch, title, marker);
   if (skip) return log(`${name} ${rel.version}: skipped, ${skip}`);
   if (dryRun)
     return log(`[dry-run] would bump ${name} ${cfg.version} -> ${rel.version} on ${branch}`);
@@ -207,7 +231,8 @@ function syncPin(name, cfg, rel) {
   writeFileSync(MANIFEST, `${JSON.stringify(branchManifest, null, 2)}\n`);
   git("add", MANIFEST);
   git("commit", "--no-verify", "-m", `Sync ${name} ${rel.version}`);
-  const body = `## Sync ${name} ${rel.version}
+  const body = `${marker}
+## Sync ${name} ${rel.version}
 
 Tracked version moves from \`${from}\` to \`${rel.version}\`. Upstream: ${rel.url}
 
@@ -228,20 +253,32 @@ _Opened by the upstream watcher. Never auto-merged._
   log(url ? `opened ${url}` : `pushed ${branch}; PR not opened (see warning)`);
 }
 
-const manifest = JSON.parse(readFileSync(MANIFEST, "utf8"));
-if (!dryRun) setupGit();
-git("fetch", "--no-tags", ORIGIN, BASE);
-for (const [name, cfg] of Object.entries(manifest.upstreams)) {
-  if (only && only !== name) continue;
-  try {
-    const rel = latestRelease(cfg.repo);
-    if (!SAFE_VERSION.test(rel.version))
-      throw new Error(`unsafe version string ${JSON.stringify(rel.version)}`);
-    log(`${name}: latest ${rel.tag}${rel.head ? " (head, no releases)" : ""}`);
-    if (cfg.kind === "merge") syncPaseo(cfg, rel);
-    else syncPin(name, cfg, rel);
-  } catch (error) {
-    console.error(`[upstream-watch] ${name} failed: ${error.message}`);
-    process.exitCode = 1;
+export function main() {
+  const manifest = JSON.parse(readFileSync(MANIFEST, "utf8"));
+  if (!dryRun) {
+    setupGit();
+    git("fetch", "--no-tags", ORIGIN, BASE);
+  }
+  for (const [name, cfg] of Object.entries(manifest.upstreams)) {
+    if (only && only !== name) continue;
+    try {
+      const releases = pendingReleases(cfg);
+      if (!releases.length) {
+        log(`${name}: no new stable tags`);
+        continue;
+      }
+      for (const rel of releases) {
+        if (!SAFE_VERSION.test(rel.version))
+          throw new Error(`unsafe version string ${JSON.stringify(rel.version)}`);
+        log(`${name}: pending stable tag ${rel.tag}`);
+        if (cfg.kind === "merge") syncPaseo(cfg, rel);
+        else syncPin(name, cfg, rel);
+      }
+    } catch (error) {
+      console.error(`[upstream-watch] ${name} failed: ${error.message}`);
+      process.exitCode = 1;
+    }
   }
 }
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) main();
