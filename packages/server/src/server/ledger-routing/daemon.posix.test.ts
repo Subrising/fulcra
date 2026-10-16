@@ -150,3 +150,104 @@ test("real daemon routes ledger events, reports one level, and retains follow-up
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("daemon restart loads the saved lead without a prompt and dispatches the next closed-item slot once", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "ledger-routing-restart-"));
+  const ledgerDir = path.join(root, "ledgers");
+  const file = path.join(ledgerDir, "sample", "OPEN-ITEMS.md");
+  await mkdir(path.dirname(file), { recursive: true });
+  vi.stubEnv("FULCRA_LEDGER_DIR", ledgerDir);
+  const leadId = randomUUID();
+  const first =
+    "| JOB-1 | Respond with exactly: DONE checked | BUILD | builders | OPEN | — | fixture |";
+  const nextBrief = "Respond with exactly: BLOCKED input needed";
+  await writeFile(file, first);
+  const options = {
+    paseoHomeRoot: path.join(root, "daemon"),
+    staticDir: path.join(root, "static"),
+    cleanup: false,
+    projectDispatch: {
+      sample: ProjectDispatchSchema.parse({
+        enabled: true,
+        leadId,
+        maxParallel: 1,
+        roles: [
+          {
+            role: "implementation",
+            owner: "builders",
+            provider: "codex",
+            model: "test-model",
+            mode: "full-access",
+            cwd: root,
+          },
+        ],
+      }),
+    },
+  };
+  await mkdir(options.staticDir);
+  let daemon = await createTestPaseoDaemon({ ...options, agentClients: createTestAgentClients() });
+  try {
+    const manager = daemon.daemon.agentManager;
+    const reported = nextTurn(
+      manager,
+      (event) =>
+        event.type === "agent_stream" &&
+        event.event.type === "turn_completed" &&
+        event.agentId === leadId,
+    );
+    await manager.createAgent({ provider: "codex", cwd: root, modeId: "full-access" }, leadId, {
+      workspaceId: "sample",
+      initialTitle: "Lead",
+      labels: { "fulcra.project": "sample", "fulcra.role": "project-lead" },
+    });
+    await reported;
+    const previous = manager.listAgents().find((agent) => agent.labels["fulcra.item"] === "JOB-1")!;
+    expect(previous).toBeTruthy();
+    await daemon.close();
+    await writeFile(
+      file,
+      [
+        first.replace("OPEN | —", "DONE | test passed"),
+        `| JOB-2 | ${nextBrief} | FIX | builders | OPEN | — | fixture |`,
+      ].join("\n"),
+    );
+    const starts: string[] = [];
+    let started = () => {};
+    const nextStarted = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error("Restart did not dispatch the next item")),
+        15_000,
+      );
+      started = () => {
+        clearTimeout(timeout);
+        resolve();
+      };
+    });
+    void nextStarted.catch(() => {});
+    daemon = await createTestPaseoDaemon({
+      ...options,
+      agentClients: createTestAgentClients({
+        onStartTurn: (prompt) => {
+          if (typeof prompt !== "string") return;
+          starts.push(prompt);
+          if (prompt === nextBrief) started();
+        },
+      }),
+    });
+    await nextStarted;
+    const next = daemon.daemon.agentManager
+      .listAgents()
+      .find((agent) => agent.labels["fulcra.item"] === "JOB-2")!;
+    expect(next.id).not.toBe(previous.id);
+    expect(next.labels["paseo.parent-agent-id"]).toBe(leadId);
+    await daemon.daemon.agentManager.waitForAgentEvent(next.id);
+    expect(starts.filter((prompt) => !prompt.startsWith("<paseo-system>"))).toEqual([nextBrief]);
+    expect(
+      (await daemon.daemon.agentStorage.list()).filter((agent) => agent.labels["fulcra.item"]),
+    ).toHaveLength(2);
+  } finally {
+    await daemon.close();
+    vi.unstubAllEnvs();
+    await rm(root, { recursive: true, force: true });
+  }
+});

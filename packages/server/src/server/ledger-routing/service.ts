@@ -8,6 +8,7 @@ import type { Logger } from "pino";
 import type { AgentManager } from "../agent/agent-manager.js";
 import type { AgentStorage } from "../agent/agent-storage.js";
 import type { BoundCreateAgentCommand } from "../agent/create-agent/create.js";
+import { ensureUnarchivedAgentLoaded } from "../agent/agent-loading.js";
 import { formatProviderModel } from "../agent/create-agent/create.js";
 import type { AgentSessionConfig } from "../agent/agent-sdk-types.js";
 import { FINAL_INPUT_CHECK } from "../agent/agent-sdk-types.js";
@@ -357,6 +358,12 @@ export class LedgerRoutingService {
     this.state.claims.push(claim);
     this.save(); // An uncertain creation consumes the item and slot across restart.
     try {
+      check();
+      await ensureUnarchivedAgentLoaded(config.leadId, {
+        agentManager: this.deps.agentManager,
+        agentStorage: this.deps.agentStorage,
+        logger: this.deps.logger,
+      });
       check();
       const workspaceId = await this.deps.ensureWorkspace(role.cwd);
       check();
