@@ -605,6 +605,7 @@ fs.appendFileSync(p+'/calls',JSON.stringify(a)+'\\n');
 if(a[0]==='workflow'){fs.writeFileSync(p+'/dispatched','');execFileSync(process.env.REAL_GIT,['--git-dir',p+'/origin.git','fetch','-q',process.cwd(),f.merged+':refs/heads/main']);console.log('https://github.com/Subrising/fulcra/actions/runs/123');}
 else if(a[0]==='run') process.exit(0);
 else if(a[0]==='release'){if(a[1]==='create')fs.writeFileSync(p+'/released','');else console.log(a.includes('assets,isDraft,tagName')?'true':'v1.0.0');}
+else if(a.includes('repos/Subrising/fulcra/actions/workflows?per_page=100'))console.log(JSON.stringify([{workflows:['desktop-release','android-apk-release','release-notes-sync','deploy-app'].map(name=>({path:'.github/workflows/'+name+'.yml',state:process.env.BAD_PUBLISHER?'active':'disabled_manually'}))}]));
 else if(a[1].includes('/pulls/'))console.log(JSON.stringify({state:'open',base:{ref:'main'},head:{sha:f.sha},draft:false,merged:fs.existsSync(p+'/dispatched'),merge_commit_sha:f.merged}));
 else if(a[1].includes('/check-runs'))console.log(JSON.stringify({check_runs:[{name:'ci-passed',app:{id:15368},head_sha:f.sha,status:'completed',conclusion:process.env.BAD_CI?'failure':'success'}]}));
 else if(a[1].includes('/git/ref/heads/main'))console.log(f.merged);
@@ -618,6 +619,13 @@ else process.exit(2);
       encoding: "utf8",
     });
     assert.notEqual(bad.status, 0);
+    assert.equal(existsSync(join(root, "dispatched")), false);
+    const publisher = spawnSync("bash", [script, "1.0.1", "1", sha], {
+      cwd: checkout,
+      env: { ...env, BAD_PUBLISHER: "1" },
+      encoding: "utf8",
+    });
+    assert.notEqual(publisher.status, 0);
     assert.equal(existsSync(join(root, "dispatched")), false);
     const good = spawnSync("bash", [script, "1.0.1", "1", sha], {
       cwd: checkout,

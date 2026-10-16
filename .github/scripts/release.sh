@@ -64,6 +64,8 @@ git worktree add -q --detach "$WORKTREE" "$SHA"
 (cd "$WORKTREE" && node "$TMP/check-machine-data.mjs" --commits "$PREVIOUS..$SHA") > "$TMP/scan.log" 2>&1 || fail 'Candidate scan failed.'
 git show "$SHA:RELEASE-NOTES-$VERSION.md" > "$TMP/notes.md"
 [ -s "$TMP/notes.md" ] || fail 'Release notes are missing.'
+gh api --paginate --slurp "repos/$REPO/actions/workflows?per_page=100" > "$TMP/workflows.json"
+jq -e '[.[].workflows[] | select(.path == ".github/workflows/desktop-release.yml" or .path == ".github/workflows/android-apk-release.yml" or .path == ".github/workflows/release-notes-sync.yml" or .path == ".github/workflows/deploy-app.yml")] | length == 4 and all(.state == "disabled_manually")' "$TMP/workflows.json" >/dev/null || fail 'A tag publisher is enabled or missing.'
 echo 'candidate_verified=true'
 DISPATCH=$(gh workflow run merge-pr.yml -R "$REPO" --ref main -f pr="$PR" -f sha="$SHA")
 RUN_ID=$(printf '%s\n' "$DISPATCH" | sed -n 's|^https://github.com/Subrising/fulcra/actions/runs/\([0-9][0-9]*\)$|\1|p')
