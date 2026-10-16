@@ -37,3 +37,11 @@ Use a fresh browser context for each app viewport. Wait for fonts and two layout
 A reused page can show an incomplete resize.
 
 Check the complete app shell separately. These screen renders do not prove an installed release.
+
+The Python compatibility file must match the canonical proxy. It must not copy close-time functions.
+The Node board test sets `LEDGER_TEST_MODULE` to a scratch source with sentinel functions.
+This proves that the proxy delegates calls. It does not test real close-time behaviour.
+Run all six Python helper tests against the installed proxy on each Mac for that check.
+Load that proxy explicitly before executing the test source. Check its path and function identities.
+Use `PYTHONDONTWRITEBYTECODE=1`. Compare installed command and proxy hashes before and after.
+The TypeScript board reads close records from ledger text; it does not import Python at runtime.

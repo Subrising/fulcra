@@ -525,24 +525,35 @@ test("explicit close records are retained while no screen is mounted", async (t)
   const board = createProgressBoard({ on: () => () => {} }, { root, historyFile });
   t.after(() => board.close());
   const observed = new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      watcher.close();
-      reject(Error("No completion observation"));
-    }, 2000);
-    const watcher = fs.watch(root, (_event, name) => {
-      if (name !== "history.json") return;
+    let finished = false;
+    function check() {
+      if (finished) return true;
       try {
         const saved = JSON.parse(fs.readFileSync(historyFile, "utf8"));
         if (saved.rows["fixture:FU-1"]?.completedAt) {
+          finished = true;
           clearTimeout(timer);
           watcher.close();
           resolve();
+          return true;
         }
       } catch {
-        /* Atomic replacement can briefly remove the old inode. */
+        /* The atomic replacement can precede its directory event. */
       }
+      return false;
+    }
+    const timer = setTimeout(() => {
+      if (check()) return;
+      watcher.close();
+      reject(Error("No saved close record after the file event"));
+    }, 2000);
+    const watcher = fs.watch(root, (_event, name) => {
+      // Directory events can coalesce. Read after the project's observer saves its result.
+      if (name === "history.json") setImmediate(check);
     });
   });
+  // Give the native watch registration one event-loop turn before the write.
+  await new Promise<void>((resolve) => setImmediate(resolve));
   fs.writeFileSync(
     file + ".next",
     `${header}\n| FU-1 | Task | FIX | Worker | DONE | Closed at 2026-10-16T02:00:00Z; PR 12 | brief |`,
@@ -579,15 +590,63 @@ test("running activity uses readable updates instead of raw commands", async (t)
   assert.equal((await board.read(api)).projects[0]!.jobs[0]!.result, "Checking the phone layout.");
 });
 
-test("ledger close records preserve ISO dates and evidence", async () => {
+test("ledger close proxy loads only the selected canonical source", async (t) => {
   const { execFileSync } = await import("node:child_process");
   const { fileURLToPath } = await import("node:url");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "board-ledger-proxy-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const canonical = path.join(root, "ledger.py");
+  // Sentinels prove delegation. They contain no close-time implementation.
+  fs.writeFileSync(
+    canonical,
+    `VERSION = "fixture-version"
+RECORD = object()
+def close_evidence(evidence, previous):
+    return ("closed", evidence, previous)
+def keep_close_time(status, previous, evidence):
+    return ("kept", status, previous, evidence)
+`,
+  );
+  const proxy = fileURLToPath(
+    new URL("../../../scripts/ledger/ledger_close_time.py", import.meta.url),
+  );
   const output = execFileSync(
     "python3",
-    [fileURLToPath(new URL("../../../scripts/ledger/ledger.test.py", import.meta.url))],
-    { encoding: "utf8" },
+    [
+      "-c",
+      `
+import importlib.util
+import os
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("board_proxy", os.environ["BOARD_PROXY_FILE"])
+proxy = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(proxy)
+assert Path(proxy.module.__file__).resolve() == Path(os.environ["LEDGER_TEST_MODULE"]).resolve()
+assert proxy.close_evidence is proxy.module.close_evidence
+assert proxy.keep_close_time is proxy.module.keep_close_time
+assert proxy.VERSION == "fixture-version"
+assert proxy.RECORD is proxy.module.RECORD
+assert proxy.close_evidence("proof", "earlier") == ("closed", "proof", "earlier")
+assert proxy.keep_close_time("DONE", "earlier", "proof") == ("kept", "DONE", "earlier", "proof")
+source = Path(os.environ["LEDGER_TEST_MODULE"]).read_text()
+assert proxy.prepare_ledger(source) is source
+for invalid in ["different tool", source + "\\nfrom ledger_close_time import close_evidence\\n"]:
+    try:
+        proxy.prepare_ledger(invalid)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Unsafe source was accepted")
+assert Path(os.environ["LEDGER_TEST_MODULE"]).read_text() == source
+print("Canonical proxy contract passed")
+`,
+    ],
+    {
+      encoding: "utf8",
+      env: { ...process.env, LEDGER_TEST_MODULE: canonical, BOARD_PROXY_FILE: proxy },
+    },
   );
-  assert.match(output, /Closed at \d{4}-\d{2}-\d{2}T/);
+  assert.match(output, /Canonical proxy contract passed/);
 });
 
 test("close records outrank line history, with unknown completion dates when history is absent", async () => {
