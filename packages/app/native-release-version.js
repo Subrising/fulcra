@@ -7,7 +7,7 @@ const FDROID_ABI_VERSION_CODE_SUFFIXES = {
   x86_64: 4,
 };
 
-function getNativeReleaseVersion(version) {
+function getNativeReleaseVersion(version, displayVersion = version) {
   const match = versionPattern.exec(version);
   if (!match) {
     throw new Error(`Cannot derive native release version from unsupported version: ${version}`);
@@ -42,7 +42,11 @@ function getNativeReleaseVersion(version) {
   }
 
   return {
-    appVersion: `${major}.${minor}.${patch}`,
+    // Public fork labels must not replace the runtime package version used by plugins.
+    appVersion:
+      displayVersion === version
+        ? `${major}.${minor}.${patch}`
+        : getNativeReleaseVersion(displayVersion).appVersion,
     androidVersionCode: versionCode,
     iosBuildNumber: String(iosBuildNumber),
   };
