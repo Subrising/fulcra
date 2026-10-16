@@ -239,6 +239,7 @@ export class ReportUpService {
   private readonly nudging = new Map<string, PendingNudge>();
   private nudgeGeneration = 0;
   private ledgerRevision = 0;
+  private readonly nudgeStopped = new Set<string>();
   private ledgerWatcher?: FSWatcher;
   private ledgerDebounce?: ReturnType<typeof setTimeout>;
   private readonly nudgeDeliveredAt = new Map<string, number>();
@@ -278,6 +279,7 @@ export class ReportUpService {
           )
             return;
           this.ledgerRevision++;
+          this.nudgeStopped.clear();
           for (const id of this.nudging.keys()) this.cancelNudge(id, "Project ledger changed");
           clearTimeout(this.ledgerDebounce);
           this.ledgerDebounce = setTimeout(() => {
@@ -386,8 +388,13 @@ export class ReportUpService {
     if (event.type === "agent_state" && event.agent.lifecycle === "idle")
       this.retryRefusedFinishesOnIdle(event.agent.id);
     if (event.type === "agent_stream") this.observer.onStream(event.agentId, event.event);
-    if (event.type === "agent_stream" && event.event.type === "turn_canceled")
+    if (event.type === "agent_stream" && event.event.type === "turn_canceled") {
+      this.stopNudge(event.agentId);
       this.checkIdleLeads();
+      void this.deliverStoppedFinish(event.agentId).catch((err: unknown) =>
+        this.deps.logger.warn({ err, agentId: event.agentId }, "Stopped worker notice failed"),
+      );
+    }
   }
 
   private retryRefusedFinishesOnIdle(parentId: string): void {
@@ -467,6 +474,8 @@ export class ReportUpService {
   private onTurnEnd(input: ReportTurnEnd): void {
     if (this.stopped) return;
     const { agentId } = input;
+    if (input.failed) this.stopNudge(agentId);
+    else this.nudgeStopped.delete(agentId);
     this.checkIdleLeads();
     void this.handleOwnedFinish(input)
       .then((handled) => {
@@ -476,6 +485,17 @@ export class ReportUpService {
       .catch((err: unknown) =>
         this.deps.logger.warn({ err, agentId }, "Owned finish notice failed"),
       );
+  }
+
+  private stopNudge(agentId: string): void {
+    this.nudgeStopped.add(agentId);
+    this.cancelNudge(agentId, "Receiver turn stopped or failed");
+  }
+
+  private async deliverStoppedFinish(agentId: string): Promise<void> {
+    const notice = await this.deps.agentStorage.getFinishNotice?.(agentId);
+    if (notice?.status === "pending" && notice.reason === "stopped")
+      await this.deliverOwnedFinish(agentId, notice, false);
   }
 
   private onUnownedTurnEnd(input: ReportTurnEnd): void {
@@ -618,7 +638,8 @@ export class ReportUpService {
     notice: FinishNotice,
     recovery: boolean,
   ): Promise<boolean> {
-    if (notice.owner !== "native" || notice.reason === "closed") return false;
+    if (notice.owner !== "native" || notice.reason === "closed" || notice.reason === "stopped")
+      return false;
     const outcome = recovery
       ? await this.deps.agentManager.nativeFinishReceiptStatus(notice.messageId).catch((err) => {
           this.deps.logger.warn({ err, childId }, "Native finish receipt could not be read");
@@ -661,6 +682,26 @@ export class ReportUpService {
     return null;
   }
 
+  private async ownedFinishPrompt(
+    worker: LineAgent,
+    notice: FinishNotice,
+    observedLast?: string | null,
+  ): Promise<string> {
+    if (notice.reason === "stopped")
+      return formatSystemNotificationPrompt(
+        `Agent ${worker.id} (${titleOf(worker)}): worker turn stopped.`,
+      );
+    if (notice.reason === "closed")
+      return formatSystemNotificationPrompt(`Agent ${worker.id} (${titleOf(worker)}) was closed.`);
+    const lastMessage =
+      observedLast === undefined
+        ? await this.deps.agentManager.getLastAssistantMessage(worker.id).catch(() => null)
+        : observedLast;
+    return formatSystemNotificationPrompt(
+      formatReportUpNotice({ worker, failed: notice.reason === "errored", lastMessage }),
+    );
+  }
+
   private async deliverOwnedFinish(
     childId: string,
     notice: FinishNotice,
@@ -690,20 +731,8 @@ export class ReportUpService {
       )
         throw new OwnedFinishLineChanged(currentParentId, "reporting line unavailable");
       const finalCheck = this.captureOwnedFinalCheck(childId, notice, reportsTo(worker));
-      const lastMessage =
-        observedLast === undefined
-          ? await this.deps.agentManager.getLastAssistantMessage(childId).catch(() => null)
-          : observedLast;
-      const body =
-        notice.reason === "closed"
-          ? `Agent ${childId} (${titleOf(worker)}) was closed.`
-          : formatReportUpNotice({
-              worker,
-              failed: notice.reason === "errored",
-              lastMessage,
-            });
-      const prompt = formatSystemNotificationPrompt(body);
-      const durableDefault = notice.owner === "report-up";
+      const prompt = await this.ownedFinishPrompt(worker, notice, observedLast);
+      const durableDefault = notice.owner === "report-up" || notice.reason === "stopped";
       const send = async () => {
         finalCheck();
         if (durableDefault) {
@@ -857,7 +886,8 @@ export class ReportUpService {
       return;
     }
     await new Promise((resolve) => setImmediate(resolve));
-    if (this.observer.isOpen(leadId) || this.limitOf(leadId)) return;
+    if (this.nudgeStopped.has(leadId) || this.observer.isOpen(leadId) || this.limitOf(leadId))
+      return;
     const lead = await this.store.get(leadId);
     const live = this.deps.agentManager.getAgent(leadId);
     if (!lead || lead.archivedAt || live?.internal) return;
@@ -1088,6 +1118,7 @@ export class ReportUpService {
       this.nudging.get(leadId)?.generation === pending.generation &&
       this.nudgeStates.get(leadId)?.fingerprint === fingerprint &&
       !pending.abort.signal.aborted &&
+      !this.nudgeStopped.has(leadId) &&
       this.nudgeAllowed(leadId) &&
       this.now() - pending.startedAt < NUDGE_DELIVERY_TIMEOUT_MS &&
       // The manager registers this nudge as running before its final provider check.

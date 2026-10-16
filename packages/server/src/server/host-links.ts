@@ -94,9 +94,16 @@ export interface HostLinkDependencies {
 function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
-// Return notices keep their authority across credential rotation and expiry renewal.
-function authorityDigest(grant: { token: string; expiresAt: number }): string {
-  const { token: _token, expiresAt: _expiresAt, ...authority } = grant;
+// Return notices keep their authority across renewal and unrelated limit sharing changes.
+function authorityDigest(grant: {
+  token: string;
+  expiresAt: number;
+  shareLimits?: boolean;
+  operations?: readonly string[];
+}): string {
+  const { token: _token, expiresAt: _expiresAt, shareLimits: _shareLimits, ...authority } = grant;
+  if (authority.operations)
+    authority.operations = authority.operations.filter((op) => op !== "limits");
   return digest(authority);
 }
 function privateJson(file: string): unknown | null {

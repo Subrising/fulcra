@@ -107,6 +107,13 @@ async function fixture(
         ordinaryUsageAllowed: usageAllowed,
         rateLimits: {},
       }),
+      "turn/interrupt": (params) => {
+        created.completeTurn({
+          threadId: (params as { threadId: string }).threadId,
+          status: "interrupted",
+        });
+        return {};
+      },
       "turn/start": (params) => {
         turn++;
         if ((params as { threadId?: string }).threadId === "thread-1") onParentTurnStart?.(params);
@@ -127,6 +134,9 @@ async function fixture(
   const server = Object.assign({}, first, {
     completeTurn(params: Parameters<typeof first.completeTurn>[0] = {}) {
       (threads.get(params.threadId ?? "thread-1") ?? first).completeTurn(params);
+    },
+    startsTurn(params: Parameters<typeof first.startsTurn>[0]) {
+      (threads.get(params.threadId) ?? first).startsTurn(params);
     },
     requestCommandApproval(params: Parameters<typeof first.requestCommandApproval>[0]) {
       (threads.get(params.threadId) ?? first).requestCommandApproval(params);
@@ -1029,7 +1039,54 @@ test("startup marks an interrupted sending finish unknown and never resends it",
 });
 
 test.each([false, true])(
-  "FU-176 cancellation permits a new native prompt with native finish notices %s",
+  "a replacement turn keeps one finish notice with native notices %s",
+  async (nativeFinishNotices) => {
+    const { f, childId, childThread, offReportUp } = await defaultOwnedNoticeFixture(true, {
+      nativeFinishNotices,
+    });
+    try {
+      const armed = (await f.agentStorage.getFinishNotice(childId))!;
+      f.server.startsTurn({ threadId: childThread, turnId: "fixture-original-turn" });
+      const replacement = await f.manager.replaceAgentRun(childId, "App replacement task");
+      const drained = (async () => {
+        for await (const event of replacement) void event;
+      })();
+      await f.manager.waitForAgentRunStart(childId);
+      expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({
+        status: "armed",
+        messageId: armed.messageId,
+      });
+      f.server.completeTurn({ threadId: childThread });
+      await drained;
+      await vi.waitFor(
+        async () =>
+          expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({
+            status: "delivered",
+            reason: "finished",
+            messageId: armed.messageId,
+          }),
+        { timeout: 5000 },
+      );
+      f.server.completeTurn({ threadId: childThread });
+      await f.manager.flush();
+      const notices = f.server
+        .requests()
+        .filter(
+          (request) =>
+            request.method === "turn/start" &&
+            (request.params as { threadId: string }).threadId === f.agent.persistence!.sessionId,
+        );
+      expect(notices).toHaveLength(1);
+      expect(JSON.stringify(notices)).not.toContain("worker turn stopped");
+    } finally {
+      offReportUp();
+      await f.cleanup();
+    }
+  },
+);
+
+test.each([false, true])(
+  "FU-176 a stopped turn sends one durable notice and permits a new native prompt with native finish notices %s",
   async (nativeFinishNotices) => {
     const { f, catalog, childId, childThread, offReportUp } = await defaultOwnedNoticeFixture(
       true,
@@ -1052,17 +1109,24 @@ test.each([false, true])(
       expect(await catalog.executeTool("supervisor_inbox", {})).toMatchObject({
         structuredContent: { metadataCount: 0 },
       });
-      f.server.completeTurn({ threadId: childThread, status: "interrupted" });
+      f.server.says({ threadId: childThread, text: "Partial result must stay private" });
+      f.server.startsTurn({ threadId: childThread, turnId: "fixture-stopped-turn" });
+      await f.manager.cancelAgentRun(childId);
       await vi.waitFor(async () =>
         expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({
-          status: "cancelled",
+          status: "delivered",
+          reason: "stopped",
           messageId: first.messageId,
         }),
       );
       expect(await catalog.executeTool("supervisor_inbox", {})).toMatchObject({
         structuredContent: { metadataCount: 0 },
       });
-      expect(parentTurns()).toHaveLength(0);
+      expect(parentTurns()).toHaveLength(1);
+      expect(JSON.stringify(parentTurns()[0])).toContain("worker turn stopped");
+      expect(JSON.stringify(parentTurns()[0])).not.toContain("Partial result must stay private");
+      f.server.completeTurn({ threadId: f.agent.persistence!.sessionId });
+      await f.manager.waitForAgentEvent(f.agent.id);
       const cancelledTurnId = (await f.agentStorage.getFinishNotice(childId))!.turnId;
       expect(cancelledTurnId).toEqual(expect.any(String));
       const sent = await catalog.executeTool("send_agent_prompt", {
@@ -1089,7 +1153,7 @@ test.each([false, true])(
         status: "armed",
         messageId: armed.messageId,
       });
-      expect(parentTurns()).toHaveLength(0);
+      expect(parentTurns()).toHaveLength(1);
       f.server.completeTurn({ threadId: childThread });
       await vi.waitFor(async () =>
         expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({
@@ -1099,7 +1163,7 @@ test.each([false, true])(
       );
       f.server.completeTurn({ threadId: childThread });
       await f.manager.flush();
-      expect(parentTurns()).toHaveLength(1);
+      expect(parentTurns()).toHaveLength(2);
     } finally {
       offReportUp();
       await f.cleanup();
@@ -1107,7 +1171,7 @@ test.each([false, true])(
   },
 );
 
-test("FU-176 an uninitialized report inbox refuses armed and cancelled workers until enrollment", async () => {
+test("FU-176 an uninitialized report inbox refuses armed and stopped workers until enrollment", async () => {
   const { f, childId, childThread, offReportUp } = await defaultOwnedNoticeFixture();
   try {
     await expect(f.manager.nativeReportInbox(f.nativeOrigin())).rejects.toThrow(
@@ -1115,7 +1179,10 @@ test("FU-176 an uninitialized report inbox refuses armed and cancelled workers u
     );
     f.server.completeTurn({ threadId: childThread, status: "interrupted" });
     await vi.waitFor(async () =>
-      expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({ status: "cancelled" }),
+      expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({
+        status: "delivered",
+        reason: "stopped",
+      }),
     );
     await expect(f.manager.nativeReportInbox(f.nativeOrigin())).rejects.toThrow(
       "Report authority unavailable",

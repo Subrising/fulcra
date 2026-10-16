@@ -22,7 +22,7 @@ const FinishNoticeSchema = z
     deliveredBy: z.enum(["native", "report-up"]).optional(),
     messageId: z.string().min(1),
     turnId: z.string().min(1).optional(),
-    reason: z.enum(["finished", "errored", "closed"]).optional(),
+    reason: z.enum(["finished", "errored", "closed", "stopped"]).optional(),
     endedAt: z.number().int().nonnegative().optional(),
   })
   .strict();
@@ -252,7 +252,7 @@ export class AgentStorage {
   async recordFinishNotice(
     agentId: string,
     turnId: string,
-    reason: "finished" | "errored" | "closed" | "cancelled",
+    reason: "finished" | "errored" | "closed" | "stopped" | "cancelled",
   ): Promise<FinishNotice | null> {
     await this.load();
     let result: FinishNotice | null = null;

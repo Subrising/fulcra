@@ -935,6 +935,31 @@ test.each(["before-read", "before-handoff"])(
   },
 );
 
+test.each(["before-read", "before-handoff"])(
+  "FU-170 delivers after limit sharing changes %s",
+  async (when) => {
+    const f = await fixture();
+    const receipt = await f.source.spawnForAgent("lead", "target", {
+      ...spawn,
+      notifyOnFinish: true,
+    });
+    f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Shared limit result");
+    const renew = async () => {
+      f.sourceConfig.outgoing[0]!.shareLimits = true;
+      f.targetConfig.incoming[0]!.operations.push("limits");
+      f.save();
+    };
+    if (when === "before-read") await renew();
+    else f.state.beforeFinish = renew;
+    const source = f.restartSource();
+    await source.syncNotifications();
+    await source.flushNotificationDeliveries();
+    expect(f.finishNotices).toHaveLength(1);
+    expect(f.finishNotices[0]?.text).toContain("Shared limit result");
+    expect(retainedReturn(f.sourceHome).receivedNotices?.[0]?.state).toBe("delivered");
+  },
+);
+
 test("FU-170 refuses revocation at the return notice handoff", async () => {
   const f = await fixture();
   const receipt = await f.source.spawnForAgent("lead", "target", {

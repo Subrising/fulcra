@@ -7971,7 +7971,7 @@ export class AgentManager {
   private recordOwnedFinish(
     agent: ActiveManagedAgent,
     turnId: string | undefined,
-    reason: "finished" | "errored" | "cancelled",
+    reason: "finished" | "errored" | "stopped",
     foreground: boolean,
   ): Promise<void> | null {
     if (!foreground || !turnId || !this.registry) return null;
@@ -8304,8 +8304,11 @@ export class AgentManager {
     const persist = this.recordOwnedFinish(
       params.agent,
       params.eventTurnId,
-      "cancelled",
-      params.isForegroundEvent && params.terminalDisposition !== "stale",
+      "stopped",
+      params.isForegroundEvent &&
+        params.terminalDisposition !== "stale" &&
+        !params.agent.pendingReplacement &&
+        params.event.reason !== "replace",
     );
     if (persist) return persist.then(() => this.onStreamTurnCanceled(params));
     this.onStreamTurnCanceled(params);
