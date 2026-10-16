@@ -415,7 +415,7 @@ jobs:
 
       - name: Run desktop renderer E2E
         if: ${{ env.DESKTOP_SUITE == 'renderer' }}
-        run: npm run test:e2e:renderer --workspace=@getpaseo/desktop -- --shard=${{ env.DESKTOP_RENDERER_SHARD }}
+        run: npm run test:e2e:renderer --workspace=@getpaseo/desktop -- --shard=${{ env.DESKTOP_RENDERER_SHARD }} --workers=2 --fully-parallel
 
       - name: Run desktop browser E2E
         if: ${{ runner.os == 'Linux' && env.DESKTOP_SUITE != 'renderer' }}
@@ -453,6 +453,7 @@ jobs:
       contents: read
     env:
       DESKTOP_SUITE: renderer
+      E2E_USE_BUILT_DAEMON: "1"
       DESKTOP_RENDERER_SHARD: "1/2"
     steps: *desktop_test_steps
 
@@ -466,6 +467,7 @@ jobs:
       contents: read
     env:
       DESKTOP_SUITE: renderer
+      E2E_USE_BUILT_DAEMON: "1"
       DESKTOP_RENDERER_SHARD: "2/2"
     steps: *desktop_test_steps
 
@@ -583,12 +585,19 @@ jobs:
           E2E_PLAN_ONLY: "1"
           NODE_OPTIONS: --max-old-space-size=4096
         run: |
-          npm run build:server
+          npm run build:server-deps
           npm run build --workspace=@getpaseo/expo-two-way-audio
-          npm exec --workspace=@getpaseo/app -- expo export --platform web --output-dir .e2e-web --max-workers 2
+          # Both branches read built dependencies. Preserve each exit status.
+          (npm run build --workspace=@getpaseo/server && npm run build --workspace=@getpaseo/cli) &
+          daemon_pid=$!
+          npm exec --workspace=@getpaseo/app -- expo export --platform web --output-dir .e2e-web --max-workers 2 &
+          web_pid=$!
+          daemon_status=0; wait "$daemon_pid" || daemon_status=$?
+          web_status=0; wait "$web_pid" || web_status=$?
+          if [ "$daemon_status" -ne 0 ] || [ "$web_status" -ne 0 ]; then exit 1; fi
           npm run test:e2e --workspace=@getpaseo/app -- --list --reporter=../../.github/scripts/browser-ci-reporter.mjs
           E2E_PLAN_ONLY=0 E2E_SELECTED_LIST=.e2e-plan/all.txt npm run test:e2e --workspace=@getpaseo/app -- --list --test-list=.e2e-plan/all.txt --reporter=../../.github/scripts/browser-ci-reporter.mjs
-          node --input-type=module -e 'import { existsSync, readdirSync, writeFileSync } from "node:fs"; const paths = readdirSync("packages").map(p => `packages/${p}/dist`).filter(existsSync); paths.push("plugins/dist", "packages/app/.e2e-web", "packages/app/.e2e-plan"); if (existsSync("packages/expo-two-way-audio/build")) paths.push("packages/expo-two-way-audio/build"); writeFileSync("browser-input-paths.txt", paths.join("\n") + "\n");'
+          node .github/scripts/browser-inputs.mjs
           tar -czf browser-inputs.tgz -T browser-input-paths.txt
 
   playwright-1:
@@ -988,13 +997,16 @@ jobs:
 
       # The local runner builds its dependencies and shards its own E2E files.
       - name: Run CLI E2E tests
+        if: ${{ env.CLI_SUITE != 'source' }}
         run: npm run test:local --workspace=@getpaseo/cli
 
-      # Source tests do not read PASEO_CLI_TEST_SHARD. Run them once, on the
-      # shortest E2E shard, after its runner has built the server stack.
+      - name: Build CLI source-test dependencies
+        if: ${{ env.CLI_SUITE == 'source' }}
+        run: npm run build:server
+
       - name: Run CLI source tests
-        if: ${{ env.PASEO_CLI_TEST_SHARD == '3' }}
-        run: npm run test:unit --workspace=@getpaseo/cli
+        if: ${{ env.CLI_SUITE == 'source' }}
+        run: npm run test:unit --workspace=@getpaseo/cli -- --maxConcurrency=2
 
   cli-tests-2:
     name: cli-tests (shard 2/3)
@@ -1020,6 +1032,18 @@ jobs:
       PASEO_VOICE_MODE_ENABLED: "0"
       PASEO_CLI_TEST_SHARD: "3"
       PASEO_CLI_TEST_SHARD_TOTAL: "3"
+    steps: *cli_test_steps
+
+  cli-source-tests:
+    name: cli-source-tests
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.cli != 'false') }}
+    runs-on: ubuntu-latest
+    env:
+      CLI_SUITE: source
+      PASEO_LOCAL_SPEECH_AUTO_DOWNLOAD: "0"
+      PASEO_DICTATION_ENABLED: "0"
+      PASEO_VOICE_MODE_ENABLED: "0"
     steps: *cli_test_steps
 
   # FULCRA: the one check that branch protection on main requires. A job skipped by the path filter counts as passed;
@@ -1065,6 +1089,7 @@ jobs:
       - cli-tests-1
       - cli-tests-2
       - cli-tests-3
+      - cli-source-tests
     runs-on: ubuntu-latest
     steps:
       - name: Every job passed or was skipped

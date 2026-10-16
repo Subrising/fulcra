@@ -18,7 +18,57 @@ import { requiresFullSuite } from "./ci-shared-changes.mjs";
 import { proveMerge, complete } from "../.github/scripts/ci-finished.mjs";
 import { balanceTests, testListPath } from "../.github/scripts/browser-shards.mjs";
 import { startStaticWeb } from "../.github/scripts/static-e2e-web.mjs";
+import { browserInputPaths } from "../.github/scripts/browser-inputs.mjs";
 import { watchOperation } from "../.github/scripts/watch-ci.mjs";
+
+test("both parallel browser build exits remain required", () => {
+  const source = readFileSync(ciWorkflowPath, "utf8");
+  const waits = source.slice(
+    source.indexOf("          daemon_status=0;"),
+    source.indexOf("          npm run test:e2e --workspace=@getpaseo/app -- --list"),
+  );
+  assert.ok(waits.includes("wait"));
+  for (const [daemon, web] of [
+    [0, 0],
+    [7, 0],
+    [0, 8],
+    [7, 8],
+  ]) {
+    const script = `(exit ${daemon}) & daemon_pid=$!\n(exit ${web}) & web_pid=$!\n${waits}\necho BUILDS_PASSED`;
+    const result = spawnSync("bash", ["-e", "-c", script], { encoding: "utf8" });
+    assert.equal(result.status, daemon || web ? 1 : 0);
+    assert.equal(result.stdout.includes("BUILDS_PASSED"), !daemon && !web);
+  }
+});
+
+test("clean browser packaging omits absent optional plugins and requires tested inputs", () => {
+  const root = mkdtempSync(join(tmpdir(), "browser-inputs-"));
+  try {
+    for (const file of [
+      "packages/app/.e2e-web/index.html",
+      "packages/app/.e2e-plan/manifest.json",
+      "packages/server/dist/scripts/supervisor-entrypoint.js",
+      "packages/cli/dist/index.js",
+    ]) {
+      mkdirSync(join(root, file, ".."), { recursive: true });
+      writeFileSync(join(root, file), "fixture");
+    }
+    const paths = browserInputPaths(root);
+    assert.ok(paths.includes("packages/server/dist"));
+    assert.ok(paths.includes("packages/app/.e2e-web"));
+    assert.ok(!paths.includes("plugins/dist"));
+    assert.equal(
+      spawnSync("tar", ["-czf", join(root, "inputs.tgz"), "-C", root, ...paths]).status,
+      0,
+    );
+    mkdirSync(join(root, "plugins/dist"), { recursive: true });
+    assert.ok(browserInputPaths(root).includes("plugins/dist"));
+    rmSync(join(root, "packages/server/dist"), { recursive: true });
+    assert.throws(() => browserInputPaths(root), /Missing browser input/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("main CI ignores a refused merge dispatch and retains CI failure detection", () => {
   const result = spawnSync("python3", ["-B", ".github/scripts/test_main_ci_state.py"], {
@@ -165,6 +215,7 @@ test("every new shard and desktop lane remains failure-sensitive", () => {
     "desktop-renderer",
     "desktop-renderer-2",
     "server-tests-ubuntu-2",
+    "cli-source-tests",
     "browser-prepare",
     "browser-recovery",
     ...Array.from({ length: 16 }, (_, i) => `playwright-${i + 1}`),

@@ -7,8 +7,12 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { hashDaemonPassword } from "@getpaseo/server/auth";
 import { startDaemonInstance, readDaemonInstance } from "@getpaseo/server/daemon-control";
-import { expect, test } from "vitest";
+import { expect, test as baseTest } from "vitest";
 import { connectToDaemon } from "../../utils/client.js";
+
+// Each case owns its homes, environment, ports and process cleanup.
+// The CI command bounds concurrency at two private fixtures.
+const test = baseTest.concurrent;
 
 const repo = fileURLToPath(new URL("../../../../..", import.meta.url));
 const cli = path.join(repo, "packages/cli/dist/index.js");

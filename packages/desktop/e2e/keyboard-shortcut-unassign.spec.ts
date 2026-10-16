@@ -19,6 +19,13 @@ async function installDesktopBridge(
   platform: "darwin" | "win32" = "darwin",
 ): Promise<void> {
   await page.addInitScript((desktopPlatform) => {
+    // Windows emulation must not retain the Mac host's browser platform.
+    if (desktopPlatform === "win32") {
+      Object.defineProperties(navigator, {
+        platform: { configurable: true, value: "Win32" },
+        userAgent: { configurable: true, value: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
+      });
+    }
     window.paseoDesktop = {
       platform: desktopPlatform,
       events: { on: () => () => {} },
