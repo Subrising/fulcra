@@ -9882,7 +9882,9 @@ export class Session {
           resumeAt = result.resumeAt;
         } else
           deliveryNote(
-            "Message queued. The receiver takes queued messages in one combined delivery.",
+            this.agentManager.hasInFlightRun(agentId)
+              ? "accepted; delivered after the current turn"
+              : "accepted; delivered now",
           );
         await queuedAgentMessagesFor({
           agentManager: this.agentManager,

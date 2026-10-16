@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createTestLogger } from "../../../../test-utils/test-logger.js";
 import { ClaudeAgentClient } from "./agent.js";
+import type { ProviderRuntimeSettings } from "../../provider-launch-config.js";
 import {
   CLAUDE_DISABLED_THINKING_OPTION_ID,
   CLAUDE_ULTRACODE_THINKING_OPTION_ID,
@@ -39,9 +40,14 @@ async function createClaudeConfigDirWithRawSettings(settings: string): Promise<s
   return configDir;
 }
 
-function createCatalogClient(claudeCodeVersion = "2.1.293"): ClaudeAgentClient {
+function createCatalogClient(
+  claudeCodeVersion = "2.1.293",
+  runtimeSettings?: ProviderRuntimeSettings,
+): ClaudeAgentClient {
   return new ClaudeAgentClient({
     logger: createTestLogger(),
+    runtimeSettings,
+    resolveBinary: async () => "fixture-claude",
     resolveVersion: async () => claudeCodeVersion,
     // No real CLI in unit tests: discovery fails, so these exercise the manifest fallback.
     modelProbe: async () => {
@@ -314,10 +320,8 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
     const daemonConfigDir = await createClaudeConfigDir({});
     const providerConfigDir = await createClaudeConfigDir({ model: "glm-5.1" });
     vi.stubEnv("CLAUDE_CONFIG_DIR", daemonConfigDir);
-    const client = new ClaudeAgentClient({
-      logger: createTestLogger(),
-      resolveVersion: async () => "2.1.280",
-      runtimeSettings: { env: { CLAUDE_CONFIG_DIR: providerConfigDir } },
+    const client = createCatalogClient("2.1.280", {
+      env: { CLAUDE_CONFIG_DIR: providerConfigDir },
     });
 
     const { models } = await client.fetchCatalog({

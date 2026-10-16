@@ -41,6 +41,18 @@ afterEach(() => {
 });
 
 describe("agent queue and steer", () => {
+  it.each(["accepted; delivered after the current turn", "accepted; delivered now"])(
+    "prints the daemon receipt: %s",
+    async (receipt) => {
+      senderStamp.mockReturnValue({ agentId: "sender" });
+      client.sendAgentMessage.mockImplementation(async (_id, _prompt, options) => {
+        options.onDelivery(receipt);
+      });
+      const result = await parsedSend(["target", "draft", "--no-wait"]);
+      expect(result.data.message).toBe(receipt);
+      expect(client.waitForFinish).not.toHaveBeenCalled();
+    },
+  );
   it.each([{ flags: [] }, { flags: ["--queue"] }])(
     "queues agent sends by default: %j",
     async ({ flags }) => {

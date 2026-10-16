@@ -14,13 +14,13 @@ const CLIENT_SOURCE = `import React, { useState } from "react";
 import { Text, View, Pressable } from "react-native";
 import { z } from "zod";
 
-function Card({ item }) {
+function Card({ item, theme }) {
   const [count, setCount] = useState(0);
-  return <View>
-    <Text accessibilityRole="header">{item.data.label + " " + item.data.phase}</Text>
-    <Text>{item.data.text}</Text>
-    <Pressable accessibilityRole="button" onPress={() => setCount(count + 1)}>
-      <Text>{"Card clicks " + count}</Text>
+  return <View testID="timeline-plugin-card">
+    <Text style={{ color: theme.colors.foreground }} accessibilityRole="header">{item.data.label + " " + item.data.phase}</Text>
+    <Text style={{ color: theme.colors.foreground }}>{item.data.text}</Text>
+    <Pressable accessibilityRole="button" style={{ minWidth: 48, minHeight: 48, alignSelf: "flex-start", justifyContent: "center" }} onPress={() => setCount(count + 1)}>
+      <Text style={{ color: theme.colors.foreground }}>{"Card clicks " + count}</Text>
     </Pressable>
   </View>;
 }
@@ -130,6 +130,61 @@ export async function expectWholeCompletedCard(page: Page): Promise<void> {
   );
   await expect(page.getByText(ASSISTANT_TEXT, { exact: true })).toBeVisible();
   await expect(page.getByTestId("assistant-message")).toHaveCount(0);
+}
+
+export async function expectTimelineCardLayout(page: Page, info: TestInfo): Promise<void> {
+  const card = page.getByTestId("timeline-plugin-card");
+  await card.scrollIntoViewIfNeeded();
+  const metrics = await card.evaluate((element) => {
+    const box = (node: Element) => {
+      const rect = node.getBoundingClientRect();
+      return {
+        left: rect.left,
+        right: rect.right,
+        top: rect.top,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height,
+        scrollWidth: node.scrollWidth,
+        clientWidth: node.clientWidth,
+        scrollHeight: node.scrollHeight,
+        clientHeight: node.clientHeight,
+      };
+    };
+    return {
+      viewport: innerWidth,
+      documentWidth: document.documentElement.scrollWidth,
+      card: box(element),
+      children: Array.from(element.children, box),
+      button: box(element.querySelector('[role="button"]')!),
+    };
+  });
+  await writeFile(info.outputPath("timeline-layout.json"), JSON.stringify(metrics, null, 2));
+  await info.attach("timeline-layout", {
+    body: JSON.stringify(metrics, null, 2),
+    contentType: "application/json",
+  });
+  expect(metrics.documentWidth).toBeLessThanOrEqual(metrics.viewport + 1);
+  expect(metrics.card.left).toBeGreaterThanOrEqual(-1);
+  expect(metrics.card.right).toBeLessThanOrEqual(metrics.viewport + 1);
+  expect(metrics.button.width).toBeGreaterThanOrEqual(48);
+  expect(metrics.button.height).toBeGreaterThanOrEqual(48);
+  for (const child of metrics.children) {
+    expect(child.scrollWidth).toBeLessThanOrEqual(child.clientWidth + 1);
+    expect(child.scrollHeight).toBeLessThanOrEqual(child.clientHeight + 1);
+  }
+  for (let i = 1; i < metrics.children.length; i++) {
+    expect(metrics.children[i].top).toBeGreaterThanOrEqual(metrics.children[i - 1].bottom - 1);
+  }
+  const button = card.getByRole("button", { name: "Card clicks 0", exact: true });
+  await button.scrollIntoViewIfNeeded();
+  await expect(button).toBeInViewport();
+  await button.click();
+  await expect(card.getByRole("button", { name: "Card clicks 1", exact: true })).toBeVisible();
+  await page.screenshot({ path: info.outputPath("timeline-bottom.png") });
+  const heading = card.getByRole("heading", { name: "Assistant complete", exact: true });
+  await heading.scrollIntoViewIfNeeded();
+  await expect(heading).toBeInViewport();
 }
 
 export async function expectBothConsecutiveTools(page: Page): Promise<void> {
