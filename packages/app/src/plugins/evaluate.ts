@@ -1,3 +1,8 @@
+import {
+  activeConnectionOfClient,
+  needsDirectConnection,
+  CommandCentreNeedsDirectConnectionError,
+} from "./command-centre-connection";
 import type { createPluginHosts } from "./hosts";
 import { useObservedAgents } from "./observed-agents";
 import { openExternalUrl } from "@/utils/open-external-url";
@@ -465,6 +470,12 @@ export function runPluginClientBundle(
         useSettings,
         useObservedAgents,
         openExternalUrl,
+        invokeHostRpc: (serverId: string, method: string, input: unknown) => {
+          const client = runtime.hosts.getClientForRpc(serverId);
+          if (needsDirectConnection(id, activeConnectionOfClient(client), client))
+            return Promise.reject(new CommandCentreNeedsDirectConnectionError());
+          return client.invokePluginRpc(id, method, input);
+        },
         getPaseoClient: (serverId: string) => runtime.hosts.getPaseoClient(serverId),
         useHosts: () =>
           React.useSyncExternalStore(

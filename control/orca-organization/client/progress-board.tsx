@@ -1,450 +1,510 @@
-import { useEffect, useState } from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
-import { usePaseo, type PluginSurfaceProps } from "@getpaseo/plugin/client";
+import { useEffect, useMemo, useState } from "react";
+import { Pressable, ScrollView, Text, View, useWindowDimensions } from "react-native";
+import {
+  useHosts,
+  invokeHostRpc,
+  getPaseoClient,
+  type PluginSurfaceProps,
+  type PluginHostSummary,
+} from "@getpaseo/plugin/client";
+import { readProgressHost } from "./read-progress-host";
 import { useContract } from "./use-contract";
 import { WorkButton } from "./work-button";
 import {
   ageLabel,
-  boardColumns,
+  combineProjects,
   progressBoardRpc,
-  type BoardCard,
-  type BoardGroup,
+  readyItems,
+  recentDone,
   type ProgressBoard,
 } from "../shared/progress-board";
+
+type HostBoard = { id: string; label: string; data: ProgressBoard | null; error: string | null };
+type Section = "running" | "done" | "next" | "blocked";
+const labels: Record<Section, string> = {
+  running: "Running now",
+  done: "Done",
+  next: "Next",
+  blocked: "Blocked",
+};
+// Session IDs and ledger keys remain navigation keys. They are not page copy.
+const plain = (text: string) =>
+  text
+    .replace(/\b[A-Z]{2,5}-\d+\b\s*[:·-]?\s*/g, "")
+    .replace(/\b[a-f\d]{8}-[a-f\d-]{27,}\b/gi, "")
+    .replace(/\b(?:lead|chat|session)\s+[a-f\d]{7,40}\b/gi, "")
+    .replace(/\([a-f\d]{7,40}\)/gi, "")
+    .replace(/\[removed\]/g, "Private detail")
+    .trim();
+const modelName = (name: string | null | undefined) =>
+  name
+    ? name
+        .replace(/^claude-/, "")
+        .replace(/-(\d)-(\d)$/, " $1.$2")
+        .replace(/^./, (letter) => letter.toUpperCase())
+    : "Model unavailable";
 
 export function ProgressBoardView({
   theme,
   layout,
-  data,
-  error,
+  navigation,
+  boards,
+  hosts,
+  selected,
+  selectHost,
   loading,
   refresh,
-  navigation,
-}: Pick<PluginSurfaceProps, "theme" | "layout" | "navigation"> & {
-  data: ProgressBoard | null;
-  error: string | null;
+}: PluginSurfaceProps & {
+  boards: HostBoard[];
+  hosts: readonly PluginHostSummary[];
+  selected: string;
+  selectHost: (id: string) => void;
   loading: boolean;
   refresh: () => void;
 }) {
-  const [selected, select] = useState<string | null>(null);
-  const [group, setGroup] = useState<BoardGroup>("In progress");
-  const [doneOpen, setDoneOpen] = useState(false);
-  const [branchesOpen, setBranchesOpen] = useState(false);
-  const [detail, setDetail] = useState<{
-    project: string;
-    type: BoardCard["type"];
-    id: string;
-  } | null>(null);
+  const { width } = useWindowDimensions();
   const c = theme.colors;
-  const project = data?.projects.find((p) => p.id === selected) ?? data?.projects[0];
-  const now = Date.parse(data?.observedAt ?? "");
-  const columns = project ? boardColumns(project, now) : [];
-  const body = { color: c.foreground, fontSize: 14, lineHeight: 22, flexShrink: 1 };
-  const muted = { ...body, color: c.foregroundMuted };
-  const heading = { ...body, fontWeight: "600" as const };
-  const panel = {
-    padding: 16,
-    gap: 12,
-    borderWidth: 1,
-    borderColor: c.border,
-    borderRadius: 12,
-    backgroundColor: c.surface1,
-    minWidth: 0,
+  const wide = width >= 1100 && !layout.compact;
+  const now = Date.now();
+  const [doneDays, setDoneDays] = useState(1);
+  const [moreDone, setMoreDone] = useState<ReadonlySet<string>>(new Set());
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const summary = (text: string) =>
+    text.length <= 150 ? text : `${text.slice(0, 145).replace(/\s+\S*$/, "")}…`;
+  const evidenceLine = (text: string) =>
+    [
+      ...new Set(
+        text.match(
+          /https:\/\/github\.com\/[^\s]+\/pull\/\d+|(?:PR|pull request)\s*#?\d+|\b[0-9a-f]{7,40}\b/gi,
+        ) ?? [],
+      ),
+    ]
+      .slice(0, 2)
+      .join(" · ") || summary(plain(text));
+  const colors: Record<Section, string> = {
+    running: "#62c7f2",
+    done: "#71cda0",
+    next: c.foreground,
+    blocked: "#efbb79",
   };
-  const picked =
-    detail && detail.project === project?.id
-      ? columns
-          .flatMap((column) => column.cards)
-          .find(
-            (card) =>
-              card.type === detail.type &&
-              (card.type === "item" ? card.item.id : card.job.id) === detail.id,
-          )
-      : undefined;
-
-  function cardView(card: BoardCard) {
-    const item = card.type === "item" ? card.item : null;
-    const job = card.type === "job" ? card.job : null;
-    const title = item?.item ?? job!.title;
-    const id = item?.id ?? job!.id;
+  // Use darker status ink in the light theme.
+  const light = c.foreground.toLowerCase() === "#1a1a1e" || c.surface0.toLowerCase() === "#ffffff";
+  if (light) {
+    colors.running = "#08648d";
+    colors.done = "#17683c";
+    colors.blocked = "#825013";
+  }
+  const body = { color: c.foreground, fontSize: 15, lineHeight: 22, flexShrink: 1 } as const;
+  const muted = { ...body, color: c.foregroundMuted, fontSize: 13, lineHeight: 20 };
+  const projects = combineProjects(boards);
+  const latest = Math.max(
+    0,
+    ...boards.flatMap((board) => (board.data ? [Date.parse(board.data.observedAt)] : [])),
+  );
+  const selectedLabel =
+    selected === "all"
+      ? "All hosts"
+      : (hosts.find((host) => host.serverId === selected)?.label ?? "Selected computer");
+  const rows = (project: ProgressBoard["projects"][number], section: Section) => {
+    if (section === "running")
+      return project.jobs.filter(
+        (job) => job.status === "running" || job.status === "initializing",
+      );
+    if (section === "done") return recentDone(project.items, now, doneDays);
+    if (section === "next") return readyItems(project.items);
+    return project.items.filter((item) => /^BLOCKED\b/i.test(item.status));
+  };
+  function section(section: Section) {
+    const count = projects.reduce((sum, project) => sum + rows(project, section).length, 0);
+    const empty: Record<Section, string> = {
+      running: "No sessions are running on the connected computers.",
+      done: `No work closed in the last ${doneDays === 1 ? "24 hours" : "7 days"}.`,
+      next: "No open work is ready in the available project lists.",
+      blocked: "No work is marked blocked in the available project lists.",
+    };
     return (
-      <Pressable
-        key={`${card.type}:${id}`}
-        accessibilityRole="button"
-        accessibilityLabel={`Open ${item ? item.id : "job"}: ${title}`}
-        onPress={() => setDetail({ project: project!.id, type: card.type, id })}
-        style={({ pressed }) => ({
-          ...panel,
-          padding: 12,
-          gap: 8,
-          minHeight: 48,
-          minWidth: 48,
-          backgroundColor: pressed ? c.surface2 : c.surface0,
-        })}
-      >
+      <View testID={`board-section-${section}`} style={{ gap: 16, minWidth: 0 }}>
         <View
           style={{
             flexDirection: "row",
-            justifyContent: "space-between",
-            gap: 8,
             alignItems: "center",
+            gap: 10,
+            borderBottomWidth: 1,
+            borderColor: c.border,
+            paddingBottom: 14,
           }}
         >
-          <Text numberOfLines={1} style={muted}>
-            {item?.id ?? "Job"}
+          <Text
+            accessibilityRole="header"
+            style={{
+              ...body,
+              fontSize: 21,
+              lineHeight: 28,
+              fontWeight: "700",
+              color: colors[section],
+              flex: 1,
+            }}
+          >
+            {labels[section]}
           </Text>
           <Text
-            style={{
-              ...muted,
-              fontSize: 12,
-              lineHeight: 18,
-              paddingHorizontal: 8,
-              paddingVertical: 2,
-              borderRadius: 4,
-              backgroundColor: c.surface2,
-            }}
+            accessibilityLabel={`${count} ${labels[section].toLowerCase()}`}
+            style={{ ...body, color: colors[section], fontWeight: "700", fontSize: 20 }}
           >
-            {item?.kind ?? "JOB"}
+            {count}
           </Text>
         </View>
-        <Text numberOfLines={2} ellipsizeMode="tail" style={heading}>
-          {title}
-        </Text>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-          <Text numberOfLines={1} style={{ ...muted, flex: 1 }}>
-            {item ? item.owner || "Owner unavailable" : `${job!.status} · ${job!.machine}`}
-          </Text>
-          <Text style={muted}>{ageLabel(item?.createdAt ?? job?.createdAt ?? "", now)}</Text>
-        </View>
-        {!!job?.permissions && (
-          <Text style={{ ...body, color: c.statusWarning }}>
-            Waiting for permission ({job.permissions})
-          </Text>
-        )}
-        {job && (
-          <Text numberOfLines={1} ellipsizeMode="tail" style={muted}>
-            {job.result ?? "No result available."}
-          </Text>
-        )}
-      </Pressable>
-    );
-  }
-
-  function columnView(column: (typeof columns)[number]) {
-    const done = column.group === "Done";
-    const collapsed = done && !doneOpen;
-    return (
-      <View
-        key={column.group}
-        testID={`board-column-${column.group}`}
-        style={{
-          ...panel,
-          width: layout.compact ? "100%" : 288,
-          flexShrink: 0,
-          padding: 12,
-          height: layout.compact ? undefined : 560,
-        }}
-      >
-        {done ? (
-          <WorkButton
-            theme={theme}
-            label={`Done (${column.cards.length})`}
-            expanded={doneOpen}
-            onPress={() => setDoneOpen((open) => !open)}
-          >{`${doneOpen ? "Hide" : "Show"} Done (${column.cards.length})`}</WorkButton>
-        ) : (
-          <View
-            style={{
-              minHeight: 48,
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 8,
-            }}
-          >
-            <Text accessibilityRole="header" style={heading}>
-              {column.group}
-            </Text>
-            <Text style={muted}>{column.cards.length}</Text>
+        {section === "done" && (
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+            <WorkButton
+              theme={theme}
+              label="Last 24 hours"
+              selected={doneDays === 1}
+              onPress={() => setDoneDays(1)}
+            />
+            <WorkButton
+              theme={theme}
+              label="Last 7 days"
+              selected={doneDays === 7}
+              onPress={() => setDoneDays(7)}
+            />
           </View>
         )}
-        {done && <Text style={muted}>Last 10 ledger completions. Dated items cover 14 days.</Text>}
-        {!collapsed &&
-          (layout.compact ? (
-            <View style={{ gap: 12 }}>{column.cards.map(cardView)}</View>
-          ) : (
-            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ gap: 12, paddingBottom: 4 }}>
-              {column.cards.map(cardView)}
-              {!column.cards.length && <Text style={muted}>No items in this column.</Text>}
-            </ScrollView>
-          ))}
-        {!collapsed && layout.compact && !column.cards.length && (
-          <Text style={muted}>No items in this column.</Text>
+        {!count && (
+          <Text style={muted}>
+            {projects.length
+              ? empty[section]
+              : loading
+                ? "Reading the selected computers…"
+                : "Connect a computer with sessions or a project list to see work here."}
+          </Text>
         )}
+        {section === "done" &&
+          projects.some((project) =>
+            rows(project, "done").some(
+              (item) => "completedSource" in item && item.completedSource === "file",
+            ),
+          ) && <Text style={muted}>Approximate times use the project list’s last change.</Text>}
+        {projects.map((project) => {
+          const entries = rows(project, section);
+          if (!entries.length) return null;
+          return (
+            <View key={project.id} style={{ gap: 0, minWidth: 0 }}>
+              <Text style={{ ...muted, fontWeight: "700", paddingBottom: 6 }}>
+                {plain(project.name)} · {entries.length}
+              </Text>
+              {(section === "done" && !moreDone.has(project.id)
+                ? entries.slice(0, 10)
+                : entries
+              ).map((entry) => {
+                if ("title" in entry) {
+                  const contents = (
+                    <View style={{ gap: 6, minWidth: 0 }}>
+                      <Text style={{ ...body, fontWeight: "600" }}>{plain(entry.title)}</Text>
+                      <Text style={{ ...muted, color: colors.running }}>
+                        {modelName(entry.model)} · {entry.machine} ·
+                        {entry.startedAt
+                          ? `Running for ${ageLabel(entry.startedAt, now)}`
+                          : "Start time unavailable"}
+                      </Text>
+                      <Text style={muted}>
+                        {entry.result
+                          ? summary(plain(entry.result))
+                          : "No activity text received yet."}
+                      </Text>
+                      {!!entry.permissions && (
+                        <Text style={{ ...muted, color: colors.blocked }}>
+                          Waiting for permission
+                        </Text>
+                      )}
+                    </View>
+                  );
+                  return navigation ? (
+                    <Pressable
+                      key={entry.id}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Open session: ${plain(entry.title)}`}
+                      onPress={() =>
+                        navigation.openAgent({
+                          agentId: entry.id,
+                          serverId: "hostId" in entry ? String(entry.hostId) : undefined,
+                        })
+                      }
+                      style={{
+                        paddingVertical: 16,
+                        minHeight: 48,
+                        minWidth: 48,
+                        borderBottomWidth: 1,
+                        borderColor: c.border,
+                      }}
+                    >
+                      {contents}
+                    </Pressable>
+                  ) : (
+                    <View key={entry.id} style={{ paddingVertical: 16 }}>
+                      {contents}
+                    </View>
+                  );
+                }
+                const itemKey = `${project.id}:${entry.id}`;
+                const isExpanded = expanded.has(itemKey);
+                return (
+                  <View
+                    key={entry.id}
+                    style={{
+                      gap: 6,
+                      paddingVertical: 16,
+                      borderBottomWidth: 1,
+                      borderColor: c.border,
+                    }}
+                  >
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`${isExpanded ? "Hide" : "Show"} full item: ${summary(plain(entry.item))}`}
+                      accessibilityState={{ expanded: isExpanded }}
+                      onPress={() =>
+                        setExpanded((previous) => {
+                          const next = new Set(previous);
+                          if (next.has(itemKey)) next.delete(itemKey);
+                          else next.add(itemKey);
+                          return next;
+                        })
+                      }
+                      style={{ minHeight: 48, minWidth: 48, justifyContent: "center" }}
+                    >
+                      <Text style={{ ...body, fontWeight: "500" }}>
+                        {isExpanded ? plain(entry.item) : summary(plain(entry.item))}
+                      </Text>
+                    </Pressable>
+                    {section === "done" ? (
+                      <Text style={{ ...muted, color: colors.done }}>
+                        {entry.evidence && entry.evidence !== "—"
+                          ? isExpanded
+                            ? plain(entry.evidence)
+                            : evidenceLine(entry.evidence)
+                          : "No evidence recorded."}
+                      </Text>
+                    ) : (
+                      <Text style={muted}>{plain(entry.owner) || "Owner unavailable"}</Text>
+                    )}
+                    {section === "done" && entry.completedAt && (
+                      <Text style={muted}>
+                        Closed {ageLabel(entry.completedAt, now)} ago
+                        {entry.completedSource === "file"
+                          ? " · approx"
+                          : entry.completedSource === "git"
+                            ? " · from file history"
+                            : ""}
+                      </Text>
+                    )}
+                    {section === "blocked" && (
+                      <>
+                        <Text style={{ ...body, color: colors.blocked }}>
+                          {plain(
+                            entry.status
+                              .replace(/^BLOCKED\s*:?\s*/i, "")
+                              .replace(/\s*blocked\s+(?:at|since)\s*:?\s*\d{4}-\S+/i, ""),
+                          ) || "No block reason recorded."}
+                        </Text>
+                        <Text style={muted}>
+                          {entry.blockedAt
+                            ? `Blocked for ${ageLabel(entry.blockedAt, now)}${entry.blockedApprox ? " · approx" : ""}`
+                            : "Block start time not recorded."}
+                        </Text>
+                      </>
+                    )}
+                  </View>
+                );
+              })}
+              {section === "done" && entries.length > 10 && (
+                <WorkButton
+                  theme={theme}
+                  label={
+                    moreDone.has(project.id)
+                      ? "Show fewer closed items"
+                      : `Show all ${entries.length} closed items`
+                  }
+                  onPress={() =>
+                    setMoreDone((previous) => {
+                      const next = new Set(previous);
+                      if (next.has(project.id)) next.delete(project.id);
+                      else next.add(project.id);
+                      return next;
+                    })
+                  }
+                />
+              )}
+            </View>
+          );
+        })}
       </View>
     );
   }
-
   return (
     <ScrollView
       testID="board-page"
-      style={{ flex: 1, minWidth: 0, backgroundColor: c.surface0 }}
-      contentContainerStyle={{ padding: layout.compact ? 16 : 24, gap: 16 }}
+      style={{ flex: 1, backgroundColor: c.surface0 }}
+      contentContainerStyle={{ padding: width < 600 ? 20 : 32, gap: 28 }}
     >
-      <View
-        style={{
-          flexDirection: "row",
-          alignItems: "center",
-          justifyContent: "space-between",
-          flexWrap: "wrap",
-          gap: 12,
-        }}
-      >
-        <Text accessibilityRole="header" style={{ ...heading, fontSize: 24, lineHeight: 32 }}>
-          Progress board
-        </Text>
-        <WorkButton theme={theme} label="Refresh board" onPress={refresh} disabled={loading} />
-      </View>
-      <Text style={muted}>
-        {data
-          ? `${data.machine} · Updated ${new Date(data.observedAt).toLocaleTimeString()}`
-          : "Reading this host…"}
-      </Text>
-      {error && (
-        <Text accessibilityRole="alert" style={body}>
-          Board unavailable. Select Refresh board to retry.
-        </Text>
-      )}
-      {data?.warnings.map((warning) => (
-        <Text key={warning} style={muted}>
-          {warning}
-        </Text>
-      ))}
-      <View style={{ gap: 8 }}>
-        <Text style={heading}>Project</Text>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-          {data?.projects.map((p) => (
+      <View style={{ gap: 16 }}>
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+          }}
+        >
+          <Text
+            accessibilityRole="header"
+            style={{ ...body, fontSize: 28, lineHeight: 36, fontWeight: "700", flex: 1 }}
+          >
+            Progress
+          </Text>
+          <WorkButton theme={theme} label="Refresh board" onPress={refresh} disabled={loading}>
+            {loading ? "Reading…" : "Refresh"}
+          </WorkButton>
+        </View>
+        <Text style={muted}>What is running, what finished, and what can start next.</Text>
+        <View testID="board-hosts" style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+          <WorkButton
+            theme={theme}
+            label="All hosts"
+            selected={selected === "all"}
+            onPress={() => selectHost("all")}
+          />
+          {hosts.map((host) => (
             <WorkButton
-              key={p.id}
+              key={host.serverId}
               theme={theme}
-              label={p.name}
-              selected={project?.id === p.id}
-              onPress={() => {
-                select(p.id);
-                setDetail(null);
-              }}
+              label={`${host.label}${host.status === "online" ? "" : " · Offline"}`}
+              selected={selected === host.serverId}
+              onPress={() => selectHost(host.serverId)}
             />
           ))}
         </View>
+        <Text testID="board-updated" style={muted}>
+          {selectedLabel} ·{" "}
+          {loading
+            ? "Reading…"
+            : latest
+              ? `Updated ${new Date(latest).toLocaleTimeString()}`
+              : "No current snapshot"}
+        </Text>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 16 }}>
+          {(["running", "done", "next", "blocked"] as const).map((key) => (
+            <Text key={key} style={{ ...body, color: colors[key], fontWeight: "600" }}>
+              {projects.reduce((sum, project) => sum + rows(project, key).length, 0)}{" "}
+              {labels[key].toLowerCase()}
+            </Text>
+          ))}
+        </View>
+        {boards.flatMap((board) => [
+          board.error ? (
+            <Text
+              key={`${board.id}:error`}
+              accessibilityRole="alert"
+              style={{ ...muted, color: colors.blocked }}
+            >
+              {board.label}: {board.error}
+            </Text>
+          ) : null,
+          ...(board.data?.warnings ?? []).map((warning) => (
+            <Text key={`${board.id}:${warning}`} style={{ ...muted, color: colors.blocked }}>
+              {board.label}: {warning}
+            </Text>
+          )),
+        ])}
       </View>
-      {!loading && data?.projects.length === 0 && (
-        <Text style={body}>No projects on this host.</Text>
-      )}
-      {project && (
-        <>
-          {project.ledgerState !== "Current" && <Text style={muted}>{project.ledgerState}</Text>}
-          {picked ? (
-            <View style={panel}>
-              <WorkButton theme={theme} label="Back to board" onPress={() => setDetail(null)} />
-              {picked.type === "item" ? (
-                <>
-                  <Text accessibilityRole="header" selectable style={heading}>
-                    {picked.item.id} · {picked.item.item}
-                  </Text>
-                  <Text selectable style={muted}>
-                    {picked.item.kind} · {picked.item.status} ·{" "}
-                    {picked.item.owner || "Owner unavailable"}
-                  </Text>
-                  <Text style={muted}>{ageLabel(picked.item.createdAt ?? "", now)}</Text>
-                  <Text selectable style={body}>
-                    Evidence:{" "}
-                    {picked.item.evidence && picked.item.evidence !== "—"
-                      ? picked.item.evidence
-                      : "No evidence available."}
-                  </Text>
-                  <Text selectable style={muted}>
-                    Source: {picked.item.source || "Source unavailable"}
-                  </Text>
-                </>
-              ) : (
-                <>
-                  <Text accessibilityRole="header" selectable style={heading}>
-                    {picked.job.title}
-                  </Text>
-                  <Text style={muted}>
-                    {picked.job.status} · {picked.job.machine} ·{" "}
-                    {ageLabel(picked.job.createdAt, now)}
-                  </Text>
-                  {!!picked.job.permissions && (
-                    <Text style={{ ...body, color: c.statusWarning }}>
-                      Waiting for permission ({picked.job.permissions})
-                    </Text>
-                  )}
-                  <Text selectable style={body}>
-                    {picked.job.result ?? "No result available."}
-                  </Text>
-                  {navigation && (
-                    <WorkButton
-                      theme={theme}
-                      label={`Open job ${picked.job.title}`}
-                      onPress={() => navigation.openAgent({ agentId: picked.job.id })}
-                    >
-                      Open job
-                    </WorkButton>
-                  )}
-                </>
-              )}
-            </View>
-          ) : (
-            <>
-              {layout.compact && (
-                <ScrollView
-                  horizontal
-                  testID="board-status-tabs"
-                  style={{ flexGrow: 0 }}
-                  contentContainerStyle={{ gap: 8, paddingBottom: 4 }}
-                >
-                  {columns.map((column) => (
-                    <WorkButton
-                      key={column.group}
-                      theme={theme}
-                      label={`${column.group} (${column.cards.length})`}
-                      selected={group === column.group}
-                      onPress={() => setGroup(column.group)}
-                    />
-                  ))}
-                </ScrollView>
-              )}
-              {layout.compact ? (
-                columns.filter((column) => column.group === group).map(columnView)
-              ) : (
-                <ScrollView
-                  horizontal
-                  testID="board-lanes"
-                  style={{ flexGrow: 0, minWidth: 0 }}
-                  contentContainerStyle={{ gap: 16, paddingBottom: 12 }}
-                >
-                  {columns.map(columnView)}
-                </ScrollView>
-              )}
-            </>
-          )}
-          {!picked && (
-            <View style={{ gap: 12 }}>
-              <WorkButton
-                theme={theme}
-                label={`Branches and checks (${project.branches.length})`}
-                expanded={branchesOpen}
-                onPress={() => setBranchesOpen((open) => !open)}
-              />
-              {branchesOpen && (
-                <>
-                  <Text style={muted}>Git and CI reads are cached for at least 60 seconds.</Text>
-                  {!project.branches.length && (
-                    <Text style={muted}>No workspaces on this host.</Text>
-                  )}
-                  {project.branches.map((b, i) => (
-                    <View key={`${b.workspace}:${i}`} style={panel}>
-                      <Text selectable style={heading}>
-                        {b.workspace}
-                      </Text>
-                      <Text selectable style={body}>
-                        {b.branch ?? "Branch unavailable"} ·{" "}
-                        {b.head?.slice(0, 12) ?? "Head unavailable"}
-                      </Text>
-                      <Text style={muted}>
-                        {b.state} · CI: {b.ci}
-                      </Text>
-                      <Text style={muted}>
-                        {b.observedAt
-                          ? `Checked ${new Date(b.observedAt).toLocaleTimeString()}`
-                          : "Read pending"}
-                      </Text>
-                    </View>
-                  ))}
-                </>
-              )}
-            </View>
-          )}
-        </>
-      )}
+      <View
+        style={{
+          flexDirection: wide ? "row" : "column",
+          gap: wide ? 32 : 36,
+          alignItems: "stretch",
+          minWidth: 0,
+        }}
+      >
+        <View style={{ flex: wide ? 1.15 : undefined, minWidth: 0 }}>{section("running")}</View>
+        <View style={{ flex: wide ? 1 : undefined, minWidth: 0 }}>{section("next")}</View>
+        <View style={{ flex: wide ? 1 : undefined, minWidth: 0 }}>{section("blocked")}</View>
+        <View style={{ flex: wide ? 1 : undefined, minWidth: 0 }}>{section("done")}</View>
+      </View>
     </ScrollView>
   );
 }
 
 export function ProgressBoardSurface(props: PluginSurfaceProps) {
   const read = useContract(progressBoardRpc);
-  const paseo = usePaseo();
-  const [state, setState] = useState<{
-    data: ProgressBoard | null;
-    error: string | null;
-    loading: boolean;
-  }>({ data: null, error: null, loading: true });
+  const configured = useHosts();
+  const hosts = useMemo(() => {
+    const all = [...configured];
+    if (!all.some((host) => host.serverId === props.host.id))
+      all.push({ serverId: props.host.id, label: props.host.label, status: "online" });
+    return all;
+  }, [configured, props.host.id, props.host.label]);
+  const [selected, selectHost] = useState("all");
+  const [boards, setBoards] = useState<HostBoard[]>([]);
+  const [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0);
   useEffect(() => {
     let disposed = false,
-      pending = false,
-      again = false;
-    let debounce: ReturnType<typeof setTimeout> | undefined;
-    const releases: Array<() => void | Promise<void>> = [];
+      pending = false;
+    const targets = hosts.filter((host) => selected === "all" || selected === host.serverId);
+    setBoards([]); // A host change must not show the previous computer's work.
     async function refresh() {
-      if (disposed) return;
-      if (pending) {
-        again = true;
-        return;
-      }
+      if (disposed || pending) return;
       pending = true;
-      setState((s) => ({ ...s, loading: true }));
-      try {
-        const data = await read({});
-        if (!disposed) setState({ data, loading: false, error: null });
-      } catch {
-        if (!disposed) setState((s) => ({ ...s, loading: false, error: "unavailable" }));
-      } finally {
-        pending = false;
-        if (again) {
-          again = false;
-          schedule();
-        }
-      }
-    }
-    function schedule() {
+      setLoading(true);
+      const next = await Promise.all(
+        targets.map(async (host): Promise<HostBoard> => {
+          if (host.status !== "online")
+            return {
+              id: host.serverId,
+              label: host.label,
+              data: null,
+              error: "This computer is offline. Connect it to read its work.",
+            };
+          try {
+            const data = await readProgressHost(getPaseoClient(host.serverId), async () =>
+              host.serverId === props.host.id
+                ? await read({})
+                : progressBoardRpc.output.parse(
+                    await invokeHostRpc(host.serverId, progressBoardRpc.name, {}),
+                  ),
+            );
+            return { id: host.serverId, label: host.label, data, error: null };
+          } catch {
+            return {
+              id: host.serverId,
+              label: host.label,
+              data: null,
+              error: "Cannot read this computer. Check its connection, then refresh.",
+            };
+          }
+        }),
+      );
       if (!disposed) {
-        clearTimeout(debounce);
-        debounce = setTimeout(() => void refresh(), 400);
+        setBoards(next);
+        setLoading(false);
       }
+      pending = false;
     }
     void refresh();
-    // Owned directory observations carry status changes and reconnect snapshots. No timeline stream is opened.
-    void paseo.agents
-      .list({ filter: { includeArchived: false }, subscribe: {}, page: { limit: 100 } })
-      .then((directory) => {
-        if (disposed) {
-          void directory.subscription.release();
-          return;
-        }
-        directory.subscription.subscribe({ snapshot: schedule, update: schedule });
-        releases.push(() => directory.subscription.release());
-      })
-      .catch(() => {});
-    void paseo.workspaces
-      .list({ subscribe: {}, page: { limit: 100 } })
-      .then((directory) => {
-        if (disposed) {
-          void directory.subscription.release();
-          return;
-        }
-        directory.subscription.subscribe({ snapshot: schedule, update: schedule });
-        releases.push(() => directory.subscription.release());
-      })
-      .catch(() => {});
-    const timer = setInterval(() => void refresh(), 60000);
+    const timer = setInterval(() => void refresh(), 15000);
     return () => {
       disposed = true;
-      clearTimeout(debounce);
       clearInterval(timer);
-      releases.forEach((release) => void release());
     };
-  }, [read, paseo, revision]);
-  return <ProgressBoardView {...props} {...state} refresh={() => setRevision((n) => n + 1)} />;
+  }, [read, hosts, selected, revision, props.host.id]);
+  return (
+    <ProgressBoardView
+      {...props}
+      boards={boards}
+      hosts={hosts}
+      selected={selected}
+      selectHost={selectHost}
+      loading={loading}
+      refresh={() => setRevision((n) => n + 1)}
+    />
+  );
 }

@@ -140,6 +140,9 @@ export function setNativeHostCatalog(hosts = [], clients = new Map()) {
   nativeClients = clients;
 }
 export const useHosts = () => nativeHosts;
+export async function invokeHostRpc() {
+  throw Error("No cross-host fixture RPC configured");
+}
 export function getPaseoClient(serverId) {
   const client = nativeClients.get(serverId);
   if (!client) throw new Error(`Fixture host is unavailable: ${serverId}`);

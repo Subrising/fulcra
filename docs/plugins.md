@@ -10,14 +10,24 @@ Distribution authors adding synchronous security policy use [trusted bundled hos
 
 ## Progress board
 
-The bundled Command Centre plugin has a **Progress board** sidebar screen. It works on desktop and mobile.
-Select a host to see its jobs, ledger, workspace heads, pull requests, and CI checks.
-Ledger files come from `~/shared-vault/projects/<project>/OPEN-ITEMS.md` on that host.
-Project names or repository names must match ledger folder names. Unmatched projects show an unavailable ledger.
-Job events refresh the screen. A 60-second refresh covers ledger changes and cached GitHub checks.
-GitHub checks use the host's `gh` command. Missing access shows unavailable data.
-Each snapshot starts at most 16 branch reads. Other branch reads stay pending until a later snapshot.
-The board reads data without a model. It does not create jobs or approve permission requests.
+The bundled Command Centre plugin has a **Progress board** sidebar screen.
+It shows running sessions, ready work, blocked work, and completions from the last 24 hours.
+Select one saved computer or **All hosts**. Offline computers show their connection state.
+Mirrored project lists appear once. The newest ledger copy supplies each project's work items.
+
+The board reads `FULCRA_LEDGER_DIR/<project>/OPEN-ITEMS.md` when that environment variable is set.
+Otherwise, it reads `~/shared-vault/projects/<project>/OPEN-ITEMS.md`.
+A project does not need a local lead session. Running sessions without project labels remain visible.
+Session run times use the current turn's start time. Missing times stay unknown.
+
+Old ledger rows have no completion timestamps. The board excludes them from the 24-hour count.
+Explicit `closed at <ISO timestamp>` and `blocked since <ISO timestamp>` values supply transition dates.
+The board also records observed status transitions in its private `progress-history.json` cache.
+Its first observation never assigns a date to an existing completion or block.
+The daemon observes ledger changes even while the screen is closed.
+The cache survives restarts. It does not change ledger files.
+
+The screen refreshes every 15 seconds while mounted. It performs no model calls or branch scans.
 
 ## Install a directory source
 

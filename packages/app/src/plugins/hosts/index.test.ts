@@ -122,3 +122,14 @@ it("reacquires a fresh API after explicit disposal without affecting a later bor
   h.lifetime.abort();
   expect(() => second.agents.subscribe(ignoreUpdate)).toThrow("disposed");
 });
+
+it("routes RPC access only to a connected host within the installation lifetime", () => {
+  const h = registry();
+  const client = connection("b");
+  h.snapshots.set("b", { connectionStatus: "online", client });
+  expect(h.runtime.getClientForRpc("b")).toBe(client);
+  expect(() => h.runtime.getClientForRpc("a")).toThrow("disconnected");
+  expect(() => h.runtime.getClientForRpc("missing")).toThrow("Unknown");
+  h.lifetime.abort();
+  expect(() => h.runtime.getClientForRpc("b")).toThrow("stopped");
+});
