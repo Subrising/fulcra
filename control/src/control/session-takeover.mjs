@@ -61,7 +61,7 @@ export async function takeOverSession(
       }
       const snapshot = await control.native.snapshot(sessionId);
       if (
-        !["idle", "error"].includes(snapshot.status) ||
+        !["idle", "error", "closed"].includes(snapshot.status) ||
         observed.pending ||
         snapshot.pendingPermissions?.length
       )

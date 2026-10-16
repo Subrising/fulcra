@@ -17,7 +17,7 @@ function resolveBalance(balance: UsageBalance, locale: string): ResolvedBalance 
     const usedAmount = used ?? (remaining != null ? limit - remaining : null);
     const usedPct = usedAmount != null ? (usedAmount / limit) * 100 : null;
     const usedText = usedAmount != null ? format(usedAmount) : "—";
-    return { amountText: `${usedText} / ${format(limit)}`, usedPct };
+    return { amountText: `${usedText} ${unit === "usd" ? "of" : "/"} ${format(limit)}`, usedPct };
   }
   if (remaining != null) {
     return { amountText: `${format(remaining)} left`, usedPct: null };
@@ -55,9 +55,7 @@ export function UsageBalanceBar({ balance }: { balance: UsageBalance }) {
   return (
     <View style={styles.container}>
       <View style={styles.labelRow}>
-        <Text style={styles.label} numberOfLines={1}>
-          {balance.label}
-        </Text>
+        <Text style={styles.label}>{balance.label}</Text>
         <Text style={styles.value}>
           {amountText}
           {resetLabel ? <Text style={styles.reset}>{` · ${resetLabel}`}</Text> : null}
@@ -78,6 +76,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   labelRow: {
     flexDirection: "row",
+    flexWrap: "wrap",
     justifyContent: "space-between",
     alignItems: "center",
     gap: theme.spacing[2],

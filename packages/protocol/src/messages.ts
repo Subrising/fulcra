@@ -498,6 +498,7 @@ const AgentUsageSchema: z.ZodType<AgentUsage> = z.object({
   cachedInputTokens: z.number().optional(),
   outputTokens: z.number().optional(),
   totalCostUsd: z.number().optional(),
+  turnCostUsd: z.number().nonnegative().optional(),
   contextWindowMaxTokens: z.number().optional(),
   contextWindowUsedTokens: z.number().optional(),
 });
@@ -858,6 +859,7 @@ export const AgentStreamEventPayloadSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("turn_failed"),
+    usage: AgentUsageSchema.optional(),
     provider: AgentProviderSchema,
     turnId: z.string().optional(),
     error: z.string(),
@@ -956,6 +958,7 @@ export const AgentSnapshotPayloadSchema = z.object({
   updatedAt: z.string(),
   lastUserMessageAt: z.string().nullable(),
   status: AgentStatusSchema,
+  nativeLifecycle: z.enum(AGENT_LIFECYCLE_STATUSES).optional(),
   activeTurn: AgentActiveTurnPayloadSchema.nullable().optional(),
   capabilities: AgentCapabilityFlagsSchema,
   currentModeId: z.string().nullable(),
@@ -999,6 +1002,7 @@ export const AgentListItemPayloadSchema = z.object({
   thinkingOptionId: z.string().nullable().optional(),
   effectiveThinkingOptionId: z.string().nullable().optional(),
   status: AgentStatusSchema,
+  nativeLifecycle: z.enum(AGENT_LIFECYCLE_STATUSES).optional(),
   cwd: z.string(),
   createdAt: z.string(),
   updatedAt: z.string(),

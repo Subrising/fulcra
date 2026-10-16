@@ -88,7 +88,7 @@ export const agentLsSchema: OutputSchema<AgentListItem> = {
 };
 
 /** Transform agent snapshot to AgentListItem */
-function toListItem(agent: AgentSnapshotPayload): AgentListItem {
+export function toListItem(agent: AgentSnapshotPayload): AgentListItem {
   const model = normalizeModelId(agent.runtimeInfo?.model) ?? normalizeModelId(agent.model);
   return {
     id: agent.id,
@@ -96,7 +96,7 @@ function toListItem(agent: AgentSnapshotPayload): AgentListItem {
     name: agent.title ?? "-",
     provider: model ? `${agent.provider}/${model}` : agent.provider,
     thinking: agent.effectiveThinkingOptionId ?? "auto",
-    status: agent.status,
+    status: agent.nativeLifecycle ?? agent.status,
     cwd: shortenPath(agent.cwd),
     created: relativeTime(agent.createdAt),
   };

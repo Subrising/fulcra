@@ -1,5 +1,6 @@
 // Synthetic DOM adapter for component behavior tests. This is not a Paseo/phone UI test.
 import React from "react";
+export const useWindowDimensions = () => ({ width: 1440, height: 900, scale: 1, fontScale: 1 });
 export const calls = [];
 export const scrollCalls = [];
 export const layoutHandlers = new Map();

@@ -1193,3 +1193,27 @@ test("Settings Accounts route retains registered host, saves defaults and reopen
     dispose();
   }
 });
+
+test("an API account saves its own dollar budget and start date", async () => {
+  const initial = view();
+  const account = {
+    ...initial.accounts[1],
+    credentialKind: "api-key",
+    budget: { limitUsd: 200, startAt: "2026-10-01T00:00:00.000Z" },
+  };
+  const writes = setup(view({ accounts: [account] }));
+  const amount = await screen.findByLabelText("Budget for Personal in USD");
+  fireEvent.change(amount, { target: { value: "250" } });
+  fireEvent.change(screen.getByLabelText("Budget start date for Personal"), {
+    target: { value: "2026-10-05" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save budget for Personal" }));
+  await waitFor(() => assert.equal(writes.length, 1));
+  assert.deepEqual(writes[0], {
+    name: "organization.accounts.update",
+    input: {
+      id: B,
+      budget: { limitUsd: 250, startAt: "2026-10-05T00:00:00.000Z" },
+    },
+  });
+});

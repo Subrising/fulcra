@@ -333,6 +333,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   detailRow: {
     flexDirection: "row",
+    flexWrap: "wrap",
     justifyContent: "space-between",
     gap: theme.spacing[2],
   },
@@ -342,6 +343,8 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.sm,
   },
   detailValue: {
+    flexShrink: 1,
+    maxWidth: "100%",
     color: theme.colors.foreground,
     fontSize: theme.fontSize.sm,
   },

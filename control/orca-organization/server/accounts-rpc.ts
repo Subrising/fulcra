@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import {
   readAccountsAsync,
+  credentialKind,
   publicView,
   addAccount,
   setAccount,
@@ -194,6 +195,9 @@ export function createAccountHandlers(d: Deps) {
           await removeAccount(d.root(), account.id).catch(() => {});
           return refused(plain(e, "The token could not be kept in the Keychain"));
         }
+        await setAccount(d.root(), account.id, {
+          credentialKind: credentialKind(input.token!.trim()),
+        });
         return ok("Added. New Claude sessions can use it now.");
       }
       signIn(account.id);
@@ -207,6 +211,7 @@ export function createAccountHandlers(d: Deps) {
       enabled?: boolean;
       priority?: number;
       clearLimit?: true;
+      budget?: { limitUsd: number; startAt: string };
       token?: string;
       signIn?: true;
       remove?: true;
@@ -228,14 +233,17 @@ export function createAccountHandlers(d: Deps) {
         if (input.token !== undefined) {
           if (a.provider !== "claude") return refused("A Codex account signs in in the browser");
           await keychain.put(a.id, input.token.trim());
-          await setAccount(d.root(), a.id, { auth: "ok" });
+          await setAccount(d.root(), a.id, {
+            auth: "ok",
+            credentialKind: credentialKind(input.token.trim()),
+          });
         }
         if (input.signIn) {
           if (a.provider !== "codex") return refused("Replace a Claude account's token instead");
           signIn(a.id);
         }
         const patch: Record<string, unknown> = {};
-        for (const k of ["name", "enabled", "priority", "clearLimit"] as const)
+        for (const k of ["name", "enabled", "priority", "clearLimit", "budget"] as const)
           if (input[k] !== undefined) patch[k] = input[k];
         if (Object.keys(patch).length) await setAccount(d.root(), a.id, patch);
         return ok(input.signIn ? "A browser sign-in opened on the Mac that runs this host." : null);

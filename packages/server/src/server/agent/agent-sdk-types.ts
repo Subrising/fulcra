@@ -248,6 +248,8 @@ export interface AgentUsage {
   cachedInputTokens?: number;
   outputTokens?: number;
   totalCostUsd?: number;
+  /** Cost added by this result, after subtracting the SDK query total already recorded. */
+  turnCostUsd?: number;
   contextWindowMaxTokens?: number;
   contextWindowUsedTokens?: number;
 }
@@ -468,6 +470,7 @@ export type AgentStreamEvent =
     }
   | {
       type: "turn_failed";
+      usage?: AgentUsage;
       provider: AgentProvider;
       error: string;
       code?: string;

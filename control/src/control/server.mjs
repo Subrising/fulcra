@@ -1,3 +1,5 @@
+import { createAccountBudgets } from "./account-budgets.mjs";
+import { poolRoot } from "./account-rotation.mjs";
 import { team } from "./team.mjs";
 import { HostNative } from "./host-native.mjs";
 import { createWorktreeLifecycle } from "./worktree-lifecycle-runtime.mjs";
@@ -274,6 +276,7 @@ export async function startController({
     clearInterval(seatSyncTimer);
     unsubscribeEvents();
     unsubscribeLimits();
+    budgets.close();
     await Promise.allSettled([
       ...operations,
       lifecyclePass,
@@ -315,8 +318,12 @@ export async function startController({
   await refreshEvents();
   // H6 item 6: a Claude session of ours that goes idle is checked for a usage-limit stop; stops already present at
   // startup (a controller restarted during the wait) are found by one bounded pass over delegated sessions.
+  const budgets = createAccountBudgets(control, control.poolRoot ?? poolRoot());
+  await budgets.start();
   const unsubscribeLimits = native.subscribe((a) => {
     void control.usageLimits.onAgent(a);
+    if (a.provider === "claude" && ["idle", "closed", "error"].includes(a.status))
+      void budgets.check().catch((e) => log.line({ accountBudgetError: e.message }));
     void control.wakes.onAgent(a);
     void control.providerRecovery.onAgent(a);
     void control.compactionLoops.onAgent(a);

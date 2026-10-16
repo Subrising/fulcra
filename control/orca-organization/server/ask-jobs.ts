@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 // Fulcra 0.2.17 (FU-58): the controller answers a plugin call within 30 s, and a model call can take longer, so `fulcra
 // ask` starts a job and reads its result by id. Jobs live in memory only: a daemon restart ends them, and the caller
-// asks again. At most MAX_RUNNING run at once; finished jobs are dropped after KEEP_MS.
+// asks again. askOnce persists secret-free billing failures before rejecting. At most MAX_RUNNING run at once; finished jobs are dropped after KEEP_MS.
 
 export interface AskResult {
   output: unknown;

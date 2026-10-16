@@ -97,9 +97,11 @@ export function describeHookAgent(agent: {
   cwd: string;
   title?: string | null;
   labels: Record<string, string>;
+  accountId?: string;
 }): PluginHookAgent {
   return {
     id: agent.id,
+    ...(agent.accountId ? { accountId: agent.accountId } : {}),
     workspaceId: agent.workspaceId ?? null,
     parentAgentId: agent.labels[PARENT_AGENT_ID_LABEL] ?? null,
     provider: agent.provider,
@@ -122,10 +124,12 @@ export function publishAgentStream(
       turnId: event.turnId ?? null,
       timeline,
       outcome: { kind: "completed" },
+      ...(event.usage ? { usage: event.usage } : {}),
     });
   } else if (event.type === "turn_failed") {
     lifecycle.emit("agent.turn_ended", {
       agent,
+      ...(event.usage ? { usage: event.usage } : {}),
       turnId: event.turnId ?? null,
       timeline,
       outcome: {

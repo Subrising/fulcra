@@ -141,7 +141,7 @@ test("Claude: a stop at the limit moves the session to the next account now, rel
   await setRotateOnLimit(w.root, true);
   const id = await w.enrol();
   w.tails.set(id, tail());
-  assert.equal((await assign(w.root, id, "claude", w.clock.now)).account.id, a.id);
+  assert.equal((await assign(w.root, id, "claude", w.clock.now - 60_000)).account.id, a.id);
   const stop = await w.control.usageLimits.onAgent({
     id,
     provider: "claude",
@@ -177,7 +177,7 @@ test("B4: a human-held session at the limit stays on its account (marked limited
   const id = randomUUID();
   w.store.created(id, T(1), path.join(w.dir, id));
   w.tails.set(id, tail()); // enrolled, never delegated
-  assert.equal((await assign(w.root, id, "claude", w.clock.now)).account.id, a.id);
+  assert.equal((await assign(w.root, id, "claude", w.clock.now - 60_000)).account.id, a.id);
   await w.control.usageLimits.onAgent({ id, provider: "claude", status: "idle", updatedAt: "u1" });
   assert.deepEqual(w.rotated, []);
   assert.equal(accountOf(readAccounts(w.root), id).name, "Work", "not moved");
@@ -207,7 +207,7 @@ test("Claude: no pool -> exactly the previous behaviour (waits for the reset); e
   const only = await addAccount(w2.root, { provider: "claude", name: "Only" }, w2.clock.now);
   const id2 = await w2.enrol();
   w2.tails.set(id2, tail());
-  await assign(w2.root, id2, "claude", w2.clock.now);
+  await assign(w2.root, id2, "claude", w2.clock.now - 60_000);
   const stop2 = await w2.control.usageLimits.onAgent({
     id: id2,
     provider: "claude",
@@ -273,7 +273,7 @@ test("an account-switch receipt is reconciled through the shared seam, never a p
     id = await w.enrol();
   await addAccount(w.root, { provider: "claude", name: "A" });
   const b = await addAccount(w.root, { provider: "claude", name: "B" });
-  await assign(w.root, id, "claude");
+  await assign(w.root, id, "claude", w.clock.now - 60_000);
   const { takeOverSession } = await import("./session-takeover.mjs");
   const recover = w.native.recover;
   w.native.recover = async () => {
@@ -319,7 +319,7 @@ async function manualWorld(t) {
     id = await w.enrol();
   await addAccount(w.root, { provider: "claude", name: "A" });
   const b = await addAccount(w.root, { provider: "claude", name: "B" });
-  await assign(w.root, id, "claude");
+  await assign(w.root, id, "claude", w.clock.now - 60_000);
   return {
     ...w,
     id,
@@ -532,7 +532,7 @@ test("FU-112: a revoked token marks the account down with its reason, moves the 
     two = await w.enrol();
   for (const id of [one, two]) {
     w.tails.set(id, revokedTail());
-    assert.equal((await assign(w.root, id, "claude", w.clock.now)).account.id, a.id);
+    assert.equal((await assign(w.root, id, "claude", w.clock.now - 60_000)).account.id, a.id);
   }
   const stop = await w.control.usageLimits.onAgent(agentUpdate(one, 1));
   assert.match(stop.outcome, /moving to account "Personal"/);
@@ -569,7 +569,7 @@ test("FU-112: with no other account ready, a revoked token is recorded, nothing 
   await addAccount(w.root, { provider: "claude", name: "Work" }, w.clock.now);
   const id = await w.enrol();
   w.tails.set(id, revokedTail());
-  await assign(w.root, id, "claude", w.clock.now);
+  await assign(w.root, id, "claude", w.clock.now - 60_000);
   const stop = await w.control.usageLimits.onAgent(agentUpdate(id, 1));
   assert.equal(stop.state, "unresolved");
   assert.match(stop.outcome, /revoked or invalid and no other account is ready/);
@@ -586,7 +586,7 @@ test("FU-112: a human-held session on a revoked account is not moved; the accoun
   const id = randomUUID();
   w.store.created(id, T(1), path.join(w.dir, id)); // enrolled, never delegated
   w.tails.set(id, revokedTail());
-  await assign(w.root, id, "claude", w.clock.now);
+  await assign(w.root, id, "claude", w.clock.now - 60_000);
   await w.control.usageLimits.onAgent(agentUpdate(id, 1));
   assert.equal(accountOf(readAccounts(w.root), id).name, "Work", "not moved");
   assert.ok(readAccounts(w.root).accounts.find((x) => x.id === a.id).revoked);

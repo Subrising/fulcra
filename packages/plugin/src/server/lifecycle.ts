@@ -3,6 +3,7 @@ import type {
   AgentPermissionResponse,
   AgentTimelineItem,
   AgentSessionConfig,
+  AgentUsage,
 } from "@getpaseo/protocol/agent-types";
 import type { PaseoApi } from "@getpaseo/client";
 import type { WorkspaceCreateRequest } from "@getpaseo/protocol/messages";
@@ -21,6 +22,7 @@ export interface PluginHookWorkspace {
 }
 
 export interface PluginHookAgent {
+  accountId?: string;
   id: string;
   workspaceId: string | null;
   parentAgentId: string | null;
@@ -50,6 +52,7 @@ export interface PluginLifecycleEvents {
     agent: PluginHookAgent;
     turnId: string | null;
     outcome: PluginTurnOutcome;
+    usage?: AgentUsage;
     timeline: readonly AgentTimelineItem[];
   };
   "agent.permission_requested": { agent: PluginHookAgent; request: AgentPermissionRequest };

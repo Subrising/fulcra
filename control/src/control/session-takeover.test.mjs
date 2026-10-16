@@ -375,3 +375,14 @@ test("an unenrolled chat whose host reconnect refuses: the switch rolls back and
   assert.equal(r.ok, false);
   assert.equal(readAccounts(w.root).assignments[w.id].accountId, w.a.id);
 });
+
+test("a dormant session switches quietly with its native id, history and control intact", async (t) => {
+  const w = await world(t);
+  w.status("closed");
+  const before = w.store.get(w.id);
+  const result = await takeOverSession(w.id, w.b.id, { control: w.control });
+  assert.equal(result.ok, true);
+  assert.equal(w.launched().id, w.nativeId);
+  assert.equal(w.launched().history, fs.readFileSync(w.transcript, "utf8"));
+  assert.deepEqual(w.store.get(w.id), before);
+});

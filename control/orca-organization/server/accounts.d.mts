@@ -1,6 +1,8 @@
 export const PROVIDERS: readonly ["claude", "codex"];
 export const POLICIES: readonly ["priority", "spread"];
 export interface Account {
+  credentialKind?: "api-key" | "subscription";
+  budget?: { limitUsd: number | null; startAt: string };
   id: string;
   provider: "claude" | "codex";
   name: string;
@@ -84,6 +86,8 @@ export function rotate(
     resetAt?: string | null;
     note?: string | null;
     stopId?: string | null;
+    accountId?: string | null;
+    stoppedAt?: string | null;
     reassign?: boolean;
     kind?: string | null;
   },
@@ -182,3 +186,7 @@ export function switchSession(
   o?: { takeOver?: TakeOver | null },
   now?: number,
 ): Promise<{ ok: boolean; message: string | null; moved?: "takeover" | "switch" }>;
+
+export function isApiAccount(a: Account): boolean;
+export function credentialKind(token: string): "api-key" | "subscription";
+export function accountBudget(a: Account): { limitUsd: number | null; startAt: string } | null;

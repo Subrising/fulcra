@@ -101,6 +101,10 @@ files.push("client/inbox-model.ts", "client/inbox-model.test.ts");
 // Update-7: the account pool, rotation, role defaults, orchestration, Accounts & models.
 files.push(
   "server/accounts.mjs",
+  "server/account-billing.mjs",
+  "server/account-billing.d.mts",
+  "server/account-billing.test.mjs",
+  "../src/control/account-budgets.mjs",
   "server/accounts.d.mts",
   "server/accounts.test.mjs",
   "server/role-defaults-store.mjs",
@@ -493,6 +497,7 @@ try {
       "runtime/progress-board-shared.test.mjs",
       "runtime/accounts-rpc.test.mjs",
       "server/accounts.test.mjs",
+      "server/account-billing.test.mjs",
       "../src/control/account-rotation.test.mjs",
       "../src/control/creation-roles.test.mjs",
       "runtime/work-map.test.mjs",

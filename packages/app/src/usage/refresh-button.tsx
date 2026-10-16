@@ -6,6 +6,13 @@ import { ToolbarButton, paneContentToolbarIconSize } from "@/components/ui/pane-
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { usageCopy } from "./copy";
 
+const ACTION_TARGET = {
+  minWidth: 48,
+  minHeight: 48,
+  alignItems: "center",
+  justifyContent: "center",
+} as const;
+
 const ThemedRotateCw = withUnistyles(RotateCw);
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 
@@ -16,6 +23,7 @@ export function UsageRefreshButton({ busy, onRefresh }: { busy: boolean; onRefre
   return (
     <ToolbarButton
       label={usageCopy.refreshAll}
+      style={ACTION_TARGET}
       compact={compact}
       disabled={busy}
       onPress={onRefresh}

@@ -2742,6 +2742,21 @@ describe("ClaudeAgentSession context window usage", () => {
     };
   }
 
+  test("API turn costs use query deltas rather than repeatedly adding cumulative SDK costs", async () => {
+    const session = await createSessionForTurns([
+      [initMessage("default"), createSuccessResult({ total_cost_usd: 0.25 })],
+      [createSuccessResult({ total_cost_usd: 0.4, uuid: "second-result" })],
+    ]);
+    try {
+      const first = await session.run("one");
+      const second = await session.run("two");
+      expect(first.usage?.turnCostUsd).toBe(0.25);
+      expect(second.usage?.turnCostUsd).toBeCloseTo(0.15);
+    } finally {
+      await session.close();
+    }
+  });
+
   test("passive recorded usage comes from actual injected SDK result with distinct cache creation", async () => {
     const session = await createSessionForTurns([
       [

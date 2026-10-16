@@ -3,6 +3,8 @@
 // It creates no agent, no workspace and no session record, so nothing shows in any list. A usage limit marks the
 // account limited (kind and reset time) and the call is tried once more on the next usable account. The machine's own
 // login is never used: with no pooled account the call fails.
+import { randomUUID } from "node:crypto";
+import { recordAccountCost, recordBillingError, isBillingError } from "./account-billing.mjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +12,7 @@ import { spawn } from "node:child_process";
 import { parseLimitLine, parseRevokedLine } from "./limit-line.mjs";
 import {
   accountStatus,
+  credentialKind,
   choose,
   markAccountLimited,
   markAccountRevoked,
@@ -78,8 +81,8 @@ export function spawnClaudeOnce({
     ...(env.TEMP ? { TEMP: env.TEMP } : {}),
     // A scratch config home: nothing is read from, or written to, the machine's own Claude settings or login.
     CLAUDE_CONFIG_DIR: path.join(scratch, "config"),
-    CLAUDE_CODE_OAUTH_TOKEN: token,
-    ANTHROPIC_API_KEY: "",
+    CLAUDE_CODE_OAUTH_TOKEN: credentialKind(token) === "api-key" ? "" : token,
+    ANTHROPIC_API_KEY: credentialKind(token) === "api-key" ? token : "",
     ANTHROPIC_AUTH_TOKEN: "",
   };
   const command = bin ?? env.FULCRA_CLAUDE_BIN ?? "claude";
@@ -364,8 +367,23 @@ export async function askOnce({
       );
     } catch (error) {
       // Only an error this module made is passed on; anything else has no text of its own here.
+      if (isBillingError(error?.message)) {
+        await recordBillingError(root, picked.id, new Date(now()).toISOString());
+        throw new AskError("The API account has insufficient credit", "BILLING_ERROR");
+      }
       if (error instanceof AskError) throw error;
       throw new AskError("The Claude call failed", "ASK_FAILED");
+    }
+    if (typeof result?.total_cost_usd === "number")
+      await recordAccountCost(root, {
+        id: `ask:${randomUUID()}`,
+        accountId: picked.id,
+        costUsd: result.total_cost_usd,
+        at: new Date(now()).toISOString(),
+      });
+    if (result?.is_error && isBillingError(result?.result)) {
+      await recordBillingError(root, picked.id, new Date(now()).toISOString());
+      throw new AskError("The API account has insufficient credit", "BILLING_ERROR");
     }
     if (isRevoked(result)) {
       const line = String(result.result ?? "");
@@ -389,6 +407,8 @@ export async function askOnce({
           : { resetAt: new Date(at + RATE_LIMIT_HOLD_MS).toISOString(), kind: "rate", note: line },
         at,
       );
+      if (!marked)
+        throw new AskError("The API request was rate limited; retry later", "API_RATE_LIMITED");
       tried.push({
         id: picked.id,
         name: picked.name,
