@@ -86,7 +86,10 @@ export interface CreateAgentFromSessionInput {
 }
 
 export interface CreateAgentFromMcpInput {
+  /** Host-only reserved identity for restart-safe dispatch. */
+  agentId?: string;
   reportCreation?: NativeReportCreation;
+  creationAdmission?: CreateAgentOptions["creationAdmission"];
   kind: "mcp";
   provider: string;
   title: string;
@@ -189,14 +192,12 @@ export async function createAgentCommand(
       ? await resolveSessionCreateAgent(dependencies, input)
       : await resolveMcpCreateAgent(dependencies, input);
 
-  const snapshot = await dependencies.agentManager.createAgent(
-    resolved.config,
-    input.kind === "session" ? input.agentId : undefined,
-    {
-      ...resolved.createOptions,
-      ...(input.kind === "mcp" ? { reportCreation: input.reportCreation } : {}),
-    },
-  );
+  const snapshot = await dependencies.agentManager.createAgent(resolved.config, input.agentId, {
+    ...resolved.createOptions,
+    ...(input.kind === "mcp"
+      ? { reportCreation: input.reportCreation, creationAdmission: input.creationAdmission }
+      : {}),
+  });
 
   resolved.setupContinuation?.startAfterAgentCreate({
     agentId: snapshot.id,

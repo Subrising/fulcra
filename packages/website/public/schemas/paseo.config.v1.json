@@ -161,6 +161,170 @@
               "type": "integer",
               "exclusiveMinimum": 21600000,
               "maximum": 9007199254740991
+            },
+            "projectDispatch": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]*$"
+              },
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "enableId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "hostId": {
+                    "type": "string",
+                    "pattern": "^srv_[A-Za-z0-9_-]+$"
+                  },
+                  "daemonHome": {
+                    "type": "string",
+                    "pattern": "^\\/"
+                  },
+                  "ledgerRoot": {
+                    "type": "string",
+                    "pattern": "^\\/"
+                  },
+                  "leadId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "maxParallel": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 8
+                  },
+                  "maxTotalStarts": {
+                    "default": 10,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100
+                  },
+                  "dailyStartBudget": {
+                    "default": 5,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100
+                  },
+                  "minStartIntervalSeconds": {
+                    "default": 60,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 86400
+                  },
+                  "holdLabels": {
+                    "default": [],
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "approvals": {
+                    "default": {},
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z][A-Za-z0-9]*-\\d+$"
+                    },
+                    "additionalProperties": {
+                      "type": "object",
+                      "properties": {
+                        "generation": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "digest": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "addedBy": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "const": "owner"
+                            },
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            }
+                          ]
+                        },
+                        "cwd": {
+                          "type": "string",
+                          "pattern": "^\\/"
+                        }
+                      },
+                      "required": ["generation", "digest", "addedBy", "cwd"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "roles": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "role": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "owner": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "provider": {
+                          "type": "string",
+                          "enum": ["claude", "codex"]
+                        },
+                        "model": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "thinking": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "mode": {
+                          "type": "string",
+                          "enum": ["auto", "default", "plan"]
+                        },
+                        "account": {
+                          "default": "personal-workspace-api",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 80
+                        }
+                      },
+                      "required": ["role", "owner", "provider", "model", "mode"],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "enableId",
+                  "hostId",
+                  "daemonHome",
+                  "ledgerRoot",
+                  "leadId",
+                  "maxParallel",
+                  "roles"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "ledgerDispatchEnabled": {
+              "type": "boolean"
             }
           },
           "additionalProperties": false

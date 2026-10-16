@@ -453,6 +453,8 @@ export interface PaseoDaemonConfig {
   reportUpOnTurnEnd?: boolean;
   nativeFinishNotices?: boolean;
   receiptRetentionMs?: number;
+  ledgerDispatchEnabled?: boolean;
+  projectDispatch?: MutableDaemonConfig["projectDispatch"];
   idleLeadNudge?: boolean;
   idleLeadNudgeSkipOwners?: string[];
   idleLeadNudgeMinIntervalMinutes?: number;
@@ -654,9 +656,15 @@ function initialNudgeConfig(
   config: PaseoDaemonConfig,
 ): Pick<
   MutableDaemonConfig,
-  "idleLeadNudge" | "idleLeadNudgeSkipOwners" | "idleLeadNudgeMinIntervalMinutes"
+  | "ledgerDispatchEnabled"
+  | "projectDispatch"
+  | "idleLeadNudge"
+  | "idleLeadNudgeSkipOwners"
+  | "idleLeadNudgeMinIntervalMinutes"
 > {
   return {
+    ledgerDispatchEnabled: config.ledgerDispatchEnabled ?? false,
+    projectDispatch: config.projectDispatch,
     idleLeadNudge: config.idleLeadNudge,
     idleLeadNudgeSkipOwners: config.idleLeadNudgeSkipOwners ?? [],
     idleLeadNudgeMinIntervalMinutes: config.idleLeadNudgeMinIntervalMinutes ?? 60,
@@ -1159,6 +1167,7 @@ export async function createPaseoDaemon(
       resolvePaseoToolPolicy(provider, daemonConfigStore.get().providers),
     logger,
   });
+  daemonConfigStore.setDispatchOwnerAdmission(() => agentManager.assertDispatchOwner());
   // Display-only background-job sample for providers without a task protocol (MULTIHOST-DESIGN §6).
   agentManager.startBackgroundWorkSampling();
   const syncPluginProviders = () => {
@@ -1610,6 +1619,8 @@ export async function createPaseoDaemon(
   });
   // FULCRA(orchestration): a worker's finished turn reaches its lead as one notice (report-up.ts).
   const stopReportUp = startReportUp({
+    createAgent,
+    ensureRoutingWorkspace: (cwd) => ensureWorkspaceForCreateAndBroadcastExternal(cwd),
     hooks: pluginRuntime,
     paseoHome: config.paseoHome,
     agentManager,
