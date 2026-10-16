@@ -84,15 +84,29 @@ jobs:
           set -euo pipefail
           git fetch --no-tags origin "$SHA"
           git merge-base --is-ancestor origin/main "$SHA"
-          identities=$(git log --format='%an <%ae>|%cn <%ce>' "origin/main..$SHA")
-          test -n "$identities"
-          while IFS= read -r identity; do
+          # Rebuild this namespace from the upstream server. Fork tags never establish trust.
+          git for-each-ref --format='%(refname)' refs/verified-paseo-release-tags/ > "$RUNNER_TEMP/paseo-old-refs"
+          while IFS= read -r ref; do
+            git update-ref -d "$ref"
+          done < "$RUNNER_TEMP/paseo-old-refs"
+          git fetch --no-tags https://github.com/getpaseo/paseo.git '+refs/tags/v*:refs/verified-paseo-release-tags/v*'
+          git rev-list --glob='refs/verified-paseo-release-tags/v*' > "$RUNNER_TEMP/paseo-release-commits"
+          test -s "$RUNNER_TEMP/paseo-release-commits"
+          commits=$(git rev-list "origin/main..$SHA")
+          test -n "$commits"
+          while IFS= read -r commit; do
+            identity=$(git show -s --format='%an <%ae>|%cn <%ce>' "$commit")
             case "$identity" in
               'Fulcra <fulcra@users.noreply.github.com>|Fulcra <fulcra@users.noreply.github.com>'|'github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>|GitHub <noreply@github.com>') ;;
-              *) echo false; exit 1 ;;
+              *) grep -Fxq "$commit" "$RUNNER_TEMP/paseo-release-commits" || { echo false; exit 1; } ;;
             esac
-          done <<< "$identities"
+          done <<< "$commits"
           echo true
+
+      - name: Scan candidate commit metadata
+        run: |
+          set -euo pipefail
+          node "$RUNNER_TEMP/check-machine-data.mjs" --commits "origin/main..$SHA"
 
       - name: Merge with the workflow token
         id: merge
