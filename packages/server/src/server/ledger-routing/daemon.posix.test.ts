@@ -34,6 +34,34 @@ function nextTurn(
     );
   });
 }
+async function noticeTurn(manager: AgentManager, lead: string, line: string): Promise<void> {
+  const messageId = await new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      off();
+      reject(new Error(`Missing lead receipt: ${line}`));
+    }, 15000);
+    const off = manager.subscribe(
+      (event) => {
+        if (
+          event.type !== "agent_stream" ||
+          event.agentId !== lead ||
+          event.event.type !== "timeline"
+        )
+          return;
+        const item = event.event.item;
+        if (item.type !== "user_message" || !item.text.includes(line) || !item.clientMessageId)
+          return;
+        clearTimeout(timer);
+        off();
+        resolve(item.clientMessageId);
+      },
+      { replayState: false },
+    );
+  });
+  const result = await manager.waitForMessageTurn(lead, messageId, AbortSignal.timeout(15000));
+  expect(result.permission).toBeNull();
+  expect(result.status).not.toBe("error");
+}
 async function environment() {
   const root = await mkdtemp(path.join(tmpdir(), "ledger-routing-daemon-"));
   const ledgerRoot = path.join(root, "ledgers");
@@ -90,6 +118,7 @@ async function environment() {
   const staticDir = path.join(root, "static");
   await mkdir(staticDir);
   vi.stubEnv("FULCRA_LEDGER_DIR", ledgerRoot);
+  vi.stubEnv("PASEO_SERVER_ID", hostId);
   const options = {
     paseoHomeRoot,
     staticDir,
@@ -120,14 +149,18 @@ test("real daemon claims READY work, reports one level, and keeps a follow-up in
   const daemon = await createTestPaseoDaemon(f.options);
   const manager = daemon.daemon.agentManager;
   const notice = (line: string) =>
-    nextTurn(
-      manager,
-      (e) =>
-        e.type === "agent_stream" &&
-        e.event.type === "turn_completed" &&
-        e.agentId === f.leadId &&
-        f.prompts.includes(`<paseo-system>\n${line}\n</paseo-system>`),
-    );
+    noticeTurn(manager, f.leadId, line).catch(async (error: unknown) => {
+      const journal = await readFile(
+        path.join(f.options.paseoHomeRoot, ".paseo", "ledger-routing.json"),
+        "utf8",
+      ).catch(() => "missing journal");
+      const agents = manager
+        .listAgents()
+        .map((agent) => ({ item: agent.labels["fulcra.item"], lifecycle: agent.lifecycle }));
+      throw new Error(
+        `${error instanceof Error ? error.message : error}; agents=${JSON.stringify(agents)}; journal=${journal}`,
+      );
+    });
   try {
     expect((await fetch(`http://127.0.0.1:${daemon.port}/api/health`)).ok).toBe(true);
     await manager.createAgent(
