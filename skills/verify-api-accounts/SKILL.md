@@ -62,3 +62,15 @@ The real CLI test uses a loopback API and scans actual session files for its fak
 The SDK test captures arguments, environment, settings, and logs.
 Revoke tests cover permission refusal, successful removal, failed removal, replacement races, persistent local revocation, and process stop acknowledgements.
 The spawn tests cover pruned assignments, switched but running processes, copied environment values, and native settings conflicts.
+
+For crash recovery repairs, run the account RPC and native account suites above.
+The stale-lock fixture uses a dead owner PID and an old lock timestamp.
+It checks the revoked state and new generation before the scratch store deletes its fake key.
+It runs the old helper to prove refusal, then confirms actual runtime termination.
+The replacement race must refuse an earlier write after revoke changes its generation.
+The orphan fixtures kill a scratch owner, recover its child lease, and permit explicit replacement.
+A mismatched child creation time must retain the lease and leave that process unchanged.
+The one-shot fixture starts a detached descendant that ignores SIGTERM.
+A successful stop reply must follow confirmed termination of both recorded processes.
+The helper checks cover the fixed Keychain reader and encoded PowerShell entry.
+Native Windows shell execution still needs an idle Windows host before release.

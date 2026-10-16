@@ -501,6 +501,9 @@ for (const fail of [false, true]) {
   });
 }
 
+function childExit(child: import("node:child_process").ChildProcess) {
+  return new Promise<void>((resolve) => child.once("exit", () => resolve()));
+}
 function latch() {
   let open!: () => void;
   const promise = new Promise<void>((resolve) => {
@@ -551,9 +554,15 @@ for (const first of ["replace", "revoke"] as const) {
     const revoke = () => asOwner(() => h.update({ id: a.id, revoke: true }));
     const pending = first === "replace" ? replace() : revoke();
     await entered.promise;
+    const blocked = latch();
+    const watcher = fs.watch(path.join(root, "accounts"), () => {
+      if (readAccounts(root).accounts[0].localRevoked) blocked.open();
+    });
     const next = first === "replace" ? revoke() : replace();
+    if (first === "replace") await blocked.promise;
+    watcher.close();
     release.open();
-    assert.equal((await pending).ok, true);
+    assert.equal((await pending).ok, first !== "replace");
     assert.equal((await next).ok, true);
     assert.deepEqual(events, first === "replace" ? ["put", "remove"] : ["remove", "put"]);
     assert.equal(readAccounts(root).accounts[0].localRevoked, first === "replace");
@@ -652,6 +661,220 @@ test(
     await asOwner(() => h.update({ id: a.id, clearLimit: true, enabled: true }));
     await assert.rejects(run, (error: any) => !String(error.stdout).includes(second));
     assert.equal((await store.get(a.id)) === second, true);
+    assert.equal(readAccounts(root).accounts[0].localRevoked, true);
+  },
+);
+
+test(
+  "stale credential lock: revoke blocks the helper, deletes the key and stops the actual runtime",
+  { skip: process.platform !== "darwin", timeout: 90000 },
+  async (t) => {
+    const { spawn, exec } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const { randomUUID } = await import("node:crypto");
+    const { scratchKeychain } = await import("./scratch-keychain.fixture.mjs");
+    const { apiKeyHelperCommand } = await import("./api-key-helper.mjs");
+    const { createApiRuntimeChannel } = await import("./api-runtime-channel.mjs");
+    const { stopRecordedTree, processIdentity } = await import("./api-process-tree.mjs");
+    const root = scratch();
+    const { store, env } = scratchKeychain(root);
+    const a = await addAccount(root, { provider: "claude", name: "Stale lock fixture" });
+    const epoch = randomUUID();
+    const key = `sk-ant-api03-${randomUUID()}-${randomUUID()}`;
+    await store.put(a.id, key);
+    await setAccount(root, a.id, { credentialKind: "api-key", keyEpoch: epoch });
+    const command = apiKeyHelperCommand({ root, id: a.id, epoch, env });
+    const runHelper = () =>
+      promisify(exec)(command, { env: { HOME: process.env.HOME }, timeout: 15000 });
+    assert.equal((await runHelper()).stdout === key, true);
+    const dead = spawn(process.execPath, ["-e", ""], { env: {}, stdio: "ignore" });
+    await childExit(dead);
+    const lock = path.join(root, "accounts", `.credential-${a.id}.lock`);
+    fs.writeFileSync(lock, String(dead.pid), { mode: 0o600 });
+    fs.utimesSync(lock, new Date(0), new Date(0));
+    const child = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
+      env: {},
+      stdio: "ignore",
+    });
+    const exited = childExit(child);
+    const start = processIdentity(child.pid);
+    const channel = createApiRuntimeChannel({
+      root,
+      accountId: a.id,
+      epoch,
+      onStop: () => {
+        void stopRecordedTree(child.pid, start).then(() => channel.release());
+      },
+    });
+    channel.attach(child);
+    t.after(async () => {
+      child.kill("SIGKILL");
+      channel.release();
+      await store.remove(a.id);
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+    let deleted = false;
+    const h = createAccountHandlers({
+      root: () => root,
+      configRoles: () => null,
+      keychain: {
+        ...store,
+        remove: async (id) => {
+          const current = readAccounts(root).accounts[0];
+          assert.equal(current.localRevoked, true);
+          assert.notEqual(current.keyEpoch, epoch);
+          await assert.rejects(runHelper, (e: any) => !String(e.stdout).includes(key));
+          await store.remove(id);
+          deleted = true;
+        },
+      },
+    });
+    const result = await asOwner(() => h.update({ id: a.id, revoke: true }));
+    assert.equal(result.ok, true, result.message ?? "");
+    await exited;
+    assert.equal(deleted, true);
+    assert.equal(await store.get(a.id), null);
+    assert.equal(processIdentity(child.pid), null);
+    assert.equal(fs.existsSync(lock), false);
+    await assert.rejects(runHelper, (e: any) => !String(e.stdout).includes(key));
+  },
+);
+
+test(
+  "orphan lease recovery permits explicit key replacement after a daemon crash",
+  { timeout: 15000 },
+  async (t) => {
+    const { spawn } = await import("node:child_process");
+    const { randomUUID } = await import("node:crypto");
+    const { processIdentity } = await import("./api-process-tree.mjs");
+    const root = scratch();
+    const a = await addAccount(root, { provider: "claude", name: "Orphan fixture" });
+    await setAccount(root, a.id, { credentialKind: "api-key" });
+    const dead = spawn(process.execPath, ["-e", ""], { env: {}, stdio: "ignore" });
+    await childExit(dead);
+    const child = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
+      env: {},
+      stdio: "ignore",
+    });
+    const exit = childExit(child);
+    t.after(() => {
+      child.kill("SIGKILL");
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+    const dir = path.join(root, "accounts/api-runtimes");
+    fs.mkdirSync(dir, { recursive: true });
+    const lease = path.join(dir, `${randomUUID()}.json`);
+    fs.writeFileSync(
+      lease,
+      JSON.stringify({
+        accountId: a.id,
+        ownerPid: dead.pid,
+        childPid: child.pid,
+        childStart: processIdentity(child.pid),
+      }),
+    );
+    let puts = 0;
+    const h = createAccountHandlers({
+      root: () => root,
+      configRoles: () => null,
+      keychain: {
+        get: async () => null,
+        remove: async () => {},
+        put: async () => {
+          puts++;
+          assert.equal(processIdentity(child.pid), null);
+        },
+      },
+    });
+    const result = await asOwner(() =>
+      h.update({ id: a.id, token: "sk-ant-api03-SYNTHETIC-REPLACEMENT-ONLY" }),
+    );
+    assert.equal(result.ok, true, result.message ?? "");
+    await exit;
+    assert.equal(fs.existsSync(lease), false);
+    assert.equal(puts, 1);
+    assert.equal(readAccounts(root).accounts[0].auth, "ok");
+  },
+);
+
+test(
+  "dead credential owner recovery is available without native credential storage",
+  { timeout: 15000 },
+  async (t) => {
+    const { spawn } = await import("node:child_process");
+    const root = scratch();
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const a = await addAccount(root, { provider: "claude", name: "Dead lock fixture" });
+    await setAccount(root, a.id, { credentialKind: "api-key" });
+    const dead = spawn(process.execPath, ["-e", ""], { env: {}, stdio: "ignore" });
+    await childExit(dead);
+    const lock = path.join(root, "accounts", `.credential-${a.id}.lock`);
+    fs.writeFileSync(lock, String(dead.pid));
+    fs.utimesSync(lock, new Date(0), new Date(0));
+    let removed = false;
+    const h = createAccountHandlers({
+      root: () => root,
+      configRoles: () => null,
+      keychain: {
+        get: async () => null,
+        put: async () => {},
+        remove: async () => {
+          assert.equal(readAccounts(root).accounts[0].localRevoked, true);
+          removed = true;
+        },
+      },
+    });
+    assert.equal((await asOwner(() => h.update({ id: a.id, revoke: true }))).ok, true);
+    assert.equal(removed, true);
+    assert.equal(fs.existsSync(lock), false);
+  },
+);
+
+test(
+  "revoke reasserts its block after a writer finishes while revoke waits for the credential lock",
+  { timeout: 15000 },
+  async (t) => {
+    const { withCredentialLock } = await import("./accounts.mjs");
+    const { randomUUID } = await import("node:crypto");
+    const root = scratch();
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const a = await addAccount(root, { provider: "claude", name: "Wait ordering fixture" });
+    await setAccount(root, a.id, { credentialKind: "api-key" });
+    const entered = latch(),
+      release = latch(),
+      blocked = latch();
+    const writer = withCredentialLock(root, a.id, async () => {
+      entered.open();
+      await release.promise;
+      // Model a replacement that reached its final commit before revoke acquired the lock.
+      await setAccount(root, a.id, { auth: "ok", localRevoked: false, keyEpoch: randomUUID() });
+    });
+    await entered.promise;
+    const watcher = fs.watch(path.join(root, "accounts"), () => {
+      if (readAccounts(root).accounts[0].localRevoked) blocked.open();
+    });
+    t.after(() => watcher.close());
+    let deletes = 0;
+    const h = createAccountHandlers({
+      root: () => root,
+      configRoles: () => null,
+      keychain: {
+        get: async () => null,
+        put: async () => {},
+        remove: async () => {
+          const current = readAccounts(root).accounts[0];
+          assert.equal(current.localRevoked, true);
+          assert.equal(current.auth, "expired");
+          deletes++;
+        },
+      },
+    });
+    const pending = asOwner(() => h.update({ id: a.id, revoke: true }));
+    await blocked.promise;
+    release.open();
+    await writer;
+    assert.equal((await pending).ok, true);
+    assert.equal(deletes, 1);
     assert.equal(readAccounts(root).accounts[0].localRevoked, true);
   },
 );

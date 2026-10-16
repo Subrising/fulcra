@@ -200,12 +200,18 @@ export function createAccountHandlers(d: Deps) {
               ?.localRevoked
           )
             return refused("The new account was revoked before its key was saved");
+          const epoch = randomUUID();
           try {
-            await setAccount(d.root(), account.id, {
-              auth: "expired",
-              keyEpoch: randomUUID(),
-              credentialKind: credentialKind(input.token!.trim()),
-            });
+            await setAccount(
+              d.root(),
+              account.id,
+              {
+                auth: "expired",
+                keyEpoch: epoch,
+                credentialKind: credentialKind(input.token!.trim()),
+              },
+              account.keyEpoch ?? null,
+            );
             await keychain.put(account.id, input.token!.trim());
           } catch (e) {
             return refused(
@@ -215,10 +221,15 @@ export function createAccountHandlers(d: Deps) {
               ),
             );
           }
-          await setAccount(d.root(), account.id, {
-            credentialKind: credentialKind(input.token!.trim()),
-            auth: "ok",
-          });
+          await setAccount(
+            d.root(),
+            account.id,
+            {
+              credentialKind: credentialKind(input.token!.trim()),
+              auth: "ok",
+            },
+            epoch,
+          );
           return ok("Added. New Claude sessions can use it now.");
         });
       }
@@ -243,6 +254,41 @@ export function createAccountHandlers(d: Deps) {
       },
       _paseo?: Paseo,
     ) {
+      if (input.revoke) {
+        const a = (await readAccountsAsync(d.root())).accounts.find((x) => x.id === input.id);
+        if (!a || !isApiAccount(a)) return refused("Only API keys can be revoked here");
+        // Blocking must not depend on a credential lock left by a stopped daemon.
+        await revokeLocalAccount(d.root(), a.id, now());
+        try {
+          return await withCredentialLock(
+            d.root(),
+            a.id,
+            async () => {
+              // A later replacement can win the lock after the first block. Reassert before deletion.
+              await revokeLocalAccount(d.root(), a.id, now());
+              const results = await Promise.allSettled([
+                keychain.remove(a.id),
+                waitForApiRuntimes(d.root(), a.id),
+              ]);
+              if (results.some((r) => r.status === "rejected"))
+                return refused(
+                  "The account is blocked. Retry revoke to remove its key and confirm all API processes stopped.",
+                );
+              return ok(
+                "Revoked locally. API processes stopped. Revoke the key in Claude Console to invalidate it everywhere.",
+              );
+            },
+            { recoverStale: true },
+          );
+        } catch {
+          return refused("The account is blocked. Retry revoke after credential lock recovery.");
+        }
+      }
+      const invokedEpoch =
+        input.token !== undefined
+          ? ((await readAccountsAsync(d.root())).accounts.find((x) => x.id === input.id)
+              ?.keyEpoch ?? null)
+          : undefined;
       return withCredentialLock(d.root(), input.id, async () => {
         const a = (await readAccountsAsync(d.root())).accounts.find((x) => x.id === input.id);
         if (!a) return refused("No such account");
@@ -250,21 +296,6 @@ export function createAccountHandlers(d: Deps) {
           if (input.move) {
             await moveAccount(d.root(), a.id, input.move);
             return ok();
-          }
-          if (input.revoke) {
-            if (!isApiAccount(a)) return refused("Only API keys can be revoked here");
-            await revokeLocalAccount(d.root(), a.id, now());
-            const results = await Promise.allSettled([
-              keychain.remove(a.id),
-              waitForApiRuntimes(d.root(), a.id),
-            ]);
-            if (results.some((r) => r.status === "rejected"))
-              return refused(
-                "The account is blocked. Retry revoke to remove its key and confirm all API processes stopped.",
-              );
-            return ok(
-              "Revoked locally. API processes stopped. Revoke the key in Claude Console to invalidate it everywhere.",
-            );
           }
           if (input.remove) {
             if (a.provider === "claude") await keychain.remove(a.id);
@@ -275,14 +306,20 @@ export function createAccountHandlers(d: Deps) {
           if (input.token !== undefined) {
             if (a.provider !== "claude") return refused("A Codex account signs in in the browser");
             // Deny old helpers before the secret changes. A failed readback leaves this generation blocked.
-            await setAccount(d.root(), a.id, { auth: "expired", keyEpoch: randomUUID() });
+            const epoch = randomUUID();
+            await setAccount(d.root(), a.id, { auth: "expired", keyEpoch: epoch }, invokedEpoch);
             await waitForApiRuntimes(d.root(), a.id);
             await keychain.put(a.id, input.token.trim());
-            await setAccount(d.root(), a.id, {
-              auth: "ok",
-              localRevoked: false,
-              credentialKind: credentialKind(input.token.trim()),
-            });
+            await setAccount(
+              d.root(),
+              a.id,
+              {
+                auth: "ok",
+                localRevoked: false,
+                credentialKind: credentialKind(input.token.trim()),
+              },
+              epoch,
+            );
           }
           if (input.signIn) {
             if (a.provider !== "codex") return refused("Replace a Claude account's token instead");

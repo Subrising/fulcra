@@ -8,7 +8,9 @@ API keys do not enter launch arguments, launch environments, chat environments, 
 Subscription token transport and Codex authentication use their existing paths.
 
 The helper checks account state before and after each store read.
-Credential writes and revokes run one at a time for each account.
+Credential writes and deletes run one at a time for each account.
+Revoke blocks the account before it waits for this lock.
+Replacement restores access only if its credential generation still matches.
 Replacement blocks the account and changes its generation before the OS store write.
 A disabled, revoked, missing, replaced, or reassigned account cannot supply a key.
 Account replacement changes the credential generation.
@@ -27,15 +29,37 @@ The command blocks the account first, removes its stored credential, and stops i
 Session history remains available.
 Running one-shot calls stop when account state becomes unavailable.
 If deletion or process stopping fails, the command reports failure and keeps the account blocked.
-Run the same command again to complete removal.
+Retry the command to complete removal.
+If automatic crash recovery cannot confirm process identity, use the recovery steps below.
 
 Local revoke does not invalidate the provider's key.
 Use Claude Console to revoke the key for all applications and machines.
 An HTTP request already accepted by the provider can finish.
 Runtime stop checks use process leases and private stop channels, independent of bounded assignment history.
 The channel carries a stop capability and a completion reply. It never carries an API key.
-An uncertain lease after a crash causes a stop failure; it never counts as proof that a process ended.
-A stale credential lock also fails closed and needs operator inspection before removal.
+Each lease records the owner and child process IDs and native creation times.
+After an owner crash, recovery stops the child tree only if the creation time matches.
+A missing child permits lease removal. A different creation time keeps the lease for operator inspection.
+Revoke can recover a credential lock after its owner has ended and the lock is at least one second old.
+Metadata locking serializes recovery with other credential lock attempts.
+An uncertain lock or lease leaves the account blocked and reports failure.
+
+### Manual crash recovery
+
+1. Keep the account blocked after a failed revoke.
+2. Stop the daemon that owns the account store.
+3. Inspect the named lease under `<Command Centre home>/accounts/api-runtimes/`.
+4. Verify the recorded child and its descendants have ended with native process tools.
+5. Remove that lease only after this check.
+6. For a legacy lease without child identity, verify all affected Claude processes have ended first.
+7. Inspect `.credential-<account UUID>.lock` under the same account store.
+8. Remove that lock only after its recorded owner has ended.
+9. Start the daemon and retry local revoke.
+
+Do not remove a lease or lock while its process identity is uncertain.
+The helper always uses `/usr/bin/security` on macOS; environment overrides cannot select a reader.
+On Windows, PowerShell sets the nonsecret Electron flag inside the helper process.
+This entry command has the same form for cmd.exe and Git Bash callers.
 
 ## Storage before this change
 

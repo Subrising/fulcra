@@ -1,3 +1,4 @@
+import { deflateRawSync } from "node:zlib";
 import { isAbsolute } from "node:path";
 // The helper contains code and account references only. Claude receives its stdout through apiKeyHelper.
 // Keep the runtime self-contained: plugin and controller bundles do not share a module directory.
@@ -113,10 +114,7 @@ export function apiKeyHelperCommand({
     session,
     epoch,
     keychain: env.FULCRA_ACCOUNTS_KEYCHAIN || null,
-    security:
-      env.FULCRA_ACCOUNTS_KEYCHAIN && env.FULCRA_ACCOUNTS_SECURITY?.startsWith("/")
-        ? env.FULCRA_ACCOUNTS_SECURITY
-        : "/usr/bin/security",
+    security: "/usr/bin/security",
   };
   const source = `(${readApiKey.toString()})(${JSON.stringify(config)})`;
   const code = `eval(Buffer.from('${Buffer.from(source).toString("base64")}','base64').toString())`;
@@ -125,8 +123,22 @@ export function apiKeyHelperCommand({
     if (/["%!\r\n]/.test(s)) throw Error("Unsupported helper path");
     return `"${s}"`;
   };
-  // Electron uses its bundled Node runtime. This flag carries no credential.
-  const prefix =
-    platform === "win32" ? 'set "ELECTRON_RUN_AS_NODE=1"&& ' : "ELECTRON_RUN_AS_NODE=1 ";
-  return `${prefix}${quote(process.execPath)} -e ${quote(code)}`;
+  // PowerShell sets this nonsecret flag inside the helper, for both cmd.exe and Git Bash callers.
+  if (platform === "win32") {
+    const ps =
+      `${env.SystemRoot || "C:/Windows"}/System32/WindowsPowerShell/v1.0/powershell.exe`.replaceAll(
+        "\\",
+        "/",
+      );
+    const literal = (value) => "'" + value.replaceAll("'", "''") + "'";
+    // Keep the encoded PowerShell command below cmd.exe's command-line limit.
+    // Compression applies only to fixed code and account references, never to a key.
+    const packed = deflateRawSync(Buffer.from(source)).toString("base64");
+    const winCode = `eval(require('node:zlib').inflateRawSync(Buffer.from('${packed}','base64')).toString())`;
+    const script = `$env:ELECTRON_RUN_AS_NODE='1'; & ${literal(process.execPath)} '-e' ${literal(winCode)}; exit $LASTEXITCODE`;
+    const command = `${quote(ps)} -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, "utf16le").toString("base64")}`;
+    if (command.length > 7500) throw Error("Unsupported helper command length");
+    return command;
+  }
+  return `ELECTRON_RUN_AS_NODE=1 ${quote(process.execPath)} -e ${quote(code)}`;
 }

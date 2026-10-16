@@ -1,3 +1,4 @@
+import { stopRecordedTree } from "./api-process-tree.mjs";
 // Fulcra 0.2.17 (FU-58): `fulcra ask`, a one-shot model call for apps. It takes a pooled Claude account, runs the Claude
 // CLI once in print mode with NO tools, in an empty scratch folder and a scratch config home, and returns the answer.
 // It creates no agent, no workspace and no session record, so nothing shows in any list. A usage limit marks the
@@ -137,6 +138,8 @@ export function spawnClaudeOnce({
     let out = "";
     let settled = false;
     let leaderExited = false;
+    let stopping = false;
+    let childStart = null;
     const finish = (settle) => {
       if (settled) return;
       settled = true;
@@ -147,23 +150,43 @@ export function spawnClaudeOnce({
     };
     child.on("exit", () => {
       leaderExited = true;
-      releaseLease();
+      if (!stopping) releaseLease();
     });
     // The call ends at the deadline, without waiting for a process that holds the pipes. While the leader runs, its
     // process tree is stopped. Once it has exited, its numeric ID may belong to another process now, so nothing is
     // killed by that number: the pipes are closed and the call is rejected on its own (0.2.17 review).
     const timer = setTimeout(() => {
-      if (leaderExited) closePipes(child);
+      if (api) requestStop("TIMEOUT");
+      else if (leaderExited) closePipes(child);
       else killProcessTree(child);
       finish(() => reject(new AskError("The call timed out", "TIMEOUT")));
     }, timeoutMs);
-    requestStop = () => {
-      killProcessTree(child);
+    requestStop = (code = "ACCOUNT_REVOKED") => {
+      if (stopping) return;
+      stopping = true;
+      if (api) {
+        void stopRecordedTree(child.pid, childStart)
+          .then(releaseLease)
+          .catch(() => {
+            // Use the retained child handle for a best-effort stop, without acknowledging success.
+            killProcessTree(child);
+          });
+      } else killProcessTree(child);
       finish(() =>
-        reject(new AskError("The API account is revoked or unavailable", "ACCOUNT_REVOKED")),
+        reject(
+          new AskError(
+            code === "TIMEOUT" ? "The call timed out" : "The API account is revoked or unavailable",
+            code,
+          ),
+        ),
       );
     };
     if (api) {
+      try {
+        childStart = channel.attach(child);
+      } catch {
+        requestStop();
+      }
       const check = () => {
         try {
           const a = JSON.parse(
@@ -179,18 +202,14 @@ export function spawnClaudeOnce({
           )
             throw Error();
         } catch {
-          killProcessTree(child);
-          finish(() =>
-            reject(new AskError("The API account is revoked or unavailable", "ACCOUNT_REVOKED")),
-          );
+          requestStop();
         }
       };
       try {
-        watcher = fs.watch(path.join(root, "accounts"), check);
+        if (!settled) watcher = fs.watch(path.join(root, "accounts"), check);
         check();
       } catch {
-        killProcessTree(child);
-        finish(() => reject(new AskError("The API account cannot be watched", "NO_CREDENTIAL")));
+        requestStop();
       }
     }
     child.stdout.on("data", (d) => {

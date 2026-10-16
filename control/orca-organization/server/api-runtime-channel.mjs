@@ -1,3 +1,4 @@
+import { processIdentity } from "./api-process-tree.mjs";
 // Process stop control only. This channel never reads or transports an API key.
 import fs from "node:fs";
 import net from "node:net";
@@ -9,12 +10,23 @@ export function createApiRuntimeChannel({ root, accountId, epoch = null, onStop 
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const file = path.join(dir, `${randomUUID()}.json`);
   const stopToken = randomUUID();
+  const ownerStart = processIdentity(process.pid);
   const socketDir = process.platform === "win32" ? null : fs.mkdtempSync("/tmp/fulcra-api-");
   const address = socketDir
     ? path.join(socketDir, "control.sock")
     : `\\\\.\\pipe\\fulcra-api-${randomUUID()}`;
   const replies = new Set();
   let closed = false;
+  const lease = {
+    accountId,
+    epoch,
+    ownerPid: process.pid,
+    ownerStart,
+    address,
+    stopToken,
+    childPid: null,
+    childStart: null,
+  };
   const server = net.createServer((socket) => {
     let input = "";
     socket.setTimeout(5000, () => socket.destroy());
@@ -58,14 +70,18 @@ export function createApiRuntimeChannel({ root, accountId, epoch = null, onStop 
   try {
     server.on("error", onStop);
     server.listen(address);
-    fs.writeFileSync(
-      file,
-      JSON.stringify({ accountId, epoch, ownerPid: process.pid, address, stopToken }),
-      { flag: "wx", mode: 0o600 },
-    );
+    fs.writeFileSync(file, JSON.stringify(lease), { flag: "wx", mode: 0o600 });
   } catch {
     release();
     throw Error("The API process control channel is unavailable");
   }
-  return { release };
+  return {
+    release,
+    attach(child) {
+      lease.childPid = child.pid;
+      lease.childStart = child.pid ? processIdentity(child.pid) : null;
+      fs.writeFileSync(file, JSON.stringify(lease), { mode: 0o600 });
+      return lease.childStart;
+    },
+  };
 }

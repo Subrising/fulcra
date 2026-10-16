@@ -2,7 +2,7 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import type { ChildProcess } from "node:child_process";
+import { execFileSync, type ChildProcess } from "node:child_process";
 import { terminateWithTreeKill } from "../../../../utils/tree-kill.js";
 
 interface ApiAccount {
@@ -11,6 +11,46 @@ interface ApiAccount {
   epoch: string | null;
 }
 const denied = () => new Error("The API account is revoked or unavailable");
+
+// The controller uses the same native creation-time format for orphan recovery.
+function processStart(pid: number | undefined): string | null {
+  if (!pid) return null;
+  const env: NodeJS.ProcessEnv = { LC_ALL: "C" };
+  for (const name of ["SystemRoot", "WINDIR", "TEMP", "TMP"])
+    if (process.env[name]) env[name] = process.env[name];
+  const options = {
+    encoding: "utf8" as const,
+    env,
+    timeout: 5000,
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "ignore"] as ["ignore", "pipe", "ignore"],
+  };
+  if (process.platform === "win32") {
+    const ps = path.join(
+      process.env.SystemRoot || "C:\\Windows",
+      "System32/WindowsPowerShell/v1.0/powershell.exe",
+    );
+    const script = `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CreationDate.ToUniversalTime().ToString('o')`;
+    return (
+      execFileSync(
+        ps,
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-EncodedCommand",
+          Buffer.from(script, "utf16le").toString("base64"),
+        ],
+        options,
+      ).trim() || null
+    );
+  }
+  try {
+    return execFileSync("/bin/ps", ["-p", String(pid), "-o", "lstart="], options).trim() || null;
+  } catch (error) {
+    if ((error as { status?: number }).status === 1) return null;
+    throw error;
+  }
+}
 
 // A private lease binds the stop capability to this actual child, independently of assignment history.
 export function guardClaudeApiRuntime(raw: string | undefined): {
@@ -35,10 +75,21 @@ export function guardClaudeApiRuntime(raw: string | undefined): {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const file = path.join(dir, `${randomUUID()}.json`);
   const stopToken = randomUUID();
+  const lease = {
+    accountId: account.id,
+    epoch: account.epoch,
+    ownerPid: process.pid,
+    ownerStart: processStart(process.pid),
+    address: "",
+    stopToken,
+    childPid: null as number | null,
+    childStart: null as string | null,
+  };
   const socketDir = process.platform === "win32" ? null : fs.mkdtempSync("/tmp/fulcra-api-");
   const address = socketDir
     ? path.join(socketDir, "control.sock")
     : `\\\\.\\pipe\\fulcra-api-${randomUUID()}`;
+  lease.address = address;
   let child: ChildProcess | undefined;
   let invalid = false,
     stopping = false,
@@ -127,17 +178,7 @@ export function guardClaudeApiRuntime(raw: string | undefined): {
   try {
     server.on("error", invalidate);
     server.listen(address);
-    fs.writeFileSync(
-      file,
-      JSON.stringify({
-        accountId: account.id,
-        epoch: account.epoch,
-        ownerPid: process.pid,
-        address,
-        stopToken,
-      }),
-      { flag: "wx", mode: 0o600 },
-    );
+    fs.writeFileSync(file, JSON.stringify(lease), { flag: "wx", mode: 0o600 });
     watcher = fs.watch(path.join(account.root, "accounts"), check);
     watcher.on("error", invalidate);
     check();
@@ -153,6 +194,13 @@ export function guardClaudeApiRuntime(raw: string | undefined): {
     close,
     attach(process) {
       child = process;
+      try {
+        lease.childPid = process.pid ?? null;
+        lease.childStart = processStart(process.pid);
+        fs.writeFileSync(file, JSON.stringify(lease), { mode: 0o600 });
+      } catch {
+        invalidate();
+      }
       child.once("error", close);
       child.once("exit", () => {
         if (!stopping) close();

@@ -1,3 +1,4 @@
+import { processIdentity, stopRecordedTree } from "./api-process-tree.mjs";
 // Update-7: the account pool. Fulcra owns a list of subscription accounts per provider (Claude, Codex); every session
 // launch takes one by policy, and a session stopped by a usage limit continues on the next available account.
 //
@@ -396,10 +397,12 @@ export async function addAccount(root, { provider, name, priority }, now = Date.
     return a;
   });
 }
-export async function setAccount(root, id, patch) {
+export async function setAccount(root, id, patch, expectedEpoch) {
   return update(root, (s) => {
     const a = s.accounts.find((x) => x.id === id);
     if (!a) throw Error("No such account");
+    if (expectedEpoch !== undefined && (a.keyEpoch ?? null) !== expectedEpoch)
+      throw Error("The credential changed during replacement; the account stays blocked");
     if (patch.name !== undefined) {
       const n = String(patch.name).trim().slice(0, 60);
       if (!n) throw Error("Name the account");
@@ -1440,7 +1443,7 @@ export function sessionOpenHook({
 }
 
 // Credential I/O can exceed the metadata lock's stale timeout. This separate lock never expires while its owner lives.
-export async function withCredentialLock(root, id, fn) {
+export async function withCredentialLock(root, id, fn, { recoverStale = false } = {}) {
   if (!uuid(id)) throw Error("Bad account id");
   const dir = accountsDir(root);
   await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
@@ -1448,18 +1451,30 @@ export async function withCredentialLock(root, id, fn) {
   const deadline = Date.now() + 60000;
   for (;;) {
     try {
-      await fsp.writeFile(lock, String(process.pid), { flag: "wx", mode: 0o600 });
+      // The metadata lock serializes acquisition and recovery between all contenders.
+      await update(root, () => {
+        try {
+          fs.writeFileSync(lock, String(process.pid), { flag: "wx", mode: 0o600 });
+        } catch (error) {
+          if (error.code !== "EEXIST") throw error;
+          const owner = Number(fs.readFileSync(lock, "utf8"));
+          const age = Date.now() - fs.statSync(lock).mtimeMs;
+          let dead = false;
+          if (Number.isSafeInteger(owner) && owner > 0) {
+            try {
+              process.kill(owner, 0);
+            } catch (e) {
+              dead = e.code === "ESRCH";
+            }
+          }
+          if (!dead || !recoverStale || age < 1000) throw error;
+          fs.unlinkSync(lock);
+          fs.writeFileSync(lock, String(process.pid), { flag: "wx", mode: 0o600 });
+        }
+      });
       break;
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
-      const owner = Number(await fsp.readFile(lock, "utf8").catch(() => ""));
-      if (Number.isSafeInteger(owner) && owner > 0) {
-        try {
-          process.kill(owner, 0);
-        } catch (e) {
-          if (e.code === "ESRCH") throw Error("The account credential lock needs recovery");
-        }
-      }
       if (Date.now() >= deadline) throw Error("The account credential store is busy");
       // Wake on the owner's unlink. The timeout bounds a lost native filesystem event.
       await new Promise((resolve) => {
@@ -1473,7 +1488,7 @@ export async function withCredentialLock(root, id, fn) {
             watcher.close();
             resolve();
           },
-          Math.max(1, deadline - Date.now()),
+          Math.max(1, Math.min(1000, deadline - Date.now())),
         );
         watcher.on("error", () => {
           watcher.close();
@@ -1524,6 +1539,28 @@ export async function waitForApiRuntimes(root, accountId, timeoutMs = 5000) {
       throw Error("API runtime stop could not be confirmed");
     }
     if (lease.accountId !== accountId) continue;
+    const ownerStart = processIdentity(lease.ownerPid);
+    if (ownerStart === null || (lease.ownerStart && ownerStart !== lease.ownerStart)) {
+      pending.push(
+        (async () => {
+          await stopRecordedTree(lease.childPid, lease.childStart);
+          fs.rmSync(file, { force: true });
+          // A dead owner cannot clean its private Unix socket directory.
+          if (
+            typeof lease.address === "string" &&
+            /^\/tmp\/fulcra-api-[^/]+\/control\.sock$/.test(lease.address)
+          ) {
+            try {
+              fs.rmSync(lease.address, { force: true });
+              fs.rmdirSync(path.dirname(lease.address));
+            } catch {
+              /* Process termination is already confirmed. */
+            }
+          }
+        })(),
+      );
+      continue;
+    }
     pending.push(
       new Promise((resolve, reject) => {
         if (typeof lease.address !== "string" || !uuid(lease.stopToken)) {

@@ -103,6 +103,7 @@ files.push(
   "server/accounts.mjs",
   "server/api-key-helper.mjs",
   "server/api-runtime-channel.mjs",
+  "server/api-process-tree.mjs",
   "server/scratch-keychain.fixture.mjs",
   "server/account-billing.mjs",
   "server/account-billing.d.mts",

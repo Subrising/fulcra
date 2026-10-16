@@ -884,3 +884,56 @@ test(
     }
   },
 );
+
+test(
+  "one-shot revoke confirms the captured tree before releasing its lease",
+  { ...posix, timeout: 15000 },
+  async (t) => {
+    const { setAccount, revokeLocalAccount, waitForApiRuntimes } = await import("./accounts.mjs");
+    const { processIdentity } = await import("./api-process-tree.mjs");
+    const { root, a } = await pool();
+    const marker = path.join(root, "tree-ready.json");
+    await setAccount(root, a.id, { credentialKind: "api-key" });
+    const { file } = fakeClaude(`
+    const {spawn}=await import('node:child_process');
+    const child=spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});process.stdout.write('ready');setInterval(()=>{},1000)"],{env:{},detached:true,stdio:['ignore','pipe','ignore']});
+    child.stdout.once('data',()=> (import('node:fs')).then(fs=>fs.writeFileSync(${JSON.stringify(marker)},JSON.stringify({pid:process.pid,descendant:child.pid}))));
+    setInterval(()=>{},1000);
+  `);
+    const ready = new Promise((resolve) => {
+      const watcher = fs.watch(root, () => {
+        if (fs.existsSync(marker)) {
+          watcher.close();
+          resolve();
+        }
+      });
+      t.after(() => watcher.close());
+    });
+    const pending = spawnClaudeOnce({
+      token: "sk-ant-api03-SYNTHETIC-ONLY-FOR-TEST",
+      root,
+      accountId: a.id,
+      model: "claude-haiku-5-5",
+      prompt: "fixture",
+      timeoutMs: 12000,
+      bin: file,
+      env: { PATH: process.env.PATH },
+    }).catch((e) => e.code);
+    await ready;
+    const { pid, descendant } = JSON.parse(fs.readFileSync(marker, "utf8"));
+    t.after(() => {
+      for (const p of [pid, descendant]) {
+        try {
+          process.kill(p, "SIGKILL");
+        } catch {}
+      }
+    });
+    assert.ok(processIdentity(descendant));
+    await revokeLocalAccount(root, a.id);
+    await waitForApiRuntimes(root, a.id);
+    assert.equal(await pending, "ACCOUNT_REVOKED");
+    assert.equal(processIdentity(pid), null);
+    assert.equal(processIdentity(descendant), null);
+    assert.deepEqual(fs.readdirSync(path.join(root, "accounts/api-runtimes")), []);
+  },
+);
