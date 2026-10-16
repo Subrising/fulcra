@@ -1,11 +1,52 @@
 import assert from "node:assert/strict";
-import { readFileSync, mkdtempSync, readdirSync, rmSync, existsSync } from "node:fs";
+import {
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  existsSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { needsMetro } from "./browser-routing.mjs";
 import BrowserReporter from "./browser-ci-reporter.mjs";
 import { balanceTests } from "./browser-shards.mjs";
+import { installCacheSafe } from "./install-cache-inputs.mjs";
+
+test("unknown install lifecycle inputs use fresh installs instead of cached dependencies", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "install-inputs-"));
+  const manifest = {
+    workspaces: ["packages/member"],
+    scripts: {
+      postinstall: "node scripts/postinstall-patches.mjs",
+      prepare: "node scripts/install-git-hooks.mjs",
+    },
+  };
+  const save = (file, value) => writeFileSync(path.join(root, file), JSON.stringify(value));
+  try {
+    mkdirSync(path.join(root, "packages/member"), { recursive: true });
+    save("package.json", manifest);
+    save("packages/member/package.json", {});
+    assert.equal(installCacheSafe(root), true);
+    save("packages/member/package.json", { scripts: { postinstall: "node new-install.mjs" } });
+    assert.equal(installCacheSafe(root), false);
+    save("packages/member/package.json", {});
+    save("package.json", {
+      ...manifest,
+      scripts: { ...manifest.scripts, prepare: "node other-input.mjs" },
+    });
+    assert.equal(installCacheSafe(root), false);
+    save("package.json", { ...manifest, workspaces: ["tools/member"] });
+    assert.equal(installCacheSafe(root), false);
+    save("package.json", { ...manifest, workspaces: ["packages/*"] });
+    assert.equal(installCacheSafe(root), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("ordinary files share setup while slow files still split without losing cases", () => {
   const ordinary = Array.from({ length: 8 }, (_, file) =>
@@ -114,10 +155,19 @@ test("installed dependency caches require exact platform and install inputs", ()
     "node22-npm11",
     "package-lock.json",
     "patches/**",
-    "scripts/**",
+    "scripts/postinstall-patches.mjs",
+    "scripts/install-git-hooks.mjs",
+    "scripts/npm-retry.mjs",
+    "install-cache-inputs.mjs",
   ])
     assert.ok(action.includes(input), input);
   assert.ok(!action.includes("restore-keys:"));
+  assert.ok(!action.includes("'scripts/**'"));
+  assert.match(action, /id: dependencies\n\s+if: steps\.lifecycle\.outputs\.reusable == 'true'/);
+  assert.match(
+    action,
+    /if: steps\.lifecycle\.outputs\.reusable == 'true' && steps\.dependencies\.outputs\.cache-hit != 'true'\n\s+uses: actions\/cache\/save/,
+  );
   assert.match(action, /cache-hit != 'true'[\s\S]*node scripts\/npm-retry.mjs ci/);
   assert.match(action, /cache-hit == 'true'[\s\S]*npm run prepare/);
   assert.ok(!action.includes("~/.npmrc"));

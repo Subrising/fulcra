@@ -1,4 +1,4 @@
-export const BROWSER_SHARDS = 24;
+export const BROWSER_SHARDS = 16;
 
 export function balanceTests(tests, seconds, count = BROWSER_SHARDS) {
   const buckets = Array.from({ length: count }, () => ({ seconds: 0, tests: [] }));
@@ -43,13 +43,30 @@ export function balanceTests(tests, seconds, count = BROWSER_SHARDS) {
       chunk(largest.file, largest.tests.slice(midpoint)),
     );
   }
-  chunks.sort((a, b) => b.seconds - a.seconds || a.tests[0].key.localeCompare(b.tests[0].key));
+  // A file that already needs every shard cannot save more fixtures by
+  // grouping. Balance its individual cases before assigning other files.
+  const fileGroups = new Map();
+  for (const group of chunks) fileGroups.set(group.file, (fileGroups.get(group.file) ?? 0) + 1);
+  const scheduled = chunks.flatMap((group) =>
+    fileGroups.get(group.file) >= count
+      ? group.tests.map((item) => chunk(group.file, [item]))
+      : [group],
+  );
+  scheduled.sort((a, b) => b.seconds - a.seconds || a.tests[0].key.localeCompare(b.tests[0].key));
   const assignedFiles = new Map(buckets.map((bucket) => [bucket, new Set()]));
-  for (const group of chunks) {
+  for (const group of scheduled) {
     const candidates = buckets.filter((bucket) => !assignedFiles.get(bucket).has(group.file));
-    const target = (candidates.length ? candidates : buckets).reduce((a, b) =>
-      a.seconds <= b.seconds ? a : b,
-    );
+    // Every shard already has this file's fixture. Place remaining cases by
+    // load; this adds no fixture copies and avoids a large final chunk.
+    if (!candidates.length) {
+      for (const item of [...group.tests].sort((a, b) => b.seconds - a.seconds)) {
+        const target = buckets.reduce((a, b) => (a.seconds <= b.seconds ? a : b));
+        target.tests.push(item);
+        target.seconds += item.seconds;
+      }
+      continue;
+    }
+    const target = candidates.reduce((a, b) => (a.seconds <= b.seconds ? a : b));
     target.tests.push(...group.tests);
     target.seconds += group.seconds;
     assignedFiles.get(target).add(group.file);

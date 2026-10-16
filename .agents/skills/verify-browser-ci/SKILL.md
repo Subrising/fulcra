@@ -9,7 +9,7 @@ Build the server stack and audio package before exporting the app.
 ```sh
 npm run build:server
 npm run build --workspace=@getpaseo/expo-two-way-audio
-npm exec --workspace=@getpaseo/app -- expo export --platform web --output-dir .e2e-web --max-workers 2
+bash .github/scripts/export-browser-web.sh
 E2E_PLAN_ONLY=1 npm run test:e2e --workspace=@getpaseo/app -- --list --reporter=../../.github/scripts/browser-ci-reporter.mjs
 E2E_STATIC_WEB=1 npm run test:e2e --workspace=@getpaseo/app -- --list --test-list=.e2e-plan/shard-1.txt
 E2E_STATIC_WEB=1 E2E_REPORT_CI=1 E2E_USE_BUILT_DAEMON=1 npm run test:e2e --workspace=@getpaseo/app -- e2e/browser/sidebar-leads-scroll.spec.ts --fully-parallel --workers=3 --retries=0
@@ -47,3 +47,20 @@ E2E_STATIC_WEB=1 E2E_USE_BUILT_DAEMON=1 npm run test:e2e --workspace=@getpaseo/a
 Inspect `timeline-layout.json` and the screenshots for all six widths.
 Require complete messages after reload, no sideways scroll, no row overlap, and buttons of at least 48×48 pixels.
 Check both scroll positions in the landscape case. The message uses normal vertical scrolling.
+
+For Metro cache changes, export twice with one new `E2E_METRO_CACHE` directory.
+Compare the cold and warm bundle times. Require both exports to pass.
+Use a temporary source marker to check cache freshness. Preserve the original file bytes.
+Require the marker in the exported JavaScript. Restore the source in a finally block.
+Export again, then require the marker to be absent. Check that git shows no source edit.
+The final bundle cache still requires its exact source key.
+
+For job layout changes, run one full planned shard with the same CI worker limit.
+
+```sh
+CI=1 E2E_STATIC_WEB=1 E2E_USE_BUILT_DAEMON=1 E2E_REPORT_CI=1 node .github/scripts/run-browser-ci.mjs 1
+```
+
+Compare its case count with the manifest. Full PR timing still needs a real GitHub run.
+Unknown install lifecycle commands or workspace paths must use fresh npm ci.
+They must not read or save the installed dependency cache.

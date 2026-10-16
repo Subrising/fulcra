@@ -16,6 +16,12 @@ const customWebPlatform = (process.env.PASEO_WEB_PLATFORM ?? "")
   .toLowerCase();
 
 const config = getDefaultConfig(projectRoot);
+// Metro validates source and transformer keys inside this store. CI reuses it
+// between exports; exact final bundles have a separate source-keyed cache.
+if (process.env.E2E_METRO_CACHE) {
+  const { FileStore } = require("metro-cache");
+  config.cacheStores = [new FileStore({ root: process.env.E2E_METRO_CACHE })];
+}
 config.watchFolders = [
   ...new Set([
     ...(config.watchFolders ?? []),

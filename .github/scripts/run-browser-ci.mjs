@@ -33,7 +33,7 @@ const result = spawnSync(
     "test",
     "--project=browser",
     `--test-list=${list}`,
-    "--workers=3",
+    "--workers=4",
     "--global-timeout=420000",
   ],
   { stdio: "inherit", env: { ...process.env, E2E_SELECTED_LIST: list } },

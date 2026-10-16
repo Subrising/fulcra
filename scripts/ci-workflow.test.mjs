@@ -230,7 +230,7 @@ test("every new shard and desktop lane remains failure-sensitive", () => {
     source
       .split("\n")
       .filter((line) => line.includes("restore-keys:"))
-      .every((line) => line.includes("browser-failed-")),
+      .every((line) => line.includes("browser-failed-") || line.includes("metro-web-v1-")),
   );
   assert.match(source, /steps\.shared\.outputs\.full != 'false'/);
 });
@@ -365,10 +365,10 @@ const gatedCiJobs = new Map([
   ["desktop-tests-ubuntu", { name: "desktop-tests (ubuntu-latest)", contract: "desktop" }],
   ["app-tests", { name: "app-tests", contract: "app" }],
   ["sdk-tests", { name: "sdk-tests", contract: "sdk" }],
-  ["playwright-1", { name: "playwright (shard 1/24)", contract: "browser" }],
-  ["playwright-2", { name: "playwright (shard 2/24)", contract: "browser" }],
-  ["playwright-3", { name: "playwright (shard 3/24)", contract: "browser" }],
-  ["playwright-4", { name: "playwright (shard 4/24)", contract: "browser" }],
+  ["playwright-1", { name: "playwright (shard 1/16)", contract: "browser" }],
+  ["playwright-2", { name: "playwright (shard 2/16)", contract: "browser" }],
+  ["playwright-3", { name: "playwright (shard 3/16)", contract: "browser" }],
+  ["playwright-4", { name: "playwright (shard 4/16)", contract: "browser" }],
   ["relay-tests", { name: "relay-tests", contract: "relay" }],
   ["cli-tests-1", { name: "cli-tests (shard 1/3)", contract: "cli" }],
   ["cli-tests-2", { name: "cli-tests (shard 2/3)", contract: "cli" }],
