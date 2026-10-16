@@ -235,7 +235,8 @@ prevents duplicate watchers. The watcher records its send attempt before native
 delivery. An uncertain receipt needs inspection before another attempt.
 A watcher error sends one blocked notice with the retained run URL.
 
-Set `FULCRA_CI_OWNER` to the retained owner session UUID when using `release.sh`.
+`release.sh` uses the caller session in `PASEO_AGENT_ID` by default.
+Set `FULCRA_CI_OWNER` to select another retained owner session.
 The release tool registers the same watcher after its merge dispatch. The notice
 contains pass or fail, the run URL, attempt, and head SHA. Resume the release with
 the exact run ID from that notice. A completion for another head cannot resume it.

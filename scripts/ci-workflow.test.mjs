@@ -894,6 +894,8 @@ test("source release returns after dispatch and resumes only from a matching com
       GIT_COMMITTER_NAME: "Fulcra",
       GIT_COMMITTER_EMAIL: "fulcra@users.noreply.github.com",
       FULCRA_RELEASE_REPO: checkout,
+      PASEO_AGENT_ID: "",
+      FULCRA_CI_OWNER: "",
       ROOT: root,
       REAL_GIT: realGit,
       PATH: `${bin}:${process.env.PATH}`,
