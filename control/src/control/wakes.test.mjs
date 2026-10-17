@@ -582,3 +582,29 @@ test("API budget notices target Main once, using a durable account and period ke
   assert.equal(queued.size, 1);
   assert.equal(pumps, 1);
 });
+
+test("API thresholds route to Main, the project lead, and the worker manager once each", () => {
+  const lead = "11111111-1111-4111-8111-111111111111";
+  const manager = "22222222-2222-4222-8222-222222222222";
+  const worker = "33333333-3333-4333-8333-333333333333";
+  const main = "44444444-4444-4444-8444-444444444444";
+  const targets = [];
+  const fake = {
+    has: () => true,
+    db: {
+      prepare: (sql) => ({
+        all: () =>
+          sql.includes("role_bindings") ? [{ session: main }] : [{ supervisor: manager }],
+      }),
+    },
+    owned: () => [{ holder: lead }, { holder: main }],
+    enqueue: (target) => {
+      targets.push(target.holder);
+      return true;
+    },
+    pump: () => {},
+  };
+  Wakes.prototype.accountBudget.call(fake, "daily:50", { sessions: [worker] });
+  assert.deepEqual(new Set(targets), new Set([main, lead, manager]));
+  assert.equal(targets.length, 3);
+});

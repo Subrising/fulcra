@@ -1,3 +1,4 @@
+import { recordSessionCost, sessionCost, type SessionCostRecords } from "./session-cost.js";
 import { queuedAgentMessagesFor } from "../queued-agent-messages.js";
 import { heldSendsFor } from "../held-sends.js";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -601,6 +602,7 @@ interface HandleStreamEventOptions {
 }
 
 interface ManagedAgentBase {
+  costRecords?: SessionCostRecords;
   archivedAt: string | null;
   instanceId?: string;
   inputSequence?: InputSequence;
@@ -2388,10 +2390,34 @@ export class AgentManager {
     });
   }
 
+  private assertSessionCostCapWrite(
+    patch: AgentLabelPatch | undefined,
+    labels: Record<string, string> | undefined,
+  ): void {
+    const capKey = "fulcra.session-cost-cap-usd";
+    if (patch && Object.hasOwn(patch, capKey) && patch[capKey] !== labels?.[capKey]) {
+      const caller = this.agentCallers.getStore();
+      caller?.validate?.();
+      const source = this.trustedPlugins.currentInputSource();
+      const value = patch[capKey];
+      const automated = caller?.agentId || source === "agent" || source === "plugin";
+      if (
+        automated &&
+        (value === null ||
+          (labels?.[capKey] !== undefined && Number(value) > Number(labels[capKey])))
+      )
+        throw new Error("Only the owner connection can raise or remove a session cost cap.");
+      if (value !== null && (!Number.isFinite(Number(value)) || Number(value) <= 0))
+        throw new Error("Session cost cap must be a positive USD value.");
+    }
+  }
+
   private assertArchiveLeadLabelWrite(
     patch: AgentLabelPatch | undefined,
     labels: Record<string, string> | undefined,
   ): void {
+    this.assertSessionCostCapWrite(patch, labels);
+
     if (
       !patch ||
       !isArchiveLead({ labels: labels ?? {} }) ||
@@ -4633,6 +4659,7 @@ export class AgentManager {
         persistence: record.persistence ?? null,
         historyPrimed: true,
         lastUserMessageAt: record.lastUserMessageAt ? new Date(record.lastUserMessageAt) : null,
+        costRecords: record.costRecords,
         lastUsage: undefined,
         lastError: record.lastError ?? undefined,
         attention,
@@ -5519,6 +5546,46 @@ export class AgentManager {
     });
   }
 
+  async refreshSessionCost(id: string) {
+    const live = this.agents.get(id);
+    const target = live ?? this.registry?.getCached(id);
+    if (!target) return undefined;
+    const beforeRecords = target.costRecords;
+    if (!this.pluginLifecycle) return sessionCost(beforeRecords);
+    const result = await this.pluginLifecycle.before("agent.cost_read", {
+      agentId: id,
+      provider: target.provider,
+      runtimeSessionId: target.persistence?.sessionId ?? null,
+      records: beforeRecords,
+    });
+    if (!live) return sessionCost(result.records);
+    const current = this.agents.get(id);
+    if (current !== live || live.costRecords !== beforeRecords)
+      return sessionCost(current?.costRecords);
+    // Normal snapshot writes retain imported billing facts.
+    live.costRecords = result.records;
+    return sessionCost(result.records);
+  }
+
+  private sessionCostAccount(agent: ActiveManagedAgent): string | null {
+    const binding = agent.session.limitResumeAccountBinding?.();
+    if (binding?.startsWith("pool:")) return binding.slice(5);
+    return agent.session.usageCredential?.()?.accountId ?? null;
+  }
+
+  private async checkTurnBudget(agent: ActiveManagedAgent): Promise<void> {
+    if (!this.pluginLifecycle) return;
+    await this.refreshSessionCost(agent.id);
+    await this.pluginLifecycle.before("agent.turn_start", {
+      agentId: agent.id,
+      provider: agent.provider,
+      accountId: this.sessionCostAccount(agent),
+      costRecords: agent.costRecords?.turns,
+      labels: { ...agent.labels },
+      sessionCost: sessionCost(agent.costRecords),
+    });
+  }
+
   private async startPendingForegroundTurn(params: {
     agent: ActiveManagedAgent;
     agentId: string;
@@ -5597,6 +5664,8 @@ export class AgentManager {
         }
         turnOptions = { ...options, [CODEX_TURN_ADMISSION]: admission };
       }
+      await this.checkTurnBudget(agent);
+      validate();
       const result = await this.withInput(
         agentId,
         "prompt",
@@ -6085,6 +6154,7 @@ export class AgentManager {
       this.agentStreamCoalescer.flushFor(agent.id);
       await this.drainTimelineWrites(agent.id);
       this.assertTimelineHealthy(agent.id);
+      await this.checkTurnBudget(agent);
       this.assertSteerAdmissionOwnsTurn(agent, expectedTurnId);
       const barrier: SteerEventBarrier = { events: [] };
       this.steerEventBarriers.set(agent.id, barrier);
@@ -7203,6 +7273,10 @@ export class AgentManager {
     return { durableTimelineHasRows };
   }
 
+  private storedCostRecords(id: string) {
+    return this.registry?.getCached(id)?.costRecords;
+  }
+
   private buildManagedAgentForRegister(params: {
     resolvedAgentId: string;
     session: AgentSession;
@@ -7264,6 +7338,7 @@ export class AgentManager {
       ),
       historyPrimed: options?.historyPrimed ?? durableTimelineHasRows,
       lastUserMessageAt: options?.lastUserMessageAt ?? null,
+      costRecords: this.storedCostRecords(resolvedAgentId),
       lastUsage: options?.lastUsage,
       lastError: options?.lastError,
       attention: resolveInitialAttention(options?.attention),
@@ -7964,6 +8039,7 @@ export class AgentManager {
       );
     }
 
+    await this.recordCostResult(agent, event, eventTurnId, options?.fromHistory);
     this.rememberMessageTurnResult(agent, event, eventTurnId, options?.fromHistory);
     const flags: StreamEventFlags = { shouldDispatchEvent: true, shouldNotifyWaiters: true };
 
@@ -7996,6 +8072,33 @@ export class AgentManager {
     this.traceHandleStreamEventEnd(agent, event, eventTurnId, flags);
 
     return flags.shouldNotifyWaiters;
+  }
+
+  private async recordCostResult(
+    agent: ActiveManagedAgent,
+    event: AgentStreamEvent,
+    eventTurnId: string | undefined,
+    fromHistory: boolean | undefined,
+  ): Promise<void> {
+    if (
+      !fromHistory &&
+      eventTurnId &&
+      (event.type === "turn_completed" || event.type === "turn_failed") &&
+      event.usage
+    ) {
+      const next = recordSessionCost(agent.costRecords, {
+        provider: agent.provider,
+        turnId: eventTurnId,
+        accountId: this.sessionCostAccount(agent),
+        usage: event.usage,
+        at: new Date().toISOString(),
+      });
+      if (next !== agent.costRecords) {
+        agent.costRecords = next;
+        if (next?.turns[eventTurnId]) event.usage.turnCostUsd = next.turns[eventTurnId].amountUsd;
+        await this.persistSnapshot(agent);
+      }
+    }
   }
 
   /** Retain the exact turn result before finalization publishes an idle state. */

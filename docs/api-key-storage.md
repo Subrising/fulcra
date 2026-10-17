@@ -22,6 +22,26 @@ The preflight uses the SDK settings resolver for managed files, MDM, registry, a
 It refuses a managed policy helper because the resolver cannot inspect its future output.
 Pooled API settings cannot replace the helper or inject authentication through settings `env`.
 
+## API cost caps
+
+API accounts have a daily USD cap. The default is $40 per account, with a UTC midnight reset.
+Set `dailyLimitUsd` through `organization.accounts.update`. The existing `budget` setting controls the account's full budget period.
+Warnings at 50% and 80% go to Main and the leads of affected sessions.
+At either cap, Fulcra refuses new API turns and one-shot calls with a cost-cap error.
+Subscription accounts keep their existing limits.
+
+A lead can set a worker cap with `paseo agent update <id> --label fulcra.session-cost-cap-usd=15`.
+An agent can set or lower this cap. Only an owner connection can raise or remove it.
+The session cap counts all recorded session costs, including earlier accounts.
+An active provider turn can finish above a cap. The guard refuses the next turn after recorded spend reaches the cap.
+Provider estimates and delayed result records cannot give an exact limit during a running turn.
+
+`paseo inspect <id> --json` returns `SessionCost` with total USD, last-turn USD, and totals by account ID.
+The session usage RPCs return the same `sessionCost` field.
+These amounts come from provider result records and existing host billing records. They are API estimates, not invoices.
+A missing cost field means no recorded cost is available.
+Older records can cover only the billing history that this host retained.
+
 ## Revoke a key locally
 
 Run `fulcra account revoke <name-or-id>`.

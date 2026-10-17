@@ -24,6 +24,7 @@ interface AgentInspect {
   Cwd: string;
   CreatedAt: string;
   UpdatedAt: string;
+  SessionCost: AgentSnapshotPayload["sessionCost"] | null;
   LastUsage: {
     InputTokens: number;
     OutputTokens: number;
@@ -111,7 +112,11 @@ function buildLastUsage(snapshot: AgentSnapshotPayload): AgentInspect["LastUsage
     InputTokens: snapshot.lastUsage.inputTokens ?? 0,
     OutputTokens: snapshot.lastUsage.outputTokens ?? 0,
     CachedTokens: snapshot.lastUsage.cachedInputTokens ?? 0,
-    CostUsd: snapshot.lastUsage.totalCostUsd ?? 0,
+    CostUsd:
+      snapshot.sessionCost?.lastTurnUsd ??
+      snapshot.lastUsage.turnCostUsd ??
+      snapshot.lastUsage.totalCostUsd ??
+      0,
   };
 }
 
@@ -140,6 +145,7 @@ function toInspectData(snapshot: AgentSnapshotPayload): AgentInspect {
     Cwd: snapshot.cwd,
     CreatedAt: snapshot.createdAt,
     UpdatedAt: snapshot.updatedAt,
+    SessionCost: snapshot.sessionCost ?? null,
     LastUsage: buildLastUsage(snapshot),
     Capabilities: buildCapabilities(snapshot),
     AvailableModes: snapshot.availableModes
@@ -171,6 +177,17 @@ function toInspectRows(agent: AgentInspect): InspectRow[] {
     { key: "UpdatedAt", value: agent.UpdatedAt },
   ];
 
+  if (agent.SessionCost) {
+    rows.push({
+      key: "SessionCost",
+      value: `Total: ${formatCost(agent.SessionCost.totalUsd)}, Last turn: ${formatCost(agent.SessionCost.lastTurnUsd)}`,
+    });
+    for (const account of agent.SessionCost.accounts)
+      rows.push({
+        key: `Cost.${account.accountId ?? "unattributed"}`,
+        value: formatCost(account.totalUsd),
+      });
+  }
   if (agent.LastUsage) {
     rows.push({
       key: "LastUsage",

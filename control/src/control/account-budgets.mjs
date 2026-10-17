@@ -1,7 +1,11 @@
 // Automatic API failover uses delegation fences. Refusals need the session's own idle event and a backoff.
 import fs from "node:fs";
 import path from "node:path";
-import { accountSpend, readBilling } from "../../orca-organization/server/account-billing.mjs";
+import {
+  accountSpend,
+  dailySpend,
+  readBilling,
+} from "../../orca-organization/server/account-billing.mjs";
 import {
   readAccounts,
   update,
@@ -120,6 +124,31 @@ export function createAccountBudgets(
     for (const account of pool.accounts) {
       const spend = accountSpend(root, account, billing);
       if (!account.enabled || !spend) continue;
+      for (const [scope, period] of [
+        ["account", spend],
+        ["daily UTC", dailySpend(root, account, billing, now())],
+      ]) {
+        if (!period?.limitUsd) continue;
+        for (const threshold of [0.5, 0.8, 1]) {
+          if (period.usedUsd < period.limitUsd * threshold) continue;
+          const noticeKey = `spend:${account.id}:${scope}:${period.startAt}:${period.limitUsd}:${threshold}`;
+          if (pool.budgetNotices?.[noticeKey]) continue;
+          const routed = control.wakes?.accountBudget?.(noticeKey, {
+            account: account.name,
+            accountId: account.id,
+            scope,
+            threshold,
+            sessions: candidates(pool, account.id),
+            usedUsd: period.usedUsd,
+            limitUsd: period.limitUsd,
+          });
+          if (routed > 0)
+            await update(root, (s) => {
+              s.budgetNotices ??= {};
+              s.budgetNotices[noticeKey] = new Date(now()).toISOString();
+            });
+        }
+      }
       const lowCredit = billing.events.some(
         (e) => e.accountId === account.id && Date.parse(e.at) >= Date.parse(spend.startAt),
       );

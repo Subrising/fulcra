@@ -6,7 +6,12 @@ import { stopRecordedTree } from "./api-process-tree.mjs";
 // login is never used: with no pooled account the call fails.
 import { createApiRuntimeChannel } from "./api-runtime-channel.mjs";
 import { randomUUID } from "node:crypto";
-import { recordAccountCost, recordBillingError, isBillingError } from "./account-billing.mjs";
+import {
+  recordAccountCost,
+  recordBillingError,
+  isBillingError,
+  assertApiSpendAllowed,
+} from "./account-billing.mjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -463,6 +468,7 @@ export async function askOnce({
       throw new AskError("The subscription account is at its limit", "ACCOUNT_LIMITED");
     if (limitProbe && isApiAccount(picked))
       throw new AskError("API accounts have no subscription limit", "API_ACCOUNT");
+    assertApiSpendAllowed(root, { provider: "claude", accountId: picked.id }, now());
     const spawnMs = deadline - now();
     if (spawnMs < MIN_ATTEMPT_MS) throw new AskError("The call timed out", "TIMEOUT");
     let result;

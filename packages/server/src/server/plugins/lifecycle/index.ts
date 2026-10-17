@@ -1,3 +1,5 @@
+import { SessionCostRecordsSchema } from "../../agent/session-cost.js";
+import { SessionCostSchema } from "@getpaseo/protocol/recorded-usage";
 import type { AgentStreamEvent, AgentTimelineItem } from "../../agent/agent-sdk-types.js";
 import { z } from "zod";
 import { CreateAgentRequestMessageSchema } from "@getpaseo/protocol/messages";
@@ -26,9 +28,42 @@ export const lifecycleEventNames = [
   "workspace.created",
   "workspace.archived",
 ] as const;
-export const beforeHookNames = ["agent.create", "agent.session_open", "workspace.create"] as const;
+export const beforeHookNames = [
+  "agent.create",
+  "agent.session_open",
+  "agent.turn_start",
+  "agent.cost_read",
+  "workspace.create",
+] as const;
 
 const beforeSchemas = {
+  "agent.cost_read": z
+    .object({
+      agentId: z.string(),
+      provider: z.string(),
+      runtimeSessionId: z.string().nullable(),
+      records: SessionCostRecordsSchema.optional(),
+    })
+    .strict(),
+  "agent.turn_start": z
+    .object({
+      agentId: z.string(),
+      provider: z.string(),
+      accountId: z.string().nullable(),
+      labels: z.record(z.string(), z.string()),
+      sessionCost: SessionCostSchema.optional(),
+      costRecords: z
+        .record(
+          z.string(),
+          z.object({
+            accountId: z.string().nullable(),
+            amountUsd: z.number().finite().nonnegative(),
+            at: z.string(),
+          }),
+        )
+        .optional(),
+    })
+    .strict(),
   // labels are context for the hook (e.g. what the session is for); changes to them are not applied.
   "agent.create": CreateAgentRequestMessageSchema.pick({
     config: true,
@@ -158,12 +193,29 @@ export function publishAgentStream(
   }
 }
 
+function validateCostReadResult(input: unknown, result: unknown): void {
+  const previous = beforeSchemas["agent.cost_read"].parse(input);
+  const next = beforeSchemas["agent.cost_read"].parse(result);
+  if (
+    previous.agentId !== next.agentId ||
+    previous.provider !== next.provider ||
+    previous.runtimeSessionId !== next.runtimeSessionId
+  )
+    throw new Error("Cost readers cannot change session identity");
+  for (const [id, row] of Object.entries(previous.records?.turns ?? {}))
+    if (JSON.stringify(next.records?.turns[id]) !== JSON.stringify(row))
+      throw new Error("Cost readers cannot change recorded turns");
+}
+
 export function validateBeforeResult<Name extends keyof PluginBeforeRequests>(
   name: Name,
   input: PluginBeforeRequests[Name],
   output: unknown,
 ): PluginBeforeRequests[Name] {
   const result = validateBeforeRequest(name, output);
+  if (name === "agent.cost_read") validateCostReadResult(input, result);
+  if (name === "agent.turn_start" && JSON.stringify(input) !== JSON.stringify(result))
+    throw new Error("agent.turn_start hooks cannot change the request");
   if (name === "agent.session_open") {
     const previous = beforeSchemas["agent.session_open"].parse(input);
     const next = beforeSchemas["agent.session_open"].parse(result);

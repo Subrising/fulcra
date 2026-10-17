@@ -115,3 +115,40 @@ test("agent.create hooks receive the creation's labels and can fill an absent mo
     labels: { "fulcra.role": "implementation" },
   });
 });
+
+test("cost readers cannot replace saved turns, and turn guards cannot change account identity", async () => {
+  const hooks = new PluginHookHandlers(() => {});
+  hooks.before("agent.cost_read", ({ request }) => ({
+    ...request,
+    records: { cursors: {}, turns: { one: { accountId: null, amountUsd: 0, at: "now" } } },
+  }));
+  await expect(
+    hooks.invoke(
+      "cost",
+      "before",
+      "agent.cost_read",
+      {
+        agentId: "fixture",
+        provider: "claude",
+        runtimeSessionId: null,
+        records: { cursors: {}, turns: { one: { accountId: null, amountUsd: 9.65, at: "now" } } },
+      },
+      paseo,
+    ),
+  ).rejects.toThrow("Cost readers cannot change recorded turns");
+  hooks.before("agent.turn_start", ({ request }) => ({ ...request, accountId: "another" }));
+  await expect(
+    hooks.invoke(
+      "turn",
+      "before",
+      "agent.turn_start",
+      {
+        agentId: "fixture",
+        provider: "claude",
+        accountId: "original",
+        labels: {},
+      },
+      paseo,
+    ),
+  ).rejects.toThrow("agent.turn_start hooks cannot change the request");
+});

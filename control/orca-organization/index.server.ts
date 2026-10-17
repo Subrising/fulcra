@@ -40,6 +40,9 @@ import { operatorInvokeRpc } from "./shared/operator-invoke";
 import { operatorInvoke } from "./server/operator-invoke.mjs";
 import {
   recordAccountCost,
+  assertApiSpendAllowed,
+  readBilling,
+  readSessionBilling,
   recordBillingError,
   isBillingError,
 } from "./server/account-billing.mjs";
@@ -582,14 +585,38 @@ export default function contribute(
             await recordAccountCost(poolRoot(), {
               id: `turn:${event.agent.id}:${event.turnId}`,
               accountId,
+              sessionId: event.agent.id,
               costUsd: event.usage.turnCostUsd ?? event.usage.totalCostUsd,
-              runtimeSessionId: event.usage.recorded?.runtimeSessionId,
-              cumulativeUsd: event.usage.totalCostUsd,
+              ...(event.usage.turnCostUsd === undefined
+                ? {
+                    runtimeSessionId: event.usage.recorded?.runtimeSessionId,
+                    cumulativeUsd: event.usage.totalCostUsd,
+                  }
+                : {}),
             });
           if (event.outcome.kind === "failed" && isBillingError(event.outcome.error.message))
             await recordBillingError(poolRoot(), accountId, undefined, "session.billing_error");
         })
       : undefined;
+  const stopCostRead = server.before("agent.cost_read", ({ request }) =>
+    readSessionBilling(poolRoot(), request),
+  );
+  const stopSpendGuard = server.before("agent.turn_start", async ({ request }) => {
+    // Recover a missed billing event from the daemon's durable result records before admission.
+    const billing = readBilling(poolRoot());
+    for (const [turnId, row] of Object.entries(request.costRecords ?? {})) {
+      const id = `turn:${request.agentId}:${turnId}`;
+      if (row.accountId && !billing.calls[id])
+        await recordAccountCost(poolRoot(), {
+          id,
+          accountId: row.accountId,
+          costUsd: row.amountUsd,
+          at: row.at,
+          sessionId: request.agentId,
+        });
+    }
+    assertApiSpendAllowed(poolRoot(), request);
+  });
   const stopPool: unknown =
     typeof server.before === "function"
       ? server.before("agent.session_open", sessionOpenHook({ root: poolRoot }) as any)
@@ -988,6 +1015,8 @@ export default function contribute(
     workMapProjects.clear();
     workMap = undefined;
     stopBilling?.();
+    stopSpendGuard();
+    stopCostRead();
     usage = undefined;
     fleet = undefined;
     projects = undefined;

@@ -122,8 +122,8 @@ test("95% switches all pooled Claude sessions after busy turns finish and notifi
     store: { get: () => ({ mode: "delegated", generation: 1 }) },
     native: { snapshot: async () => ({ status: "idle" }) },
     wakes: {
-      accountBudget: () => {
-        notices++;
+      accountBudget: (_key, payload) => {
+        if (!payload.scope) notices++;
         return 1;
       },
     },
@@ -286,4 +286,115 @@ test("L3/L4: advancing retention preserves the native cursor across account and 
   });
   assert.equal(accountSpend(root, readAccounts(root).accounts[0]).usedUsd, 7);
   assert.equal(Object.hasOwn(readBilling(root).calls, "old-native-turn"), false);
+});
+
+test("daily cap survives restart, resets at UTC midnight, and leaves subscription accounts alone", async (t) => {
+  const { dailySpend, assertApiSpendAllowed } = await import("./account-billing.mjs");
+  const root = world(t);
+  const a = await addAccount(root, { provider: "claude", name: "API" });
+  await setAccount(root, a.id, {
+    credentialKind: "api-key",
+    dailyLimitUsd: 40,
+    budget: { limitUsd: 200, startAt: "2026-10-01T00:00:00Z" },
+  });
+  const at = "2026-10-17T12:00:00.000Z",
+    now = Date.parse(at);
+  await recordAccountCost(root, { id: "today", accountId: a.id, costUsd: 40, at });
+  const account = readAccounts(root).accounts[0];
+  assert.equal(dailySpend(root, account, readBilling(root), now).usedUsd, 40);
+  const input = { provider: "claude", accountId: a.id };
+  assert.throws(() => assertApiSpendAllowed(root, input, now), /daily UTC cost cap reached/);
+  assert.doesNotThrow(() => assertApiSpendAllowed(root, input, Date.parse("2026-10-18T00:00:00Z")));
+  await setAccount(root, a.id, { credentialKind: "subscription" });
+  assert.doesNotThrow(() => assertApiSpendAllowed(root, input, now));
+});
+
+test("account and session caps refuse at the exact boundary", async (t) => {
+  const { assertApiSpendAllowed } = await import("./account-billing.mjs");
+  const root = world(t);
+  const a = await addAccount(root, { provider: "claude", name: "API" });
+  await setAccount(root, a.id, {
+    credentialKind: "api-key",
+    dailyLimitUsd: 100,
+    budget: { limitUsd: 20, startAt: "2026-10-01T00:00:00Z" },
+  });
+  const input = {
+    provider: "claude",
+    accountId: a.id,
+    labels: { "fulcra.session-cost-cap-usd": "15" },
+    sessionCost: { totalUsd: 15 },
+  };
+  assert.throws(() => assertApiSpendAllowed(root, input), /session cost cap reached/);
+  assert.doesNotThrow(() =>
+    assertApiSpendAllowed(root, { ...input, sessionCost: { totalUsd: 14.99 } }),
+  );
+  await recordAccountCost(root, { id: "cap", accountId: a.id, costUsd: 20 });
+  assert.throws(
+    () => assertApiSpendAllowed(root, { provider: "claude", accountId: a.id }),
+    /account cost cap reached/,
+  );
+  assert.doesNotThrow(() => assertApiSpendAllowed(root, { provider: "codex", accountId: a.id }));
+});
+
+test("50% and 80% warnings carry affected sessions and remain once after restart", async (t) => {
+  const root = world(t);
+  const a = await addAccount(root, { provider: "claude", name: "API" });
+  await setAccount(root, a.id, { credentialKind: "api-key" });
+  const id = randomUUID();
+  await assign(root, id, "claude");
+  const notices = [];
+  const control = {
+    wakes: {
+      accountBudget: (key, payload) => {
+        notices.push({ key, payload });
+        return 2;
+      },
+    },
+  };
+  await recordAccountCost(root, { id: "half", accountId: a.id, costUsd: 20 });
+  await createAccountBudgets(control, root).check();
+  assert.deepEqual(
+    notices.map((n) => n.payload.threshold),
+    [0.5],
+  );
+  assert.deepEqual(notices[0].payload.sessions, [id]);
+  await recordAccountCost(root, { id: "eighty", accountId: a.id, costUsd: 12 });
+  await createAccountBudgets(control, root).check();
+  assert.deepEqual(
+    notices.map((n) => n.payload.threshold),
+    [0.5, 0.8],
+  );
+  await createAccountBudgets(control, root).check();
+  assert.equal(notices.length, 2);
+});
+
+test("existing recorded turns restore session totals without another paid turn", async (t) => {
+  const { readSessionBilling } = await import("./account-billing.mjs");
+  const root = world(t),
+    id = randomUUID();
+  const a = await addAccount(root, { provider: "claude", name: "API A" });
+  const b = await addAccount(root, { provider: "claude", name: "API B" });
+  for (const [turn, accountId, costUsd, at] of [
+    ["one", a.id, 9.65, "2026-10-17T01:00:00Z"],
+    ["two", b.id, 7.87, "2026-10-17T02:00:00Z"],
+    ["three", b.id, 0, "2026-10-17T03:00:00Z"],
+  ])
+    await recordAccountCost(root, {
+      id: `turn:${id}:${turn}`,
+      accountId,
+      costUsd,
+      at,
+      sessionId: id,
+    });
+  const input = { agentId: id, provider: "claude", runtimeSessionId: "native" };
+  const restored = readSessionBilling(root, input);
+  assert.deepEqual(
+    Object.values(restored.records.turns).map((row) => row.amountUsd),
+    [9.65, 7.87, 0],
+  );
+  assert.deepEqual(readSessionBilling(root, restored), restored);
+  assert.equal(
+    readSessionBilling(root, { ...input, agentId: randomUUID() }).records.turns.one,
+    undefined,
+  );
 });

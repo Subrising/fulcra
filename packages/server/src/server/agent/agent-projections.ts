@@ -1,3 +1,4 @@
+import { sessionCost } from "./session-cost.js";
 import { stripInternalPaseoMcpServer } from "./runtime-mcp-config.js";
 import { withoutPublicBaselineTransport } from "./host-public-baseline.js";
 import { RecordedUsageSchema } from "@getpaseo/protocol/recorded-usage";
@@ -78,6 +79,7 @@ export function toStoredAgentRecord(
   const runtimeInfo = withoutPublicBaselineTransport(sanitizeRuntimeInfo(agent.runtimeInfo));
 
   return {
+    costRecords: agent.costRecords,
     id: agent.id,
     provider: agent.provider,
     cwd: agent.cwd,
@@ -165,6 +167,8 @@ export function toAgentPayload(
     })(),
   };
 
+  const cost = sessionCost(agent.costRecords);
+  if (cost) payload.sessionCost = cost;
   const usage = sanitizeUsage(agent.lastUsage);
   if (usage !== undefined) {
     payload.lastUsage = usage;
@@ -272,6 +276,7 @@ export function buildStoredAgentPayload(
   );
 
   return {
+    ...(sessionCost(record.costRecords) ? { sessionCost: sessionCost(record.costRecords) } : {}),
     id: record.id,
     provider: record.provider,
     cwd: record.cwd,

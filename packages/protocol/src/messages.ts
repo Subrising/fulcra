@@ -1,5 +1,5 @@
 import { ProjectDispatchMapSchema } from "./project-dispatch.js";
-import { RecordedUsageSchema } from "./recorded-usage.js";
+import { RecordedUsageSchema, SessionCostSchema } from "./recorded-usage.js";
 import { GitAiDraftRequestSchema, GitAiDraftResponseSchema } from "./git-ai-draft.js";
 import {
   NativeArtifactContentReadInputSchema,
@@ -967,6 +967,7 @@ export const AgentSnapshotPayloadSchema = z.object({
   persistence: AgentPersistenceHandleSchema.nullable(),
   runtimeInfo: AgentRuntimeInfoSchema.optional(),
   lastUsage: AgentUsageSchema.optional(),
+  sessionCost: SessionCostSchema.optional(),
   lastError: z.string().optional(),
   title: z.string().nullable(),
   labels: z.record(z.string(), z.string()).default({}),
@@ -7470,6 +7471,7 @@ export const ProviderUsageListResponseMessageSchema = z.object({
     requestId: z.string(),
     fetchedAt: z.string(),
     providers: z.array(ProviderUsageSchema),
+    sessionCost: SessionCostSchema.optional(),
     // update-7c: present when the request asked for `accounts` and the daemon has a pool.
     accounts: z.array(AccountUsageRowSchema).optional(),
     observationOnly: z.boolean().optional(),
@@ -7573,7 +7575,11 @@ export const UsageListReportsUpdateMessageSchema = z.object({
 });
 export const UsageListReportsResponseMessageSchema = z.object({
   type: z.literal("usage.list_reports.response"),
-  payload: z.object({ requestId: z.string(), error: z.string().nullable() }),
+  payload: z.object({
+    requestId: z.string(),
+    error: z.string().nullable(),
+    sessionCost: SessionCostSchema.optional(),
+  }),
 });
 
 const AgentSlashCommandSchema = z.object({

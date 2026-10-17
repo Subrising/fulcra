@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { accountSpend } from "./account-billing.mjs";
+import { accountSpend, dailySpend } from "./account-billing.mjs";
 import { accountLimit, readAccounts } from "./accounts.mjs";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import {
@@ -94,11 +94,21 @@ export function createPoolUsage(root: () => string, now = Date.now) {
       if (!account.enabled) return unavailable("This pooled account is disabled.");
       const stored = readAccounts(root()).accounts.find((a) => a.id === account.id);
       const spend = stored && accountSpend(root(), stored);
-      if (spend)
+      if (spend) {
+        const daily = dailySpend(root(), stored!, undefined, now())!;
         return {
           status: "available",
           windows: [],
           balances: [
+            {
+              id: "api-daily-budget",
+              label: "Daily API cap (UTC)",
+              unit: "usd",
+              used: daily.usedUsd,
+              limit: daily.limitUsd,
+              remaining: Math.max(0, daily.limitUsd - daily.usedUsd),
+              tone: toneFromUsedPct((daily.usedUsd / daily.limitUsd) * 100),
+            },
             {
               id: "api-budget",
               label: "API budget",
@@ -122,6 +132,7 @@ export function createPoolUsage(root: () => string, now = Date.now) {
             },
           ],
         };
+      }
       const parsed = z
         .object({ v: z.literal(1), reports: z.array(rowSchema) })
         .safeParse(readJson(join(root(), "accounts", "usage-reports.json")));

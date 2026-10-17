@@ -1,3 +1,4 @@
+import { sessionCost } from "./agent/session-cost.js";
 import { noteDeliveredReport } from "./lead-events.js";
 import { archiveReportCount } from "./archive-observation.js";
 // FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
@@ -1150,6 +1151,13 @@ export class Session {
       logger: this.sessionLogger,
     });
     this.accountUsageSession = new AccountUsageSession({
+      refreshSessionCost: (id) => this.agentManager.refreshSessionCost(id),
+      sessionCost: (id) => {
+        const agent = this.agentManager.getAgent(id);
+        return agent && this.isProviderVisibleToClient(agent.provider)
+          ? sessionCost(agent.costRecords)
+          : undefined;
+      },
       sessionUsage: async (agentId) => {
         const agent = this.agentManager.getAgent(agentId);
         if (!agent || !this.isProviderVisibleToClient(agent.provider)) return null;
@@ -1170,6 +1178,7 @@ export class Session {
       logger: this.sessionLogger,
     });
     this.usageSession = new UsageSession({
+      sessionCost: (id) => this.agentManager.refreshSessionCost(id),
       emit: (msg) => this.emit(msg),
       runtime: pluginRuntime,
       logger: this.sessionLogger,
@@ -9140,6 +9149,8 @@ export class Session {
       });
       return;
     }
+
+    agent.sessionCost = await this.agentManager.refreshSessionCost(agent.id);
 
     const project = agent.workspaceId
       ? await this.buildProjectPlacementForWorkspaceId(agent.workspaceId)

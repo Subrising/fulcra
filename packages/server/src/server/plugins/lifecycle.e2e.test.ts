@@ -584,3 +584,179 @@ test("reloading a plugin does not send on a closed IPC channel", async () => {
     await rm(pluginDirectory, { recursive: true, force: true });
   }
 }, 60_000);
+
+test("scratch daemon keeps recorded session costs across restart and refuses a capped API turn", async () => {
+  const { createTestAgentClient } = await import("../test-utils/fake-agent-client.js");
+  const { randomUUID } = await import("node:crypto");
+  const root = await mkdtemp(path.join(tmpdir(), "session-cost-daemon-"));
+  const plugin = path.join(root, "budget-plugin");
+  const account = randomUUID();
+  let started = 0;
+  const costs = [9.65, 0];
+  const provider = createTestAgentClient("claude", {
+    onStartTurn: () => {
+      started++;
+    },
+  });
+  function instrument(session: Awaited<ReturnType<typeof provider.createSession>>) {
+    const subscribe = session.subscribe.bind(session);
+    // API launches have no OAuth usage credential. Their immutable binding owns account identity.
+    session.usageCredential = () => null;
+    session.limitResumeAccountBinding = () => `pool:${account}`;
+    session.subscribe = (callback) =>
+      subscribe((event) => {
+        if (event.type === "turn_completed") {
+          const cost = costs.shift() ?? 0;
+          callback({
+            ...event,
+            usage: {
+              totalCostUsd: cost,
+              turnCostUsd: cost,
+              recorded: {
+                provider: "claude",
+                source: "claude-sdk-result",
+                observedAt: "2026-10-17T00:00:00.000Z",
+                runtimeSessionId: "native-fixture",
+                estimate: {
+                  scope: "provider-query",
+                  kind: "provider-api-estimate",
+                  amountUsd: cost,
+                },
+              },
+            },
+          });
+        } else callback(event);
+      });
+    return session;
+  }
+  const create = provider.createSession.bind(provider),
+    resume = provider.resumeSession.bind(provider);
+  provider.createSession = async (...args) => instrument(await create(...args));
+  provider.resumeSession = async (...args) => instrument(await resume(...args));
+  let daemon = await createTestPaseoDaemon({
+    paseoHomeRoot: root,
+    cleanup: false,
+    agentClients: { claude: provider },
+  });
+  let client = new DaemonClient({
+    url: `ws://127.0.0.1:${daemon.port}/ws`,
+    appVersion: resolveDaemonVersion(),
+  });
+  try {
+    await mkdir(plugin);
+    await cp(path.resolve("../../control/orca-organization/server"), path.join(plugin, "server"), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(plugin, "paseo-plugin.json"),
+      JSON.stringify({ id: "cost-guard-fixture", requirements: { paseo: ">=0.8.0" } }),
+    );
+    await writeFile(
+      path.join(plugin, "index.server.ts"),
+      `
+import { assertApiSpendAllowed, readSessionBilling } from "./server/account-billing.mjs";
+export default function(server) {
+ server.before("agent.cost_read", ({ request }) => readSessionBilling(${JSON.stringify(path.join(root, "pool"))}, request));
+ server.before("agent.turn_start", ({ request }) => assertApiSpendAllowed(${JSON.stringify(path.join(root, "pool"))}, request));
+ return () => {};
+}
+`,
+    );
+    const { addAccount, setAccount } =
+      await import("../../../../../control/orca-organization/server/accounts.mjs");
+    const pool = path.join(root, "pool");
+    const a = await addAccount(pool, { provider: "claude", name: "Fixture API" });
+    // The fixture account ID is the launch identity returned by this provider.
+    const { update } = await import("../../../../../control/orca-organization/server/accounts.mjs");
+    await update(pool, (s) => {
+      s.accounts[0].id = account;
+    });
+    await setAccount(pool, account, {
+      credentialKind: "api-key",
+      budget: { limitUsd: 200, startAt: "2026-10-01T00:00:00Z" },
+    });
+    expect(a.provider).toBe("claude");
+    await client.connect();
+    await client.fetchAgents({ subscribe: {} });
+    await client.patchDaemonConfig({ pluginsEnabled: true });
+    await client.installDirectoryPlugin(plugin);
+    const agent = await client.createAgent({
+      provider: "claude",
+      cwd: root,
+      modeId: "bypassPermissions",
+    });
+    await client.sendMessage(agent.id, "First fixture turn");
+    await client.waitForAgentUpsert(agent.id, (s) => s.status === "idle");
+    await client.sendMessage(agent.id, "Zero cost fixture turn");
+    const snapshot = await client.waitForAgentUpsert(agent.id, (s) => s.status === "idle");
+    expect(snapshot.sessionCost).toMatchObject({ totalUsd: 9.65, lastTurnUsd: 0 });
+    expect(snapshot.sessionCost?.accounts).toEqual([{ accountId: account, totalUsd: 9.65 }]);
+    await client.close();
+    await daemon.close();
+    daemon = await createTestPaseoDaemon({
+      paseoHomeRoot: root,
+      cleanup: false,
+      agentClients: { claude: provider },
+      pluginsEnabled: true,
+      plugins: { "cost-guard-fixture": { source: "directory", path: plugin, enabled: true } },
+    });
+    client = new DaemonClient({
+      url: `ws://127.0.0.1:${daemon.port}/ws`,
+      appVersion: resolveDaemonVersion(),
+    });
+    await client.connect();
+    await client.fetchAgents({ subscribe: {} });
+    const restored = await client.fetchAgent(agent.id);
+    expect(restored?.agent?.sessionCost).toMatchObject({ totalUsd: 9.65, lastTurnUsd: 0 });
+    const { recordAccountCost } =
+      await import("../../../../../control/orca-organization/server/account-billing.mjs");
+    const legacy = await client.createAgent({
+      provider: "claude",
+      cwd: root,
+      modeId: "bypassPermissions",
+    });
+    await recordAccountCost(pool, {
+      id: `turn:${legacy.id}:legacy-one`,
+      accountId: account,
+      costUsd: 4,
+      at: "2026-10-17T01:00:00Z",
+    });
+    await recordAccountCost(pool, {
+      id: `turn:${legacy.id}:legacy-two`,
+      accountId: account,
+      costUsd: 5.65,
+      at: "2026-10-17T02:00:00Z",
+    });
+    const imported = await client.fetchAgent(legacy.id);
+    expect(imported?.agent.sessionCost).toMatchObject({ totalUsd: 9.65, lastTurnUsd: 5.65 });
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const inspected = await promisify(execFile)(
+      process.execPath,
+      [
+        path.resolve("../cli/dist/index.js"),
+        "--host",
+        `127.0.0.1:${daemon.port}`,
+        "inspect",
+        legacy.id,
+        "--json",
+      ],
+      { env: { ...process.env, PASEO_HOME: daemon.paseoHome }, timeout: 15_000 },
+    );
+    expect(inspected.stdout).toContain('"SessionCost"');
+    expect(inspected.stdout).toContain("9.65");
+    const usage = await client.listUsageReports({ agentId: legacy.id });
+    expect(usage.sessionCost).toMatchObject({ totalUsd: 9.65, lastTurnUsd: 5.65 });
+    // Restore, then use the native label update to set the test worker's cap.
+    await client.fetchAgents({ subscribe: {} });
+    await client.updateAgent(agent.id, { labels: { "fulcra.session-cost-cap-usd": "9.65" } });
+    await expect(client.sendMessage(agent.id, "This must not start")).rejects.toThrow(
+      /session cost cap/,
+    );
+    expect(started).toBe(2);
+  } finally {
+    await client.close();
+    await daemon.close();
+    await rm(root, { recursive: true, force: true });
+  }
+}, 60_000);

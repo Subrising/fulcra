@@ -1,9 +1,11 @@
+import type { SessionCost } from "@getpaseo/protocol/recorded-usage";
 import type { ListUsageReportsOptions } from "../../plugins/usage-sources/index.js";
 import type pino from "pino";
 import type { ProviderUsage, UsageReportEntry } from "@getpaseo/protocol/messages";
 import type { SessionInboundMessage, SessionOutboundMessage } from "../../messages.js";
 
 export interface UsageSessionOptions {
+  sessionCost?: (agentId: string) => SessionCost | undefined | Promise<SessionCost | undefined>;
   emit(message: SessionOutboundMessage): void;
   runtime?: {
     listUsageReports(options: ListUsageReportsOptions): Promise<UsageReportEntry[]>;
@@ -32,7 +34,11 @@ export class UsageSession {
       });
       this.options.emit({
         type: "usage.list_reports.response",
-        payload: { requestId: msg.requestId, error: null },
+        payload: {
+          requestId: msg.requestId,
+          error: null,
+          ...(msg.agentId ? { sessionCost: await this.options.sessionCost?.(msg.agentId) } : {}),
+        },
       });
     } catch (error) {
       this.options.emit({
