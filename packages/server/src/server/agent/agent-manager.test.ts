@@ -9895,7 +9895,7 @@ test("native archive and restore release the loaded session writer", async () =>
     // Opening archived history can retain a writer, including records archived by older daemons.
     await ensureAgentLoaded(agent.id, { agentManager: manager, agentStorage: storage, logger });
     expect(client.session?.closed).toBe(false);
-    await manager.unarchiveSnapshot(agent.id);
+    await manager.trustedPlugins.rpc(undefined, () => manager.unarchiveSnapshot(agent.id));
     expect(client.unarchivedHandles).toHaveLength(1);
     expect((await storage.get(agent.id))?.archivedAt).toBeNull();
     expect(client.session?.closed).toBe(true);
@@ -9960,10 +9960,12 @@ test("unarchiveSnapshot unarchives native provider storage before clearing archi
   await manager.archiveAgent(agent.id);
   client.readArchivedAtDuringUnarchive = async () => (await storage.get(agent.id))?.archivedAt;
 
-  const unarchived = await manager.unarchiveSnapshot(agent.id, {
-    workspaceId: "ws-restored",
-    labels: { [PARENT_AGENT_ID_LABEL]: null, source: "reimport" },
-  });
+  const unarchived = await manager.trustedPlugins.rpc(undefined, () =>
+    manager.unarchiveSnapshot(agent.id, {
+      workspaceId: "ws-restored",
+      labels: { [PARENT_AGENT_ID_LABEL]: null, source: "reimport" },
+    }),
+  );
   const stored = await storage.get(agent.id);
 
   expect(unarchived).toBe(true);
@@ -10001,7 +10003,9 @@ test("unarchiveSnapshotByHandle unarchives native provider storage for the match
     throw new Error("expected archived snapshot to have persistence");
   }
 
-  await manager.unarchiveSnapshotByHandle(archived.persistence);
+  await manager.trustedPlugins.rpc(undefined, () =>
+    manager.unarchiveSnapshotByHandle(archived.persistence),
+  );
 
   const stored = await storage.get(agent.id);
   expect(client.unarchivedHandles).toEqual(client.archivedHandles);
@@ -10031,7 +10035,9 @@ test("unarchiveSnapshot keeps the stored record archived when native unarchive f
   await manager.archiveAgent(agent.id);
   client.unarchiveFailure = new Error("provider still archived");
 
-  await expect(manager.unarchiveSnapshot(agent.id)).rejects.toThrow("provider still archived");
+  await expect(
+    manager.trustedPlugins.rpc(undefined, () => manager.unarchiveSnapshot(agent.id)),
+  ).rejects.toThrow("provider still archived");
 
   const stored = await storage.get(agent.id);
   expect(stored?.archivedAt).toEqual(expect.any(String));
@@ -12835,9 +12841,9 @@ test("concurrent native restores run once before resuming the same agent", async
     });
     agentId = created.id;
     await manager.archiveAgent(agentId);
-    const first = manager.unarchiveSnapshot(agentId);
+    const first = manager.trustedPlugins.rpc(undefined, () => manager.unarchiveSnapshot(agentId));
     await restoreStarted.promise;
-    const second = manager.unarchiveSnapshot(agentId);
+    const second = manager.trustedPlugins.rpc(undefined, () => manager.unarchiveSnapshot(agentId));
     const load = ensureAgentLoaded(agentId, {
       agentManager: manager,
       agentStorage: storage,
@@ -15282,11 +15288,13 @@ test("FU-153 restore publishes the original record and native failure keeps its 
     await manager.archiveAgent(agent.id);
     const archived = (await storage.get(agent.id))!;
     client.unarchiveFailure = new Error("Native restore failed");
-    await expect(manager.unarchiveSnapshot(agent.id)).rejects.toThrow("Native restore failed");
+    await expect(
+      manager.trustedPlugins.rpc(undefined, () => manager.unarchiveSnapshot(agent.id)),
+    ).rejects.toThrow("Native restore failed");
     expect(await storage.get(agent.id)).toEqual(archived);
     client.unarchiveFailure = null;
     updates.length = 0;
-    await manager.unarchiveSnapshot(agent.id);
+    await manager.trustedPlugins.rpc(undefined, () => manager.unarchiveSnapshot(agent.id));
     expect(updates).toContainEqual(
       expect.objectContaining({
         type: "agent_state",
@@ -15325,7 +15333,9 @@ test("FU-153 restore refuses an archived original when a duplicate record remain
     await manager.archiveAgent(original.id);
     const before = (await storage.get(original.id))!;
     await storage.upsert({ ...before, id: randomUUID(), archivedAt: null });
-    await expect(manager.unarchiveSnapshot(original.id)).rejects.toThrow("another live record");
+    await expect(
+      manager.trustedPlugins.rpc(undefined, () => manager.unarchiveSnapshot(original.id)),
+    ).rejects.toThrow("another live record");
     expect(await storage.get(original.id)).toEqual(before);
     expect(client.unarchivedHandles).toHaveLength(0);
     expect(await storage.list()).toHaveLength(2);
@@ -15353,8 +15363,8 @@ test("FU-153 concurrent explicit restores cannot activate archived duplicate rec
     const duplicate = randomUUID();
     await storage.upsert({ ...(await storage.get(original.id))!, id: duplicate });
     const outcomes = await Promise.allSettled([
-      manager.unarchiveSnapshot(original.id),
-      manager.unarchiveSnapshot(duplicate),
+      manager.trustedPlugins.rpc(undefined, () => manager.unarchiveSnapshot(original.id)),
+      manager.trustedPlugins.rpc(undefined, () => manager.unarchiveSnapshot(duplicate)),
     ]);
     expect(outcomes.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     expect(outcomes.filter((result) => result.status === "rejected")).toHaveLength(1);
