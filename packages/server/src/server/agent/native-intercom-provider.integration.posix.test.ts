@@ -2509,6 +2509,7 @@ async function sessionWire(f: Awaited<ReturnType<typeof fixture>>) {
     agentManager: f.manager,
     agentStorage: {
       list: async () => [],
+      get: f.agentStorage.get.bind(f.agentStorage),
       noticePausePath: f.agentStorage.noticePausePath,
     },
     sessionLogger: createTestLogger(),
