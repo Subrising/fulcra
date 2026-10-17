@@ -2507,7 +2507,10 @@ async function sessionWire(f: Awaited<ReturnType<typeof fixture>>) {
   for (const [key, value] of Object.entries({
     agentCallerSources: new WeakMap(),
     agentManager: f.manager,
-    agentStorage: { list: async () => [] },
+    agentStorage: {
+      list: async () => [],
+      noticePausePath: f.agentStorage.noticePausePath,
+    },
     sessionLogger: createTestLogger(),
     delivery,
     authorization,
