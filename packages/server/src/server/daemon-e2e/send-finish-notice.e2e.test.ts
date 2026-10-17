@@ -432,3 +432,42 @@ test.each([false, true])(
     await f.finish();
   },
 );
+
+test("a paused follow-up keeps prior spend and reports the resumed cumulative total", async () => {
+  const f = await fixture(PARENT_AGENT_ID_LABEL, "Child", [1.25, 2.75]);
+  await f.client.sendAgentMessage(f.child.id, "earlier work", {
+    sender: { agentId: f.parent.id },
+  });
+  await f.finish();
+  await vi.waitFor(async () =>
+    expect(await f.storage.getFinishNotice(f.child.id)).toMatchObject({
+      status: "delivered",
+      sessionCost: { totalUsd: 1.25 },
+    }),
+  );
+  const before = await f.storage.getFinishNotice(f.child.id);
+  const inputsBefore = f.prompts.length;
+  await writeFile(
+    f.storage.noticePausePath,
+    JSON.stringify({
+      pausedProviders: ["codex"],
+      exceptSessions: [f.parent.id],
+    }),
+  );
+  const arm = vi.spyOn(f.storage, "rearmFinishNotice");
+  for (const text of ["held follow-up one", "held follow-up two"])
+    await f.client.sendAgentMessage(f.child.id, text, { sender: { agentId: f.parent.id } });
+  expect(f.prompts).toHaveLength(inputsBefore);
+  expect(arm).not.toHaveBeenCalled();
+  expect(await f.storage.getFinishNotice(f.child.id)).toEqual(before);
+  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: [] }));
+  await vi.waitFor(() => expect(f.notices()).toHaveLength(2));
+  await f.manager.waitForAgentEvent(f.parent.id);
+  await vi.waitFor(async () =>
+    expect(await f.storage.getFinishNotice(f.child.id)).toMatchObject({
+      status: "delivered",
+      sessionCost: { totalUsd: 4 },
+    }),
+  );
+  expect(f.notices()[1]).toContain("Session total spend: US$4.000000.");
+});
