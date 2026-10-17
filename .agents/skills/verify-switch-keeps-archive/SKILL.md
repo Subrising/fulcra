@@ -13,6 +13,7 @@ From `packages/server`, run:
 
 ```sh
 npx vitest run src/server/archive-maintenance.e2e.test.ts src/server/agent/agent-loading.test.ts src/server/held-sends.trust.test.ts src/server/agent/agent-prompt.test.ts
+npx vitest run src/server/daemon-e2e/reloaded-cli-send.e2e.test.ts src/server/revive-on-restart.test.ts
 ```
 
 From the repository root, run:
@@ -38,6 +39,9 @@ Explicit restore must keep the same session ID and retain protected app confirma
 Send and resume must refuse archived sessions for every caller.
 An older app must receive an error that names worker reload and an app update.
 Workspace recovery must preserve each archived session.
+After a scratch restart, queued sends must refuse an archived receiver before pause or hold handling.
+Check owner WebSocket requests and lead CLI requests with the scratch provider paused and unpaused.
+Both queues must stay empty. The archived record must stay unchanged. The provider must receive no prompt.
 
 For the two private ops sources, use `control/ops/README.md`.
 Retain test output with the task evidence.

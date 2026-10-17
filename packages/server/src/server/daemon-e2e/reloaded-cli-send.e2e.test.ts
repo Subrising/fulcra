@@ -21,6 +21,9 @@ import { hashDaemonPassword } from "../auth.js";
 import { sendPromptToAgent } from "../agent/agent-prompt.js";
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import type { AgentPromptInput } from "../agent/agent-sdk-types.js";
+import { queuedAgentMessagesFor } from "../queued-agent-messages.js";
+import { heldSendsFor } from "../held-sends.js";
+import { DaemonClient } from "../test-utils/daemon-client.js";
 
 vi.mock("../limit-resume/service.js", async (original) => ({
   ...(await original<typeof import("../limit-resume/service.js")>()),
@@ -32,6 +35,108 @@ const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const close of cleanups.splice(0).toReversed()) await close();
 });
+
+test.each([false, true])(
+  "queued sends refuse an archived child after restart (provider paused: %s)",
+  async (paused) => {
+    const root = realpathSync(await mkdtemp(path.join(tmpdir(), "archived-cli-queue-")));
+    const staticDir = path.join(root, "static");
+    await mkdir(staticDir);
+    let daemon: TestPaseoDaemon | undefined;
+    cleanups.push(async () => {
+      await daemon?.close();
+      await rm(root, { recursive: true, force: true });
+    });
+    const options = { paseoHomeRoot: root, staticDir, cleanup: false };
+    daemon = await createTestPaseoDaemon({
+      ...options,
+      agentClients: { claude: createTestAgentClient("claude") },
+    });
+    const manager = daemon.daemon.agentManager;
+    const config = { provider: "claude", cwd: root };
+    const parent = await manager.createAgent(config, undefined, {});
+    const child = await manager.createAgent(config, undefined, {
+      labels: { [PARENT_AGENT_ID_LABEL]: parent.id },
+    });
+    await manager.trustedPlugins.daemon(() => manager.archiveAgent(child.id));
+    await manager.flush();
+    const archivedAt = (await daemon.daemon.agentStorage.get(child.id))!.archivedAt;
+    expect(archivedAt).toBeTruthy();
+    const pausePath = daemon.daemon.agentStorage.noticePausePath;
+    await daemon.close();
+    daemon = undefined;
+    // A stale stop record must not reopen an archived session.
+    await recordOpenSessions({
+      paseoHome: path.join(root, ".paseo"),
+      agents: [
+        { id: parent.id, lifecycle: "idle" },
+        { id: child.id, lifecycle: "idle" },
+      ],
+    });
+    if (paused)
+      writePrivateFileAtomicSync(pausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+    const prompts: AgentPromptInput[] = [];
+    daemon = await createTestPaseoDaemon({
+      ...options,
+      agentClients: {
+        claude: createTestAgentClient("claude", { onStartTurn: (p) => prompts.push(p) }),
+      },
+    });
+    const restored = daemon.daemon;
+    const before = await restored.agentStorage.get(child.id);
+    expect(before?.archivedAt).toBe(archivedAt);
+    const logger = createTestLogger();
+    const queue = queuedAgentMessagesFor({
+      agentManager: restored.agentManager,
+      agentStorage: restored.agentStorage,
+      logger,
+    });
+    const owner = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws` });
+    cleanups.push(() => owner.close());
+    await owner.connect();
+    for (const send of [
+      () => owner.sendAgentMessage(child.id, "Do not restore or hold", { queue: true }),
+      () =>
+        promisify(execFile)(
+          process.execPath,
+          [
+            "--import",
+            "tsx",
+            path.resolve("../cli/src/index.ts"),
+            "send",
+            child.id,
+            "--queue",
+            "--no-wait",
+            "--prompt",
+            "Do not restore or hold",
+            "--host",
+            `127.0.0.1:${daemon.port}`,
+            "--json",
+          ],
+          {
+            timeout: 15000,
+            env: {
+              ...process.env,
+              PASEO_HOME: daemon.paseoHome,
+              PASEO_AGENT_ID: parent.id,
+              PASEO_AGENT_CALLER_WITNESS: "",
+              PASEO_WORKSPACE_ID: "",
+              PASEO_PASSWORD: "",
+            },
+          },
+        ),
+    ]) {
+      await expect(send()).rejects.toThrow("The receiver is archived. Restore it first.");
+      expect(queue.pending(child.id)).toBe(0);
+      expect(heldSendsFor(restored.agentManager, logger).pending(child.id)).toBe(0);
+      expect(await restored.agentStorage.get(child.id)).toEqual(before);
+      expect(await restored.agentStorage.getFinishNotice(child.id)).toBeNull();
+      expect(restored.agentManager.getAgent(child.id)).toBeNull();
+      expect(prompts).toEqual([]);
+    }
+  },
+  60000,
+);
 
 test.each(["none", "local", "remote", "paused Claude"])(
   "CLI starts a reloaded idle child and notifies its parent with blocked recovery: %s",
