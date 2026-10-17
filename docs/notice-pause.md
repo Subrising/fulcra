@@ -43,12 +43,13 @@ Set `FULCRA_NOTICE_CONFIG` to select an isolated policy directory for a test.
 
 Optional host settings are:
 
-| Setting                | Purpose                                                     |
-| ---------------------- | ----------------------------------------------------------- |
-| `defaultHome`          | Select the existing native daemon home.                     |
-| `daemonPauseFiles`     | Update the listed daemon policy files with the host policy. |
-| `roles.main-assistant` | Bind that role alias to a complete session ID.              |
-| `daemonWatch`          | Let the installed native watcher own resume delivery.       |
+| Setting                | Purpose                                                        |
+| ---------------------- | -------------------------------------------------------------- |
+| `deliveryCli`          | Use the current stable CLI when an old build has been retired. |
+| `defaultHome`          | Select the existing native daemon home.                        |
+| `daemonPauseFiles`     | Update the listed daemon policy files with the host policy.    |
+| `roles.main-assistant` | Bind that role alias to a complete session ID.                 |
+| `daemonWatch`          | Let the installed native watcher own resume delivery.          |
 
 On Macs, a native `WatchPaths` job can drain notices outside a model process.
 On Windows, `--resume` drains the saved batches directly.

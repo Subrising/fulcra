@@ -1,3 +1,4 @@
+import { writeFileSync } from "node:fs";
 import { afterEach, expect, test, vi } from "vitest";
 import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -156,6 +157,7 @@ async function fixture(
     busy,
     send,
     sendWithProvenance,
+    asPlugin: () => Object.assign(session, { pluginOriginId: "fixture" }),
     pending,
     endTurnIn,
     sourcesFor,
@@ -1003,4 +1005,34 @@ test("paused notices combine within each original sender", async () => {
     `Message 1 from ${f.sender.id}:\nfirst A\n\nMessage 2 from ${f.sender.id}:\nsecond A`,
   );
   expect(f.prompts[1]).toBe("only B");
+});
+
+test("paused plugin sessions cannot become owner notices without a wire token", async () => {
+  const f = await fixture("claude");
+  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+  f.asPlugin();
+  await f.send("retain the delegated operation");
+  expect(f.pending()).toBe(0);
+  expect(f.prompts).toEqual([]);
+  expect(f.messages).toContainEqual(
+    expect.objectContaining({
+      type: "send_agent_message_response",
+      payload: expect.objectContaining({ accepted: false }),
+    }),
+  );
+});
+
+test("a pause that clears at final handoff still resumes the ordinary notice", async () => {
+  const f = await fixture("claude");
+  const start = f.target.session!.startTurn.bind(f.target.session);
+  vi.spyOn(f.target.session!, "startTurn").mockImplementationOnce(async (...args) => {
+    writeFileSync(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+    try {
+      return await start(...args);
+    } finally {
+      writeFileSync(f.storage.noticePausePath, JSON.stringify({ pausedProviders: [] }));
+    }
+  });
+  await f.send("ordinary notice", f.sender.id);
+  await vi.waitFor(() => expect(f.prompts).toEqual(["ordinary notice"]));
 });

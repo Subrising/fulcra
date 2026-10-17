@@ -9932,7 +9932,8 @@ export class Session {
           if (armed) await this.agentStorage.settleFinishNotice(agentId, armed, "cancelled");
         }
         if (!(error instanceof NoticePausedError)) throw error;
-        if (msg.inputProvenance !== undefined) throw new ProvenanceRefusedError({ cause: error });
+        if (this.pluginOriginId || msg.inputProvenance !== undefined)
+          throw new ProvenanceRefusedError({ cause: error });
         if (msg.sender) throw new SteerUnavailableError(agentId);
         await queuedAgentMessagesFor({
           agentManager: this.agentManager,
@@ -10054,7 +10055,8 @@ export class Session {
         // A message that carries a plugin's provenance token cannot wait: its token is bound to this attempt, and a
         // later delivery would run as plain owner input, a different source than the plugin sent it as
         // (0.2.13 review). It is refused instead, with the reason, and the sender sends it again when the chat is idle.
-        if (msg.inputProvenance !== undefined) throw new ProvenanceRefusedError({ cause: error });
+        if (this.pluginOriginId || msg.inputProvenance !== undefined)
+          throw new ProvenanceRefusedError({ cause: error });
         holdOwnerMessage();
       }
     };
@@ -10149,7 +10151,8 @@ export class Session {
     const pauseTarget =
       this.agentManager.getAgent(agentId) ?? (await this.agentStorage.get(agentId));
     if (noticePaused(this.agentStorage.noticePausePath, pauseTarget)) {
-      if (msg.inputProvenance !== undefined || msg.nativeQueue) throw new ProvenanceRefusedError();
+      if (this.pluginOriginId || msg.inputProvenance !== undefined || msg.nativeQueue)
+        throw new ProvenanceRefusedError();
       const hold = async () => {
         await queuedAgentMessagesFor({
           agentManager: this.agentManager,
