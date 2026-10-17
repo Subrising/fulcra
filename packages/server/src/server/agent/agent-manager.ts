@@ -1,3 +1,8 @@
+import {
+  assertComputerUseLabels,
+  computerUseFromLabels,
+  restoreComputerUseDecisions,
+} from "./providers/codex/computer-use.js";
 import { SessionCostOutbox, type PendingSessionCost } from "./session-cost-outbox.js";
 import { recordSessionCost, sessionCost, type SessionCostRecords } from "./session-cost.js";
 import { queuedAgentMessagesFor } from "../queued-agent-messages.js";
@@ -217,10 +222,11 @@ import {
   withRuntimePaseoMcpServer,
   matchesPaseoInjectLabels,
   assertPaseoInjectionLabelWrite,
+  isPaseoPolicyLabelWrite,
 } from "./runtime-mcp-config.js";
 import { resolveCreateAgentTitles } from "./create-agent-title.js";
 import type { PaseoToolCatalogFactory } from "./tools/types.js";
-import { isPaseoToolPolicyEnabled } from "./paseo-tool-policy.js";
+import { isPaseoToolPolicyEnabled, sessionPaseoToolPolicy } from "./paseo-tool-policy.js";
 import {
   ProviderSubagentStore,
   type ProviderSubagentDescriptor,
@@ -829,7 +835,9 @@ function validateAgentId(agentId: string, source: string): string {
 function applyLabelPatch(
   labels: Record<string, string>,
   patch: AgentLabelPatch,
+  provider: AgentProvider,
 ): Record<string, string> {
+  assertComputerUseLabels({ stored: { provider, labels }, updates: { labels: patch } });
   const nextLabels = { ...labels };
   for (const [key, value] of Object.entries(patch)) {
     if (value === null) {
@@ -1259,7 +1267,8 @@ export class AgentManager {
     this.intercomRates = rates;
     const registry = new NativeReportRegistry(
       file,
-      (agentId) => this.currentReportIdentity(agentId),
+      (agentId) =>
+        this.currentReportIdentity(agentId, this.labelReportCapture.getStore() === agentId),
       10000,
       grantDirectory,
     );
@@ -1395,8 +1404,8 @@ export class AgentManager {
       return null;
     }
   }
-  private captureReportRelaunch(agentId: string, contextRotation = false) {
-    const source = this.currentReportIdentity(agentId);
+  private captureReportRelaunch(agentId: string, contextRotation = false, labelMutation = false) {
+    const source = this.currentReportIdentity(agentId, labelMutation);
     const original = this.agents.get(agentId);
     if (!source || !original?.session || !this.reportRegistry) return undefined;
     const admission = this.readMcpRefreshAdmission(original);
@@ -1404,9 +1413,13 @@ export class AgentManager {
       return undefined;
     let commit: ReturnType<NativeReportRegistry["captureRelaunch"]>;
     try {
-      commit = contextRotation
-        ? this.reportRegistry.captureContextRotation(source, admission.revision)
-        : this.reportRegistry.captureRelaunch(source, admission.revision);
+      if (contextRotation)
+        commit = this.reportRegistry.captureContextRotation(source, admission.revision);
+      else if (labelMutation)
+        commit = this.labelReportCapture.run(agentId, () =>
+          this.reportRegistry!.captureRelaunch(source, admission.revision),
+        );
+      else commit = this.reportRegistry.captureRelaunch(source, admission.revision);
     } catch {
       return undefined;
     } // Unknown legacy registrations cannot be adopted by refresh.
@@ -2160,6 +2173,11 @@ export class AgentManager {
   private paseoToolsEnabled = true;
   private mcpInjectLabels: Record<string, string> = {};
   private readonly labelMutations = new AsyncLocalStorage<string>();
+  private readonly labelReportCapture = new AsyncLocalStorage<string>();
+  private readonly labelRelaunch = new AsyncLocalStorage<{
+    relaunch?: { beforeClose(): void; finish(): Promise<void> };
+    refreshed: boolean;
+  }>();
   private readonly agentCallers = new AsyncLocalStorage<{
     agentId?: string;
     validate?: () => void;
@@ -2380,8 +2398,7 @@ export class AgentManager {
   }
 
   assertInjectionLabelWrite(labels: Record<string, unknown> | undefined): void {
-    if (!labels || !Object.keys(this.mcpInjectLabels).some((key) => Object.hasOwn(labels, key)))
-      return;
+    if (!isPaseoPolicyLabelWrite(labels, this.mcpInjectLabels)) return;
     const caller = this.agentCallers.getStore();
     caller?.validate?.();
     const source = this.trustedPlugins.currentInputSource();
@@ -2938,6 +2955,7 @@ export class AgentManager {
     this.assertAcceptingAgentRegistrations();
     const resolvedAgentId = validateAgentId(agentId ?? this.idFactory(), "createAgent");
     this.assertInjectionLabelWrite(options.labels);
+    this.validateComputerUseCreate(config, options);
     options = withoutSeatLabel(options);
     if (this.pluginLifecycle && !config.internal) {
       // Update-7 W3 (R1 P-3 seam): a create with a caller shows the hook the caller's provider, mode and mode class,
@@ -3122,6 +3140,7 @@ export class AgentManager {
     const record = this.registry ? await this.registry.get(resolvedAgentId) : null;
     requireRecord?.(record);
     this.assertChangedInjectionLabels(options?.labels, record?.labels);
+    assertComputerUseLabels({ stored: record, updates: options, replace: true });
     const labels = options?.labels ?? record?.labels;
     const currentResumeOptions = record
       ? { purpose: record.archivedAt ? ("history" as const) : ("interactive" as const) }
@@ -3732,18 +3751,16 @@ export class AgentManager {
     }
   }
 
-  private async reloadQuietMcpSession(
+  private async prepareQuietMcpLaunch(
     existing: ActiveManagedAgent,
     storedConfig: AgentSessionConfig,
+    client: AgentClient,
+    paseoToolPolicy: ProviderPaseoToolsPolicy | undefined,
     beforeClose: () => Promise<() => void>,
-    rotation?: { check(): void; record(handle: AgentPersistenceHandle): Promise<void> },
-  ): Promise<void> {
-    this.assertAcceptingAgentRegistrations();
+    selection?: { labels: Record<string, string>; policy: ProviderPaseoToolsPolicy | undefined },
+  ) {
     const agentId = existing.id;
-    const handle = existing.persistence!; // Admission requires a persisted native session.
-    const client = this.requireClient(existing.provider);
-    // Preserve the captured tool policy and saved config; do not re-resolve provider defaults.
-    const paseoToolPolicy = this.paseoToolPolicies.get(agentId);
+    const previousLaunch = this.reportLaunches.get(agentId);
     const reportLaunch = this.prepareNativeReportLaunch(agentId);
     const launchConfig = this.applyDaemonAppendSystemPrompt(
       withRuntimePaseoMcpServer({
@@ -3757,21 +3774,75 @@ export class AgentManager {
             : null,
       }),
     );
-    const context = await this.buildLaunchContext(
-      agentId,
-      client,
-      storedConfig.cwd,
-      paseoToolPolicy,
-      undefined,
-      {
-        reason: "refresh",
-        purpose: "interactive",
-        workspaceId: existing.workspaceId,
-        internal: existing.internal,
-      },
-    );
+    if (storedConfig.provider === "codex") {
+      launchConfig.computerUse = this.computerUseForLaunch(
+        selection?.labels ?? existing.labels,
+        existing.persistence,
+      );
+    }
+    let context: AgentLaunchContext;
+    let commitClose: () => void;
+    try {
+      context = await this.buildLaunchContext(
+        agentId,
+        client,
+        storedConfig.cwd,
+        paseoToolPolicy,
+        undefined,
+        {
+          reason: "refresh",
+          purpose: "interactive",
+          workspaceId: existing.workspaceId,
+          internal: existing.internal,
+        },
+      );
+      commitClose = await beforeClose();
+    } catch (error) {
+      if (selection && this.reportLaunches.get(agentId) === reportLaunch) {
+        if (previousLaunch) this.reportLaunches.set(agentId, previousLaunch);
+        else this.reportLaunches.delete(agentId);
+      }
+      throw error;
+    }
     const providerConfig = this.resolveProviderLaunchConfig(launchConfig, context);
-    const commitClose = await beforeClose();
+    return {
+      context,
+      providerConfig,
+      commitClose: () => {
+        try {
+          commitClose();
+        } catch (error) {
+          if (selection && this.reportLaunches.get(agentId) === reportLaunch) {
+            if (previousLaunch) this.reportLaunches.set(agentId, previousLaunch);
+            else this.reportLaunches.delete(agentId);
+          }
+          throw error;
+        }
+      },
+    };
+  }
+
+  private async reloadQuietMcpSession(
+    existing: ActiveManagedAgent,
+    storedConfig: AgentSessionConfig,
+    beforeClose: () => Promise<() => void>,
+    rotation?: { check(): void; record(handle: AgentPersistenceHandle): Promise<void> },
+    selection?: { labels: Record<string, string>; policy: ProviderPaseoToolsPolicy | undefined },
+  ): Promise<void> {
+    this.assertAcceptingAgentRegistrations();
+    const agentId = existing.id;
+    const handle = existing.persistence!; // Admission requires a persisted native session.
+    const client = this.requireClient(existing.provider);
+    // Preserve the captured tool policy and saved config; do not re-resolve provider defaults.
+    const paseoToolPolicy = selection ? selection.policy : this.paseoToolPolicies.get(agentId);
+    const { context, providerConfig, commitClose } = await this.prepareQuietMcpLaunch(
+      existing,
+      storedConfig,
+      client,
+      paseoToolPolicy,
+      beforeClose,
+      selection,
+    );
     let closed: ManagedAgentClosed | undefined;
     let session: AgentSession | undefined;
     let registered = false;
@@ -3785,6 +3856,7 @@ export class AgentManager {
       await this.persistSnapshot(closed);
       this.assertAcceptingAgentRegistrations();
       rotation?.check();
+      this.paseoToolPolicies.set(agentId, paseoToolPolicy);
       session = await nativeDispatch(() =>
         rotation
           ? client.createSession(providerConfig, context, { freshSessionId: randomUUID() })
@@ -3802,7 +3874,7 @@ export class AgentManager {
         rotation.check();
       }
       await this.registerSession(session, storedConfig, agentId, {
-        labels: existing.labels,
+        labels: selection?.labels ?? existing.labels,
         workspaceId: existing.workspaceId,
         owner: existing.owner,
         createdAt: existing.createdAt,
@@ -4822,13 +4894,13 @@ export class AgentManager {
     this.assertInjectionLabelWrite(labels);
     if (Object.hasOwn(labels, PARENT_AGENT_ID_LABEL))
       throw new Error("Use native owner parent adoption to change parent metadata");
-    return this.runLifecycleMutation(agentId, () =>
+    return this.runLabelMutation(agentId, () =>
       this.withStoredInput(
         agentId,
         "configure",
         undefined,
         () =>
-          this.labelMutations.run(agentId, async () => {
+          this.withLabelRelaunch(agentId, async () => {
             await this.writeLabels(this.requireAgent(agentId).id, labels);
           }),
         commandPayload("set-labels", { labels }),
@@ -4841,7 +4913,24 @@ export class AgentManager {
     const liveAgent = this.agents.get(agentId);
     if (liveAgent) {
       this.assertArchiveLeadLabelWrite(patch, liveAgent.labels);
-      liveAgent.labels = applyLabelPatch(liveAgent.labels, patch);
+      const labels = applyLabelPatch(liveAgent.labels, patch, liveAgent.provider);
+      sessionPaseoToolPolicy(undefined, labels);
+      const changed = [
+        "fulcra.mcp",
+        "fulcra.mcp.groups",
+        ...Object.keys(this.mcpInjectLabels),
+      ].some((key) => labels[key] !== liveAgent.labels[key]);
+      const nextPolicy =
+        this.paseoToolsEnabled && matchesPaseoInjectLabels(labels, this.mcpInjectLabels)
+          ? sessionPaseoToolPolicy(this.resolvePaseoToolPolicy(liveAgent.provider), labels)
+          : { enabled: false };
+      const policyChanged =
+        JSON.stringify(nextPolicy) !== JSON.stringify(this.paseoToolPolicies.get(agentId));
+      if (changed && policyChanged && this.agents.get(agentId)?.session) {
+        await this.refreshSessionPaseoSelection(this.requireSessionAgent(agentId), labels);
+        return { record: this.registry ? await this.registry.get(agentId) : null, live: true };
+      }
+      liveAgent.labels = labels;
       this.touchUpdatedAt(liveAgent);
       await this.persistSnapshot(liveAgent);
       this.emitState(liveAgent, { persist: false });
@@ -4868,11 +4957,98 @@ export class AgentManager {
     const nextRecord = {
       ...record,
       ...(patch.title ? { title: patch.title } : {}),
-      ...(patch.labels ? { labels: applyLabelPatch(record.labels, patch.labels) } : {}),
+      ...(patch.labels
+        ? { labels: applyLabelPatch(record.labels, patch.labels, record.provider) }
+        : {}),
       updatedAt: this.nextStoredUpdatedAt(record),
     };
+    sessionPaseoToolPolicy(undefined, nextRecord.labels);
     await registry.upsert(nextRecord);
     return nextRecord;
+  }
+
+  private runLabelMutation<T>(agentId: string, operation: () => Promise<T>): Promise<T> {
+    const context: {
+      relaunch?: { beforeClose(): void; finish(): Promise<void> };
+      refreshed: boolean;
+    } = { refreshed: false };
+    return this.runLifecycleMutation(agentId, () =>
+      this.labelRelaunch.run(context, operation),
+    ).then(async (result) => {
+      if (context.refreshed && context.relaunch) await context.relaunch.finish();
+      return result;
+    });
+  }
+
+  private withLabelRelaunch<T>(agentId: string, operation: () => Promise<T>): Promise<T> {
+    return this.labelMutations.run(agentId, () => {
+      const context = this.labelRelaunch.getStore();
+      if (context) context.relaunch = this.captureReportRelaunch(agentId, false, true);
+      return operation();
+    });
+  }
+
+  /** Label selection changes use the quiet native resume contract, without replaying work. */
+  private async refreshSessionPaseoSelection(
+    existing: ActiveManagedAgent,
+    labels: Record<string, string>,
+  ): Promise<void> {
+    const agentId = existing.id;
+    const admission = this.readMcpRefreshAdmission(existing);
+    const revision = this.liveMcpRefreshState(existing, admission).configRevision;
+    const relaunch = this.labelRelaunch.getStore();
+    if (
+      !relaunch?.relaunch?.beforeClose &&
+      this.reportRegistry &&
+      (await this.reportRegistry.registrationOf(agentId)) !== "unregistered"
+    )
+      throw new Error("MCP preset change requires native ownership rebind");
+    const check = () => {
+      this.assertInjectionLabelWrite(labels);
+      if (
+        !this.supportsQuietMcpRefresh(existing) ||
+        !this.readMcpRefreshAdmission(existing).allowed
+      )
+        throw new Error("MCP preset change requires a supported, owned session");
+      if (
+        existing.lifecycle !== "idle" ||
+        this.hasInFlightRun(agentId) ||
+        existing.activeTurnId !== null ||
+        existing.pendingReplacement ||
+        existing.pendingPermissions.size > 0 ||
+        existing.inFlightPermissionResponses.size > 0 ||
+        this.foregroundMutationTails.has(agentId) ||
+        this.providerSubagents.list(agentId).some((child) => child.status === "running")
+      )
+        throw new Error("MCP preset change requires a quiet session");
+      const current = this.liveMcpRefreshState(existing, this.readMcpRefreshAdmission(existing));
+      if (this.agents.get(agentId) !== existing || current.configRevision !== revision)
+        throw new Error("MCP preset changed before refresh");
+    };
+    check();
+    const policy =
+      this.paseoToolsEnabled && matchesPaseoInjectLabels(labels, this.mcpInjectLabels)
+        ? sessionPaseoToolPolicy(this.resolvePaseoToolPolicy(existing.provider), labels)
+        : { enabled: false };
+    this.mcpRefreshes.add(agentId);
+    try {
+      await this.reloadQuietMcpSession(
+        existing,
+        existing.config,
+        async () => {
+          await this.drainSessionEvents(agentId);
+          return () => {
+            check();
+            relaunch?.relaunch?.beforeClose();
+          };
+        },
+        undefined,
+        { labels, policy },
+      );
+      if (relaunch) relaunch.refreshed = true;
+    } finally {
+      this.mcpRefreshes.delete(agentId);
+    }
   }
 
   private parentAdoptionTail: Promise<void> = Promise.resolve();
@@ -5159,6 +5335,10 @@ export class AgentManager {
     }
 
     this.assertArchiveLeadLabelWrite(updates?.labels, record.labels);
+    const restoredLabels = updates?.labels
+      ? applyLabelPatch(record.labels, updates.labels, record.provider)
+      : record.labels;
+    sessionPaseoToolPolicy(undefined, restoredLabels);
     await this.assertRestoreSafe(agentId);
 
     if (record.persistence) {
@@ -5183,7 +5363,7 @@ export class AgentManager {
     const restored: StoredAgentRecord = {
       ...record,
       ...(updates?.workspaceId ? { workspaceId: updates.workspaceId } : {}),
-      ...(updates?.labels ? { labels: applyLabelPatch(record.labels, updates.labels) } : {}),
+      ...(updates?.labels ? { labels: restoredLabels } : {}),
       archivedAt: null,
       updatedAt: this.nextStoredUpdatedAt(record),
     };
@@ -5312,15 +5492,13 @@ export class AgentManager {
     this.assertInjectionLabelWrite(updates.labels);
     if (updates.labels && Object.hasOwn(updates.labels, PARENT_AGENT_ID_LABEL))
       throw new Error("Use native owner parent adoption to change parent metadata");
-    return this.runLifecycleMutation(agentId, () =>
+    return this.runLabelMutation(agentId, () =>
       this.withStoredInput(
         agentId,
         "configure",
         undefined,
         () =>
-          this.labelMutations.run(agentId, () =>
-            this.updateAgentMetadataUnlocked(agentId, updates),
-          ),
+          this.withLabelRelaunch(agentId, () => this.updateAgentMetadataUnlocked(agentId, updates)),
         commandPayload("set-metadata", { metadata: updates }),
       ),
     );
@@ -9650,13 +9828,17 @@ export class AgentManager {
       resolveDefaultMode: options.resolveDefaultMode,
       resolveDefaultThinking: options.resolveDefaultThinking,
     });
+    sessionPaseoToolPolicy(undefined, options.labels ?? this.agents.get(agentId)?.labels);
     const paseoToolPolicy =
       this.paseoToolsEnabled &&
       matchesPaseoInjectLabels(
         options.labels ?? this.agents.get(agentId)?.labels,
         this.mcpInjectLabels,
       )
-        ? this.resolvePaseoToolPolicy(storedConfig.provider)
+        ? sessionPaseoToolPolicy(
+            this.resolvePaseoToolPolicy(storedConfig.provider),
+            options.labels ?? this.agents.get(agentId)?.labels,
+          )
         : { enabled: false };
     const reportLaunch = this.prepareNativeReportLaunch(agentId);
     const launchConfig = this.applyDaemonAppendSystemPrompt(
@@ -9671,6 +9853,12 @@ export class AgentManager {
         nativeReportWitness: reportLaunch?.witness,
       }),
     );
+    if (storedConfig.provider === "codex") {
+      launchConfig.computerUse = this.computerUseForLaunch(
+        options.labels ?? this.agents.get(agentId)?.labels,
+        this.agents.get(agentId)?.persistence,
+      );
+    }
     return { storedConfig, launchConfig, paseoToolPolicy };
   }
 
@@ -9685,6 +9873,49 @@ export class AgentManager {
           daemonAppendSystemPrompt,
         }
       : next;
+  }
+
+  private validateComputerUseCreate(config: AgentSessionConfig, options: CreateAgentOptions): void {
+    if (config.provider === "codex" && !options.fromStoredRecord)
+      computerUseFromLabels(options.labels);
+  }
+
+  private computerUseForLaunch(
+    labels: Record<string, string> | undefined,
+    handle?: AgentPersistenceHandle | null,
+  ): AgentSessionConfig["computerUse"] {
+    let allowed: { allowApps: string[] } | undefined;
+    try {
+      allowed = computerUseFromLabels(labels);
+    } catch {
+      this.logger.warn("Invalid stored computerUse.allowApps; no apps were granted");
+    }
+    const decisions = restoreComputerUseDecisions(handle?.metadata?.computerUseDecisions);
+    if (!allowed && decisions.size === 0) return undefined;
+    return {
+      allowApps: allowed?.allowApps ?? [],
+      decisions: Object.fromEntries(
+        [...decisions].map(([key, decision]) => [key, decision.action]),
+      ),
+    };
+  }
+
+  private currentComputerUseSession(
+    agentId: string,
+    session: AgentSession,
+  ): ActiveManagedAgent | undefined {
+    const agent = this.agents.get(agentId);
+    if (
+      !agent ||
+      agent.session !== session ||
+      agent.provider !== "codex" ||
+      agent.internal ||
+      agent.archivedAt ||
+      this.inFlightAgentCloses.has(agentId) ||
+      this.mcpRefreshes.has(agentId)
+    )
+      return undefined;
+    return agent;
   }
 
   private async buildLaunchContext(
@@ -9716,6 +9947,20 @@ export class AgentManager {
     }
     const context: AgentLaunchContext = {
       agentId,
+      computerUsePolicy: {
+        approve: (session, request) => {
+          const agent = this.currentComputerUseSession(agentId, session);
+          if (!agent || request.metadata?.threadId !== session.id) return false;
+          const allowed = this.trustedPlugins.automaticPermission(agent, request, true);
+          return allowed && this.currentComputerUseSession(agentId, session) === agent;
+        },
+        changed: (session) => {
+          const agent = this.currentComputerUseSession(agentId, session);
+          if (!agent) return;
+          this.refreshSessionPersistence(agent);
+          this.emitState(agent);
+        },
+      },
       env: {
         ...env,
         PASEO_AGENT_ID: agentId,

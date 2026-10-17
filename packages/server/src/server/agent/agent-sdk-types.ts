@@ -664,6 +664,8 @@ export interface AgentSessionConfig {
   providerOptions?: ProviderOptions;
   toolPolicy?: ToolPolicy;
   mcpServers?: Record<string, McpServerConfig>;
+  /** Launch-only app grants, resolved from this job's creation label. */
+  computerUse?: { allowApps: string[]; decisions?: Record<string, "accept" | "decline"> };
   /**
    * Internal agents are hidden from listings and don't trigger notifications.
    * They are used for ephemeral system tasks like commit/PR generation.
@@ -671,7 +673,13 @@ export interface AgentSessionConfig {
   internal?: boolean;
 }
 
+export interface AgentComputerUsePolicy {
+  approve(session: AgentSession, request: AgentPermissionRequest): boolean;
+  changed(session: AgentSession): void;
+}
+
 export interface AgentLaunchContext {
+  computerUsePolicy?: AgentComputerUsePolicy;
   /** Host-selected public text/hash snapshot. Runtime-only; never an account/profile/config override. */
   publicBaseline?: import("./host-public-baseline.js").HostPublicBaseline;
   agentId?: string;

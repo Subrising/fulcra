@@ -57,3 +57,12 @@ describe("provider Paseo-tool policy", () => {
     ).toEqual({ disabledTools: ["browser_future_tool"] });
   });
 });
+
+test("allow lists validate persisted tool names and accept an empty set", () => {
+  expect(ProviderPaseoToolsPolicySchema.parse({ allowedTools: [] })).toEqual({ allowedTools: [] });
+  expect(
+    ProviderOverrideSchema.parse({ paseoTools: { allowedTools: ["create_agent"] } }).paseoTools
+      ?.allowedTools,
+  ).toEqual(["create_agent"]);
+  expect(() => ProviderPaseoToolsPolicySchema.parse({ allowedTools: ["future_tool"] })).toThrow();
+});
