@@ -2674,6 +2674,7 @@ test("worker finish notices include total session spend across turns and account
 
 test("ledger-routed worker results include spend without an owned finish notice", async () => {
   const routing = {
+    begin: () => {},
     enabledForLead: () => false,
     observeEnd: async () => ({
       fresh: true,
