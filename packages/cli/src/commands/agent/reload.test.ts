@@ -8,8 +8,9 @@ vi.mock("../../utils/client.js", async (load) => ({
   connectToDaemon: vi.fn(),
 }));
 
-test("reload skips an archived ID before refresh and closes the client", async () => {
+test("reload sends explicit restore intent for an archived stored ID and closes the client", async () => {
   const client = {
+    fetchAgent: vi.fn(async () => null),
     fetchAgents: vi.fn(async () => ({
       entries: [
         {
@@ -21,13 +22,17 @@ test("reload skips an archived ID before refresh and closes the client", async (
         },
       ],
     })),
-    refreshAgent: vi.fn(),
+    refreshAgent: vi.fn(async () => ({ agentId: "11111111-1111-4111-8111-111111111111" })),
     close: vi.fn(async () => {}),
   };
   vi.mocked(connectToDaemon).mockResolvedValue(client as never);
-  await expect(runReloadCommand("11111111", {}, new Command())).rejects.toMatchObject({
-    code: "AGENT_ARCHIVED",
+  await expect(runReloadCommand("11111111", {}, new Command())).resolves.toMatchObject({
+    data: { agentId: "11111111-1111-4111-8111-111111111111", status: "reloaded" },
   });
-  expect(client.refreshAgent).not.toHaveBeenCalled();
+  expect(client.refreshAgent).toHaveBeenCalledWith(
+    "11111111-1111-4111-8111-111111111111",
+    undefined,
+    { restore: true },
+  );
   expect(client.close).toHaveBeenCalledOnce();
 });

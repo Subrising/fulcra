@@ -857,7 +857,7 @@ test.each([false, true])(
           type: "activity_log",
           payload: expect.objectContaining({
             type: "error",
-            content: expect.stringContaining("The receiver is closed or archived"),
+            content: expect.stringContaining("The receiver is archived. Restore it first."),
           }),
         }),
       ),
@@ -865,7 +865,7 @@ test.each([false, true])(
     await vi.waitFor(() =>
       expect(
         f.prompts.some((prompt) =>
-          String(prompt).includes("was not delivered: The receiver is closed or archived"),
+          String(prompt).includes("was not delivered: The receiver is archived. Restore it first."),
         ),
       ).toBe(true),
     );
@@ -878,7 +878,44 @@ test.each([false, true])(
     expect((await f.storage.get(f.target.id))!.archivedAt).toEqual(expect.any(String));
     expect(JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"))[0]).toMatchObject({
       state: "refused",
-      reason: "The receiver is closed or archived",
+      reason: "The receiver is archived. Restore it first.",
     });
   },
 );
+
+test("archive refuses three queued messages with one combined sender notice", async () => {
+  const f = await fixture();
+  f.busy.add(f.target.id);
+  for (const text of ["one", "two", "three"]) await f.send(text, f.sender.id);
+  await f.host.daemon(() => f.manager.archiveAgent(f.target.id));
+  const before = (await f.storage.get(f.target.id))!;
+  await f.endTurnIn((run) => f.host.daemon(run));
+  await vi.waitFor(() =>
+    expect(f.prompts.filter((p) => String(p).includes("not delivered"))).toHaveLength(1),
+  );
+  await f.queue.close();
+  const notices = f.prompts.filter((p) => String(p).includes("not delivered"));
+  expect(notices).toHaveLength(1);
+  expect(String(notices[0])).toContain("3 messages");
+  expect(f.prompts).not.toContain("one");
+  expect(f.prompts).not.toContain("two");
+  expect(f.prompts).not.toContain("three");
+  expect((await f.storage.get(f.target.id))!.archivedAt).toBe(before.archivedAt);
+  const records = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
+  expect(records).toHaveLength(3);
+  expect(records.every((record: { state: string }) => record.state === "refused")).toBe(true);
+});
+
+test("the MCP queue refuses an archived receiver without a new receipt", async () => {
+  const f = await fixture();
+  await f.host.daemon(() => f.manager.archiveAgent(f.target.id));
+  const before = await f.storage.get(f.target.id);
+  await expect(
+    f.queue.enqueue(f.target.id, {
+      text: "Do not restore",
+      sender: { agentId: f.sender.id },
+    }),
+  ).rejects.toThrow("The receiver is archived. Restore it first.");
+  expect(f.pending()).toBe(0);
+  expect(await f.storage.get(f.target.id)).toEqual(before);
+});

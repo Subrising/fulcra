@@ -66,6 +66,12 @@ interface Deps {
   deferStart?: boolean;
 }
 
+function closedReceiverReason(target: { archivedAt?: unknown } | null): string {
+  return target?.archivedAt
+    ? "The receiver is archived. Restore it first."
+    : "The receiver is closed or archived";
+}
+
 /** Plain agent input only. Plugin and owner inputs keep their separate admission paths. */
 export class QueuedAgentMessages {
   private records: Record[] = [];
@@ -176,7 +182,7 @@ export class QueuedAgentMessages {
         target.archivedAt ||
         ("lifecycle" in target ? target.lifecycle : target.lastStatus) === "closed"
       )
-        throw Object.assign(new Error("The receiver is closed or archived"), {
+        throw Object.assign(new Error(closedReceiverReason(target)), {
           code: "QUEUED_RECEIVER_CLOSED",
         });
       this.records = this.records
@@ -287,7 +293,7 @@ export class QueuedAgentMessages {
           (record.state === "refused" && selected.includes(record))),
     );
     if (!pending.length) return true;
-    const reason = "The receiver is closed or archived";
+    const reason = closedReceiverReason(target);
     const senders = new Map<string, Record[]>();
     for (const record of pending) {
       record.state = "refused";
@@ -359,7 +365,7 @@ export class QueuedAgentMessages {
       target.archivedAt ||
       ("lifecycle" in target ? target.lifecycle : target.lastStatus) === "closed"
     )
-      return "The receiver is closed or archived";
+      return closedReceiverReason(target);
     if ((target.persistence?.sessionId ?? null) !== record.sessionId)
       return "The receiver session changed";
     if (line && !line.allowed) return line.reason;
@@ -411,7 +417,7 @@ export class QueuedAgentMessages {
         identity(mainAssistantId ? (agents.get(mainAssistantId) ?? null) : null),
       ]);
       let reason: string | null = null;
-      if (!target || target.archivedAt) reason = "The receiver is closed or archived";
+      if (!target || target.archivedAt) reason = closedReceiverReason(target);
       else if (!remote && (!senderAgent || senderAgent.archivedAt))
         reason = "The sending chat is closed or archived";
       else {
@@ -619,7 +625,7 @@ export async function loadQueuedReceiver(
     ...deps,
     requireRecord: (record) => {
       if (!record || record.archivedAt || record.lastStatus === "closed")
-        throw Object.assign(new Error("The receiver is closed or archived"), {
+        throw Object.assign(new Error(closedReceiverReason(record)), {
           code: "QUEUED_RECEIVER_CLOSED",
         });
       if ((record.persistence?.sessionId ?? null) !== sessionId)
@@ -643,7 +649,7 @@ export function queuedReceiverCheck(
       checkLines();
       const current = agentManager.getAgent(agentId);
       if (!current || current.archivedAt)
-        throw Object.assign(new Error("The receiver is closed or archived"), {
+        throw Object.assign(new Error(closedReceiverReason(current)), {
           code: "QUEUED_RECEIVER_CLOSED",
         });
       if (

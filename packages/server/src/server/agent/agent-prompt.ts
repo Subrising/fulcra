@@ -17,7 +17,7 @@ import type {
 } from "./agent-sdk-types.js";
 import type { AgentManager, ManagedAgent } from "./agent-manager.js";
 import type { AgentStorage } from "./agent-storage.js";
-import { ensureAgentLoaded } from "./agent-loading.js";
+import { ensureUnarchivedAgentLoaded } from "./agent-loading.js";
 import { heldSendsFor } from "../held-sends.js";
 import { isStaleProviderSessionError } from "./stale-provider-session-error.js";
 import { getParentAgentIdFromLabels } from "@getpaseo/protocol/agent-labels";
@@ -321,9 +321,8 @@ export interface SendPromptToAgentParams {
   /** Optional mode to set on the agent before the run starts. */
   sessionMode?: string;
   /**
-   * Default true. When false, archived agents are skipped instead of being
-   * unarchived. Use false for system-injected prompts (chat mentions,
-   * schedule fires, notify-on-finish).
+   * Kept for call compatibility. A prompt always refuses an archived receiver.
+   * Only an explicit restore action can clear archive state.
    */
   unarchive?: boolean;
   /** See {@link StartAgentRunOptions.clearPendingPermissions}. */
@@ -381,15 +380,8 @@ export async function waitForAgentRunStartWithTimeout(
 }
 
 /**
- * Full send-prompt orchestration: (optional unarchive) → load → (optional
- * mode change) → start run.
- *
- * Every surface that sends a prompt to an agent (Session/WS, MCP, CLI-through-MCP,
- * chat mentions, notify-on-finish) MUST go through this so behavior can never
- * drift between them.
- *
- * When `unarchive` is false and the agent is archived, the call is a silent
- * no-op (returns the normal turn-start disposition) — the agent is not run.
+ * Load, optionally change mode, and start a prompt. A prompt never restores an
+ * archived receiver. All prompt surfaces share this refusal.
  */
 export async function sendPromptToAgent(
   params: SendPromptToAgentParams,
@@ -407,45 +399,25 @@ export async function sendPromptToAgent(
           ...params,
           runOptions: { ...params.runOptions, [TRUSTED_OPERATION]: handle },
         };
-      const unarchive = params.unarchive ?? true;
-
-      const record = await params.agentStorage.get(params.agentId);
+      const requireActive = (record: { archivedAt?: string | null } | null) => {
+        if (record?.archivedAt)
+          throw Object.assign(new Error("The receiver is archived. Restore it first."), {
+            code: "QUEUED_RECEIVER_CLOSED",
+          });
+      };
+      requireActive(await params.agentStorage.get(params.agentId));
       finishCheck?.();
       assertFinalInputCheck(params.runOptions?.[FINAL_INPUT_CHECK]);
-      if (record?.archivedAt) {
-        params.agentManager.trustedPlugins.input(
-          record,
-          "prompt",
-          params.messageId ?? params.runOptions?.clientMessageId,
-          () => undefined,
-          promptPayload(params.prompt, params.runOptions, {
-            sessionMode: params.sessionMode,
-            unarchive: params.unarchive ?? true,
-            replaceRunning: !params.queuedOnly,
-            activeTurnBehavior: params.activeTurnBehavior,
-            clearPendingPermissions: params.clearPendingPermissions ?? false,
-          }),
-          handle,
-        );
+      try {
+        await ensureUnarchivedAgentLoaded(params.agentId, {
+          agentManager: params.agentManager,
+          agentStorage: params.agentStorage,
+          logger: params.logger,
+        });
+      } catch (error) {
+        requireActive(await params.agentStorage.get(params.agentId));
+        throw error;
       }
-      if (record?.archivedAt) {
-        if (!unarchive) {
-          return { disposition: "turn_started" };
-        }
-        await unarchiveAgentState(
-          params.agentStorage,
-          params.agentManager,
-          params.agentId,
-          undefined,
-          handle,
-        );
-      }
-
-      await ensureAgentLoaded(params.agentId, {
-        agentManager: params.agentManager,
-        agentStorage: params.agentStorage,
-        logger: params.logger,
-      });
 
       finishCheck?.();
       if (params.sessionMode) {
@@ -476,7 +448,7 @@ export async function sendPromptToAgent(
     },
     promptPayload(params.prompt, params.runOptions, {
       sessionMode: params.sessionMode,
-      unarchive: params.unarchive ?? true,
+      unarchive: false,
       replaceRunning: !params.queuedOnly,
       activeTurnBehavior: params.activeTurnBehavior,
       clearPendingPermissions: params.clearPendingPermissions ?? false,

@@ -4452,10 +4452,6 @@ export class AgentManager {
   private async assertRestoreSafe(agentId: string): Promise<void> {
     const caller = this.agentCallers.getStore();
     caller?.validate?.();
-    if (caller?.agentId || this.trustedPlugins.currentInputSource() !== "human")
-      throw new Error(
-        "Restore refused. Only the owner can restore this session. Confirm in the app.",
-      );
     const protection = await this.getArchiveProtection(agentId);
     if (!protection.confirmationRequired) return;
     if (

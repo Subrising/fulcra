@@ -12,7 +12,7 @@ Never stop a live daemon or change a live session.
 From `packages/server`, run:
 
 ```sh
-npx vitest run src/server/archive-maintenance.e2e.test.ts src/server/agent/agent-loading.test.ts
+npx vitest run src/server/archive-maintenance.e2e.test.ts src/server/agent/agent-loading.test.ts src/server/held-sends.trust.test.ts src/server/agent/agent-prompt.test.ts
 ```
 
 From the repository root, run:
@@ -25,15 +25,18 @@ npx tsx --test control/orca-organization/server/accounts-rpc.test.ts
 From `packages/cli`, run:
 
 ```sh
-npx vitest run src/commands/account.test.ts src/commands/agent/archive.test.ts
+npx vitest run src/commands/account.test.ts src/commands/agent/archive.test.ts src/commands/agent/reload.test.ts
 ```
 
 Check both old and current client versions.
-Reload must refuse an archived session before runtime or storage changes.
+Maintenance reload must refuse an archived session before runtime or storage changes.
 Repeat with its history runtime loaded.
 MCP reconnect and direct reload must also refuse it.
 The archive timestamp, update timestamp, history ID, and active list must remain unchanged.
-Explicit owner restore must keep the same session ID and retain archive protection checks.
+The owner and parent lead must restore an archived worker with `fulcra agent reload <id>`.
+Explicit restore must keep the same session ID and retain protected app confirmation checks.
+Send and resume must refuse archived sessions for every caller.
+An older app must receive an error that names worker reload and an app update.
 Workspace recovery must preserve each archived session.
 
 For the two private ops sources, use `control/ops/README.md`.

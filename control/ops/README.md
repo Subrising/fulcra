@@ -8,7 +8,8 @@ Apply the patch from the task root that contains `ops/`.
 Copy `../src/control/archive-guard.mjs` from this directory into each patched script directory first.
 Each script checks list metadata and fresh native archive state.
 A wait worker checks again after its completion event.
-The work-switch reload fallback checks again before reload.
+The work-switch reload fallback checks again before a native maintenance reload.
+It never calls the explicit worker restore command, `agent reload`.
 The FU-225 monitor checks again before each switch attempt.
 
 Run these commands from that task root:
