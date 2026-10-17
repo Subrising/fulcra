@@ -134,8 +134,13 @@ export default function(server) {
       await client.sendMessage(id, "Fixture turn");
       return client.waitForAgentUpsert(id, (s) => s.status === "idle");
     },
-    async create() {
-      return client.createAgent({ provider: "claude", cwd: root, modeId: "bypassPermissions" });
+    async create(callerAgentId?: string) {
+      return client.createAgent({
+        provider: "claude",
+        cwd: root,
+        modeId: "bypassPermissions",
+        callerAgentId,
+      });
     },
   };
 }
@@ -227,11 +232,10 @@ test("worker finish data retains total spend including the last turn across daem
   const f = await fixture();
   try {
     const parent = await f.create();
-    const child = await f.create();
+    const child = await f.create(parent.id);
     await f.turn(child.id, 9.65);
     f.switchAccount();
     await f.manager.reloadAgentSession(child.id);
-    await f.client.updateAgent(child.id, { labels: { "paseo.parent-agent-id": parent.id } });
     await f.storage.armFinishNotice(f.manager.getAgent(child.id)!, parent.id, "report-up");
     await f.turn(child.id, 7.87);
     const notice = await f.storage.getFinishNotice(child.id);
