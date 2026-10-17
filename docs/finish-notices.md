@@ -10,7 +10,7 @@ Use `--no-notify-on-finish` to opt out for that message.
 MCP callers can set `notifyOnFinish: false`.
 An opt-out does not cancel a notice requested by an earlier message.
 
-For a remote worker, send through its parent host with `<child>@<server>` as the target.
+For a remote worker, send through its parent host with `<full-child-id>@<server>` as the target.
 The parent host must retain the worker's host-link creation receipt and its original grant.
 The remote host returns the notice through that grant. A changed parent, session, profile, or grant causes refusal.
 Remote sends return after admission. The finish notice carries the result.

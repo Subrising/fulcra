@@ -18,7 +18,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   for (const close of cleanups.splice(0).toReversed()) await close();
 });
-async function fixture(parentLabel = PARENT_AGENT_ID_LABEL) {
+async function fixture(parentLabel = PARENT_AGENT_ID_LABEL, childTitle = "Child") {
   const root = await mkdtemp(path.join(tmpdir(), "send-finish-"));
   const prompts: string[] = [];
   const daemon = await createTestPaseoDaemon({
@@ -44,7 +44,7 @@ async function fixture(parentLabel = PARENT_AGENT_ID_LABEL) {
     {},
   );
   const child = await manager.createAgent(
-    { provider: "codex", cwd: root, modeId: "full-access", title: "Child" },
+    { provider: "codex", cwd: root, modeId: "full-access", title: childTitle },
     undefined,
     {
       labels: { [parentLabel]: parent.id },
@@ -256,4 +256,13 @@ test("a plain reporting-line child gets a saved finish notice", async () => {
     parentId: f.parent.id,
     status: "delivered",
   });
+});
+
+test("a local child title containing @ keeps local send behavior", async () => {
+  const f = await fixture(PARENT_AGENT_ID_LABEL, "Child @ home");
+  await f.client.sendAgentMessage("Child @ home", "named local task", {
+    sender: { agentId: f.parent.id },
+  });
+  await f.finish();
+  expect(f.prompts).toContain("named local task");
 });

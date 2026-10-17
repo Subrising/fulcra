@@ -10121,7 +10121,7 @@ export class Session {
     msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
   ) {
     const remote = msg.agentId.split("@");
-    if (remote.length !== 2) return msg;
+    if (remote.length !== 2 || !/^[a-f0-9-]{36}$/i.test(remote[0]!)) return msg;
     if (remote[1] === this.localServerId) return { ...msg, agentId: remote[0]! };
     await this.sendRemoteAgentMessage(msg, remote[0]!, remote[1]!);
     return null;

@@ -329,12 +329,19 @@ it("explicit opt-out reaches the daemon for sends and steers", async () => {
 
 it("remote parent sends keep their message identity and return for the finish notice", async () => {
   senderStamp.mockReturnValue({ agentId: "sender" });
-  const result = await parsedSend(["child@remote", "follow-up"]);
+  const result = await parsedSend(["22222222-2222-4222-8222-222222222222@remote", "follow-up"]);
   expect(result.data.status).toBe("sent");
   expect(client.sendAgentMessage).toHaveBeenCalledWith(
-    "child@remote",
+    "22222222-2222-4222-8222-222222222222@remote",
     "follow-up",
     expect.objectContaining({ messageId: expect.any(String) }),
   );
   expect(client.waitForFinish).not.toHaveBeenCalled();
+});
+
+it("waits for local titles containing @", async () => {
+  senderStamp.mockReturnValue({ agentId: "sender" });
+  const result = await parsedSend(["Child @ home", "local task"]);
+  expect(result.data.status).toBe("completed");
+  expect(client.waitForFinish).toHaveBeenCalledOnce();
 });

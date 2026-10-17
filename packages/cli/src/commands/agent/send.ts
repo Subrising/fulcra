@@ -306,7 +306,7 @@ function completionPolicy(
   sender: ReturnType<typeof resolveSender>,
   agentId: string,
 ) {
-  const remote = Boolean(sender && agentId.includes("@"));
+  const remote = Boolean(sender && /^[a-f0-9-]{36}@[a-z0-9_-]+$/i.test(agentId));
   return {
     background: options.wait === false || remote,
     messageId: options.wait === false && !remote ? undefined : randomUUID(),
