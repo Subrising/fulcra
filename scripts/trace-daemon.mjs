@@ -95,6 +95,7 @@ const entries = [
 const additionalInputs = [
   // Agent orchestration skill catalog loaded through filesystem paths
   "packages/server/dist/server/skills/**",
+  "packages/server/dist/server/skills/.bundled-skill-hashes.json",
   "packages/server/dist/server/builtin-plugins/**",
   // Shell integration scripts loaded by the terminal manager
   "packages/server/dist/server/terminal/shell-integration/**",
