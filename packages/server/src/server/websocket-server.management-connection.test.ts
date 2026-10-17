@@ -10,6 +10,8 @@ import { AccountActionsAudit } from "./plugins/account-actions.js";
 import type { ManagementInvocation } from "./plugins/management.js";
 import { OWNER_PERMISSIONS, RELAY_DEVICE_DEFAULT_PERMISSIONS } from "./authorization/index.js";
 import { DeviceRegistry, WS_CLOSE_ACCESS_CHANGED } from "./pairing/device-registry.js";
+import { RelayDeviceGate } from "./pairing/relay-device-gate.js";
+import { OfferStore } from "./pairing/offer-store.js";
 import { hashDaemonPassword } from "./auth.js";
 import {
   daemonAuthorizationHeader,
@@ -70,7 +72,7 @@ const hash = "$2b$12$OLxyuuP9uLK30Uzc4wQX0O6liuU/Q1t5P2b0Ebf36mULvpVK3DRZW";
 async function fixture() {
   const home = await mkdtemp(join(tmpdir(), "cc-connection-"));
   const host = new TrustedPlugins(
-    { enabled: () => true, validate: (c) => c },
+    { enabled: () => true, validate: (c) => c, isRead: (c) => c.method === "list" },
     { accountActions: new AccountActionsAudit(home) },
   );
   host.initializeKnownAgents([]);
@@ -210,7 +212,10 @@ async function fixture() {
     hold: () => {
       hold = true;
     },
-    release: () => release?.(),
+    release: () => {
+      hold = false;
+      release?.();
+    },
     async close() {
       release?.();
       for (const s of sockets) s.close();
@@ -701,7 +706,7 @@ test("accounts-manage: a relay device carries accounts.manage only while the own
     const phone = await relayDevice(f, accountsAdmission(deviceId));
     expect(phone.closed).toBeUndefined();
     await f.request(phone);
-    expect(f.getInvocation()?.accountsManage).toBe(true);
+    expect(f.getInvocation()?.accountsManage).toBe(false);
     expect(f.getInvocation()?.principal.permissions).toContain("accounts.manage");
     // Revoked: the device's sockets close, and a new admission claiming it is refused again.
     await registry.setAccountsManage(deviceId, false, (id, code, reason) =>
@@ -732,12 +737,10 @@ test("accounts-manage: no credential material in any response or event to a remo
     const invocation = f.getInvocation()!;
     await expect(
       invocation.recordAccountAction({ action: "switch", accountLabel: "Work" }),
-    ).resolves.toEqual({
-      recorded: true,
-    });
+    ).rejects.toThrow("This device may not manage accounts");
     await expect(
       invocation.recordAccountAction({ action: "add", accountLabel: CANARY }),
-    ).rejects.toThrow("Invalid account action");
+    ).rejects.toThrow("This device may not manage accounts");
     f.release();
     await pending;
     // Every frame the device received: hello/server_info, the management reply, and any event.
@@ -746,12 +749,167 @@ test("accounts-manage: no credential material in any response or event to a remo
     expect(frames).not.toContain(CANARY);
     expect(frames).not.toMatch(/sk-ant-|auth\.json|access_token|refresh_token/);
     // The owner's audit holds the label only.
-    const stored = await readFile(join(f.home, "accounts-audit.json"), "utf8");
-    expect(stored).toContain('"accountLabel": "Work"');
-    expect(stored).not.toContain(CANARY);
+    await expect(readFile(join(f.home, "accounts-audit.json"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   } finally {
     if (previous === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
     else process.env.CLAUDE_CODE_OAUTH_TOKEN = previous;
+    await f.close();
+  }
+});
+
+test("normal paired source switches its focused chat while other open timelines stay unchanged", async () => {
+  const f = await fixture();
+  try {
+    const registry = new DeviceRegistry(f.home);
+    const { deviceId } = registry.add("phone-scope-key", "Scratch phone");
+    const plain = deviceAdmission(deviceId, false);
+    const socket = await relayDevice(f, {
+      ...plain,
+      authentication: {
+        id: plain.principalId,
+        authentication: "paired-device",
+        deviceId,
+      },
+    });
+    expect(socket.closed).toBeUndefined();
+    const session = f.session(socket);
+    const id = "11111111-1111-4111-8111-111111111111";
+    const call = async (method: string, agentId = id) =>
+      session.handleMessage(
+        {
+          type: "plugin.rpc.invoke.request",
+          requestId: "scope-call",
+          pluginId: "orca-organization-next",
+          method,
+          input: { agentId, account: "Spare" },
+        },
+        socket,
+      );
+    const runtime = Reflect.get(f.server, "pluginRuntime");
+    let forwarded = 0;
+    runtime.invokePluginRpc = async (
+      _plugin: string,
+      _method: string,
+      _input: unknown,
+      management?: ManagementInvocation,
+    ) => {
+      forwarded++;
+      if (!management) return "unavailable";
+      expect(management.principal.accountSessionId).toBe(id);
+      await management.invoke("switch", {
+        method: "session-takeover",
+        input: { session: id, reason: "manual" },
+      });
+      await management.recordAccountAction({ action: "switch", accountLabel: "Spare" });
+      await session.handleMessage(
+        {
+          type: "client_heartbeat",
+          deviceType: "mobile",
+          focusedAgentId: "22222222-2222-4222-8222-222222222222",
+          focusedTerminalId: null,
+          lastActivityAt: new Date().toISOString(),
+          appVisible: true,
+        },
+        socket,
+      );
+      return "ok";
+    };
+    await call("organization.accounts.switch");
+    expect(f.bridge).not.toHaveBeenCalled();
+    await session.handleMessage(
+      {
+        type: "agent.timeline.set_subscription.request",
+        requestId: "invalid-view",
+        agentIds: ["not-a-session"],
+      },
+      socket,
+    );
+    await session.handleMessage(
+      {
+        type: "client_heartbeat",
+        deviceType: "mobile",
+        focusedAgentId: "not-a-session",
+        focusedTerminalId: null,
+        lastActivityAt: new Date().toISOString(),
+        appVisible: true,
+      },
+      socket,
+    );
+    await call("organization.accounts.switch", "not-a-session");
+    expect(forwarded).toBe(0);
+    await session.handleMessage(
+      {
+        type: "agent.timeline.set_subscription.request",
+        requestId: "view",
+        agentIds: [id, "22222222-2222-4222-8222-222222222222"],
+      },
+      socket,
+    );
+    await session.handleMessage(
+      {
+        type: "client_heartbeat",
+        deviceType: "mobile",
+        focusedAgentId: id,
+        focusedTerminalId: null,
+        lastActivityAt: new Date().toISOString(),
+        appVisible: true,
+      },
+      socket,
+    );
+    await call("organization.accounts.switch", "22222222-2222-4222-8222-222222222222");
+    expect(f.bridge).not.toHaveBeenCalled();
+    await call("organization.accounts.switch");
+    expect(f.bridge).toHaveBeenCalledTimes(1);
+    expect(
+      socket.sent.findLast((frame) => frame.message?.type === "plugin.rpc.invoke.response")?.message
+        ?.payload.output,
+    ).toBe("ok");
+    expect(f.bridge).toHaveBeenLastCalledWith(
+      expect.objectContaining({ method: "session-takeover" }),
+      expect.objectContaining({ deviceId, accountSessionId: id }),
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("removed or suspended read-only grant cannot reopen Command Centre management", async () => {
+  const f = await fixture();
+  try {
+    const registry = new DeviceRegistry(f.home);
+    const key = Buffer.alloc(32, 19).toString("base64");
+    const device = registry.add(key, "Scratch reader");
+    const gate = new RelayDeviceGate(new OfferStore(f.home), registry);
+    await registry.setCommandCentre(device.deviceId, true, () => {}, true);
+    const admitted = await relayDevice(f, gate.admit(key, { type: "hello" }).admission);
+    await f.request(admitted);
+    expect(f.getInvocation()?.readOnly).toBe(true);
+    expect(f.bridge).toHaveBeenCalledTimes(1);
+    const previous = f.getInvocation();
+    f.hold();
+    const pending = f.request(admitted);
+    await vi.waitFor(() => expect(f.getInvocation()).not.toBe(previous));
+    const retained = f.getInvocation()!;
+    let suspended: Promise<boolean> | undefined;
+    await registry.setCommandCentre(device.deviceId, false, () => {
+      suspended = retained.invoke("suspended", { method: "list", input: null }).then(
+        () => false,
+        () => true,
+      );
+    });
+    expect(await suspended).toBe(true);
+    f.release();
+    await pending;
+    expect(f.bridge).toHaveBeenCalledTimes(1);
+    const reconnected = await relayDevice(f, gate.admit(key, { type: "hello" }).admission);
+    expect(reconnected.closed).toBeUndefined();
+    await f.request(reconnected);
+    expect(f.getInvocation()).toBeUndefined();
+    expect(f.bridge).toHaveBeenCalledTimes(1);
+    expect(registry.hasCommandCentre(device.deviceId)).toBe(false);
+  } finally {
     await f.close();
   }
 });

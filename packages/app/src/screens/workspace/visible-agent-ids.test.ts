@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import type { WorkspaceLayout } from "@/stores/workspace-layout-store";
 import type { WorkspaceTab } from "@/workspace-tabs/model";
-import { selectVisibleAgentIds } from "./visible-agent-ids";
+import { agentIdForViewedTab, selectVisibleAgentIds } from "./visible-agent-ids";
 
 test("selects only the active agent tab in every visible pane", () => {
   const layout: WorkspaceLayout = {
@@ -109,4 +109,38 @@ test("pane retargeting replaces the viewed agent and duplicate panes collapse to
       focusedPaneOnly: false,
     }),
   }).toEqual({ duplicate: ["agent-a"], retargeted: ["agent-a", "agent-b"] });
+});
+
+test("the selected agent panel keeps its native chat visible and focused", () => {
+  const target = {
+    kind: "plugin" as const,
+    pluginId: "orca-organization-next",
+    panelId: "switch-account",
+    context: "agent" as const,
+    agentId: "viewed",
+  };
+  const layout: WorkspaceLayout = {
+    focusedPaneId: "main",
+    root: { kind: "pane", pane: { id: "main", tabIds: ["panel", "other"], focusedTabId: "panel" } },
+  };
+  const tabs: WorkspaceTab[] = [
+    { tabId: "panel", target, createdAt: 1 },
+    { tabId: "other", target: { kind: "agent", agentId: "hidden" }, createdAt: 2 },
+  ];
+  expect(agentIdForViewedTab(target)).toBe("viewed");
+  expect(
+    selectVisibleAgentIds({ layout, tabs, routeFocused: true, focusedPaneOnly: true }),
+  ).toEqual(["viewed"]);
+  expect(
+    agentIdForViewedTab({
+      kind: "plugin",
+      pluginId: "orca-organization-next",
+      panelId: "settings",
+      context: "workspace",
+    }),
+  ).toBeNull();
+  expect(agentIdForViewedTab({ kind: "terminal", terminalId: "terminal" })).toBeNull();
+  expect(
+    selectVisibleAgentIds({ layout, tabs, routeFocused: false, focusedPaneOnly: true }),
+  ).toEqual([]);
 });

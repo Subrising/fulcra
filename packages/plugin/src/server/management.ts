@@ -13,15 +13,13 @@ export interface PluginManagementContextV11 {
   /** D13: the host opened this invocation for a read-only device; only reads will succeed. */
   readonly readOnly?: boolean;
   /**
-   * U7: the caller may manage accounts (list, switch, set the default, take over a chat onto another account). Set by
-   * the host only for this Mac's owner, or a paired device the owner explicitly granted `accounts.manage`; never on
-   * the read-only tier. Absent means refuse account changes.
+   * Local owner account administration. A paired switch uses principal.accountSessionId instead.
    */
   readonly accountsManage?: boolean;
   /**
    * U7: records a remote account action for the owner's audit (Settings > Devices). The host adds the device and the
    * time from this invocation; the plugin gives only what happened and the account's label (never a credential).
-   * Local-owner actions are not recorded (`recorded: false`). Refused without `accountsManage`.
+   * Local-owner actions are not recorded (`recorded: false`). A paired invocation needs a host-bound account session.
    */
   recordAccountAction(entry: AccountActionV11): Promise<{ recorded: boolean }>;
   invoke(command: ControllerManagementCommandV11): Promise<JsonValue>;

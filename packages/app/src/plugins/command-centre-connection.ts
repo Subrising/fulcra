@@ -48,9 +48,11 @@ export function needsDirectConnection(
   pluginId: string,
   connection: Pick<ActiveConnection, "type"> | null | undefined,
   client?: Pick<DaemonClient, "getLastServerInfoMessage"> | null,
+  method?: string,
 ): boolean {
   return (
     isCommandCentrePlugin(pluginId) &&
+    !["organization.accounts.session", "organization.accounts.switch"].includes(method ?? "") &&
     connection?.type === "relay" &&
     !relayHasCommandCentre(client)
   );

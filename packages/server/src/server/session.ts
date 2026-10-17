@@ -82,7 +82,8 @@ import type { CreationSnapshot, AgentCreateRequest } from "@getpaseo/protocol/me
 import type { MessageReceipts } from "./message-receipts/index.js";
 import equal from "fast-deep-equal";
 import { SessionDelivery, type OwnedSubscription } from "./session/owned-subscriptions/index.js";
-import { v4 as uuidv4 } from "uuid";
+import { v4 as uuidv4, validate as isUuid } from "uuid";
+import { DeviceRegistry } from "./pairing/device-registry.js";
 import { lstat, mkdir, mkdtemp, realpath, rename, rm, stat } from "node:fs/promises";
 import { basename, resolve, sep } from "path";
 import { homedir } from "node:os";
@@ -3222,22 +3223,58 @@ export class Session {
     // D13: a caller without daemon.manage (a read-only device) is admitted for plugin reads only: the runtime refuses
     // any method the bundled Command Centre plugin did not register as a read, and its management runs reads only.
     const readOnlyCaller = !this.authorization.allowsPermission("daemon.manage");
+    const accountAdmission = source && this.managementSources.get(source);
+    const scopedAccount =
+      msg.pluginId === this.agentManager.trustedPlugins.controllerPluginId &&
+      ["organization.accounts.session", "organization.accounts.switch"].includes(msg.method) &&
+      accountAdmission &&
+      accountAdmission.authentication.authentication === "paired-device";
+    const accountSessionId =
+      scopedAccount && typeof msg.input === "object" && msg.input !== null
+        ? Reflect.get(msg.input, "agentId")
+        : undefined;
+    const assertAccountView = () => {
+      if (!scopedAccount) return;
+      const ids = new Set<string>();
+      const subscriptions = new Set(this.delivery.subscriptionIds(source!, "timelines"));
+      for (const [id, subscription] of this.timelineSubscriptions)
+        if (subscriptions.has(id)) for (const agentId of subscription.agentIds) ids.add(agentId);
+      const activity = this.getClientActivity(source);
+      if (
+        typeof accountSessionId !== "string" ||
+        !isUuid(accountSessionId) ||
+        !ids.has(accountSessionId) ||
+        !activity?.appVisible ||
+        activity.focusedAgentId !== accountSessionId
+      )
+        throw new Error("Open this session before changing its account");
+    };
+    assertAccountView();
+    const principalReader = () => {
+      assertAccountView();
+      const admission = source && this.managementSources.get(source);
+      if (!admission || this.isCleanedUp) return undefined;
+      if (
+        readOnlyCaller &&
+        !scopedAccount &&
+        admission.authentication.authentication === "paired-device" &&
+        (!admission.authentication.deviceId ||
+          !new DeviceRegistry(this.paseoHome).hasCommandCentre(admission.authentication.deviceId))
+      )
+        return undefined;
+      return {
+        ...admission.authentication,
+        permissions: this.authorization
+          .listPermissions()
+          .filter((permission) => admission.permissions.includes(permission)),
+      };
+    };
     const management =
       source && !this.pluginOriginId
         ? this.agentManager.trustedPlugins.management.open(
             this.pluginRuntime.managementTarget?.(msg.pluginId),
-            () => {
-              const admission = this.managementSources.get(source);
-              return admission && !this.isCleanedUp
-                ? {
-                    ...admission.authentication,
-                    permissions: this.authorization
-                      .listPermissions()
-                      .filter((permission) => admission.permissions.includes(permission)),
-                  }
-                : undefined;
-            },
-            { readOnly: readOnlyCaller },
+            principalReader,
+            { readOnly: readOnlyCaller, ...(scopedAccount ? { accountSessionId } : {}) },
           )
         : undefined;
     if (management && source) this.managementInvocations.set(management, source);
@@ -3252,6 +3289,12 @@ export class Session {
         if (management) this.managementInvocations.delete(management);
       })
       .then((output) => {
+        // A completed write keeps its result if the user changes focus after dispatch.
+        if (msg.method !== "organization.accounts.switch") {
+          assertAccountView();
+          if (readOnlyCaller && management && !principalReader())
+            throw new Error("Command Centre read authority changed");
+        }
         this.emit({
           type: "plugin.rpc.invoke.response",
           payload: { requestId: msg.requestId, output },

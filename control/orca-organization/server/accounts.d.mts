@@ -11,6 +11,7 @@ export interface Account {
   enabled: boolean;
   priority: number;
   auth: "ok" | "expired" | "signing-in";
+  revoked?: { at: string; reason: string };
   limitedUntil: string | null;
   limitKind?: string | null;
   limitObservedAt?: string | null;
@@ -44,10 +45,14 @@ export function accountLimit(
   a: Account,
   now?: number,
 ): { until: string; kind: string | null; source: string } | null;
-export function accountStatus(
-  a: Account,
-  now?: number,
-): { state: string; until?: string; source?: string };
+export type AccountStatus =
+  | { state: "ok" }
+  | { state: "disabled" }
+  | { state: "auth-expired" }
+  | { state: "signing-in" }
+  | { state: "revoked"; reason: string }
+  | { state: "limited"; until: string; source?: string };
+export function accountStatus(a: Account, now?: number): AccountStatus;
 export const WEEKLY_LAUNCH_CAP_PCT: number;
 export function readUsage(root: string, now?: number): Record<string, number>;
 export function readUsageAsync(root: string, now?: number): Promise<Record<string, number>>;
@@ -170,7 +175,7 @@ export interface SessionAccounts {
   accounts: {
     id: string;
     name: string;
-    status: { state: string; until?: string; source?: string };
+    status: AccountStatus;
     isDefault: boolean;
   }[];
 }
@@ -210,6 +215,7 @@ export function confirmAccountLimit(input: {
   | null
 >;
 
+export function publicAccountText(value: unknown, fallback: string): string;
 export function launchEnv(
   provider: string,
   account: { id: string; keyEpoch?: string },

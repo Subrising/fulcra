@@ -17,6 +17,7 @@ export async function takeOverSession(
     reconcile = false,
     switchId,
     reason = "manual",
+    requireUnowned = false,
   } = {},
 ) {
   const accountId = typeof targetAccount === "string" ? targetAccount : targetAccount?.id;
@@ -37,6 +38,8 @@ export async function takeOverSession(
       // It has no delegation to fence, so only the owner's manual switch applies to it; every other guard below stays
       // (idle, target account, the durable intent bound to boot and the human-input cursor, rollback on refusal).
       const current = control.store.get(sessionId) ?? null;
+      if (requireUnowned && current?.mode === "delegated")
+        return refused("Another owner controls this session");
       if (current && !["human", "delegated"].includes(current.mode))
         return refused("Session control changed; refresh before switching");
       if (reason !== "manual" && current?.mode !== "delegated")

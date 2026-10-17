@@ -395,10 +395,9 @@ test("session-takeover has an exact write contract and rejects read, device and 
     { ...owner, permissions: ["command-centre.manage"] },
     { ...owner, authentication: "paired-device", deviceId: "fixture-device" },
   ]) {
-    await assert.rejects(
-      async () => managementDispatcher(w.control)(w.command, principal),
-      /principal|device|authoris/i,
-    );
+    await assert.rejects(async () => managementDispatcher(w.control)(w.command, principal), {
+      code: "unauthorised",
+    });
   }
   await assert.rejects(
     rpc(w.control, "owner-secret")({ ...w.command, capability: "session-capability" }),

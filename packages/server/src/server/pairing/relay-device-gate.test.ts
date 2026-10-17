@@ -92,7 +92,7 @@ it("well-formed wrong claims still exhaust the attempt budget", () => {
 });
 
 // L46 option 5: Command Centre over the relay is per device, off at pairing, and per socket.
-it("gives paired-device authentication only to a device the owner granted, never at pairing", async () => {
+it("authenticates a normal paired device without granting management", async () => {
   const { offers, registry, gate } = setup();
   const offer = offers.mint();
   const key = Buffer.alloc(32, 5).toString("base64");
@@ -102,9 +102,11 @@ it("gives paired-device authentication only to a device the owner granted, never
     secret: offer.secret,
     deviceName: "Phone",
   });
-  expect(claimed.admission).not.toHaveProperty("authentication");
+  expect(claimed.admission.authentication?.authentication).toBe("paired-device");
   expect(claimed.admission.permissions).not.toContain("command-centre.manage");
-  expect(gate.admit(key, { type: "hello" }).admission).not.toHaveProperty("authentication");
+  expect(gate.admit(key, { type: "hello" }).admission.permissions).not.toContain(
+    "command-centre.manage",
+  );
 
   const deviceId = claimed.admission.deviceId;
   await registry.setCommandCentre(deviceId, true, () => {});
@@ -119,7 +121,9 @@ it("gives paired-device authentication only to a device the owner granted, never
   expect(granted.permissions).not.toContain("access.manage");
 
   await registry.setCommandCentre(deviceId, false, () => {});
-  expect(gate.admit(key, { type: "hello" }).admission).not.toHaveProperty("authentication");
+  expect(gate.admit(key, { type: "hello" }).admission.permissions).not.toContain(
+    "command-centre.manage",
+  );
 });
 
 it("accounts-manage: a device holds accounts.manage only while the owner's grant stands", async () => {

@@ -45,9 +45,7 @@ export class RelayDeviceGate {
       claimed = true;
     }
     const principalId = `device:${record.deviceId}`;
-    // The E2EE handshake proved this socket holds the device's pairing key. Only a device this Mac's owner granted
-    // Command Centre gets paired-device authentication, and only on this socket's admission; a device that has
-    // just paired (claimed) never has the grant.
+    // The pairing key authenticates the device. Management grants remain separate.
     const granted = !claimed && this.registry.hasCommandCentre(record.deviceId);
     // U7: account management only while the owner's separate grant stands (read fresh, like Command Centre).
     const accounts = granted && this.registry.hasAccountsManage(record.deviceId);
@@ -60,15 +58,11 @@ export class RelayDeviceGate {
         principalId,
         deviceId: record.deviceId,
         permissions,
-        ...(granted
-          ? {
-              authentication: {
-                id: principalId,
-                authentication: "paired-device" as const,
-                deviceId: record.deviceId,
-              },
-            }
-          : {}),
+        authentication: {
+          id: principalId,
+          authentication: "paired-device" as const,
+          deviceId: record.deviceId,
+        },
       },
     };
   }

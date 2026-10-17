@@ -18,3 +18,29 @@ test("RPC_METHODS equals every method literal the dispatcher answers, and nothin
   assert.deepEqual([...RPC_METHODS].sort(), [...literal].sort());
   assert.ok(RPC_METHODS.size > 90);
 });
+
+test("scoped phone management accepts only the exact manual account switch", async () => {
+  const { requireManagementPrincipal } = await import("./management-principal.mjs");
+  const session = "11111111-1111-4111-8111-111111111111";
+  const principal = {
+    id: "device:phone",
+    deviceId: "phone",
+    authentication: "paired-device",
+    permissions: ["daemon.read", "workspace.read", "workspace.write"],
+    accountSessionId: session,
+  };
+  assert.equal(
+    requireManagementPrincipal(principal, {
+      method: "session-takeover",
+      input: { session, reason: "manual" },
+    }),
+    principal,
+  );
+  for (const command of [
+    { method: "create", input: {} },
+    { method: "list", input: null },
+    { method: "session-takeover", input: { session: "other", reason: "manual" } },
+    { method: "session-takeover", input: { session, reason: "limit" } },
+  ])
+    assert.throws(() => requireManagementPrincipal(principal, command), /viewed session/);
+});

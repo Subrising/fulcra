@@ -103,6 +103,7 @@ const command = z
         authentication: z.enum(["daemon-password", "paired-device", "protected-local-ipc"]),
         deviceId: z.string().nullable(),
         permissions: z.array(DaemonPermissionSchema),
+        accountSessionId: z.string().uuid().optional(),
       })
       .strict(),
   })

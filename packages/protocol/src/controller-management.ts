@@ -10,6 +10,8 @@ export interface ManagementPrincipalV11 {
   readonly authentication: "daemon-password" | "paired-device" | "protected-local-ipc";
   readonly deviceId: string | null;
   readonly permissions: readonly DaemonPermission[];
+  /** Host-bound viewed session. This permits only its manual account switch. */
+  readonly accountSessionId?: string;
 }
 export type ControllerHostRequestV11 =
   | {

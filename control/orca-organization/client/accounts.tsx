@@ -16,7 +16,9 @@ import {
 // U7 accounts.manage: the plain "ask the owner" refusal a device without account management receives.
 const ownerAsk = (error: unknown) => {
   const m = error instanceof Error ? error.message : "";
-  const i = m.indexOf("Ask the owner to allow account management");
+  const i = m.search(
+    /Account settings require the local owner|Ask the owner to allow account management/,
+  );
   return i >= 0 ? m.slice(i, i + 200) : null;
 };
 

@@ -60,6 +60,7 @@ interface TestPaseoDaemonOptions {
   agentProfiles?: AgentProfile[];
   autoArchiveAfterMerge?: boolean;
   pluginsEnabled?: PaseoDaemonConfig["pluginsEnabled"];
+  bundledPluginsDirectory?: string;
   builtinPlugins?: BuiltinPluginLoader;
   plugins?: PaseoDaemonConfig["plugins"];
   timelineStoreStep?: PaseoDaemonDependencies["timelineStoreStep"];
@@ -231,6 +232,7 @@ async function prepareTestDaemonConfig(
     agentProfiles: options.agentProfiles,
     autoArchiveAfterMerge: options.autoArchiveAfterMerge,
     pluginsEnabled: options.pluginsEnabled,
+    bundledPluginsDirectory: options.bundledPluginsDirectory,
     plugins: options.plugins,
   };
   return { config, paseoHomeRoot, paseoHome, staticDir, createdDirs };

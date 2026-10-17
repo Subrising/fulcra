@@ -209,7 +209,7 @@ export class PluginRegistry {
           paseo: createPaseoApi(client),
           invoke: (method, input) =>
             // L46: never send a Command Centre read the relay cannot authenticate; say why instead.
-            needsDirectConnection(entry.id, activeConnectionOfClient(client), client)
+            needsDirectConnection(entry.id, activeConnectionOfClient(client), client, method)
               ? Promise.reject(new CommandCentreNeedsDirectConnectionError())
               : client.invokePluginRpc(entry.id, method, input),
           id: entry.id,

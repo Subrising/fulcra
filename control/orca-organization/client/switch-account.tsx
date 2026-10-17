@@ -9,15 +9,17 @@ import { sessionAccountsRpc, accountSwitchRpc } from "../shared/accounts";
 
 /**
  * W1: "Switch account…" for one session. It appears in the session's menu (the command center in a session) and as
- * /account in its chat: `/account` lists the accounts (it opens this menu), `/account <name>` switches to one. Only the
- * owner in the app reaches it; nothing here shows a credential.
+ * /account in its chat: `/account` lists the accounts (it opens this menu), `/account <name>` switches to one.
+ * A paired device can use its viewed session. Nothing here shows a credential.
  */
 export const SWITCH_PANEL = "switch-account";
 const PROVIDER_LABEL = { claude: "Claude", codex: "Codex" } as const;
-// U7 accounts.manage: a device the owner has not allowed to manage accounts is told plainly who to ask.
+// Show the host-owner refusal, including messages from older hosts.
 export const ownerAsk = (error: unknown) => {
   const m = error instanceof Error ? error.message : "";
-  const i = m.indexOf("Ask the owner to allow account management");
+  const i = m.search(
+    /Account settings require the local owner|Ask the owner to allow account management/,
+  );
   return i >= 0 ? m.slice(i, i + 200) : null;
 };
 

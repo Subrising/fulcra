@@ -138,3 +138,23 @@ describe("L46: Command Centre over the relay", () => {
     ).toBe(false);
   });
 });
+
+it("normal paired relay device can call only the session account list and switch", async () => {
+  const { client, invokePluginRpc } = fakeClient();
+  host.connection = { type: "relay" };
+  const runtime = createPluginSurfaceRuntime(client, plugin(COMMAND_CENTRE_PLUGIN_ID))!;
+  for (const method of ["organization.accounts.session", "organization.accounts.switch"])
+    await runtime.invoke(method, { agentId: "viewed" });
+  expect(invokePluginRpc).toHaveBeenCalledTimes(2);
+  for (const method of [
+    "organization.accounts",
+    "organization.accounts.add",
+    "organization.accounts.update",
+    "organization.accounts.settings",
+    "organization.accounts.takeover",
+  ])
+    await expect(runtime.invoke(method, {})).rejects.toBeInstanceOf(
+      CommandCentreNeedsDirectConnectionError,
+    );
+  expect(invokePluginRpc).toHaveBeenCalledTimes(2);
+});

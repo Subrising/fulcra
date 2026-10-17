@@ -96,7 +96,7 @@ import type {
 } from "@/keyboard/keyboard-action-dispatcher";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
 import { normalizeWorkspaceTabTarget, workspaceTabTargetsEqual } from "@/workspace-tabs/identity";
-import { useVisibleAgentIds } from "./visible-agent-ids";
+import { agentIdForViewedTab, useVisibleAgentIds } from "./visible-agent-ids";
 import {
   getHostRuntimeStore,
   useHostRuntimeClient,
@@ -2002,11 +2002,7 @@ function WorkspaceScreenContent({
   const setFocusedAgentId = useSessionStore((state) => state.setFocusedAgentId);
   const setFocusedTerminalId = useSessionStore((state) => state.setFocusedTerminalId);
   const focusedPaneAgentId = useMemo(() => {
-    const target = focusedPaneTabState.activeTab?.descriptor.target;
-    if (target?.kind !== "agent") {
-      return null;
-    }
-    return target.agentId;
+    return agentIdForViewedTab(focusedPaneTabState.activeTab?.descriptor.target);
   }, [focusedPaneTabState.activeTab]);
   const focusedPaneTerminalId = useMemo(() => {
     const target = focusedPaneTabState.activeTab?.descriptor.target;

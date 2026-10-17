@@ -472,7 +472,7 @@ export function runPluginClientBundle(
         openExternalUrl,
         invokeHostRpc: (serverId: string, method: string, input: unknown) => {
           const client = runtime.hosts.getClientForRpc(serverId);
-          if (needsDirectConnection(id, activeConnectionOfClient(client), client))
+          if (needsDirectConnection(id, activeConnectionOfClient(client), client, method))
             return Promise.reject(new CommandCentreNeedsDirectConnectionError());
           return client.invokePluginRpc(id, method, input);
         },
