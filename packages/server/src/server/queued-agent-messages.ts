@@ -1,3 +1,4 @@
+import { hostLinksFor } from "./host-links.js";
 import { leadEventsFor, withLeadEvent } from "./lead-events.js";
 import { randomUUID } from "node:crypto";
 import { DIRECT_LINK_LABEL, MAIN_ASSISTANT_ROLE } from "@getpaseo/protocol/agent-labels";
@@ -10,7 +11,7 @@ import type { AgentStorage } from "./agent/agent-storage.js";
 import {
   disarmFinishNotification,
   sendPromptToAgentAndWaitForStart,
-  setupFinishNotification,
+  armPromptFinishNotification,
   SteerUnavailableError,
 } from "./agent/agent-prompt.js";
 import { buildAgentPrompt } from "./agent/prompt-attachments.js";
@@ -39,6 +40,7 @@ const RequestSchema = SendAgentMessageRequestSchema.pick({
   sender: SendAgentMessageRequestSchema.shape.sender.unwrap(),
   sessionMode: z.string().optional(),
   notifyOnFinish: z.boolean().optional(),
+  hostLinkMessageId: z.string().uuid().optional(),
 });
 const RecordSchema = z.object({
   id: z.string(),
@@ -89,7 +91,13 @@ export class QueuedAgentMessages {
           ["turn_completed", "turn_failed", "turn_canceled"].includes(event.event.type)
         )
           id = event.agentId;
-        if (id) this.kick(id);
+        if (id) {
+          this.kick(id);
+          // A prior result must settle before the next task takes its saved notice slot.
+          for (const record of this.records)
+            if (record.state === "queued" && record.request.sender.agentId === id)
+              this.kick(record.agentId);
+        }
         // The run releases its foreground fence after publishing its terminal event.
         if (id && event.type === "agent_stream") setTimeout(() => this.kick(id), 100).unref?.();
       },
@@ -137,7 +145,7 @@ export class QueuedAgentMessages {
     }
     if (attempted.length) await this.save();
     this.initialized = true;
-    for (const record of attempted) this.tell(record, record.reason!);
+    this.tellBatch(attempted, attempted[0]?.reason ?? "Delivery is uncertain after restart.");
   }
 
   async prepareArchiveObservation(): Promise<void> {
@@ -200,8 +208,6 @@ export class QueuedAgentMessages {
         ...(resumeAt ? { resumeAt } : {}),
       });
       await this.save();
-      if (body.notifyOnFinish)
-        disarmFinishNotification(this.deps.agentManager, agentId, body.sender.agentId);
     });
     this.kick(agentId);
   }
@@ -237,6 +243,19 @@ export class QueuedAgentMessages {
     });
   }
 
+  async messageState(agentId: string, messageId: string): Promise<string | null> {
+    try {
+      await this.serial(() => this.load());
+      return (
+        this.records.find(
+          (record) => record.agentId === agentId && record.request.messageId === messageId,
+        )?.state ?? null
+      );
+    } catch {
+      return "uncertain";
+    }
+  }
+
   archivePending(agentId: string): number | null {
     if (!this.initialized || this.unhealthy || this.stopped) return null;
     return this.records.filter(
@@ -258,7 +277,36 @@ export class QueuedAgentMessages {
     await this.tail;
   }
 
+  private tellBatch(records: Record[], reason: string): void {
+    const remote = new Map<string, Record[]>();
+    for (const record of records) {
+      if (!record.request.hostLinkMessageId) {
+        this.tell(record, reason);
+        continue;
+      }
+      const key = JSON.stringify([record.agentId, record.request.sender]);
+      const group = remote.get(key) ?? [];
+      group.push(record);
+      remote.set(key, group);
+    }
+    for (const group of remote.values()) {
+      hostLinksFor(this.deps.agentManager)?.failQueuedPrompts(
+        group[0]!.agentId,
+        group.map((record) => record.request.hostLinkMessageId!),
+        reason,
+        group.some((record) => record.state === "uncertain"),
+      );
+    }
+  }
+
   private tell(record: Record, reason: string): void {
+    if (record.request.hostLinkMessageId && ["refused", "uncertain"].includes(record.state))
+      hostLinksFor(this.deps.agentManager)?.failQueuedPrompts(
+        record.agentId,
+        [record.request.hostLinkMessageId],
+        reason,
+        record.state === "uncertain",
+      );
     tellSenderUndelivered({
       ...this.deps,
       sender: record.request.sender,
@@ -308,6 +356,11 @@ export class QueuedAgentMessages {
     this.timers.delete(agentId);
     for (const group of senders.values()) {
       const record = group[0]!;
+      const remoteIds = group.flatMap((item) =>
+        item.request.hostLinkMessageId ? [item.request.hostLinkMessageId] : [],
+      );
+      if (remoteIds.length)
+        hostLinksFor(agentManager)?.failQueuedPrompts(agentId, remoteIds, reason);
       tellSenderUndelivered({
         ...this.deps,
         sender: record.request.sender,
@@ -346,6 +399,13 @@ export class QueuedAgentMessages {
   }
 
   private async recordRefusal(record: Record, agentId: string): Promise<string | null> {
+    if (record.request.hostLinkMessageId) {
+      try {
+        this.checkRemotePrompt(record);
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    }
     const { agentManager, agentStorage } = this.deps;
     const target = agentManager.getAgent(agentId) ?? (await agentStorage.get(agentId));
     const line = await decideSend(
@@ -376,6 +436,17 @@ export class QueuedAgentMessages {
       } else eligible.push(record);
     }
     return eligible;
+  }
+
+  private checkRemotePrompt(record: Record): void {
+    if (!record.request.hostLinkMessageId) return;
+    const links = hostLinksFor(this.deps.agentManager);
+    if (!links) throw new Error("The remote prompt return route is unavailable.");
+    links.checkQueuedPrompt(
+      record.agentId,
+      record.request.hostLinkMessageId,
+      record.request.sender,
+    );
   }
 
   private captureLineCheck(record: Record, agentId: string): () => string | null {
@@ -429,6 +500,11 @@ export class QueuedAgentMessages {
     };
     const selected = read();
     return () => {
+      try {
+        this.checkRemotePrompt(record);
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
       const current = read();
       return (
         current.reason ??
@@ -509,10 +585,22 @@ export class QueuedAgentMessages {
             });
             if (refused.length) throw new QueuedLinesChangedError(refused);
           },
+          eligible.some((record) => record.request.hostLinkMessageId)
+            ? () => {
+                for (const record of eligible) {
+                  if (record.request.hostLinkMessageId)
+                    hostLinksFor(agentManager)!.armQueuedPrompt(
+                      agentId,
+                      record.request.hostLinkMessageId,
+                      record.request.sender,
+                    );
+                }
+              }
+            : undefined,
         );
         for (const record of eligible) {
           if (record.request.notifyOnFinish)
-            setupFinishNotification({
+            await armPromptFinishNotification({
               ...this.deps,
               childAgentId: agentId,
               callerAgentId: record.request.sender.agentId,
@@ -580,7 +668,7 @@ export class QueuedAgentMessages {
     }
     if (limit) this.schedule(agentId, limit.resumeAt);
     else if (!(error instanceof SteerUnavailableError))
-      for (const record of eligible) this.tell(record, record.reason!);
+      this.tellBatch(eligible, eligible[0]?.reason ?? "Delivery is uncertain.");
   }
 }
 
@@ -636,6 +724,7 @@ export function queuedReceiverCheck(
   sessionId: string | null,
   stopped = () => false,
   checkLines = () => {},
+  beforeHandoff?: () => void,
 ): object {
   const receiver = agentManager.getAgent(agentId);
   return createFinalInputCheck(
@@ -657,7 +746,7 @@ export function queuedReceiverCheck(
       if (stopped() || current.activeForegroundTurnId || current.pendingReplacement)
         throw new SteerUnavailableError(agentId);
     },
-    undefined,
+    beforeHandoff,
     !["claude", "codex"].includes(receiver?.provider ?? ""),
   );
 }
