@@ -1,3 +1,4 @@
+import { SessionCostOutbox, type PendingSessionCost } from "./session-cost-outbox.js";
 import { recordSessionCost, sessionCost, type SessionCostRecords } from "./session-cost.js";
 import { queuedAgentMessagesFor } from "../queued-agent-messages.js";
 import { heldSendsFor } from "../held-sends.js";
@@ -504,6 +505,7 @@ export interface CreateAgentOptions {
 }
 
 export interface AgentManagerOptions {
+  costOutboxFile?: string;
   archiveServerId?: string;
   archiveLedgerDirectory?: string;
   automaticInputNow?: () => number;
@@ -2182,8 +2184,11 @@ export class AgentManager {
   private readonly archiveLedgerDirectory?: string;
   private acceptingAgentRegistrations = true;
   private readonly automaticInputLimits: AutomaticInputLimits;
+  private readonly costOutbox: SessionCostOutbox;
+  private readonly costScopes = new WeakMap<AgentSession, string>();
 
   constructor(options: AgentManagerOptions) {
+    this.costOutbox = new SessionCostOutbox(options.costOutboxFile);
     this.archiveServerId = options.archiveServerId;
     this.archiveLedgerDirectory = options.archiveLedgerDirectory;
     this.automaticInputLimits = new AutomaticInputLimits(options.automaticInputNow);
@@ -5573,17 +5578,95 @@ export class AgentManager {
     return agent.session.usageCredential?.()?.accountId ?? null;
   }
 
+  private apiCostGuardRequired(agent: ActiveManagedAgent): boolean {
+    if (agent.provider !== "claude" || !this.sessionCostAccount(agent)) return false;
+    return agent.session.billingAccountKind?.() !== "subscription";
+  }
+
+  private async recoverPendingCost(entry: PendingSessionCost): Promise<void> {
+    if (!this.pluginLifecycle) throw new Error("API spend guard is unavailable. No turn started.");
+    const committed = await this.pluginLifecycle.before("agent.cost_commit", entry);
+    if (committed.costCommitted !== true) throw new Error("API cost billing is unavailable");
+    const live = this.agents.get(entry.agentId);
+    const stored = this.registry?.getCached(entry.agentId);
+    const records = structuredClone(
+      live?.costRecords ?? stored?.costRecords ?? { cursors: {}, turns: {} },
+    );
+    records.turns[entry.turnId] ??= {
+      accountId: entry.accountId,
+      amountUsd: entry.costUsd,
+      at: entry.at,
+    };
+    if (entry.revision >= (records.revision ?? 0)) {
+      records.cursors = { ...records.cursors, ...entry.cursors };
+      records.revision = entry.revision;
+    }
+    delete records.billingWarning;
+    if (live) {
+      live.costRecords = records;
+      await this.persistSnapshot(live);
+    } else if (stored) await this.registry!.upsert({ ...stored, costRecords: records });
+    await this.costOutbox.remove(entry);
+  }
+
+  private async pendingApiCosts(accountId: string) {
+    const entries = await this.costOutbox.pending();
+    const seen = new Set(entries.map((entry) => JSON.stringify([entry.agentId, entry.turnId])));
+    const records = new Map(
+      this.registry?.listCached().map((row) => [row.id, row.costRecords]) ?? [],
+    );
+    for (const live of this.agents.values()) records.set(live.id, live.costRecords);
+    for (const [agentId, cost] of records) {
+      if (!cost?.billingWarning) continue;
+      for (const [turnId, row] of Object.entries(cost.turns)) {
+        const key = JSON.stringify([agentId, turnId]);
+        if (row.accountId !== accountId || seen.has(key)) continue;
+        const entry: PendingSessionCost = {
+          agentId,
+          provider: "claude",
+          accountId,
+          turnId,
+          costUsd: row.amountUsd,
+          at: row.at,
+          cursors: cost.cursors,
+          revision: cost.revision ?? Object.keys(cost.turns).length,
+        };
+        await this.costOutbox.put(entry);
+        entries.push(entry);
+        seen.add(key);
+      }
+    }
+    return entries.filter((entry) => entry.accountId === accountId);
+  }
+
   private async checkTurnBudget(agent: ActiveManagedAgent): Promise<void> {
-    if (!this.pluginLifecycle) return;
+    const required = this.apiCostGuardRequired(agent);
+    if (!this.pluginLifecycle) {
+      if (required) throw new Error("API spend guard is unavailable. No turn started.");
+      return;
+    }
+    if (agent.session.billingAccountKind?.() === "subscription") return;
+    if (required) {
+      try {
+        for (const entry of await this.pendingApiCosts(this.sessionCostAccount(agent)!))
+          await this.recoverPendingCost(entry);
+      } catch {
+        throw new Error(
+          "API cost recovery failed. No turn started. Repair billing storage and retry.",
+        );
+      }
+    }
     await this.refreshSessionCost(agent.id);
-    await this.pluginLifecycle.before("agent.turn_start", {
+    const admitted = await this.pluginLifecycle.before("agent.turn_start", {
       agentId: agent.id,
       provider: agent.provider,
       accountId: this.sessionCostAccount(agent),
-      costRecords: agent.costRecords?.turns,
+      accountKind: agent.session.billingAccountKind?.() ?? undefined,
       labels: { ...agent.labels },
       sessionCost: sessionCost(agent.costRecords),
     });
+    if (required && admitted.apiGuardChecked !== true)
+      throw new Error("API spend guard is unavailable. No turn started.");
   }
 
   private async startPendingForegroundTurn(params: {
@@ -8074,6 +8157,36 @@ export class AgentManager {
     return flags.shouldNotifyWaiters;
   }
 
+  private costScope(agent: ActiveManagedAgent): string {
+    if (agent.instanceId) return agent.instanceId;
+    let scope = this.costScopes.get(agent.session);
+    if (!scope) {
+      scope = randomUUID();
+      this.costScopes.set(agent.session, scope);
+    }
+    return scope;
+  }
+
+  private setCostWarning(agent: ActiveManagedAgent, warning?: string): void {
+    if (!agent.costRecords) return;
+    const records = { ...agent.costRecords };
+    if (warning) records.billingWarning = warning;
+    else delete records.billingWarning;
+    // Invalidate an in-flight cost read before it can replace this warning.
+    agent.costRecords = records;
+  }
+
+  private async saveCostSnapshot(agent: ActiveManagedAgent): Promise<boolean> {
+    try {
+      await this.persistSnapshot(agent);
+      return true;
+    } catch {
+      this.setCostWarning(agent, "Cost storage failed. API turns require recovery.");
+      this.logger.warn({ agentId: agent.id }, "Session cost snapshot write failed");
+      return false;
+    }
+  }
+
   private async recordCostResult(
     agent: ActiveManagedAgent,
     event: AgentStreamEvent,
@@ -8081,35 +8194,69 @@ export class AgentManager {
     fromHistory: boolean | undefined,
   ): Promise<void> {
     if (
-      !fromHistory &&
-      eventTurnId &&
-      (event.type === "turn_completed" || event.type === "turn_failed") &&
-      event.usage
-    ) {
-      const next = recordSessionCost(agent.costRecords, {
-        provider: agent.provider,
-        turnId: eventTurnId,
-        accountId: this.sessionCostAccount(agent),
-        usage: event.usage,
-        at: new Date().toISOString(),
-      });
-      if (next !== agent.costRecords) {
-        const row = next?.turns[eventTurnId];
-        if (row) {
-          // Account billing commits first, including internal helpers. A published completion cannot lose spend.
-          await this.pluginLifecycle?.before("agent.cost_commit", {
-            agentId: agent.id,
-            provider: agent.provider,
-            accountId: row.accountId,
-            turnId: eventTurnId,
-            costUsd: row.amountUsd,
-            at: row.at,
-            cursors: next!.cursors,
-          });
-          event.usage.turnCostUsd = row.amountUsd;
-        }
-        agent.costRecords = next;
-        await this.persistSnapshot(agent);
+      fromHistory ||
+      !eventTurnId ||
+      (event.type !== "turn_completed" && event.type !== "turn_failed") ||
+      !event.usage
+    )
+      return;
+    const scope = this.costScope(agent);
+    const id = JSON.stringify([scope, eventTurnId]);
+    const next = recordSessionCost(agent.costRecords, {
+      provider: agent.provider,
+      turnId: eventTurnId,
+      instanceId: scope,
+      accountId: this.sessionCostAccount(agent),
+      usage: event.usage,
+      at: new Date().toISOString(),
+    });
+    if (next === agent.costRecords || !next) return;
+    agent.costRecords = next;
+    const row = next.turns[id];
+    event.usage.turnCostUsd = row.amountUsd;
+    const entry: PendingSessionCost = {
+      agentId: agent.id,
+      provider: agent.provider,
+      accountId: row.accountId,
+      turnId: id,
+      costUsd: row.amountUsd,
+      at: row.at,
+      cursors: next.cursors,
+      revision: next.revision!,
+    };
+    let committed = !row.accountId;
+    // Save the recovery entry before a snapshot can acknowledge the result.
+    if (row.accountId) {
+      try {
+        await this.costOutbox.put(entry);
+      } catch {
+        this.setCostWarning(agent, "Cost recovery storage failed. API turns require recovery.");
+      }
+    }
+    if (row.accountId) {
+      try {
+        if (!this.pluginLifecycle) throw new Error("Cost billing is unavailable");
+        const receipt = await this.pluginLifecycle.before("agent.cost_commit", entry);
+        if (receipt.costCommitted !== true) throw new Error("API cost billing is unavailable");
+        committed = true;
+        this.setCostWarning(agent);
+      } catch {
+        this.setCostWarning(
+          agent,
+          "Billing write failed. Cost is saved; API turns require recovery.",
+        );
+        this.logger.warn(
+          { agentId: agent.id },
+          "Account cost commit failed; retained for recovery",
+        );
+      }
+    }
+    const saved = await this.saveCostSnapshot(agent);
+    if (committed && saved && row.accountId) {
+      try {
+        await this.costOutbox.remove(entry);
+      } catch {
+        this.setCostWarning(agent, "Cost recovery cleanup failed. API turns require recovery.");
       }
     }
   }

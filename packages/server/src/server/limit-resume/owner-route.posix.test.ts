@@ -114,7 +114,10 @@ async function fixture(terminalFailure = false) {
   client.createSession = (config, launch) =>
     sdk.createSession(config, {
       ...launch,
-      env: { FULCRA_ACCOUNT_ID: "fixture-selected-account" },
+      env: {
+        FULCRA_ACCOUNT_ID: "fixture-selected-account",
+        CLAUDE_CODE_OAUTH_TOKEN: "fixture-subscription-token",
+      },
     });
   const manager = new AgentManager({
     automaticInputNow: () => now,

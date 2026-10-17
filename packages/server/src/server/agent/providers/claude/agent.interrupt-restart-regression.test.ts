@@ -915,6 +915,53 @@ test("creates an autonomous live turn when Claude starts a turn without a foregr
   await session.close();
 });
 
+test("API launches reject an unexpected autonomous wake before publishing a turn", async () => {
+  const logger = createTestLogger();
+  let queryRef: ScriptedQuery | null = null;
+
+  queryFactory.mockImplementation(({ prompt }: { prompt: AsyncIterable<unknown> }) => {
+    queryRef = createScriptedQuery({
+      prompt,
+      sessionId: "autonomous-live-session",
+      async handlePrompt({ promptRecord, query }) {
+        if (promptRecord.text !== "seed prompt") {
+          return;
+        }
+        query.emit({
+          type: "assistant",
+          message: { content: "SEED_RESPONSE" },
+          session_id: "autonomous-live-session",
+        });
+        query.emit(buildSuccessResult("autonomous-live-session"));
+      },
+    });
+    return queryRef;
+  });
+
+  const client = new ClaudeAgentClient({
+    logger,
+    queryFactory,
+    resolveBinary: async () => "/test/claude/bin",
+  });
+  const session = await client.createSession(
+    {
+      provider: "claude",
+      cwd: process.cwd(),
+    },
+    { env: { FULCRA_API_KEY_HELPER: "fixture-helper" } },
+  );
+
+  await collectUntilTerminal(streamSession(session, "seed prompt"));
+
+  const observed: AgentStreamEvent[] = [];
+  const unsubscribe = session.subscribe((event) => observed.push(event));
+  queryRef?.emit(buildTurnInit("autonomous-live-session"));
+  await vi.waitFor(() => expect(queryRef?.close).toHaveBeenCalled());
+  expect(observed.some((event) => event.type === "turn_started")).toBe(false);
+  unsubscribe();
+  await session.close();
+});
+
 test("steers an autonomous turn through its existing query without restarting it", async () => {
   const logger = createTestLogger();
   let queryRef: ScriptedQuery | null = null;

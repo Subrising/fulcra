@@ -40,12 +40,14 @@ export const beforeHookNames = [
 const beforeSchemas = {
   "agent.cost_commit": z
     .object({
+      costCommitted: z.boolean().optional(),
       agentId: z.string(),
       provider: z.string(),
       accountId: z.string().nullable(),
       turnId: z.string(),
       costUsd: z.number().finite().nonnegative(),
       at: z.string(),
+      revision: z.number().int().nonnegative().optional(),
       cursors: z.record(z.string(), z.number().finite().nonnegative()),
     })
     .strict(),
@@ -59,6 +61,8 @@ const beforeSchemas = {
     .strict(),
   "agent.turn_start": z
     .object({
+      accountKind: z.enum(["api-key", "subscription"]).optional(),
+      apiGuardChecked: z.boolean().optional(),
       agentId: z.string(),
       provider: z.string(),
       accountId: z.string().nullable(),
@@ -228,7 +232,18 @@ export function validateBeforeResult<Name extends keyof PluginBeforeRequests>(
   if (name === "agent.cost_read") validateCostReadResult(input, result);
   if (
     (name === "agent.turn_start" || name === "agent.cost_commit") &&
-    JSON.stringify(input) !== JSON.stringify(result)
+    JSON.stringify({
+      ...input,
+      ...(name === "agent.turn_start"
+        ? { apiGuardChecked: undefined }
+        : { costCommitted: undefined }),
+    }) !==
+      JSON.stringify({
+        ...result,
+        ...(name === "agent.turn_start"
+          ? { apiGuardChecked: undefined }
+          : { costCommitted: undefined }),
+      })
   )
     throw new Error("agent.turn_start hooks cannot change the request");
   if (name === "agent.session_open") {

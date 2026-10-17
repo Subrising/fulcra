@@ -602,6 +602,7 @@ test("scratch daemon keeps recorded session costs across restart and refuses a c
     const subscribe = session.subscribe.bind(session);
     // API launches have no OAuth usage credential. Their immutable binding owns account identity.
     session.usageCredential = () => null;
+    session.billingAccountKind = () => "api-key";
     session.limitResumeAccountBinding = () => `pool:${account}`;
     session.subscribe = (callback) =>
       subscribe((event) => {
@@ -657,10 +658,11 @@ test("scratch daemon keeps recorded session costs across restart and refuses a c
 import { assertApiSpendAllowed, readSessionBilling, recordAccountCost } from "./server/account-billing.mjs";
 export default function(server) {
  server.before("agent.cost_commit", async ({ request }) => {
-   if (request.accountId) await recordAccountCost(${JSON.stringify(path.join(root, "pool"))}, { id: "turn:" + request.agentId + ":" + request.turnId, accountId: request.accountId, sessionId: request.agentId, costUsd: request.costUsd, at: request.at, cursorCheckpoint: request.cursors });
+   if (request.accountId) await recordAccountCost(${JSON.stringify(path.join(root, "pool"))}, { id: "turn:" + request.agentId + ":" + request.turnId, accountId: request.accountId, sessionId: request.agentId, costUsd: request.costUsd, at: request.at, cursorCheckpoint: request.cursors, costRevision: request.revision });
+   return { ...request, costCommitted: true };
  });
  server.before("agent.cost_read", ({ request }) => readSessionBilling(${JSON.stringify(path.join(root, "pool"))}, request));
- server.before("agent.turn_start", ({ request }) => assertApiSpendAllowed(${JSON.stringify(path.join(root, "pool"))}, request));
+ server.before("agent.turn_start", ({ request }) => { assertApiSpendAllowed(${JSON.stringify(path.join(root, "pool"))}, request); return { ...request, apiGuardChecked: true }; });
  return () => {};
 }
 `,

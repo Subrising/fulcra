@@ -4,6 +4,7 @@ export function readBilling(root: string): {
   calls: Record<string, { accountId: string; costUsd: number; at: string }>;
   cursors?: Record<string, { cumulativeUsd: number; at: string }>;
   checkpoints?: Record<string, Record<string, number>>;
+  checkpointRevisions?: Record<string, number>;
   events: { type: string; accountId: string; at: string }[];
 };
 export function accountSpend(
@@ -22,6 +23,7 @@ export function recordAccountCost(
     cumulativeUsd?: number | null;
     sessionId?: string | null;
     cursorCheckpoint?: Record<string, number> | null;
+    costRevision?: number | null;
   },
 ): Promise<boolean>;
 export function recordBillingError(
@@ -43,6 +45,7 @@ export function assertApiSpendAllowed(
   input: {
     provider: string;
     accountId: string | null;
+    accountKind?: "api-key" | "subscription";
     labels?: Record<string, string>;
     sessionCost?: { totalUsd: number };
   },
@@ -56,6 +59,8 @@ export function readSessionBilling<
     runtimeSessionId: string | null;
     records?: {
       cursors: Record<string, number>;
+      revision?: number;
+      billingWarning?: string;
       turns: Record<string, { accountId: string | null; amountUsd: number; at: string }>;
     };
   },

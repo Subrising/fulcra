@@ -753,6 +753,8 @@ export interface AgentSession {
   usageSourceLabel?(): string | null;
   /** Cached non-secret account identity only; no credential read, transport request or authorization. */
   limitResumeAccountBinding?(): string | null;
+  /** Immutable launch kind. No credential values cross this boundary. */
+  billingAccountKind?(): "api-key" | "subscription" | null;
   /** Fulcra account pool: the credential this session was launched with and its account label (daemon-internal). */
   usageCredential?(): {
     credential: AccountCredential;

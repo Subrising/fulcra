@@ -5,6 +5,7 @@ import type { ProviderUsage, UsageReportEntry } from "@getpaseo/protocol/message
 import type { SessionInboundMessage, SessionOutboundMessage } from "../../messages.js";
 
 export interface UsageSessionOptions {
+  canReadSessionCost?: (id: string) => boolean | Promise<boolean>;
   sessionCost?: (agentId: string) => SessionCost | undefined | Promise<SessionCost | undefined>;
   emit(message: SessionOutboundMessage): void;
   runtime?: {
@@ -16,6 +17,12 @@ export interface UsageSessionOptions {
 
 export class UsageSession {
   constructor(private readonly options: UsageSessionOptions) {}
+
+  private async readSessionCost(id: string) {
+    if (this.options.canReadSessionCost && !(await this.options.canReadSessionCost(id)))
+      return undefined;
+    return this.options.sessionCost?.(id);
+  }
 
   async handleListReports(
     msg: Extract<SessionInboundMessage, { type: "usage.list_reports.request" }>,
@@ -37,7 +44,7 @@ export class UsageSession {
         payload: {
           requestId: msg.requestId,
           error: null,
-          ...(msg.agentId ? { sessionCost: await this.options.sessionCost?.(msg.agentId) } : {}),
+          ...(msg.agentId ? { sessionCost: await this.readSessionCost(msg.agentId) } : {}),
         },
       });
     } catch (error) {

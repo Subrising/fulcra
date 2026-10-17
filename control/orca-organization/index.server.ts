@@ -41,7 +41,6 @@ import { operatorInvoke } from "./server/operator-invoke.mjs";
 import {
   recordAccountCost,
   assertApiSpendAllowed,
-  readBilling,
   readSessionBilling,
   recordBillingError,
   isBillingError,
@@ -594,26 +593,16 @@ export default function contribute(
       costUsd: request.costUsd,
       at: request.at,
       cursorCheckpoint: request.cursors,
+      costRevision: request.revision,
     });
+    return { ...request, costCommitted: true };
   });
   const stopCostRead = server.before("agent.cost_read", ({ request }) =>
     readSessionBilling(poolRoot(), request),
   );
   const stopSpendGuard = server.before("agent.turn_start", async ({ request }) => {
-    // Recover a missed billing event from the daemon's durable result records before admission.
-    const billing = readBilling(poolRoot());
-    for (const [turnId, row] of Object.entries(request.costRecords ?? {})) {
-      const id = `turn:${request.agentId}:${turnId}`;
-      if (row.accountId && !billing.calls[id])
-        await recordAccountCost(poolRoot(), {
-          id,
-          accountId: row.accountId,
-          costUsd: row.amountUsd,
-          at: row.at,
-          sessionId: request.agentId,
-        });
-    }
     assertApiSpendAllowed(poolRoot(), request);
+    return { ...request, apiGuardChecked: true };
   });
   const stopPool: unknown =
     typeof server.before === "function"

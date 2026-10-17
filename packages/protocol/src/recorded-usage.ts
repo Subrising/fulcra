@@ -29,6 +29,7 @@ export type RecordedUsage = z.infer<typeof RecordedUsageSchema>;
 
 // Provider-reported USD estimates. A missing record means unknown cost, never zero spend.
 export const SessionCostSchema = z.object({
+  warning: z.string().optional(),
   totalUsd: z.number().finite().nonnegative(),
   lastTurnUsd: z.number().finite().nonnegative(),
   accounts: z.array(

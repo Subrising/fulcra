@@ -1151,6 +1151,7 @@ export class Session {
       logger: this.sessionLogger,
     });
     this.accountUsageSession = new AccountUsageSession({
+      canReadSessionCost: (id) => this.canReadSessionCost(id),
       refreshSessionCost: (id) => this.agentManager.refreshSessionCost(id),
       sessionCost: (id) => {
         const agent = this.agentManager.getAgent(id);
@@ -1178,6 +1179,7 @@ export class Session {
       logger: this.sessionLogger,
     });
     this.usageSession = new UsageSession({
+      canReadSessionCost: (id) => this.canReadSessionCost(id),
       sessionCost: (id) => this.agentManager.refreshSessionCost(id),
       emit: (msg) => this.emit(msg),
       runtime: pluginRuntime,
@@ -2222,6 +2224,11 @@ export class Session {
       ...(typeof event.seq === "number" ? { seq: event.seq } : {}),
       ...(typeof event.epoch === "string" ? { epoch: event.epoch } : {}),
     };
+  }
+
+  private async canReadSessionCost(id: string): Promise<boolean> {
+    const agent = this.agentManager.getAgent(id) ?? (await this.agentStorage.get(id));
+    return !!agent && this.isProviderVisibleToClient(agent.provider);
   }
 
   private async enrichAgentPayload(payload: AgentSnapshotPayload): Promise<AgentSnapshotPayload> {

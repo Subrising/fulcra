@@ -178,6 +178,8 @@ function toInspectRows(agent: AgentInspect): InspectRow[] {
   ];
 
   if (agent.SessionCost) {
+    if (agent.SessionCost.warning)
+      rows.push({ key: "CostWarning", value: agent.SessionCost.warning });
     rows.push({
       key: "SessionCost",
       value: `Total: ${formatCost(agent.SessionCost.totalUsd)}, Last turn: ${formatCost(agent.SessionCost.lastTurnUsd)}`,

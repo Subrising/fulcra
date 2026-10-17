@@ -152,3 +152,34 @@ test("cost readers cannot replace saved turns, and turn guards cannot change acc
     ),
   ).rejects.toThrow("agent.turn_start hooks cannot change the request");
 });
+
+test("billing receipts can confirm a write but cannot change its cost", async () => {
+  const hooks = new PluginHookHandlers(() => {});
+  const input = {
+    agentId: "agent",
+    provider: "claude",
+    accountId: "account",
+    turnId: "run:turn",
+    costUsd: 4,
+    at: "2026-10-17T00:00:00Z",
+    cursors: {},
+    revision: 1,
+  };
+  const stop = hooks.before("agent.cost_commit", ({ request }) => ({
+    ...request,
+    costCommitted: true,
+  }));
+  expect(await hooks.invoke("cost", "before", "agent.cost_commit", input, paseo)).toMatchObject({
+    ...input,
+    costCommitted: true,
+  });
+  stop();
+  hooks.before("agent.cost_commit", ({ request }) => ({
+    ...request,
+    costUsd: 0,
+    costCommitted: true,
+  }));
+  await expect(hooks.invoke("cost", "before", "agent.cost_commit", input, paseo)).rejects.toThrow(
+    /cannot change/,
+  );
+});

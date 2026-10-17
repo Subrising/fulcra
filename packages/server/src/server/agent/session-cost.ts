@@ -3,6 +3,8 @@ import { SessionCostSchema, type SessionCost } from "@getpaseo/protocol/recorded
 import type { AgentUsage } from "./agent-sdk-types.js";
 
 export const SessionCostRecordsSchema = z.object({
+  revision: z.number().int().nonnegative().optional(),
+  billingWarning: z.string().optional(),
   cursors: z.record(z.string(), z.number().finite().nonnegative()),
   turns: z.record(
     z.string(),
@@ -30,6 +32,7 @@ export function sessionCost(records?: SessionCostRecords): SessionCost | undefin
   return SessionCostSchema.parse({
     totalUsd,
     lastTurnUsd,
+    ...(records.billingWarning ? { warning: records.billingWarning } : {}),
     accounts: [...accounts].map(([accountId, accountTotal]) => ({
       accountId,
       totalUsd: accountTotal,
@@ -44,12 +47,14 @@ export function recordSessionCost(
   input: {
     provider: string;
     turnId: string;
+    instanceId?: string;
     accountId: string | null;
     usage: AgentUsage;
     at: string;
   },
 ): SessionCostRecords | undefined {
-  const { usage, turnId, accountId, at } = input;
+  const { usage, accountId, at } = input;
+  const turnId = input.instanceId ? JSON.stringify([input.instanceId, input.turnId]) : input.turnId;
   const total = usage.recorded?.estimate?.amountUsd ?? usage.totalCostUsd;
   if (total === undefined || !Number.isFinite(total) || total < 0) return previous;
   if (previous?.turns[turnId]) return previous;
@@ -61,6 +66,7 @@ export function recordSessionCost(
   if (knownIncrement !== undefined && Number.isFinite(knownIncrement) && knownIncrement >= 0)
     amountUsd = knownIncrement;
   else if (cursor !== undefined && total >= cursor) amountUsd = total - cursor;
+  records.revision = (records.revision ?? Object.keys(records.turns).length) + 1;
   records.cursors[key] = total;
   records.turns[turnId] = { accountId, amountUsd, at };
   return records;

@@ -22,6 +22,7 @@ import type {
 } from "../../../services/quota-fetcher/account-usage-types.js";
 
 export interface AccountUsageSessionOptions {
+  canReadSessionCost?: (id: string) => boolean | Promise<boolean>;
   refreshSessionCost?: (agentId: string) => Promise<SessionCost | undefined>;
   sessionCost?: (agentId: string) => SessionCost | undefined;
   host: {
@@ -52,10 +53,12 @@ export class AccountUsageSession {
   private readonly sessionUsage: AccountUsageSessionOptions["sessionUsage"];
   private readonly usageCredential: AccountUsageSessionOptions["usageCredential"];
   private readonly accountUsage: AccountUsageRegistry | undefined;
+  private readonly canReadSessionCost: AccountUsageSessionOptions["canReadSessionCost"];
   private readonly refreshSessionCost: AccountUsageSessionOptions["refreshSessionCost"];
   private readonly sessionCost: AccountUsageSessionOptions["sessionCost"];
   constructor(options: AccountUsageSessionOptions) {
     this.sessionCost = options.sessionCost;
+    this.canReadSessionCost = options.canReadSessionCost;
     this.refreshSessionCost = options.refreshSessionCost;
     this.host = options.host;
     this.providerUsageService = options.providerUsageService;
@@ -184,8 +187,8 @@ export class AccountUsageSession {
       });
     }
   }
-  private readSessionCost(id: string | undefined) {
-    if (!id) return undefined;
+  private async readSessionCost(id: string | undefined) {
+    if (!id || (this.canReadSessionCost && !(await this.canReadSessionCost(id)))) return undefined;
     return this.refreshSessionCost ? this.refreshSessionCost(id) : this.sessionCost?.(id);
   }
 

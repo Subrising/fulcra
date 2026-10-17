@@ -1147,6 +1147,7 @@ export async function createPaseoDaemon(
   // A retention interrupted by a crash is finished before any agent reads its history.
   await finishTimelineRetention(durableTimelineStore, agentStorage, logger);
   const agentManager = new AgentManager({
+    costOutboxFile: path.join(config.paseoHome, "usage", "pending-costs.json"),
     archiveServerId: serverId,
     reportRegistryFile: path.join(config.paseoHome, "agent-requests", "report-authority.json"),
     reportGrantDirectory: getNativeReportGrantDirectory(distribution),

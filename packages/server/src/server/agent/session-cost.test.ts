@@ -85,13 +85,17 @@ test("a crash after billing commit restores the cursor before the next cumulativ
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const { randomUUID } = await import("node:crypto");
-  const { addAccount } =
+  const { addAccount, setAccount } =
     await import("../../../../../control/orca-organization/server/accounts.mjs");
   const { recordAccountCost, readSessionBilling } =
     await import("../../../../../control/orca-organization/server/account-billing.mjs");
   const dir = await mkdtemp(join(tmpdir(), "cost-crash-checkpoint-"));
   try {
     const account = await addAccount(dir, { provider: "claude", name: "Fixture" });
+    await setAccount(dir, account.id, {
+      credentialKind: "api-key",
+      budget: { limitUsd: 200, startAt: "2026-10-01T00:00:00Z" },
+    });
     const id = randomUUID();
     const saved = fold(undefined, "one", 4, account.id, 4)!;
     const finished = fold(saved, "two", 6, account.id)!;
@@ -101,6 +105,7 @@ test("a crash after billing commit restores the cursor before the next cumulativ
       costUsd: 2,
       sessionId: id,
       cursorCheckpoint: finished.cursors,
+      costRevision: finished.revision,
       at: "2026-10-17T00:00:01.000Z",
     });
     // The session snapshot still has the old $4 cursor when the daemon stops.
@@ -123,4 +128,34 @@ test("a crash after billing commit restores the cursor before the next cumulativ
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("new provider instances count reused turn IDs and true replays remain duplicates", () => {
+  let records: SessionCostRecords | undefined;
+  for (const [instanceId, accountId, amount] of [
+    ["first", "a", 4],
+    ["restart", "a", 5],
+    ["reload", "a", 3],
+    ["switch", "b", 2],
+  ] as const) {
+    const input = {
+      provider: "claude",
+      instanceId,
+      turnId: "foreground-turn-1",
+      accountId,
+      at: "2026-10-17T00:00:00Z",
+      usage: { totalCostUsd: amount, turnCostUsd: amount },
+    };
+    records = recordSessionCost(records, input);
+    expect(recordSessionCost(records, input)).toBe(records);
+    records = SessionCostRecordsSchema.parse(JSON.parse(JSON.stringify(records)));
+  }
+  expect(sessionCost(records)).toMatchObject({
+    totalUsd: 14,
+    recordedTurns: 4,
+    accounts: [
+      { accountId: "a", totalUsd: 12 },
+      { accountId: "b", totalUsd: 2 },
+    ],
+  });
 });

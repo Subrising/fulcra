@@ -2371,6 +2371,12 @@ class ClaudeAgentSession implements AgentSession {
     return id ? `pool:${id}` : null;
   }
 
+  billingAccountKind(): "api-key" | "subscription" | null {
+    if (this.launchEnv?.FULCRA_API_KEY_HELPER) return "api-key";
+    if (this.launchEnv?.CLAUDE_CODE_OAUTH_TOKEN) return "subscription";
+    return null;
+  }
+
   usageCredential(): {
     credential: AccountCredential;
     label: string | null;
@@ -3677,7 +3683,12 @@ class ClaudeAgentSession implements AgentSession {
         { CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1" },
       ],
     });
-    if (this.launchEnv?.FULCRA_API_KEY_HELPER) sanitizeClaudeApiEnv(env);
+    if (this.launchEnv?.FULCRA_API_KEY_HELPER) {
+      sanitizeClaudeApiEnv(env);
+      // Paid work must enter through the host's turn admission. Native background wakes bypass that handoff.
+      env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = "1";
+      env.CLAUDE_CODE_DISABLE_CRON = "1";
+    }
     return env;
   }
 
@@ -4341,6 +4352,14 @@ class ClaudeAgentSession implements AgentSession {
     return isClaudeTurnInit(message) && !this.activeForegroundTurnId;
   }
 
+  private startGuardedAutonomousTurn(): void {
+    if (this.billingAccountKind() === "api-key") {
+      this.query?.close();
+      throw new Error("Autonomous API turns are disabled. Send a new guarded turn.");
+    }
+    this.startAutonomousTurn();
+  }
+
   private async routeSdkMessageFromPump(message: SDKMessage): Promise<void> {
     this.noteRateLimitEvent(message);
     if (this.consumeSessionStateChange(message)) {
@@ -4353,7 +4372,7 @@ class ClaudeAgentSession implements AgentSession {
 
     const isForeground = Boolean(this.activeForegroundTurnId);
     if (this.opensAutonomousTurn(message)) {
-      this.startAutonomousTurn();
+      this.startGuardedAutonomousTurn();
     }
     if (!isForeground && !this.autonomousTurn && message.type === "result") {
       return;

@@ -31,11 +31,18 @@ function compact(state, pool) {
     .map(accountBudget)
     .filter(Boolean)
     .map((b) => Date.parse(b.startAt));
-  if (!starts.length) return;
   const oldest = Math.min(...starts, Date.parse(new Date().toISOString().slice(0, 10)));
   for (const [id, call] of Object.entries(state.calls))
-    if (!call.sessionId && !id.startsWith("turn:") && Date.parse(call.at) < oldest)
-      delete state.calls[id];
+    if (Date.parse(call.at) < oldest) {
+      const sessionId = call.sessionId ?? /^turn:([a-f0-9-]{36}):/.exec(id)?.[1];
+      // Retain unmigrated live history until the session has a durable cost checkpoint.
+      const liveLegacy =
+        sessionId &&
+        pool.assignments[sessionId] &&
+        !pool.assignments[sessionId].ended &&
+        state.checkpointRevisions?.[sessionId] === undefined;
+      if (!liveLegacy) delete state.calls[id];
+    }
   // A billing error remains observable for its budget period. Repeated failures replace the same metadata row.
   const latest = new Map();
   for (const event of state.events) {
@@ -47,6 +54,18 @@ function compact(state, pool) {
       latest.set(key, event);
   }
   state.events = [...latest.values()];
+  const sessions = new Set(
+    Object.values(state.calls)
+      .map((call) => call.sessionId)
+      .filter(Boolean),
+  );
+  for (const [id, assignment] of Object.entries(pool.assignments))
+    if (!assignment.ended) sessions.add(id);
+  for (const id of Object.keys(state.checkpoints ?? {}))
+    if (!sessions.has(id)) {
+      delete state.checkpoints[id];
+      if (state.checkpointRevisions) delete state.checkpointRevisions[id];
+    }
   state.retainedFrom = new Date(oldest).toISOString();
 }
 export function accountSpend(root, account, billing = readBilling(root)) {
@@ -71,13 +90,14 @@ export async function recordAccountCost(
     cumulativeUsd = null,
     sessionId = null,
     cursorCheckpoint = null,
+    costRevision = null,
   },
 ) {
   if (
     !uuid(accountId) ||
     typeof id !== "string" ||
     !id ||
-    id.length > 200 ||
+    id.length > 512 ||
     !Number.isFinite(costUsd) ||
     costUsd < 0 ||
     !Number.isFinite(Date.parse(at))
@@ -98,7 +118,11 @@ export async function recordAccountCost(
       state.cursors[runtimeSessionId] = { cumulativeUsd, at };
     }
     state.calls[id] = { accountId, costUsd, at, ...(uuid(sessionId) ? { sessionId } : {}) };
-    if (uuid(sessionId) && cursorCheckpoint !== null) {
+    if (
+      uuid(sessionId) &&
+      cursorCheckpoint !== null &&
+      (costRevision === null || costRevision >= (state.checkpointRevisions?.[sessionId] ?? 0))
+    ) {
       if (
         typeof cursorCheckpoint !== "object" ||
         Array.isArray(cursorCheckpoint) ||
@@ -107,6 +131,10 @@ export async function recordAccountCost(
         throw Error("Invalid session cost cursor checkpoint");
       state.checkpoints ??= {};
       state.checkpoints[sessionId] = { ...cursorCheckpoint };
+      if (Number.isSafeInteger(costRevision) && costRevision >= 0) {
+        state.checkpointRevisions ??= {};
+        state.checkpointRevisions[sessionId] = costRevision;
+      }
     }
     compact(state, await readAccountsAsync(root));
     await save(root, state);
@@ -154,9 +182,14 @@ export function dailySpend(root, account, billing = readBilling(root), now = Dat
 /** The call site supplies the launch account, never a mutable current assignment. */
 export function assertApiSpendAllowed(root, input, now = Date.now()) {
   if (input.provider !== "claude" || !input.accountId) return;
+  if (input.accountKind === "subscription") return;
   const account = readAccounts(root).accounts.find((a) => a.id === input.accountId);
   if (!account) throw Error("API account is unavailable. No turn started.");
-  if (!accountBudget(account)) return;
+  if (!accountBudget(account)) {
+    if (input.accountKind === "api-key")
+      throw Error("API launch account changed. No turn started.");
+    return;
+  }
   const billing = readBilling(root);
   for (const [scope, spend] of [
     ["account", accountSpend(root, account, billing)],
@@ -184,13 +217,26 @@ export function readSessionBilling(root, request) {
   const billing = readBilling(root);
   const records = structuredClone(request.records ?? { cursors: {}, turns: {} });
   const prefix = `turn:${request.agentId}:`;
+  const savedRevision = records.revision ?? Object.keys(records.turns).length;
+  let imported = false;
   for (const [id, row] of Object.entries(billing.calls)) {
     if (!id.startsWith(prefix)) continue;
     const turnId = id.slice(prefix.length);
-    records.turns[turnId] ??= { accountId: row.accountId, amountUsd: row.costUsd, at: row.at };
+    if (!Object.hasOwn(records.turns, turnId)) {
+      imported = true;
+      records.turns[turnId] = { accountId: row.accountId, amountUsd: row.costUsd, at: row.at };
+    }
   }
   // Billing and this cursor were committed together. Replace an older session snapshot, including query resets.
-  Object.assign(records.cursors, billing.checkpoints?.[request.agentId] ?? {});
+  const committedRevision = billing.checkpointRevisions?.[request.agentId];
+  const newer =
+    committedRevision !== undefined
+      ? committedRevision > savedRevision
+      : imported && records.revision === undefined;
+  if (newer) {
+    Object.assign(records.cursors, billing.checkpoints?.[request.agentId] ?? {});
+    records.revision = committedRevision ?? Object.keys(records.turns).length;
+  }
   const runtime = request.runtimeSessionId;
   if (runtime && billing.cursors?.[runtime]) {
     const key = JSON.stringify([request.provider, runtime]);

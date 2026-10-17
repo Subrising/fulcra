@@ -74,3 +74,25 @@ The one-shot fixture starts a detached descendant that ignores SIGTERM.
 A successful stop reply must follow confirmed termination of both recorded processes.
 The helper checks cover the fixed Keychain reader and encoded PowerShell entry.
 Native Windows shell execution still needs an idle Windows host before release.
+
+For PR #61 cost repairs, run the recorded cost and scratch daemon checks:
+
+```sh
+npm run build:server
+cd packages/server
+npx vitest run src/server/agent/session-cost.test.ts src/server/agent/session-cost-outbox.test.ts src/server/session/usage/usage-session.test.ts src/server/agent/providers/claude/agent.env.test.ts src/server/agent/providers/claude/agent.interrupt-restart-regression.test.ts src/server/plugins/cost-guard.e2e.test.ts src/server/plugins/lifecycle.e2e.test.ts
+```
+
+Use the host's single build slot for builds and test suites.
+The scratch tests start new turns after restart, reload, and account switch.
+Each provider instance reuses `fake-turn-0`. Expect four billing rows and a $14 total.
+A replay within one instance must keep one row.
+The billing failure test must finish the turn with a visible warning and saved cost.
+A failed recovery must refuse admission. A successful recovery after restart must keep all cost.
+The disabled guard must refuse API turns. Subscription turns must still run.
+The hidden-provider checks must call no cost reader.
+The API launch checks must disable native background and scheduled work.
+An unexpected autonomous API wake must close the provider query without starting a host turn.
+Subscription autonomous turns must still work.
+Run `account-billing.test.mjs` for removed subscription accounts, checkpoint order, and billing retention.
+No test requires a live daemon, a real credential, or a paid turn.
