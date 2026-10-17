@@ -1,3 +1,5 @@
+import { sessionCost } from "./session-cost.js";
+import { loadAgentPolicy } from "../limit-resume/policy.js";
 import { leadEventsFor, withLeadEvent } from "../lead-events.js";
 import {
   assertFinalInputCheck,
@@ -712,7 +714,14 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
       permissionRequest,
     });
 
-    const prompt = formatSystemNotificationPrompt(body);
+    const cost = sessionCost(
+      agentManager.getAgent(childAgentId)?.costRecords ?? record?.costRecords,
+    );
+    const prompt = formatSystemNotificationPrompt(
+      cost && reason !== "needs permission"
+        ? loadAgentPolicy("report-notices").formatWorkerFinish(body, cost)
+        : body,
+    );
     const messageId = `${FINISH_NOTIFICATION_MESSAGE_PREFIX}${randomUUID()}`;
     // FULCRA(orchestration): only the owner steers. The notice comes from the daemon, so like a chat's message it
     // waits until the caller's turn ends (held-sends.ts) and is then sent with the daemon source.

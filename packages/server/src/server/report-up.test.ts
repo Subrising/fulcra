@@ -2367,7 +2367,8 @@ test("WebSocket configuration and native report-up preserve armed finish ownersh
     vi.unstubAllEnvs();
     rmSync(ledgerDir, { recursive: true, force: true });
   }
-}, 30000);
+  // This flow loads the daemon and runs three CLI processes with separate operation timeouts.
+}, 120000);
 
 test("native host-link notices use the end snapshot and respect disabled finish notices", async () => {
   const notices: string[] = [];

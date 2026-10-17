@@ -61,6 +61,7 @@ interface FinishNotificationScenarioOptions {
   /** The caller has a turn in flight; a held notice waits for it to end. */
   parentBusy?: () => boolean;
   childLastAssistantMessage?: string | null;
+  childCostRecords?: import("./session-cost.js").SessionCostRecords;
   childParentAgentId?: string | null;
   requireParentOwnership?: boolean;
   parentPromptError?: Error;
@@ -108,6 +109,7 @@ function createFinishNotificationScenario(
   Reflect.set(childAgent, "lifecycle", "idle");
   Reflect.set(childAgent, "config", { title: "Child Agent" });
   Reflect.set(childAgent, "pendingPermissions", new Map());
+  Reflect.set(childAgent, "costRecords", options?.childCostRecords);
 
   const callerAgent: ManagedAgent = Object.create(null);
   Reflect.set(callerAgent, "id", "caller-agent");
@@ -1069,4 +1071,21 @@ test("idle-only prompts refuse a busy receiver without steering or replacing its
   expect(stream).not.toHaveBeenCalled();
   expect(replace).not.toHaveBeenCalled();
   expect(steer).not.toHaveBeenCalled();
+});
+
+test("legacy native finish notifications include cumulative spend before a long response", async () => {
+  const scenario = createFinishNotificationScenario({
+    childLastAssistantMessage: "Fixture result ".repeat(1000),
+    childCostRecords: {
+      cursors: {},
+      turns: {
+        first: { accountId: "account-a", amountUsd: 9.65, at: "2026-10-17T01:00:00Z" },
+        final: { accountId: "account-b", amountUsd: 7.87, at: "2026-10-17T02:00:00Z" },
+      },
+    },
+  });
+  scenario.startWatchingChild();
+  const prompt = await scenario.finishChildAndReadParentPrompt();
+  expect(prompt).toContain("Session total spend: US$17.520000.");
+  expect(prompt.indexOf("Session total spend")).toBeLessThan(prompt.indexOf("Fixture result"));
 });
