@@ -233,6 +233,7 @@ describe("ClaudeAgentSession persisted subagent replay", () => {
       events.push(event);
     }
     await session.close();
+    expect(events).toMatchSnapshot();
     return events;
   }
 

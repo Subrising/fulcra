@@ -93,6 +93,53 @@ describe("ClaudeAgentSession persisted history load", () => {
     );
   });
 
+  test("coalesces only concurrent resumes and logs load memory", async () => {
+    mkdirSync(path.dirname(transcriptPath()), { recursive: true });
+    writeFileSync(
+      transcriptPath(),
+      JSON.stringify({ type: "user", uuid: "u1", message: { content: "hello" } }),
+    );
+    const client = new ClaudeAgentClient({
+      logger: pino({ level: "info" }, { write: (line: string) => records.push(JSON.parse(line)) }),
+      queryFactory: () => {
+        throw new Error("History must not start a query");
+      },
+      resolveVersion: async () => "2.1.220",
+    });
+    const handle = { provider: "claude", sessionId: SESSION_ID };
+    const [first, second] = await Promise.all([
+      client.resumeSession(handle, { cwd }),
+      client.resumeSession(handle, { cwd }),
+    ]);
+    expect(first).toBe(second);
+    const events = [];
+    for await (const event of first.streamHistory()) events.push(event);
+    expect(events).toHaveLength(1);
+    expect(records.filter((record) => record.msg === "history.load")).toEqual([
+      expect.objectContaining({
+        boundary: "start",
+        source: "claude",
+        heapUsed: expect.any(Number),
+        replayBytes: expect.any(Number),
+        journalCacheBytes: expect.any(Number),
+        pluginCacheBytes: expect.any(Number),
+      }),
+      expect.objectContaining({
+        boundary: "end",
+        source: "claude",
+        heapUsed: expect.any(Number),
+        replayBytes: expect.any(Number),
+        journalCacheBytes: expect.any(Number),
+        pluginCacheBytes: expect.any(Number),
+      }),
+    ]);
+    await first.close();
+    const later = await client.resumeSession(handle, { cwd });
+    expect(later).not.toBe(first);
+    for await (const event of later.streamHistory()) void event;
+    await later.close();
+  });
+
   test("a resumed transcript is replayed after the async read", async () => {
     mkdirSync(path.dirname(transcriptPath()), { recursive: true });
     const line = JSON.stringify({
@@ -102,7 +149,56 @@ describe("ClaudeAgentSession persisted history load", () => {
       message: { role: "user", content: "hello from the transcript" },
       timestamp: "2026-10-12T00:00:00.000Z",
     });
-    writeFileSync(transcriptPath(), `${line}\n`);
+    const extra = [
+      {
+        type: "assistant",
+        uuid: "a1",
+        message: {
+          content: [
+            { type: "thinking", thinking: "reason" },
+            { type: "text", text: "answer" },
+          ],
+        },
+      },
+      {
+        type: "assistant",
+        message: {
+          content: [
+            { type: "tool_use", id: "read-one", name: "Read", input: { file_path: "source.ts" } },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          content: [{ type: "tool_result", tool_use_id: "read-one", content: "file payload" }],
+        },
+      },
+      {
+        type: "assistant",
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: "todo-one",
+              name: "TodoWrite",
+              input: { todos: [{ content: "Check output", status: "completed" }] },
+            },
+          ],
+        },
+      },
+      {
+        type: "system",
+        subtype: "compact_boundary",
+        compactMetadata: { trigger: "manual", preTokens: 1200 },
+      },
+      { type: "user", isCompactSummary: true, message: { content: "summary" } },
+      { type: "assistant", uuid: "a2", message: { content: "complete 🙂" } },
+    ];
+    writeFileSync(
+      transcriptPath(),
+      [line, "{bad JSON", "null", ...extra.map((entry) => JSON.stringify(entry))].join("\r\n"),
+    );
     const client = new ClaudeAgentClient({
       logger: pino({ level: "silent" }),
       queryFactory: vi.fn(() => {
@@ -120,6 +216,7 @@ describe("ClaudeAgentSession persisted history load", () => {
     }
     await session.close();
     expect(JSON.stringify(items)).toContain("hello from the transcript");
+    expect(items).toMatchSnapshot();
   });
 
   // chmod does not remove read access on Windows, or for root.
@@ -146,4 +243,68 @@ describe("ClaudeAgentSession persisted history load", () => {
       );
     },
   );
+});
+
+describe("bounded history readers", () => {
+  test("admits by bytes in order and releases an oversized load only once", async () => {
+    const { HistoryLoadBudget } = await import("../../history-load.js");
+    const budget = new HistoryLoadBudget(10);
+    const releaseFirst = await budget.acquire(8);
+    const started: string[] = [];
+    const large = budget.acquire(100).then((release) => {
+      started.push("large");
+      return release;
+    });
+    const small = budget.acquire(2).then((release) => {
+      started.push("small");
+      return release;
+    });
+    await Promise.resolve();
+    expect(started).toEqual([]);
+    releaseFirst();
+    const releaseLarge = await large;
+    expect(started).toEqual(["large"]);
+    releaseLarge();
+    releaseLarge();
+    const releaseSmall = await small;
+    expect(started).toEqual(["large", "small"]);
+    releaseSmall();
+    (await budget.acquire(10))();
+  });
+
+  test("decodes UTF-8 and CRLF across chunks without losing the final Claude record", async () => {
+    const { open } = await import("node:fs/promises");
+    const { readHistoryLines } = await import("../../history-load.js");
+    const root = mkdtempSync(path.join(os.tmpdir(), "history-lines-"));
+    const file = path.join(root, "input.jsonl");
+    const first = JSON.stringify({ text: "x".repeat(65_525) + "🙂" });
+    const second = JSON.stringify({ text: "final" });
+    writeFileSync(file, first + "\r\n" + second);
+    try {
+      const handle = await open(file, "r");
+      try {
+        const lines = [];
+        for await (const line of readHistoryLines(handle, true)) lines.push(line);
+        expect(lines.map((line) => JSON.parse(line.text))).toEqual([
+          JSON.parse(first),
+          JSON.parse(second),
+        ]);
+        expect(lines[1].offset).toBe(Buffer.byteLength(first + "\r\n"));
+      } finally {
+        await handle.close();
+      }
+      const strict = await open(file, "r");
+      try {
+        await expect(
+          (async () => {
+            for await (const line of readHistoryLines(strict)) void line;
+          })(),
+        ).rejects.toThrow("Incomplete timeline journal");
+      } finally {
+        await strict.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

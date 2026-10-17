@@ -1016,3 +1016,98 @@ describe("durable timeline after a downgrade", () => {
     }
   });
 });
+
+describe("journal pages without retained payloads", () => {
+  it("matches every page, update, index and retained read across metadata eviction", async () => {
+    const { JournalHistoryCache } = await import("./history-load.js");
+    const directory = mkdtempSync(join(tmpdir(), "timeline-pages-"));
+    const cache = new JournalHistoryCache(1);
+    const disk = new FileAgentTimelineStore(directory, {
+      historyCache: cache,
+      segmentMaxBytes: 4096,
+    });
+    const memory = new InMemoryAgentTimelineStore();
+    const timestamp = "2026-10-17T00:00:00.000Z";
+    const items: import("./agent-sdk-types.js").AgentTimelineItem[] = [
+      { type: "user_message", text: "start", clientMessageId: "client-one" },
+      {
+        type: "tool_call",
+        name: "Read",
+        callId: "call",
+        status: "running",
+        error: null,
+        detail: { type: "read", filePath: "source.ts" },
+      },
+      { type: "assistant_message", text: "one ", messageId: "answer" },
+      { type: "reasoning", text: "think " },
+      { type: "reasoning", text: "again" },
+      {
+        type: "tool_call",
+        name: "Read",
+        callId: "call",
+        status: "completed",
+        error: null,
+        detail: { type: "read", filePath: "source.ts", content: "payload" },
+      },
+      { type: "assistant_message", text: "two ", messageId: "answer-two" },
+      { type: "assistant_message", text: "three", messageId: "answer-two" },
+      {
+        type: "plugin",
+        id: "card",
+        pluginId: "test",
+        kind: "card",
+        version: 1,
+        data: { body: "old" },
+      },
+      { type: "user_message", text: "next" },
+      {
+        type: "plugin",
+        id: "card",
+        pluginId: "test",
+        kind: "card",
+        version: 1,
+        data: { body: "new" },
+      },
+    ];
+    try {
+      for (const item of items) await disk.appendCommitted("agent", item, { timestamp });
+      await disk.flushIndex("agent");
+      const rows = await disk.getCommittedRows("agent");
+      const tail = await disk.fetchCommitted("agent");
+      memory.initialize("agent", { epoch: tail.epoch, rows });
+      for (const direction of ["tail", "before", "after"] as const) {
+        for (let seq = 0; seq <= items.length + 1; seq++) {
+          for (const limit of [0, 1, 2, 5]) {
+            const options = { direction, cursor: { epoch: tail.epoch, seq }, limit };
+            expect(await disk.fetchCommitted("agent", options)).toEqual(
+              memory.fetch("agent", options),
+            );
+          }
+        }
+      }
+      expect(await disk.getLastAssistantMessage("agent")).toBe(
+        memory.getLastAssistantMessage("agent"),
+      );
+      expect(await disk.getLastItem("agent")).toEqual(memory.getLastItem("agent"));
+      const updated = {
+        ...rows[0],
+        item: { type: "user_message" as const, text: "updated", clientMessageId: "client-one" },
+      };
+      await disk.updateCommittedRow("agent", updated);
+      await disk.flushIndex("agent");
+      expect((await disk.getCommittedRows("agent"))[0]).toEqual(updated);
+      const index = await disk.getTimelineIndex("agent");
+      expect(index?.index).toEqual(
+        TimelineIndexBuilder.fromRows([updated, ...rows.slice(1)], null).toData(),
+      );
+      const page = await disk.fetchCommitted("agent", { limit: 2 });
+      await disk.retainAgent("agent", { cwd: directory });
+      expect(await disk.fetchRetained("agent", { limit: 2 })).toEqual(page);
+      expect(await disk.fetchCommitted("agent", { limit: 2 })).toEqual(page);
+      await Promise.resolve();
+      expect(cache.bytes).toBeLessThanOrEqual(1);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});

@@ -1,0 +1,84 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`ClaudeAgentSession persisted history load > a resumed transcript is replayed after the async read 1`] = `
+[
+  {
+    "messageId": "u1",
+    "text": "hello from the transcript",
+    "type": "user_message",
+  },
+  {
+    "text": "reason",
+    "type": "reasoning",
+  },
+  {
+    "messageId": "a1",
+    "text": "answer",
+    "type": "assistant_message",
+  },
+  {
+    "callId": "read-one",
+    "detail": {
+      "filePath": "source.ts",
+      "type": "read",
+    },
+    "error": null,
+    "name": "Read",
+    "status": "running",
+    "type": "tool_call",
+  },
+  {
+    "callId": "read-one",
+    "detail": {
+      "content": "file payload",
+      "filePath": "source.ts",
+      "type": "read",
+    },
+    "error": null,
+    "name": "Read",
+    "status": "completed",
+    "type": "tool_call",
+  },
+  {
+    "items": [
+      {
+        "completed": true,
+        "id": "legacy:0",
+        "status": "completed",
+        "text": "Check output",
+      },
+    ],
+    "type": "todo",
+  },
+  {
+    "callId": "todo-one",
+    "detail": {
+      "input": {
+        "todos": [
+          {
+            "content": "Check output",
+            "status": "completed",
+          },
+        ],
+      },
+      "output": null,
+      "type": "unknown",
+    },
+    "error": null,
+    "name": "TodoWrite",
+    "status": "running",
+    "type": "tool_call",
+  },
+  {
+    "preTokens": 1200,
+    "status": "completed",
+    "trigger": "manual",
+    "type": "compaction",
+  },
+  {
+    "messageId": "a2",
+    "text": "complete 🙂",
+    "type": "assistant_message",
+  },
+]
+`;

@@ -1,0 +1,1957 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`ClaudeAgentSession persisted subagent replay > carries a failed outcome through to the descriptor 1`] = `
+[
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "running",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:27:47.034Z",
+    "type": "timeline",
+  },
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": {
+        "content": "agentId: a1730a6215e1f5cf6
+done",
+        "is_error": true,
+        "tool_use_id": "toolu_01DgLoPMW9",
+        "type": "tool_result",
+      },
+      "name": "Task",
+      "status": "failed",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:28:00.000Z",
+    "type": "timeline",
+  },
+  {
+    "event": {
+      "description": "Summarize the docs",
+      "id": "toolu_01DgLoPMW9",
+      "status": "running",
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "title": "general-purpose",
+      "toolCallId": "toolu_01DgLoPMW9",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "item": {
+        "text": "summary of the docs",
+        "type": "assistant_message",
+      },
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "status": "failed",
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+]
+`;
+
+exports[`ClaudeAgentSession persisted subagent replay > does not accumulate internal workflow agents as replay-only running rows 1`] = `
+[
+  {
+    "item": {
+      "callId": "toolu_workflow",
+      "detail": {
+        "input": {
+          "script": "await Promise.all([agent('one'), agent('two'), agent('three')])",
+        },
+        "output": null,
+        "type": "unknown",
+      },
+      "error": null,
+      "name": "Workflow",
+      "status": "running",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:27:47.034Z",
+    "type": "timeline",
+  },
+]
+`;
+
+exports[`ClaudeAgentSession persisted subagent replay > does not replay a skill-spawned subagent the parent never named 1`] = `
+[
+  {
+    "item": {
+      "text": "running /code-review",
+      "type": "assistant_message",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:27:47.034Z",
+    "type": "timeline",
+  },
+]
+`;
+
+exports[`ClaudeAgentSession persisted subagent replay > does not replay a subagent whose toolUseId names no Task call in this transcript 1`] = `
+[
+  {
+    "item": {
+      "text": "no task calls here",
+      "type": "assistant_message",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:27:47.034Z",
+    "type": "timeline",
+  },
+]
+`;
+
+exports[`ClaudeAgentSession persisted subagent replay > falls back to the legacy scrape when no meta sidecar exists 1`] = `
+[
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "running",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:27:47.034Z",
+    "type": "timeline",
+  },
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "completed",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:28:00.000Z",
+    "type": "timeline",
+  },
+  {
+    "event": {
+      "description": "Summarize the docs",
+      "id": "toolu_01DgLoPMW9",
+      "status": "running",
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "title": "general-purpose",
+      "toolCallId": "toolu_01DgLoPMW9",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "item": {
+        "text": "summary of the docs",
+        "type": "assistant_message",
+      },
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "status": "completed",
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+]
+`;
+
+exports[`ClaudeAgentSession persisted subagent replay > finishes a Task subagent from its own end_turn when the parent outcome is missing 1`] = `
+[
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "running",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:27:47.034Z",
+    "type": "timeline",
+  },
+  {
+    "event": {
+      "description": "Summarize the docs",
+      "id": "toolu_01DgLoPMW9",
+      "status": "running",
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "title": "general-purpose",
+      "toolCallId": "toolu_01DgLoPMW9",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "item": {
+        "text": "summary of the docs",
+        "type": "assistant_message",
+      },
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "status": "completed",
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+]
+`;
+
+exports[`ClaudeAgentSession persisted subagent replay > keeps the terminal notification when the workflow summary cannot be restored 1`] = `
+[
+  {
+    "item": {
+      "callId": "toolu_01XskpjeASyuFyXC5qsLHYps",
+      "detail": {
+        "input": {
+          "args": "{}",
+          "scriptPath": "/tmp/one-child.js",
+        },
+        "output": null,
+        "type": "unknown",
+      },
+      "error": null,
+      "name": "Workflow",
+      "status": "running",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:27:47.034Z",
+    "type": "timeline",
+  },
+  {
+    "item": {
+      "callId": "toolu_01XskpjeASyuFyXC5qsLHYps",
+      "detail": {
+        "input": {
+          "args": "{}",
+          "scriptPath": "/tmp/one-child.js",
+        },
+        "output": {
+          "output": "Workflow launched in background.
+Run ID: wf_4a0af4f7-f56",
+        },
+        "type": "unknown",
+      },
+      "error": null,
+      "name": "Workflow",
+      "status": "completed",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": undefined,
+    "type": "timeline",
+  },
+  {
+    "item": {
+      "callId": "task_notification_workflow-notification",
+      "detail": {
+        "icon": "wrench",
+        "label": "Workflow completed",
+        "text": "Workflow completed",
+        "type": "plain_text",
+      },
+      "error": null,
+      "metadata": {
+        "outputFile": "/tmp/workflow.output",
+        "source": "claude_task_notification",
+        "status": "completed",
+        "synthetic": true,
+        "taskId": "wf_4a0af4f7-f56",
+        "toolUseId": "toolu_01XskpjeASyuFyXC5qsLHYps",
+      },
+      "name": "task_notification",
+      "status": "completed",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": undefined,
+    "type": "timeline",
+  },
+]
+`;
+
+exports[`ClaudeAgentSession persisted subagent replay > labels a background Agent call's card with its type and task after a restart 1`] = `
+[
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Count files here",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Agent",
+      "status": "running",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:27:47.034Z",
+    "type": "timeline",
+  },
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Count files here",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Agent",
+      "status": "completed",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:27:48.000Z",
+    "type": "timeline",
+  },
+  {
+    "event": {
+      "description": "Count files here",
+      "id": "toolu_01DgLoPMW9",
+      "status": "running",
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "title": "general-purpose",
+      "toolCallId": "toolu_01DgLoPMW9",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "item": {
+        "text": "summary of the docs",
+        "type": "assistant_message",
+      },
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "status": "completed",
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+]
+`;
+
+exports[`ClaudeAgentSession persisted subagent replay > labels a background Task call's card with its type and task after a restart 1`] = `
+[
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Count files here",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "running",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:27:47.034Z",
+    "type": "timeline",
+  },
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Count files here",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "completed",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:27:48.000Z",
+    "type": "timeline",
+  },
+  {
+    "event": {
+      "description": "Count files here",
+      "id": "toolu_01DgLoPMW9",
+      "status": "running",
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "title": "general-purpose",
+      "toolCallId": "toolu_01DgLoPMW9",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "item": {
+        "text": "summary of the docs",
+        "type": "assistant_message",
+      },
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "status": "completed",
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+]
+`;
+
+exports[`ClaudeAgentSession persisted subagent replay > leaves a subagent running when the transcript records no outcome 1`] = `
+[
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "running",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:27:47.034Z",
+    "type": "timeline",
+  },
+  {
+    "event": {
+      "description": "Summarize the docs",
+      "id": "toolu_01DgLoPMW9",
+      "status": "running",
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "title": "general-purpose",
+      "toolCallId": "toolu_01DgLoPMW9",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "item": {
+        "text": "summary of the docs",
+        "type": "assistant_message",
+      },
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+]
+`;
+
+exports[`ClaudeAgentSession persisted subagent replay > links a subagent to its Task call through the meta sidecar 1`] = `
+[
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "running",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:27:47.034Z",
+    "type": "timeline",
+  },
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "completed",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:28:00.000Z",
+    "type": "timeline",
+  },
+  {
+    "event": {
+      "description": "Summarize the docs",
+      "id": "toolu_01DgLoPMW9",
+      "status": "running",
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "title": "general-purpose",
+      "toolCallId": "toolu_01DgLoPMW9",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "item": {
+        "text": "summary of the docs",
+        "type": "assistant_message",
+      },
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "status": "completed",
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+]
+`;
+
+exports[`ClaudeAgentSession persisted subagent replay > links through the meta sidecar even when the parent's tool_result is missing 1`] = `
+[
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "running",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:27:47.034Z",
+    "type": "timeline",
+  },
+  {
+    "event": {
+      "description": "Summarize the docs",
+      "id": "toolu_01DgLoPMW9",
+      "status": "running",
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "title": "general-purpose",
+      "toolCallId": "toolu_01DgLoPMW9",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "item": {
+        "text": "summary of the docs",
+        "type": "assistant_message",
+      },
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+]
+`;
+
+exports[`ClaudeAgentSession persisted subagent replay > replays a SubagentHandback report as the subagent's final message 1`] = `
+[
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "running",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:27:47.034Z",
+    "type": "timeline",
+  },
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "completed",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:28:00.000Z",
+    "type": "timeline",
+  },
+  {
+    "event": {
+      "description": "Summarize the docs",
+      "id": "toolu_01DgLoPMW9",
+      "status": "running",
+      "title": "general-purpose",
+      "toolCallId": "toolu_01DgLoPMW9",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "item": {
+        "text": "## Verdict
+
+- **Coherent**",
+        "type": "assistant_message",
+      },
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "status": "completed",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+]
+`;
+
+exports[`ClaudeAgentSession persisted subagent replay > replays a completed workflow as one generic provider-subagent row 1`] = `
+[
+  {
+    "item": {
+      "callId": "toolu_01XskpjeASyuFyXC5qsLHYps",
+      "detail": {
+        "input": {
+          "args": "{}",
+          "scriptPath": "/tmp/one-child.js",
+        },
+        "output": null,
+        "type": "unknown",
+      },
+      "error": null,
+      "name": "Workflow",
+      "status": "running",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:27:47.034Z",
+    "type": "timeline",
+  },
+  {
+    "item": {
+      "callId": "toolu_01XskpjeASyuFyXC5qsLHYps",
+      "detail": {
+        "input": {
+          "args": "{}",
+          "scriptPath": "/tmp/one-child.js",
+        },
+        "output": {
+          "output": "Workflow launched in background.
+Run ID: wf_4a0af4f7-f56",
+        },
+        "type": "unknown",
+      },
+      "error": null,
+      "name": "Workflow",
+      "status": "completed",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": undefined,
+    "type": "timeline",
+  },
+  {
+    "event": {
+      "description": "Verify the workflow row lifecycle",
+      "id": "toolu_01XskpjeASyuFyXC5qsLHYps",
+      "status": "running",
+      "timestamp": "2026-08-06T08:04:44.150Z",
+      "title": "Workflow",
+      "toolCallId": "toolu_01XskpjeASyuFyXC5qsLHYps",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01XskpjeASyuFyXC5qsLHYps",
+      "item": {
+        "text": "Verify the workflow row lifecycle",
+        "type": "user_message",
+      },
+      "timestamp": "2026-08-06T08:04:44.150Z",
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01XskpjeASyuFyXC5qsLHYps",
+      "item": {
+        "text": "earlier workflow child result",
+        "type": "assistant_message",
+      },
+      "timestamp": "2026-08-06T08:04:45.000Z",
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01XskpjeASyuFyXC5qsLHYps",
+      "item": {
+        "text": "later workflow child result",
+        "type": "assistant_message",
+      },
+      "timestamp": "2026-08-06T08:04:45.500Z",
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01XskpjeASyuFyXC5qsLHYps",
+      "subtitle": "Workflow · Sonnet 5 · 20.4k tokens",
+      "timestamp": "2026-08-06T08:04:46.347Z",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01XskpjeASyuFyXC5qsLHYps",
+      "status": "completed",
+      "timestamp": "2026-08-06T08:04:46.347Z",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+]
+`;
+
+exports[`ClaudeAgentSession persisted subagent replay > replays the subagent's own transcript onto its timeline 1`] = `
+[
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "running",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:27:47.034Z",
+    "type": "timeline",
+  },
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "completed",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:28:00.000Z",
+    "type": "timeline",
+  },
+  {
+    "event": {
+      "description": "Summarize the docs",
+      "id": "toolu_01DgLoPMW9",
+      "status": "running",
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "title": "general-purpose",
+      "toolCallId": "toolu_01DgLoPMW9",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "item": {
+        "text": "summary of the docs",
+        "type": "assistant_message",
+      },
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "status": "completed",
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+]
+`;
+
+exports[`ClaudeAgentSession persisted subagent replay > restores nested background notification ownership from queue-operation history 1`] = `
+[
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "running",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:27:47.034Z",
+    "type": "timeline",
+  },
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "completed",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:28:00.000Z",
+    "type": "timeline",
+  },
+  {
+    "item": {
+      "callId": "task_notification_toolu_root_bash-task",
+      "detail": {
+        "icon": "wrench",
+        "label": "Background command completed",
+        "text": "<task-notification><task-id>toolu_root_bash-task</task-id><tool-use-id>toolu_root_bash</tool-use-id><status>completed</status><summary>Background command completed</summary></task-notification>",
+        "type": "plain_text",
+      },
+      "error": null,
+      "metadata": {
+        "source": "claude_task_notification",
+        "status": "completed",
+        "synthetic": true,
+        "taskId": "toolu_root_bash-task",
+        "toolUseId": "toolu_root_bash",
+      },
+      "name": "task_notification",
+      "status": "completed",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:28:01.000Z",
+    "type": "timeline",
+  },
+  {
+    "item": {
+      "callId": "task_notification_toolu_orphan_bash-task",
+      "detail": {
+        "icon": "wrench",
+        "label": "Background command completed",
+        "text": "<task-notification><task-id>toolu_orphan_bash-task</task-id><tool-use-id>toolu_orphan_bash</tool-use-id><status>completed</status><summary>Background command completed</summary></task-notification>",
+        "type": "plain_text",
+      },
+      "error": null,
+      "metadata": {
+        "source": "claude_task_notification",
+        "status": "completed",
+        "synthetic": true,
+        "taskId": "toolu_orphan_bash-task",
+        "toolUseId": "toolu_orphan_bash",
+      },
+      "name": "task_notification",
+      "status": "completed",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:28:01.000Z",
+    "type": "timeline",
+  },
+  {
+    "event": {
+      "description": "Summarize the docs",
+      "id": "toolu_01DgLoPMW9",
+      "status": "running",
+      "title": "general-purpose",
+      "toolCallId": "toolu_01DgLoPMW9",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "item": {
+        "callId": "toolu_nested",
+        "detail": {
+          "input": {},
+          "output": null,
+          "type": "unknown",
+        },
+        "error": null,
+        "name": "Agent",
+        "status": "running",
+        "type": "tool_call",
+      },
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "status": "completed",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_nested",
+      "parentSubagentId": "toolu_01DgLoPMW9",
+      "status": "running",
+      "toolCallId": "toolu_nested",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_nested",
+      "item": {
+        "callId": "toolu_nested_bash",
+        "detail": {
+          "input": {},
+          "output": null,
+          "type": "unknown",
+        },
+        "error": null,
+        "name": "Bash",
+        "status": "running",
+        "type": "tool_call",
+      },
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_nested",
+      "item": {
+        "callId": "task_notification_toolu_nested_bash-task",
+        "detail": {
+          "icon": "wrench",
+          "label": "Background command completed",
+          "text": "<task-notification><task-id>toolu_nested_bash-task</task-id><tool-use-id>toolu_nested_bash</tool-use-id><status>completed</status><summary>Background command completed</summary></task-notification>",
+          "type": "plain_text",
+        },
+        "error": null,
+        "metadata": {
+          "source": "claude_task_notification",
+          "status": "completed",
+          "synthetic": true,
+          "taskId": "toolu_nested_bash-task",
+          "toolUseId": "toolu_nested_bash",
+        },
+        "name": "task_notification",
+        "status": "completed",
+        "type": "tool_call",
+      },
+      "timestamp": "2026-07-26T06:28:01.000Z",
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+]
+`;
+
+exports[`ClaudeAgentSession persisted subagent replay > restores nested background notification ownership from system history 1`] = `
+[
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "running",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:27:47.034Z",
+    "type": "timeline",
+  },
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "completed",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:28:00.000Z",
+    "type": "timeline",
+  },
+  {
+    "item": {
+      "callId": "task_notification_toolu_root_bash-task",
+      "detail": {
+        "icon": "wrench",
+        "label": "Background command completed",
+        "text": "Background command completed",
+        "type": "plain_text",
+      },
+      "error": null,
+      "metadata": {
+        "source": "claude_task_notification",
+        "status": "completed",
+        "synthetic": true,
+        "taskId": "toolu_root_bash-task",
+        "toolUseId": "toolu_root_bash",
+      },
+      "name": "task_notification",
+      "status": "completed",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:28:01.000Z",
+    "type": "timeline",
+  },
+  {
+    "item": {
+      "callId": "task_notification_toolu_orphan_bash-task",
+      "detail": {
+        "icon": "wrench",
+        "label": "Background command completed",
+        "text": "Background command completed",
+        "type": "plain_text",
+      },
+      "error": null,
+      "metadata": {
+        "source": "claude_task_notification",
+        "status": "completed",
+        "synthetic": true,
+        "taskId": "toolu_orphan_bash-task",
+        "toolUseId": "toolu_orphan_bash",
+      },
+      "name": "task_notification",
+      "status": "completed",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:28:01.000Z",
+    "type": "timeline",
+  },
+  {
+    "event": {
+      "description": "Summarize the docs",
+      "id": "toolu_01DgLoPMW9",
+      "status": "running",
+      "title": "general-purpose",
+      "toolCallId": "toolu_01DgLoPMW9",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "item": {
+        "callId": "toolu_nested",
+        "detail": {
+          "input": {},
+          "output": null,
+          "type": "unknown",
+        },
+        "error": null,
+        "name": "Agent",
+        "status": "running",
+        "type": "tool_call",
+      },
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "status": "completed",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_nested",
+      "parentSubagentId": "toolu_01DgLoPMW9",
+      "status": "running",
+      "toolCallId": "toolu_nested",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_nested",
+      "item": {
+        "callId": "toolu_nested_bash",
+        "detail": {
+          "input": {},
+          "output": null,
+          "type": "unknown",
+        },
+        "error": null,
+        "name": "Bash",
+        "status": "running",
+        "type": "tool_call",
+      },
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_nested",
+      "item": {
+        "callId": "task_notification_toolu_nested_bash-task",
+        "detail": {
+          "icon": "wrench",
+          "label": "Background command completed",
+          "text": "Background command completed",
+          "type": "plain_text",
+        },
+        "error": null,
+        "metadata": {
+          "source": "claude_task_notification",
+          "status": "completed",
+          "synthetic": true,
+          "taskId": "toolu_nested_bash-task",
+          "toolUseId": "toolu_nested_bash",
+        },
+        "name": "task_notification",
+        "status": "completed",
+        "type": "tool_call",
+      },
+      "timestamp": "2026-07-26T06:28:01.000Z",
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+]
+`;
+
+exports[`ClaudeAgentSession persisted subagent replay > restores nested background notification ownership from user history 1`] = `
+[
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "running",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:27:47.034Z",
+    "type": "timeline",
+  },
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "completed",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:28:00.000Z",
+    "type": "timeline",
+  },
+  {
+    "item": {
+      "callId": "task_notification_toolu_root_bash-notification",
+      "detail": {
+        "icon": "wrench",
+        "label": "Background command completed",
+        "text": "<task-notification><task-id>toolu_root_bash-task</task-id><tool-use-id>toolu_root_bash</tool-use-id><status>completed</status><summary>Background command completed</summary></task-notification>",
+        "type": "plain_text",
+      },
+      "error": null,
+      "metadata": {
+        "source": "claude_task_notification",
+        "status": "completed",
+        "synthetic": true,
+        "taskId": "toolu_root_bash-task",
+        "toolUseId": "toolu_root_bash",
+      },
+      "name": "task_notification",
+      "status": "completed",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:28:01.000Z",
+    "type": "timeline",
+  },
+  {
+    "item": {
+      "callId": "task_notification_toolu_orphan_bash-notification",
+      "detail": {
+        "icon": "wrench",
+        "label": "Background command completed",
+        "text": "<task-notification><task-id>toolu_orphan_bash-task</task-id><tool-use-id>toolu_orphan_bash</tool-use-id><status>completed</status><summary>Background command completed</summary></task-notification>",
+        "type": "plain_text",
+      },
+      "error": null,
+      "metadata": {
+        "source": "claude_task_notification",
+        "status": "completed",
+        "synthetic": true,
+        "taskId": "toolu_orphan_bash-task",
+        "toolUseId": "toolu_orphan_bash",
+      },
+      "name": "task_notification",
+      "status": "completed",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:28:01.000Z",
+    "type": "timeline",
+  },
+  {
+    "event": {
+      "description": "Summarize the docs",
+      "id": "toolu_01DgLoPMW9",
+      "status": "running",
+      "title": "general-purpose",
+      "toolCallId": "toolu_01DgLoPMW9",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "item": {
+        "callId": "toolu_nested",
+        "detail": {
+          "input": {},
+          "output": null,
+          "type": "unknown",
+        },
+        "error": null,
+        "name": "Agent",
+        "status": "running",
+        "type": "tool_call",
+      },
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "status": "completed",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_nested",
+      "parentSubagentId": "toolu_01DgLoPMW9",
+      "status": "running",
+      "toolCallId": "toolu_nested",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_nested",
+      "item": {
+        "callId": "toolu_nested_bash",
+        "detail": {
+          "input": {},
+          "output": null,
+          "type": "unknown",
+        },
+        "error": null,
+        "name": "Bash",
+        "status": "running",
+        "type": "tool_call",
+      },
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_nested",
+      "item": {
+        "callId": "task_notification_toolu_nested_bash-notification",
+        "detail": {
+          "icon": "wrench",
+          "label": "Background command completed",
+          "text": "<task-notification><task-id>toolu_nested_bash-task</task-id><tool-use-id>toolu_nested_bash</tool-use-id><status>completed</status><summary>Background command completed</summary></task-notification>",
+          "type": "plain_text",
+        },
+        "error": null,
+        "metadata": {
+          "source": "claude_task_notification",
+          "status": "completed",
+          "synthetic": true,
+          "taskId": "toolu_nested_bash-task",
+          "toolUseId": "toolu_nested_bash",
+        },
+        "name": "task_notification",
+        "status": "completed",
+        "type": "tool_call",
+      },
+      "timestamp": "2026-07-26T06:28:01.000Z",
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+]
+`;
+
+exports[`ClaudeAgentSession persisted subagent replay > suppresses restored workflow notifications from Claude's persisted queue forms 1`] = `
+[
+  {
+    "item": {
+      "callId": "toolu_01XskpjeASyuFyXC5qsLHYps",
+      "detail": {
+        "input": {
+          "args": "{}",
+          "scriptPath": "/tmp/one-child.js",
+        },
+        "output": null,
+        "type": "unknown",
+      },
+      "error": null,
+      "name": "Workflow",
+      "status": "running",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:27:47.034Z",
+    "type": "timeline",
+  },
+  {
+    "item": {
+      "callId": "toolu_01XskpjeASyuFyXC5qsLHYps",
+      "detail": {
+        "input": {
+          "args": "{}",
+          "scriptPath": "/tmp/one-child.js",
+        },
+        "output": {
+          "output": "Workflow launched in background.
+Run ID: wf_4a0af4f7-f56",
+        },
+        "type": "unknown",
+      },
+      "error": null,
+      "name": "Workflow",
+      "status": "completed",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": undefined,
+    "type": "timeline",
+  },
+  {
+    "event": {
+      "description": "Verify the workflow row lifecycle",
+      "id": "toolu_01XskpjeASyuFyXC5qsLHYps",
+      "status": "running",
+      "timestamp": "2026-08-06T08:04:44.150Z",
+      "title": "Workflow",
+      "toolCallId": "toolu_01XskpjeASyuFyXC5qsLHYps",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01XskpjeASyuFyXC5qsLHYps",
+      "item": {
+        "text": "Verify the workflow row lifecycle",
+        "type": "user_message",
+      },
+      "timestamp": "2026-08-06T08:04:44.150Z",
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01XskpjeASyuFyXC5qsLHYps",
+      "subtitle": "Workflow · Sonnet 5 · 20.4k tokens",
+      "timestamp": "2026-08-06T08:04:46.347Z",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01XskpjeASyuFyXC5qsLHYps",
+      "status": "completed",
+      "timestamp": "2026-08-06T08:04:46.347Z",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+]
+`;
+
+exports[`ClaudeAgentSession persisted subagent replay > survives a malformed meta sidecar (a json array) 1`] = `
+[
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "running",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:27:47.034Z",
+    "type": "timeline",
+  },
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "completed",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:28:00.000Z",
+    "type": "timeline",
+  },
+  {
+    "event": {
+      "description": "Summarize the docs",
+      "id": "toolu_01DgLoPMW9",
+      "status": "running",
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "title": "general-purpose",
+      "toolCallId": "toolu_01DgLoPMW9",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "item": {
+        "text": "summary of the docs",
+        "type": "assistant_message",
+      },
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "status": "completed",
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+]
+`;
+
+exports[`ClaudeAgentSession persisted subagent replay > survives a malformed meta sidecar (empty file) 1`] = `
+[
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "running",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:27:47.034Z",
+    "type": "timeline",
+  },
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "completed",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:28:00.000Z",
+    "type": "timeline",
+  },
+  {
+    "event": {
+      "description": "Summarize the docs",
+      "id": "toolu_01DgLoPMW9",
+      "status": "running",
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "title": "general-purpose",
+      "toolCallId": "toolu_01DgLoPMW9",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "item": {
+        "text": "summary of the docs",
+        "type": "assistant_message",
+      },
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "status": "completed",
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+]
+`;
+
+exports[`ClaudeAgentSession persisted subagent replay > survives a malformed meta sidecar (not json) 1`] = `
+[
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "running",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:27:47.034Z",
+    "type": "timeline",
+  },
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "completed",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:28:00.000Z",
+    "type": "timeline",
+  },
+  {
+    "event": {
+      "description": "Summarize the docs",
+      "id": "toolu_01DgLoPMW9",
+      "status": "running",
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "title": "general-purpose",
+      "toolCallId": "toolu_01DgLoPMW9",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "item": {
+        "text": "summary of the docs",
+        "type": "assistant_message",
+      },
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "status": "completed",
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+]
+`;
+
+exports[`ClaudeAgentSession persisted subagent replay > survives a malformed meta sidecar (truncated json) 1`] = `
+[
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "running",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:27:47.034Z",
+    "type": "timeline",
+  },
+  {
+    "item": {
+      "callId": "toolu_01DgLoPMW9",
+      "detail": {
+        "actions": [],
+        "description": "Summarize the docs",
+        "log": "",
+        "subAgentType": "general-purpose",
+        "type": "sub_agent",
+      },
+      "error": null,
+      "name": "Task",
+      "status": "completed",
+      "type": "tool_call",
+    },
+    "provider": "claude",
+    "timestamp": "2026-07-26T06:28:00.000Z",
+    "type": "timeline",
+  },
+  {
+    "event": {
+      "description": "Summarize the docs",
+      "id": "toolu_01DgLoPMW9",
+      "status": "running",
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "title": "general-purpose",
+      "toolCallId": "toolu_01DgLoPMW9",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "item": {
+        "text": "summary of the docs",
+        "type": "assistant_message",
+      },
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "status": "completed",
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+]
+`;

@@ -33,6 +33,19 @@ working directory, and rebuilds from the journal whenever they differ, so deleti
 nothing. The working directory itself comes from the agent record, or from `retained.json` once the
 agent is deleted, never from the cache.
 
+History loading reads JSONL one record at a time. The journal cache keeps byte locations and
+compact projection and file-index facts. Page reads load only contributing records from disk.
+The original journal remains authoritative. Active sessions can still keep their displayed timeline.
+
+The process shares a 128 MiB input allowance across transcript and journal loads. A larger input
+runs alone. Concurrent identical Claude resumes share their load until it completes.
+The journal metadata cache has a shared 64 MiB allowance. Entries in use or awaiting an index write
+stay pinned. Unused entries leave the cache first. Cache eviction never removes a history file.
+
+Each load logs `history.load` with its source, boundary, input bytes, heap use, and heap limit.
+`journalCacheBytes` reports the conservative metadata charge. `pluginCacheBytes` counts retained
+client bundles, catalog snapshots, and log-tail payloads. These charges are not heap measurements.
+
 ## Segments
 
 A journal file that would grow past 256 MiB rolls over to the next segment: `<hash>.jsonl`, then
@@ -53,7 +66,7 @@ but unreadable on the older daemon. To roll back:
 
 1. Stop the daemon and copy `$PASEO_HOME/native-timeline-journal/` somewhere safe.
 2. Install the older version. Agents whose journals never rolled over work as before.
-3. To see rolled history again, reinstall this version or later; the journal is read in full.
+3. To see rolled history again, reinstall this version or later; all segments become available.
 
 Do not edit the header back to version 1 by hand. The older daemon would read only the first
 segment and could append sequence numbers the later segments already use.
@@ -65,8 +78,8 @@ leftover segments belong to the history that was replaced, so they are renamed t
 `<hash>.<n>.jsonl.orphaned-<time>` and kept, never read and never deleted. Remove them by hand once you no
 longer need them.
 
-Reads still load an agent's whole journal into memory the first time it is opened. Rotation removes
-the hard stop at 256 MiB; it does not make very large sessions cheap to open.
+Opening a journal streams its records to build compact indexes. Page reads then load the needed
+records. Rotation removes the hard stop at 256 MiB. An individual large record can still need substantial memory.
 
 ## Retention
 
