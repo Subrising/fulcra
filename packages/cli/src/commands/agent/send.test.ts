@@ -315,7 +315,7 @@ describe("send reporting lines", () => {
   });
 });
 
-test("explicit opt-out reaches the daemon for sends and steers", async () => {
+it("explicit opt-out reaches the daemon for sends and steers", async () => {
   senderStamp.mockReturnValue({ agentId: "sender" });
   for (const flags of [[], ["--steer"]]) {
     await parsedSend(["target", "quiet", "--no-wait", "--no-notify-on-finish", ...flags]);
@@ -327,7 +327,7 @@ test("explicit opt-out reaches the daemon for sends and steers", async () => {
   }
 });
 
-test("remote parent sends keep their message identity and return for the finish notice", async () => {
+it("remote parent sends keep their message identity and return for the finish notice", async () => {
   senderStamp.mockReturnValue({ agentId: "sender" });
   const result = await parsedSend(["child@remote", "follow-up"]);
   expect(result.data.status).toBe("sent");

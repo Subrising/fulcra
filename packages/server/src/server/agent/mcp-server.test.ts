@@ -1,3 +1,4 @@
+import { ReportUpService } from "../report-up.js";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -4275,7 +4276,7 @@ describe("send_agent_prompt MCP tool", () => {
       await removeAgentStateDir(agentManager, storage, workdir);
     }
   });
-  it("holds a prompt to a running child until its turn ends, then notifies the caller once", async () => {
+  it("holds a prompt to a running child until its turn ends, then notifies the caller once per turn", async () => {
     const workdir = await mkdtemp(join(tmpdir(), "mcp-send-running-child-"));
     const storage = new AgentStorage(join(workdir, "agents"), logger);
     const parentClient = new HeldTurnAgentClient("claude", false);
@@ -4284,6 +4285,20 @@ describe("send_agent_prompt MCP tool", () => {
       clients: { claude: parentClient, codex: childClient },
       registry: storage,
       logger,
+    });
+
+    const reports = new ReportUpService({
+      agentManager,
+      agentStorage: storage,
+      logger,
+      localServerId: null,
+      isEnabled: () => false,
+      isOtherEnabled: () => false,
+      isNudgeEnabled: () => false,
+      readLedger: () => [],
+    });
+    const offReports = agentManager.subscribe((event) => reports.onEvent(event), {
+      replayState: false,
     });
 
     try {
@@ -4327,8 +4342,8 @@ describe("send_agent_prompt MCP tool", () => {
       expect(childSession.prompts).toEqual(["Run a long command"]);
 
       function finishNotifications() {
-        return (parentClient.sessions[0]?.prompts ?? []).filter((prompt) =>
-          prompt.includes(`Agent ${childId} (Busy Child) finished.`),
+        return (parentClient.sessions[0]?.prompts ?? []).filter(
+          (prompt) => prompt.includes(childId) && prompt.includes("finished"),
         );
       }
       childSession.finishTurn();
@@ -4337,11 +4352,13 @@ describe("send_agent_prompt MCP tool", () => {
         `Message 1 from ${parent.id}:\nStop and reply instead\n\nMessage 2 from ${parent.id}:\nAlso report tests\n\nMessage 3 from ${parent.id}:\nKeep it short`,
       );
       childSession.finishTurn();
-      // Arming for the delivered prompt replaces the first turn's notice: one notice, for the answering turn.
-      await vi.waitFor(() => expect(finishNotifications()).toHaveLength(1));
+      // Each completed turn keeps its notice. Three queued messages share the answering turn's notice.
+      await vi.waitFor(() => expect(finishNotifications()).toHaveLength(2));
       await new Promise((resolve) => setTimeout(resolve, 100));
-      expect(finishNotifications()).toHaveLength(1);
+      expect(finishNotifications()).toHaveLength(2);
     } finally {
+      offReports();
+      reports.stop();
       await removeAgentStateDir(agentManager, storage, workdir);
     }
   });
