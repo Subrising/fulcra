@@ -588,6 +588,7 @@ function createSessionForWorkspaceTests(
     listAgents: () => [],
     listProviderSubagentActivity: () => [],
     getAgent: () => null,
+    refreshSessionCost: async () => undefined,
     archiveAgent: async () => ({ archivedAt: new Date().toISOString() }),
     preflightArchiveDescendants: vi.fn(async () => undefined),
     archiveSnapshot: async () => ({}),

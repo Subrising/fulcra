@@ -239,18 +239,11 @@ test("server entry obeys host cleanup contract and registers explicit management
     {
       get(target, name) {
         // The sanctioned structural reads: ctx.secrets (J3 trackers), ctx.notify (J3b push), ctx.device (J5b pairing),
-        // ctx.credentials (J4, host-mediated requests, CONTRACTS v1.7) and ctx.before (the agent.create and
-        // agent.session_open hooks, tested for with typeof). All are absent here, so push, pairing, host
-        // credentials and the launch hooks stay off.
-        if (
-          name === "secrets" ||
-          name === "notify" ||
-          name === "device" ||
-          name === "credentials" ||
-          name === "before"
-        )
+        // ctx.credentials (J4, host-mediated requests, CONTRACTS v1.7) are absent here.
+        // Lifecycle registrations return cleanup functions. These tests do not run their callbacks.
+        if (name === "secrets" || name === "notify" || name === "device" || name === "credentials")
           return undefined;
-        if (name === "on") return () => () => undefined;
+        if (name === "on" || name === "before") return () => () => undefined;
         if (name === "registerUsageSource") return () => undefined;
         if (name !== "handle") throw new Error(`Unexpected hook or action: ${String(name)}`);
         return target.handle;
@@ -412,7 +405,7 @@ test("the app-facing seam method name is pinned to an exact literal and is regis
     },
     {
       get(target, name) {
-        if (name === "on") return () => () => undefined;
+        if (name === "on" || name === "before") return () => () => undefined;
         return name in target
           ? (target as Record<string, unknown>)[name as string]
           : () => undefined;
