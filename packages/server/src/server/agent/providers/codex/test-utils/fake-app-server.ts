@@ -122,6 +122,7 @@ export interface FakeCodexAppServer {
     serverName: string;
     message: string;
     requestedSchema: Record<string, unknown>;
+    _meta?: unknown;
   }): number;
   waitForMcpElicitationDecision(requestId?: number): Promise<unknown>;
   resolvesMcpElicitation(requestId?: number): void;
@@ -609,7 +610,7 @@ export function createFakeCodexAppServer(
           params: {
             ...params,
             mode: "openai/form",
-            _meta: null,
+            _meta: params._meta ?? null,
           },
         })}\n`,
       );
@@ -699,4 +700,25 @@ export function waitForProviderSubagent(
   id: string,
 ): Promise<ProviderSubagentEvent> {
   return waitForNextEvent(session, "provider_subagent", (event) => event.event.id === id);
+}
+
+/** Synthetic copy of the installed computer-use consent shape. */
+export function computerUseConsent(
+  app: string,
+  bundleId = `test.${app.replace(/[^a-zA-Z0-9]/g, "").toLowerCase()}`,
+) {
+  return {
+    threadId: "thread-1",
+    serverName: "cua_repl",
+    message: `Allow Computer Use to use "${app}"?`,
+    requestedSchema: { type: "object", properties: {} },
+    _meta: {
+      connector_id: "computer-use",
+      connector_name: "Computer Use",
+      codex_approval_kind: "mcp_tool_call",
+      persist: ["session"],
+      tool_params: { app: bundleId },
+      tool_params_display: [{ name: "app", display_name: "App", value: app }],
+    },
+  };
 }

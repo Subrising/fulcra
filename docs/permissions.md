@@ -114,15 +114,30 @@ A lead can name apps when it creates a Codex worker:
 ```
 
 The label is a JSON array of exact app names. It is fixed when the job starts.
-It applies only to full-access Codex sessions with `approval_policy=never` and `sandbox_mode=danger-full-access`.
-A listed app needs no lead approval. Each automatic accept writes the app name and UTC time to the session timeline.
-An unlisted app asks the lead once. The session remembers explicit accepts and declines, including after reload.
-Concurrent requests for the same app share that answer. A canceled request can ask again.
-Other MCP forms and URLs keep their existing behavior. Restricted sessions and Claude keep their existing behavior.
+It applies only to built-in Codex sessions in full-access mode.
+The approval policy must be `never`. The sandbox mode must be `danger-full-access`.
+A listed name binds to the first approved app bundle for that name. Another bundle with the same name asks separately.
+The request must carry the computer-use connector ID and app bundle ID.
 
-Codex native approval policy does not answer MCP elicitations. Those requests use a separate protocol path.
-This grant covers only the empty app-consent form from the computer-use MCP server.
-It does not grant operating-system access or remove operating-system prompts.
+The host checks each automatic answer against its current session and trusted automatic-permission hooks.
+The controller accepts this explicit app grant for delegated jobs. Other host hooks keep their veto.
+A host with only manual permission guards asks for approval.
+
+A listed app needs no lead approval when host policy permits it.
+An unlisted app asks once. The job remembers explicit accepts and declines, including after reload, MCP refresh, and context rotation.
+Each automatic accept records the app name, bundle ID, server name, and UTC time in the session timeline.
+A reused decline also records a timeline message. The question tells the lead that its answer will be remembered.
+Start a new job to change that answer or the app list.
+
+Concurrent requests for the same app identity share an answer.
+Canceling one action does not cancel the others. A remaining action can ask again if no answer was given.
+A malformed stored app list grants no apps and writes a warning. It does not prevent the session from loading.
+
+Codex native approval policy does not answer every MCP elicitation. MCP consent has a separate protocol path.
+The app grant covers only empty app-consent forms from `cua_repl` and `computer-use` on the job's root native thread.
+Other MCP forms, audio consent, renamed servers, derived providers, and native sub-agent threads keep their existing behavior.
+Restricted sessions and Claude also keep their existing behavior.
+This grant does not change operating-system access or operating-system prompts.
 
 ## Hub
 

@@ -421,3 +421,32 @@ it.runIf(process.platform === "win32")(
     }
   },
 );
+
+it("computer-use job grants keep automatic and manual-only host vetoes", () => {
+  const request = {
+    id: "app-consent",
+    provider: "codex",
+    kind: "tool" as const,
+    name: "CodexMcpElicitation",
+  };
+  const target = { ...agent, id: "00000000-0000-4000-8000-000000001134", provider: "codex" };
+  const plain = host();
+  expect(plain.automaticPermission(target, request)).toBe(false);
+  expect(plain.automaticPermission(target, request, true)).toBe(true);
+  const legacy = host((server) => server.guard("agent.permission_respond", () => "deny"));
+  expect(legacy.automaticPermission(target, request, true)).toBe(false);
+  for (const decision of ["allow", "ask"] as const) {
+    const authority = host();
+    authority.initializeKnownAgents([target.id]);
+    authority.registerV11("app-approval", true, (server) =>
+      server.permissions.automatic(() => decision),
+    );
+    expect(authority.automaticPermission(target, request, true)).toBe(decision === "allow");
+  }
+  const manual = host();
+  manual.initializeKnownAgents([target.id]);
+  manual.registerV11("manual-approval", true, (server) =>
+    server.guard("agent.permission_respond", () => "deny"),
+  );
+  expect(manual.automaticPermission(target, request, true)).toBe(false);
+});

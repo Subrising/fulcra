@@ -89,6 +89,7 @@ describe("Codex executable discovery", () => {
 import { CodexAppServerClient, CodexAppServerRpcError } from "./codex/app-server-transport.js";
 import {
   createFakeCodexAppServer,
+  computerUseConsent,
   type FakeCodexAppServer,
   waitForNextPermission,
   waitForNextTimelineItem,
@@ -1771,12 +1772,7 @@ describe("Codex app-server provider", () => {
     session.subscribe((event) => events.push(event));
     try {
       for (const app of ["VRoid Studio", "VRoid Studio", "Simulator"]) {
-        appServer.requestMcpElicitation({
-          threadId: "thread-1",
-          serverName: "cua_repl",
-          message: `Allow Computer Use to use "${app}"?`,
-          requestedSchema: { type: "object", properties: {} },
-        });
+        appServer.requestMcpElicitation(computerUseConsent(app));
         await expect(appServer.waitForMcpElicitationDecision()).resolves.toEqual({
           action: "accept",
           content: {},
@@ -1793,7 +1789,7 @@ describe("Codex app-server provider", () => {
           item: {
             type: "notification",
             level: "info",
-            message: expect.stringMatching(new RegExp(`^Computer Use auto-accepted: ${app} at `)),
+            message: expect.stringMatching(new RegExp(`^Computer Use auto-accepted: ${app} \\(`)),
           },
         })),
       );
@@ -1816,13 +1812,7 @@ describe("Codex app-server provider", () => {
       await session.connect();
       const events: AgentStreamEvent[] = [];
       session.subscribe((event) => events.push(event));
-      const request = (app: string) =>
-        appServer.requestMcpElicitation({
-          threadId: "thread-1",
-          serverName: "cua_repl",
-          message: `Allow Computer Use to use "${app}"?`,
-          requestedSchema: { type: "object", properties: {} },
-        });
+      const request = (app: string) => appServer.requestMcpElicitation(computerUseConsent(app));
       try {
         const first = waitForNextPermission(session);
         request("Simulator");
@@ -1838,7 +1828,7 @@ describe("Codex app-server provider", () => {
         await expect(appServer.waitForMcpElicitationDecision()).resolves.toEqual(decision);
         expect(events.filter((event) => event.type === "permission_requested")).toHaveLength(1);
         expect(session.describePersistence()?.metadata.computerUseDecisions).toEqual({
-          Simulator: decision.action,
+          [JSON.stringify(["Simulator", "test.simulator"])]: decision.action,
         });
         const other = waitForNextPermission(session);
         request("VRoid Studio");
@@ -1869,12 +1859,7 @@ describe("Codex app-server provider", () => {
       try {
         for (let i = 0; i < 2; i++) {
           const permission = waitForNextPermission(session);
-          appServer.requestMcpElicitation({
-            threadId: "thread-1",
-            serverName: "cua_repl",
-            message: "Allow Computer Use to use Simulator?",
-            requestedSchema: { type: "object", properties: {} },
-          });
+          appServer.requestMcpElicitation(computerUseConsent("Simulator"));
           await session.respondToPermission((await permission).request.id, { behavior: "allow" });
           await appServer.waitForMcpElicitationDecision();
         }
@@ -1913,7 +1898,7 @@ describe("Codex app-server provider", () => {
       ]) {
         for (let i = 0; i < 2; i++) {
           const permission = waitForNextPermission(session);
-          appServer.requestMcpElicitation({ threadId: "thread-1", ...params });
+          appServer.requestMcpElicitation({ ...computerUseConsent("Simulator"), ...params });
           await session.respondToPermission((await permission).request.id, { behavior: "allow" });
           await expect(appServer.waitForMcpElicitationDecision()).resolves.toEqual({
             action: "accept",
@@ -1938,13 +1923,7 @@ describe("Codex app-server provider", () => {
     await session.connect();
     const events: AgentStreamEvent[] = [];
     session.subscribe((event) => events.push(event));
-    const request = () =>
-      appServer.requestMcpElicitation({
-        threadId: "thread-1",
-        serverName: "cua_repl",
-        message: "Allow Computer Use to use Simulator?",
-        requestedSchema: { type: "object", properties: {} },
-      });
+    const request = () => appServer.requestMcpElicitation(computerUseConsent("Simulator"));
     try {
       const first = waitForNextPermission(session);
       const firstId = request();
@@ -1952,23 +1931,20 @@ describe("Codex app-server provider", () => {
       const secondId = request();
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(session.getPendingPermissions()).toHaveLength(1);
+      const promoted = waitForNextPermission(session);
       appServer.resolvesMcpElicitation(firstId);
-      for (const id of [firstId, secondId]) {
-        await expect(appServer.waitForMcpElicitationDecision(id)).resolves.toEqual({
-          action: "cancel",
-          content: null,
-          _meta: null,
-        });
-      }
-      expect(session.describePersistence()?.metadata.computerUseDecisions).toEqual({});
-      const retry = waitForNextPermission(session);
-      const retryId = request();
-      const retryPermission = await retry;
+      await expect(appServer.waitForMcpElicitationDecision(firstId)).resolves.toEqual({
+        action: "cancel",
+        content: null,
+        _meta: null,
+      });
+      const retryPermission = await promoted;
       expect(retryPermission.request.id).not.toBe(permission.request.id);
+      expect(session.describePersistence()?.metadata.computerUseDecisions).toEqual({});
       const joinedId = request();
       await new Promise<void>((resolve) => setImmediate(resolve));
       await session.respondToPermission(retryPermission.request.id, { behavior: "allow" });
-      for (const id of [retryId, joinedId]) {
+      for (const id of [secondId, joinedId]) {
         await expect(appServer.waitForMcpElicitationDecision(id)).resolves.toEqual({
           action: "accept",
           content: {},
@@ -1996,12 +1972,7 @@ describe("Codex app-server provider", () => {
       await session.startTurn("Synthetic restricted turn");
       await session.setMode("full-access");
       const permission = waitForNextPermission(session);
-      appServer.requestMcpElicitation({
-        threadId: "thread-1",
-        serverName: "cua_repl",
-        message: 'Allow Computer Use to use "Simulator"?',
-        requestedSchema: { type: "object", properties: {} },
-      });
+      appServer.requestMcpElicitation(computerUseConsent("Simulator"));
       await session.respondToPermission((await permission).request.id, { behavior: "deny" });
       await expect(appServer.waitForMcpElicitationDecision()).resolves.toEqual({
         action: "decline",
@@ -2014,7 +1985,9 @@ describe("Codex app-server provider", () => {
   });
 
   test("computer use restores app answers for the same native session and isolates new sessions", async () => {
-    const metadata = { computerUseDecisions: { Simulator: "accept" } };
+    const metadata = {
+      computerUseDecisions: { [JSON.stringify(["Simulator", "test.simulator"])]: "accept" },
+    };
     const appServer = createFakeCodexAppServer();
     const session = new CodexAppServerAgentSession(
       createConfig({ modeId: "full-access" }),
@@ -2024,12 +1997,7 @@ describe("Codex app-server provider", () => {
     );
     await session.connect();
     try {
-      appServer.requestMcpElicitation({
-        threadId: "thread-1",
-        serverName: "cua_repl",
-        message: "Allow Computer Use to use Simulator?",
-        requestedSchema: { type: "object", properties: {} },
-      });
+      appServer.requestMcpElicitation(computerUseConsent("Simulator"));
       await expect(appServer.waitForMcpElicitationDecision()).resolves.toEqual({
         action: "accept",
         content: {},
@@ -2037,12 +2005,7 @@ describe("Codex app-server provider", () => {
       });
       await session.setMode("auto");
       const permission = waitForNextPermission(session);
-      appServer.requestMcpElicitation({
-        threadId: "thread-1",
-        serverName: "cua_repl",
-        message: "Allow Computer Use to use Simulator?",
-        requestedSchema: { type: "object", properties: {} },
-      });
+      appServer.requestMcpElicitation(computerUseConsent("Simulator"));
       await session.respondToPermission((await permission).request.id, { behavior: "deny" });
       await expect(appServer.waitForMcpElicitationDecision()).resolves.toEqual({
         action: "decline",
@@ -2062,16 +2025,221 @@ describe("Codex app-server provider", () => {
     await fresh.connect();
     try {
       const permission = waitForNextPermission(fresh);
-      freshServer.requestMcpElicitation({
-        threadId: "thread-1",
-        serverName: "cua_repl",
-        message: "Allow Computer Use to use Simulator?",
-        requestedSchema: { type: "object", properties: {} },
-      });
+      freshServer.requestMcpElicitation(computerUseConsent("Simulator"));
       await fresh.respondToPermission((await permission).request.id, { behavior: "deny" });
       await freshServer.waitForMcpElicitationDecision();
     } finally {
       await fresh.close();
+    }
+  });
+
+  test("computer use rechecks host vetoes for listed and remembered answers", async () => {
+    const appServer = createFakeCodexAppServer();
+    let allowed = false;
+    const approve = vi.fn(() => allowed);
+    const session = new CodexAppServerAgentSession(
+      createConfig({ modeId: "full-access", computerUse: { allowApps: ["Simulator"] } }),
+      { sessionId: "thread-1" },
+      createTestLogger(),
+      async () => appServer.child,
+      { computerUsePolicy: { approve, changed: () => {} } },
+    );
+    await session.connect();
+    try {
+      const first = waitForNextPermission(session);
+      appServer.requestMcpElicitation(computerUseConsent("Simulator"));
+      await session.respondToPermission((await first).request.id, { behavior: "allow" });
+      await appServer.waitForMcpElicitationDecision();
+      allowed = true;
+      appServer.requestMcpElicitation(computerUseConsent("Simulator"));
+      await expect(appServer.waitForMcpElicitationDecision()).resolves.toEqual({
+        action: "accept",
+        content: {},
+        _meta: null,
+      });
+      allowed = false;
+      const vetoed = waitForNextPermission(session);
+      appServer.requestMcpElicitation(computerUseConsent("Simulator"));
+      await session.respondToPermission((await vetoed).request.id, { behavior: "deny" });
+      await appServer.waitForMcpElicitationDecision();
+      expect(approve).toHaveBeenCalledTimes(3);
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("computer use binds a listed name to its first bundle and audits the exact identity", async () => {
+    const appServer = createFakeCodexAppServer();
+    const session = new CodexAppServerAgentSession(
+      createConfig({ modeId: "full-access", computerUse: { allowApps: ["Simulator"] } }),
+      { sessionId: "thread-1" },
+      createTestLogger(),
+      async () => appServer.child,
+    );
+    await session.connect();
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    try {
+      appServer.requestMcpElicitation(computerUseConsent("Simulator", "test.original"));
+      await appServer.waitForMcpElicitationDecision();
+      const different = waitForNextPermission(session);
+      appServer.requestMcpElicitation(computerUseConsent("Simulator", "test.other"));
+      const request = (await different).request;
+      expect(request.title).toBe("Computer Use approval: Simulator (test.other)");
+      expect(request.description).toContain("This answer is remembered for this job");
+      await session.respondToPermission(request.id, { behavior: "deny" });
+      await appServer.waitForMcpElicitationDecision();
+      appServer.requestMcpElicitation(computerUseConsent("Simulator", "test.other"));
+      await expect(appServer.waitForMcpElicitationDecision()).resolves.toEqual({
+        action: "decline",
+        content: null,
+        _meta: null,
+      });
+      expect(events.filter((event) => event.type === "permission_requested")).toHaveLength(1);
+      expect(
+        events.filter((event) => event.type === "timeline" && event.item.type === "notification"),
+      ).toEqual([
+        expect.objectContaining({
+          item: expect.objectContaining({
+            message: expect.stringContaining("Simulator (test.original; cua_repl)"),
+          }),
+        }),
+        expect.objectContaining({
+          item: expect.objectContaining({
+            message: expect.stringContaining(
+              "Computer Use remembered decline: Simulator (test.other; cua_repl)",
+            ),
+          }),
+        }),
+      ]);
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("computer use cancels only the named follower and closes live followers safely", async () => {
+    const appServer = createFakeCodexAppServer();
+    const session = new CodexAppServerAgentSession(
+      createConfig({ modeId: "full-access" }),
+      { sessionId: "thread-1" },
+      createTestLogger(),
+      async () => appServer.child,
+    );
+    await session.connect();
+    try {
+      const asked = waitForNextPermission(session);
+      const firstId = appServer.requestMcpElicitation(computerUseConsent("Simulator"));
+      const permission = await asked;
+      const followerId = appServer.requestMcpElicitation(computerUseConsent("Simulator"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      appServer.resolvesMcpElicitation(followerId);
+      await expect(appServer.waitForMcpElicitationDecision(followerId)).resolves.toEqual({
+        action: "cancel",
+        content: null,
+        _meta: null,
+      });
+      await session.respondToPermission(permission.request.id, { behavior: "allow" });
+      await expect(appServer.waitForMcpElicitationDecision(firstId)).resolves.toEqual({
+        action: "accept",
+        content: {},
+        _meta: null,
+      });
+      expect(
+        appServer.requests().filter((message) => message.id === followerId && "result" in message),
+      ).toHaveLength(1);
+      const next = waitForNextPermission(session);
+      const nextId = appServer.requestMcpElicitation(computerUseConsent("Notes"));
+      await next;
+      const joinedId = appServer.requestMcpElicitation(computerUseConsent("Notes"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await session.close();
+      expect(session.getPendingPermissions()).toEqual([]);
+      // Both promises settle before the transport is closed; no accepted answer is saved.
+      expect(session.describePersistence()).toBeNull();
+      expect(
+        appServer
+          .requests()
+          .filter(
+            (message) => [nextId, joinedId].includes(Number(message.id)) && "result" in message,
+          )
+          .filter((message) => (message.result as { action: string }).action === "accept"),
+      ).toEqual([]);
+    } finally {
+      await session.close();
+    }
+  });
+
+  test.each([
+    { message: "Allow Computer Use to record computer audio?" },
+    { threadId: "another-thread" },
+    { _meta: null },
+    { _meta: { connector_id: "other", tool_params: { app: "test.simulator" } } },
+  ])("computer use leaves requests outside exact app consent unchanged: %j", async (changed) => {
+    const appServer = createFakeCodexAppServer();
+    const session = new CodexAppServerAgentSession(
+      createConfig({ modeId: "full-access", computerUse: { allowApps: ["Simulator"] } }),
+      { sessionId: "thread-1" },
+      createTestLogger(),
+      async () => appServer.child,
+    );
+    await session.connect();
+    try {
+      for (let i = 0; i < 2; i++) {
+        const permission = waitForNextPermission(session);
+        appServer.requestMcpElicitation({ ...computerUseConsent("Simulator"), ...changed });
+        await session.respondToPermission((await permission).request.id, { behavior: "allow" });
+        await appServer.waitForMcpElicitationDecision();
+      }
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("computer use does not grant apps to internal sessions", async () => {
+    const appServer = createFakeCodexAppServer();
+    const session = new CodexAppServerAgentSession(
+      createConfig({
+        modeId: "full-access",
+        internal: true,
+        computerUse: { allowApps: ["Simulator"] },
+      }),
+      { sessionId: "thread-1" },
+      createTestLogger(),
+      async () => appServer.child,
+    );
+    await session.connect();
+    try {
+      const asked = waitForNextPermission(session);
+      appServer.requestMcpElicitation(computerUseConsent("Simulator"));
+      await session.respondToPermission((await asked).request.id, { behavior: "deny" });
+      await appServer.waitForMcpElicitationDecision();
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("computer-use app grants do not start an executable history session", async () => {
+    const appServer = createFakeCodexAppServer();
+    const session = new CodexAppServerAgentSession(
+      createConfig({ modeId: "full-access", computerUse: { allowApps: ["Simulator"] } }),
+      { sessionId: "thread-1" },
+      createTestLogger(),
+      async () => appServer.child,
+      {},
+      false,
+      false,
+      false,
+      undefined,
+      "history",
+    );
+    await session.connect();
+    try {
+      expect(session.getProcessId()).toBeNull();
+      expect(session.getPendingPermissions()).toEqual([]);
+      expect(session.describePersistence()?.metadata.computerUseDecisions).toEqual({});
+      expect(appServer.requests().map((message) => message.method)).not.toContain("turn/start");
+    } finally {
+      await session.close();
     }
   });
 
