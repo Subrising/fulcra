@@ -20,7 +20,11 @@ import {
   type NativeEvidenceJournal,
 } from "@getpaseo/protocol/native-evidence";
 import { canonicalJson } from "@getpaseo/protocol/trusted-input";
-import { reportMembers, sameNativeReportEvent } from "../report-batch.js";
+import {
+  NativeReportBatchResourceLimitError,
+  reportMembers,
+  sameNativeReportEvent,
+} from "../report-batch.js";
 import { bindReportPublication } from "../report-publication.js";
 import { requireReportReader, type ReportReader } from "../report-reader.js";
 import {
@@ -691,22 +695,36 @@ export class MessageReceipts {
           await this.commit(oldKey, { ...oldReceipt, state: "cancelled" });
         }
       }
+      let mergedBatch!: NativeReportBatch;
       const entry = wakeMessageId
         ? undefined
-        : [...this.records].find(
-            ([, receipt]) =>
-              receipt.state === "queued" &&
-              (receipt.collectingUntil ?? 0) > now &&
-              receipt.report &&
-              reportMembers(receipt.report).length < 24 &&
-              receipt.report.parentEpoch === incoming.data.parentEpoch &&
-              digest(receipt.report.parent) === digest(incoming.data.parent),
-          );
+        : [...this.records].find(([key, receipt]) => {
+            if (
+              !(
+                receipt.state === "queued" &&
+                (receipt.collectingUntil ?? 0) > now &&
+                receipt.report &&
+                reportMembers(receipt.report).length < 24 &&
+                receipt.report.parentEpoch === incoming.data.parentEpoch &&
+                digest(receipt.report.parent) === digest(incoming.data.parent)
+              )
+            )
+              return false;
+            const priorBatch = this.admissions.get(key)?.reportBatch;
+            if (!priorBatch) throw new Error("Native report collection authority absent");
+            try {
+              mergedBatch = mergeNativeReportBatches(priorBatch, batch);
+            } catch (error) {
+              if (error instanceof NativeReportBatchResourceLimitError) return false;
+              throw error;
+            }
+            return true;
+          });
       if (entry) {
         const [key, receipt] = entry;
         const oldInput = this.admissions.get(key);
         if (!oldInput?.reportBatch) throw new Error("Native report collection authority absent");
-        const merged = mergeNativeReportBatches(oldInput.reportBatch, batch);
+        const merged = mergedBatch;
         const input = this.reportCollectionInput(merged, receipt.messageId, makeInput);
         const observe = input.observe;
         input.observe = oldInput.observe

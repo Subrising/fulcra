@@ -70,6 +70,12 @@ export function validateReportBatchData(data: ReportBatchData): void {
   )
     throw new Error("Native report membership journal invalid");
 }
+export class NativeReportBatchResourceLimitError extends Error {
+  constructor() {
+    super("Native report batch resource limit");
+  }
+}
+
 export interface NativeReportBatch {
   readonly kind: "native-report-batch";
 }
@@ -91,7 +97,7 @@ export function createNativeReportBatch(
   )
     throw new Error("Report member identity conflict");
   if (Buffer.byteLength(canonicalJson(parsed)) > 4096)
-    throw new Error("Native report batch resource limit");
+    throw new NativeReportBatchResourceLimitError();
   validateReportBatchData(parsed);
   const handle = Object.freeze({ kind: "native-report-batch" as const });
   batches.set(handle, Object.freeze({ data: parsed, requireCurrent }));
