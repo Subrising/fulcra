@@ -53,6 +53,8 @@ const prime = (sessionId: string) => ({
   role: "prime",
   state: "assigned",
   sessionPresent: true,
+  sessionTaskMatches: true,
+  sessionGenerationChanged: false,
   sessionId,
 });
 const empty = { available: true, primes: [], projectSeats: [] };
@@ -66,6 +68,8 @@ const withLeads = (primes: unknown[]) => ({
       projectId: "proj-1",
       state: "assigned",
       sessionPresent: true,
+      sessionTaskMatches: true,
+      sessionGenerationChanged: false,
       sessionId: "lead-1",
     },
   ],
@@ -123,6 +127,8 @@ const SCENARIOS: Scenario[] = [
             projectId: "proj-g",
             state: "assigned",
             sessionPresent: true,
+            sessionTaskMatches: true,
+            sessionGenerationChanged: false,
             sessionId: "gag-1",
           },
         ],
@@ -207,13 +213,13 @@ vi.mock("@/stores/session-store", () => ({
             book: {
               agents: new Map([
                 ["prime-2", {}],
-                ["lead-1", {}],
+                ["lead-1", { status: "idle" }],
               ]),
             },
             mini: {
               agents: new Map([
                 ["prime-1", {}],
-                ["gag-1", {}],
+                ["gag-1", { status: "idle" }],
               ]),
             },
           },
@@ -258,7 +264,8 @@ vi.mock("@/runtime/host-runtime", () => ({
                 ({
                   "organization.fleet": FLEET,
                   "organization.projects": {
-                    projects: [{ id: "proj-g", name: "Example project" }],
+                    available: true,
+                    projects: [{ id: "proj-g", name: "Example project", status: "in_progress" }],
                   },
                 })[method] ?? f.scenario?.directories[serverId],
             },
@@ -302,7 +309,10 @@ vi.mock("../../../../control/orca-organization/client/use-contract", () => ({
     ({
       "organization.role-directory": f.scenario?.directories.book,
       "organization.fleet": FLEET,
-      "organization.projects": { projects: [{ id: "proj-1", name: "weather-cli" }] },
+      "organization.projects": {
+        available: true,
+        projects: [{ id: "proj-1", name: "weather-cli", status: "in_progress" }],
+      },
     })[contract.name],
 }));
 
@@ -396,7 +406,7 @@ for (const scenario of SCENARIOS)
     });
 
 for (const size of SIZES)
-  it(`lists remote session leads without Command Centre at ${size.name}`, async () => {
+  it(`hides label-only session leads without Command Centre at ${size.name}`, async () => {
     theme.current = darkTheme;
     f.sessionLeads = true;
     f.scenario = { offline: [], directories: { book: empty, mini: empty } };
@@ -415,22 +425,8 @@ for (const size of SIZES)
         </QueryClientProvider>,
       ),
     );
-    await vi.waitFor(() => expect(container!.textContent).toContain("Game lead"));
-    expect(container.textContent).toContain("Project lead");
-    const nested = container.querySelector(
-      '[data-testid="sidebar-chat-lead-book-nested"]',
-    ) as HTMLElement;
-    expect(
-      [...nested.querySelectorAll("*")].some(
-        (element) => getComputedStyle(element).webkitLineClamp === "2",
-      ),
-    ).toBe(true);
-    expect(measure(container)).toEqual([]);
-    (
-      container.querySelector('[data-testid="sidebar-chat-lead-book-nested"]') as HTMLElement
-    ).click();
-    await page.screenshot({
-      element: container,
-      path: `../../.vitest-screenshots/sidebar/remote-leads-${size.name}.png`,
-    });
+    await vi.waitFor(() => expect(container!.textContent).not.toContain("Game lead"));
+    expect(container.textContent).not.toContain("Project lead");
+    expect(container.querySelector("[data-testid]")).toBeNull();
+    expect(container.textContent).toBe("");
   });
