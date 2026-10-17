@@ -585,7 +585,7 @@ test("reloading a plugin does not send on a closed IPC channel", async () => {
   }
 }, 60_000);
 
-test("scratch daemon keeps recorded session costs across restart and refuses a capped API turn", async () => {
+test("scratch daemon keeps recorded session costs and never refuses API turns for spend", async () => {
   const { createTestAgentClient } = await import("../test-utils/fake-agent-client.js");
   const { randomUUID } = await import("node:crypto");
   const root = await mkdtemp(path.join(tmpdir(), "session-cost-daemon-"));
@@ -602,7 +602,6 @@ test("scratch daemon keeps recorded session costs across restart and refuses a c
     const subscribe = session.subscribe.bind(session);
     // API launches have no OAuth usage credential. Their immutable binding owns account identity.
     session.usageCredential = () => null;
-    session.billingAccountKind = () => "api-key";
     session.limitResumeAccountBinding = () => `pool:${account}`;
     session.subscribe = (callback) =>
       subscribe((event) => {
@@ -655,14 +654,13 @@ test("scratch daemon keeps recorded session costs across restart and refuses a c
     await writeFile(
       path.join(plugin, "index.server.ts"),
       `
-import { assertApiSpendAllowed, readSessionBilling, recordAccountCost } from "./server/account-billing.mjs";
+import { readSessionBilling, recordAccountCost } from "./server/account-billing.mjs";
 export default function(server) {
  server.before("agent.cost_commit", async ({ request }) => {
    if (request.accountId) await recordAccountCost(${JSON.stringify(path.join(root, "pool"))}, { id: "turn:" + request.agentId + ":" + request.turnId, accountId: request.accountId, sessionId: request.agentId, costUsd: request.costUsd, at: request.at, cursorCheckpoint: request.cursors, costRevision: request.revision });
    return { ...request, costCommitted: true };
  });
  server.before("agent.cost_read", ({ request }) => readSessionBilling(${JSON.stringify(path.join(root, "pool"))}, request));
- server.before("agent.turn_start", ({ request }) => { assertApiSpendAllowed(${JSON.stringify(path.join(root, "pool"))}, request); return { ...request, apiGuardChecked: true }; });
  return () => {};
 }
 `,
@@ -678,7 +676,6 @@ export default function(server) {
     });
     await setAccount(pool, account, {
       credentialKind: "api-key",
-      budget: { limitUsd: 200, startAt: "2026-10-01T00:00:00Z" },
     });
     expect(a.provider).toBe("claude");
     await client.connect();
@@ -754,13 +751,16 @@ export default function(server) {
     expect(inspected.stdout).toContain("9.65");
     const usage = await client.listUsageReports({ agentId: legacy.id });
     expect(usage.sessionCost).toMatchObject({ totalUsd: 9.65, lastTurnUsd: 5.65 });
-    // Restore, then use the native label update to set the test worker's cap.
+    // A legacy cap label must not stop another turn.
     await client.fetchAgents({ subscribe: {} });
     await client.updateAgent(agent.id, { labels: { "fulcra.session-cost-cap-usd": "9.65" } });
-    await expect(client.sendMessage(agent.id, "This must not start")).rejects.toThrow(
-      /session cost cap/,
+    costs.push(1);
+    await client.sendMessage(agent.id, "Continue with a legacy label");
+    await client.waitForAgentUpsert(
+      agent.id,
+      (s) => s.status === "idle" && s.sessionCost?.recordedTurns === 3,
     );
-    expect(started).toBe(2);
+    expect(started).toBe(3);
     costs.push(2);
     const internal = await daemon.daemon.agentManager.createAgent(
       { provider: "claude", cwd: root, internal: true, modeId: "bypassPermissions" },
@@ -768,7 +768,7 @@ export default function(server) {
       { workspaceId: undefined },
     );
     await daemon.daemon.agentManager.runAgent(internal.id, "Internal fixture helper");
-    const { dailySpend, readBilling } =
+    const { readBilling } =
       await import("../../../../../control/orca-organization/server/account-billing.mjs");
     const calls = Object.entries(readBilling(pool).calls).filter(([id]) =>
       id.startsWith(`turn:${internal.id}:`),
@@ -776,10 +776,6 @@ export default function(server) {
     expect(calls).toHaveLength(1);
     expect(calls[0][1].costUsd).toBe(2);
     expect(await daemon.daemon.agentStorage.get(internal.id)).toBeNull();
-    const { readAccounts } =
-      await import("../../../../../control/orca-organization/server/accounts.mjs");
-    const daily = dailySpend(pool, readAccounts(pool).accounts[0])!;
-    await setAccount(pool, account, { dailyLimitUsd: daily.usedUsd });
     await client.close();
     await daemon.close();
     daemon = await createTestPaseoDaemon({
@@ -800,10 +796,10 @@ export default function(server) {
       cwd: root,
       modeId: "bypassPermissions",
     });
-    await expect(
-      client.sendMessage(other.id, "Account cap must survive without revisiting the helper"),
-    ).rejects.toThrow(/daily UTC cost cap/);
-    expect(started).toBe(3);
+    costs.push(10000);
+    await client.sendMessage(other.id, "Spend must never refuse this turn");
+    await client.waitForAgentUpsert(other.id, (state) => state.status === "idle");
+    expect(started).toBe(5);
   } finally {
     await client.close();
     await daemon.close();

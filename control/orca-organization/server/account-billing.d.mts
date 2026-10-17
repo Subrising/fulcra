@@ -5,13 +5,26 @@ export function readBilling(root: string): {
   cursors?: Record<string, { cumulativeUsd: number; at: string }>;
   checkpoints?: Record<string, Record<string, number>>;
   checkpointRevisions?: Record<string, number>;
-  events: { type: string; accountId: string; at: string }[];
+  observations?: Record<string, string>;
+  lastSuccessOrder?: Record<string, string>;
+  lastSuccess?: Record<string, string>;
+  events: {
+    id?: string;
+    type: string;
+    accountId: string;
+    at: string;
+    clearedAt?: string;
+    clearedOrder?: string;
+    notified?: boolean;
+    sessionId?: string;
+    notices?: { main?: string; owner?: string };
+  }[];
 };
 export function accountSpend(
   root: string,
   account: Account,
   billing?: ReturnType<typeof readBilling>,
-): { limitUsd: number | null; startAt: string; usedUsd: number } | null;
+): { startAt: string; usedUsd: number } | null;
 export function recordAccountCost(
   root: string,
   value: {
@@ -31,26 +44,25 @@ export function recordBillingError(
   accountId: string,
   at?: string,
   type?: string,
+  sessionId?: string | null,
+  sourceId?: string | null,
+  sourceOrder?: string | null,
 ): Promise<boolean>;
 export function isBillingError(value: unknown): boolean;
 
-export function dailySpend(
+export function recordBillingSuccess(
   root: string,
-  account: Account,
-  billing?: ReturnType<typeof readBilling>,
-  now?: number,
-): { startAt: string; limitUsd: number; usedUsd: number } | null;
-export function assertApiSpendAllowed(
+  accountId: string,
+  at?: string,
+  sourceId?: string | null,
+  sourceOrder?: string | null,
+): Promise<boolean>;
+export function markBillingWarningSent(
   root: string,
-  input: {
-    provider: string;
-    accountId: string | null;
-    accountKind?: "api-key" | "subscription";
-    labels?: Record<string, string>;
-    sessionCost?: { totalUsd: number };
-  },
-  now?: number,
-): void;
+  eventId: string,
+  notices: { main?: string; owner?: string },
+): Promise<void>;
+export function pendingBillingWarnings(root: string): ReturnType<typeof readBilling>["events"];
 
 export function readSessionBilling<
   T extends {
@@ -65,3 +77,29 @@ export function readSessionBilling<
     };
   },
 >(root: string, request: T): T | undefined;
+
+export function recordAccountTurnEnd(
+  root: string,
+  event: {
+    observedAt?: string;
+    observationId?: string;
+    observedOrder?: string;
+    turnId?: string | null;
+    agent: { id: string; provider: string; accountId?: string };
+    outcome: { kind: string; error?: { message: string } };
+  },
+  at?: string,
+): Promise<boolean>;
+
+export function observeAccountCall(
+  root: string,
+  observation: {
+    id: string;
+    accountId: string;
+    at: string;
+    sessionId: string | null;
+    failed: boolean | null;
+    costUsd: number | null;
+  },
+): Promise<boolean>;
+export function recoverAccountObservations(root: string): Promise<void>;

@@ -7,10 +7,9 @@ import { stopRecordedTree } from "./api-process-tree.mjs";
 import { createApiRuntimeChannel } from "./api-runtime-channel.mjs";
 import { randomUUID } from "node:crypto";
 import {
-  recordAccountCost,
-  recordBillingError,
   isBillingError,
-  assertApiSpendAllowed,
+  observeAccountCall,
+  recoverAccountObservations,
 } from "./account-billing.mjs";
 import fs from "node:fs";
 import os from "node:os";
@@ -394,10 +393,25 @@ export async function askOnce({
   keychain,
   input,
   spawnClaude = spawnClaudeOnce,
+  sessionId = null,
   limitProbe = false,
   now = Date.now,
 }) {
   const { prompt, model, schema = null, account = null } = input;
+  try {
+    await recoverAccountObservations(root);
+  } catch {
+    /* Reporting never blocks a call. */
+  }
+  const observe = (accountId, failed, costUsd = null) =>
+    observeAccountCall(root, {
+      id: randomUUID(),
+      accountId,
+      at: new Date(now()).toISOString(),
+      sessionId,
+      failed,
+      costUsd,
+    });
   if (limitProbe && !account) throw new AskError("A limit probe needs an account", "BAD_INPUT");
   if (typeof prompt !== "string" || !prompt.trim())
     throw new AskError("Give a prompt", "BAD_INPUT");
@@ -468,7 +482,6 @@ export async function askOnce({
       throw new AskError("The subscription account is at its limit", "ACCOUNT_LIMITED");
     if (limitProbe && isApiAccount(picked))
       throw new AskError("API accounts have no subscription limit", "API_ACCOUNT");
-    assertApiSpendAllowed(root, { provider: "claude", accountId: picked.id }, now());
     const spawnMs = deadline - now();
     if (spawnMs < MIN_ATTEMPT_MS) throw new AskError("The call timed out", "TIMEOUT");
     let result;
@@ -494,23 +507,20 @@ export async function askOnce({
       );
     } catch (error) {
       // Only an error this module made is passed on; anything else has no text of its own here.
-      if (isBillingError(error?.message)) {
-        await recordBillingError(root, picked.id, new Date(now()).toISOString());
-        throw new AskError("The API account has insufficient credit", "BILLING_ERROR");
+      if (isBillingError(error)) {
+        await observe(picked.id, true);
+        throw new AskError("The API account reported a billing error", "BILLING_ERROR");
       }
       if (error instanceof AskError) throw error;
       throw new AskError("The Claude call failed", "ASK_FAILED");
     }
-    if (typeof result?.total_cost_usd === "number")
-      await recordAccountCost(root, {
-        id: `ask:${randomUUID()}`,
-        accountId: picked.id,
-        costUsd: result.total_cost_usd,
-        at: new Date(now()).toISOString(),
-      });
-    if (result?.is_error && isBillingError(result?.result)) {
-      await recordBillingError(root, picked.id, new Date(now()).toISOString());
-      throw new AskError("The API account has insufficient credit", "BILLING_ERROR");
+    await observe(
+      picked.id,
+      result?.is_error ? (isBillingError(result) ? true : null) : false,
+      result?.total_cost_usd,
+    );
+    if (result?.is_error && isBillingError(result)) {
+      throw new AskError("The API account reported a billing error", "BILLING_ERROR");
     }
     if (isRevoked(result)) {
       const line = String(result.result ?? "");

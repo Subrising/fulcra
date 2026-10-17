@@ -1,6 +1,6 @@
 ---
 name: verify-api-accounts
-description: Verify API account budgets, durable billing errors, limit ownership, dormant account switches, and the native Usage widget.
+description: Verify recorded API spend, billing incident warnings, unrestricted API turns, owner reporting dates, and the native Usage widget.
 ---
 
 Use this checkout's dependencies and workspace builds. Use temporary homes and sample accounts.
@@ -20,7 +20,7 @@ npx vitest run --maxWorkers=1 packages/server/src/server/agent/agent-manager.tes
 Run the real app flow:
 
 ```sh
-E2E_BROWSER_CHANNEL=chrome E2E_RECORD_VIDEO=0 npm run test:e2e --workspace=@getpaseo/app -- e2e/browser/api-account-budget.spec.ts
+E2E_BROWSER_CHANNEL=chrome E2E_RECORD_VIDEO=0 npm run test:e2e --workspace=@getpaseo/app -- e2e/browser/api-account-spend.spec.ts
 ```
 
 The browser test installs the real pool usage source in an isolated daemon.
@@ -28,6 +28,9 @@ It records sample costs through the durable billing store. It opens Usage throug
 It checks 375×812, 768×1024, 1440×1000, and 812×375 views.
 The scan fails on horizontal overflow, text overlap, clipped elements, or controls smaller than 48×48 pixels.
 It scrolls smaller views to check the second account.
+It opens the real account settings surface in the same scratch daemon.
+It saves and clears the optional top-up date at each size. The date changes reporting only.
+The account form must have no dollar amount field or cap setting.
 
 Inspect all screenshots in `local/screens/api-accounts/`. Each layout measurement file must contain an empty array.
 Set `PASEO_QA_SCREENSHOT_DIR` to keep captures elsewhere.
@@ -88,11 +91,16 @@ The scratch tests start new turns after restart, reload, and account switch.
 Each provider instance reuses `fake-turn-0`. Expect four billing rows and a $14 total.
 A replay within one instance must keep one row.
 The billing failure test must finish the turn with a visible warning and saved cost.
-A failed recovery must refuse admission. A successful recovery after restart must keep all cost.
-The disabled guard must refuse API turns. Subscription turns must still run.
+A failed accounting recovery must allow the next API turn. Recovery after restart must keep all cost.
+API turns must run with accounting plugins disabled and spend above all earlier defaults.
+Old account budgets, daily limits, and worker cap labels must have no effect.
 The hidden-provider checks must call no cost reader.
-The API launch checks must disable native background and scheduled work.
-An unexpected autonomous API wake must close the provider query without starting a host turn.
-Subscription autonomous turns must still work.
+Native background and scheduled API work must have no spend gate.
+An autonomous API wake must start and finish its normal host turn.
+The first durable billing error must queue one warning for Main and the producing session's lead.
+Repeated errors must not repeat that warning. A later successful turn must permit a new incident warning.
+Check partial recipients, shared holders, queue capacity, restart, and delayed observation ordering.
+No warning can depend on a cash balance or spend threshold.
+One-shot storage failures must keep the provider result and a secret-free accounting retry record.
 Run `account-billing.test.mjs` for removed subscription accounts, checkpoint order, and billing retention.
 No test requires a live daemon, a real credential, or a paid turn.

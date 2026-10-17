@@ -980,3 +980,27 @@ test(
     assert.equal(readAccounts(root).accounts[0].localRevoked, true);
   },
 );
+
+test("only the owner can set the top-up reporting date; cap settings do not exist", async (t) => {
+  const root = scratch();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const a = await addAccount(root, { provider: "claude", name: "Fixture API" });
+  await setAccount(root, a.id, { credentialKind: "api-key" });
+  const { accountUpdateRpc, accountsRpc } = await import("../shared/accounts");
+  const view = accountsRpc.output.parse(await handlers(root).read(paseo));
+  assert.equal(view.accounts[0].topUpAt, null);
+  assert.equal("budget" in view.accounts[0], false);
+  assert.equal("dailyLimitUsd" in view.accounts[0], false);
+  assert.equal(accountUpdateRpc.input.safeParse({ id: a.id, dailyLimitUsd: 40 }).success, false);
+  assert.equal(
+    accountUpdateRpc.input.safeParse({ id: a.id, budget: { limitUsd: 200, startAt: a.createdAt } })
+      .success,
+    false,
+  );
+  const patch = accountUpdateRpc.input.parse({ id: a.id, topUpAt: a.createdAt });
+  assert.equal((await mover(root, DEVICE([]))(patch)).ok, false);
+  assert.equal((await mover(root)(patch)).ok, true);
+  assert.equal(readAccounts(root).accounts[0].topUpAt, a.createdAt);
+  assert.equal((await mover(root)({ id: a.id, topUpAt: null })).ok, true);
+  assert.equal(readAccounts(root).accounts[0].topUpAt, null);
+});

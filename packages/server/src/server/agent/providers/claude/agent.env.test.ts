@@ -284,7 +284,7 @@ test("trusted denies survive manager import, reload and quiet MCP replacement", 
 });
 
 test.each(["api-key", "subscription"] as const)(
-  "%s launch controls native background and scheduled work",
+  "%s launch has no spend-related background or schedule restriction",
   async (kind) => {
     let captured: Record<string, string | undefined> | undefined;
     const client = new ClaudeAgentClient({
@@ -320,12 +320,9 @@ test.each(["api-key", "subscription"] as const)(
       },
     );
     try {
-      expect(session.billingAccountKind?.()).toBe(kind);
       await session.run("Fixture");
-      expect(captured?.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBe(
-        kind === "api-key" ? "1" : undefined,
-      );
-      expect(captured?.CLAUDE_CODE_DISABLE_CRON).toBe(kind === "api-key" ? "1" : undefined);
+      expect(captured?.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBe(undefined);
+      expect(captured?.CLAUDE_CODE_DISABLE_CRON).toBeUndefined();
     } finally {
       await session.close();
     }

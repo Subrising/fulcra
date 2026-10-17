@@ -1,5 +1,5 @@
+import { randomUUID } from "node:crypto";
 import { SessionCostRecordsSchema } from "../../agent/session-cost.js";
-import { SessionCostSchema } from "@getpaseo/protocol/recorded-usage";
 import type { AgentStreamEvent, AgentTimelineItem } from "../../agent/agent-sdk-types.js";
 import { z } from "zod";
 import { CreateAgentRequestMessageSchema } from "@getpaseo/protocol/messages";
@@ -31,7 +31,6 @@ export const lifecycleEventNames = [
 export const beforeHookNames = [
   "agent.create",
   "agent.session_open",
-  "agent.turn_start",
   "agent.cost_read",
   "agent.cost_commit",
   "workspace.create",
@@ -59,28 +58,6 @@ const beforeSchemas = {
       records: SessionCostRecordsSchema.optional(),
     })
     .strict(),
-  "agent.turn_start": z
-    .object({
-      accountKind: z.enum(["api-key", "subscription"]).optional(),
-      apiGuardChecked: z.boolean().optional(),
-      agentId: z.string(),
-      provider: z.string(),
-      accountId: z.string().nullable(),
-      labels: z.record(z.string(), z.string()),
-      sessionCost: SessionCostSchema.optional(),
-      costRecords: z
-        .record(
-          z.string(),
-          z.object({
-            accountId: z.string().nullable(),
-            amountUsd: z.number().finite().nonnegative(),
-            at: z.string(),
-          }),
-        )
-        .optional(),
-    })
-    .strict(),
-  // labels are context for the hook (e.g. what the session is for); changes to them are not applied.
   "agent.create": CreateAgentRequestMessageSchema.pick({
     config: true,
     env: true,
@@ -161,17 +138,27 @@ export function describeHookAgent(agent: {
   };
 }
 
+function describeTurnObservation(observation?: { id: string; at: string }) {
+  return {
+    observedAt: observation?.at ?? new Date().toISOString(),
+    observationId: observation?.id ?? randomUUID(),
+    observedOrder: process.hrtime.bigint().toString(),
+  };
+}
+
 export function publishAgentStream(
   lifecycle: PluginLifecycle,
   agent: PluginHookAgent,
   event: AgentStreamEvent,
   timeline: readonly AgentTimelineItem[],
+  observation?: { id: string; at: string },
 ): void {
   if (event.type === "turn_started") {
     lifecycle.emit("agent.turn_started", { agent, turnId: event.turnId ?? null });
   } else if (event.type === "turn_completed") {
     lifecycle.emit("agent.turn_ended", {
       agent,
+      ...describeTurnObservation(observation),
       turnId: event.turnId ?? null,
       timeline,
       outcome: { kind: "completed" },
@@ -180,6 +167,7 @@ export function publishAgentStream(
   } else if (event.type === "turn_failed") {
     lifecycle.emit("agent.turn_ended", {
       agent,
+      ...describeTurnObservation(observation),
       ...(event.usage ? { usage: event.usage } : {}),
       turnId: event.turnId ?? null,
       timeline,
@@ -194,6 +182,7 @@ export function publishAgentStream(
   } else if (event.type === "turn_canceled") {
     lifecycle.emit("agent.turn_ended", {
       agent,
+      ...describeTurnObservation(observation),
       turnId: event.turnId ?? null,
       timeline,
       outcome: { kind: "canceled", reason: event.reason },
@@ -231,21 +220,11 @@ export function validateBeforeResult<Name extends keyof PluginBeforeRequests>(
   const result = validateBeforeRequest(name, output);
   if (name === "agent.cost_read") validateCostReadResult(input, result);
   if (
-    (name === "agent.turn_start" || name === "agent.cost_commit") &&
-    JSON.stringify({
-      ...input,
-      ...(name === "agent.turn_start"
-        ? { apiGuardChecked: undefined }
-        : { costCommitted: undefined }),
-    }) !==
-      JSON.stringify({
-        ...result,
-        ...(name === "agent.turn_start"
-          ? { apiGuardChecked: undefined }
-          : { costCommitted: undefined }),
-      })
+    name === "agent.cost_commit" &&
+    JSON.stringify({ ...input, costCommitted: undefined }) !==
+      JSON.stringify({ ...result, costCommitted: undefined })
   )
-    throw new Error("agent.turn_start hooks cannot change the request");
+    throw new Error("Cost commit hooks cannot change the request");
   if (name === "agent.session_open") {
     const previous = beforeSchemas["agent.session_open"].parse(input);
     const next = beforeSchemas["agent.session_open"].parse(result);

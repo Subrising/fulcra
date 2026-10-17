@@ -6,6 +6,7 @@ import {
   withManagementInvocation,
   invocationReadOnly,
   invokeManagement,
+  currentManagement,
 } from "./server/management-context.mjs";
 import {
   receiptMaintenanceRpc,
@@ -40,10 +41,8 @@ import { operatorInvokeRpc } from "./shared/operator-invoke";
 import { operatorInvoke } from "./server/operator-invoke.mjs";
 import {
   recordAccountCost,
-  assertApiSpendAllowed,
+  recordAccountTurnEnd,
   readSessionBilling,
-  recordBillingError,
-  isBillingError,
 } from "./server/account-billing.mjs";
 import { registerPoolUsage } from "./server/pool-usage";
 import { taskCatalogRpc, usageRpc } from "./shared/tasks";
@@ -578,10 +577,7 @@ export default function contribute(
   const stopBilling =
     typeof server.on === "function"
       ? server.on("agent.turn_ended", async (event) => {
-          const accountId = event.agent.accountId;
-          if (event.agent.provider !== "claude" || !accountId) return;
-          if (event.outcome.kind === "failed" && isBillingError(event.outcome.error.message))
-            await recordBillingError(poolRoot(), accountId, undefined, "session.billing_error");
+          await recordAccountTurnEnd(poolRoot(), event);
         })
       : undefined;
   const stopCostCommit = server.before("agent.cost_commit", async ({ request }) => {
@@ -600,10 +596,6 @@ export default function contribute(
   const stopCostRead = server.before("agent.cost_read", ({ request }) =>
     readSessionBilling(poolRoot(), request),
   );
-  const stopSpendGuard = server.before("agent.turn_start", async ({ request }) => {
-    assertApiSpendAllowed(poolRoot(), request);
-    return { ...request, apiGuardChecked: true };
-  });
   const stopPool: unknown =
     typeof server.before === "function"
       ? server.before("agent.session_open", sessionOpenHook({ root: poolRoot }) as any)
@@ -644,12 +636,20 @@ export default function contribute(
   });
   // One-shot model call for apps: a pooled account, no tools, no agent or workspace record (server/ask.mjs).
   const askJobs = createAskJobs({
-    run: (input: Parameters<typeof askOnce>[0]["input"]) =>
-      askOnce({ root: poolRoot(), keychain: createKeychain(), input }),
+    run: ({
+      input,
+      sessionId,
+    }: {
+      input: Parameters<typeof askOnce>[0]["input"];
+      sessionId: string | null;
+    }) => askOnce({ root: poolRoot(), keychain: createKeychain(), input, sessionId }),
   });
   handle(askRpc, (input) => {
     if (authError) throw new Error(authError);
-    return askJobs.start(input);
+    return askJobs.start({
+      input,
+      sessionId: currentManagement()?.principal?.accountSessionId ?? null,
+    });
   });
   handleRead(askResultRpc, (input) => {
     if (authError) throw new Error(authError);
@@ -1002,7 +1002,6 @@ export default function contribute(
     workMapProjects.clear();
     workMap = undefined;
     stopBilling?.();
-    stopSpendGuard();
     stopCostRead();
     stopCostCommit();
     usage = undefined;

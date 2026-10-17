@@ -915,7 +915,7 @@ test("creates an autonomous live turn when Claude starts a turn without a foregr
   await session.close();
 });
 
-test("API launches reject an unexpected autonomous wake before publishing a turn", async () => {
+test("API launches allow autonomous turns without a spend gate", async () => {
   const logger = createTestLogger();
   let queryRef: ScriptedQuery | null = null;
 
@@ -956,8 +956,14 @@ test("API launches reject an unexpected autonomous wake before publishing a turn
   const observed: AgentStreamEvent[] = [];
   const unsubscribe = session.subscribe((event) => observed.push(event));
   queryRef?.emit(buildTurnInit("autonomous-live-session"));
-  await vi.waitFor(() => expect(queryRef?.close).toHaveBeenCalled());
-  expect(observed.some((event) => event.type === "turn_started")).toBe(false);
+  await vi.waitFor(() =>
+    expect(observed.some((event) => event.type === "turn_started")).toBe(true),
+  );
+  expect(queryRef?.close).not.toHaveBeenCalled();
+  queryRef?.emit(buildSuccessResult("autonomous-live-session"));
+  await vi.waitFor(() =>
+    expect(observed.some((event) => event.type === "turn_completed")).toBe(true),
+  );
   unsubscribe();
   await session.close();
 });

@@ -1,3 +1,4 @@
+import { loadAgentPolicy } from "./limit-resume/policy.js";
 import express from "express";
 import { mkdtemp, rm, chmod } from "node:fs/promises";
 import {
@@ -1679,8 +1680,15 @@ test("remote parent follow-ups re-arm each turn and joined steers share one noti
     notifyOnFinish: true,
   });
   const child = receipt.agentId!;
-  f.target.recordWorkerStarted(child);
-  f.target.recordWorkerNotice(child, "finished", "first", "First result.");
+  const { formatWorkerFinish } = loadAgentPolicy("report-notices");
+  f.target.recordWorkerStarted(child, "first-turn");
+  f.target.recordWorkerNotice(
+    child,
+    "finished",
+    "first",
+    formatWorkerFinish("First result.", { totalUsd: 1.25 }),
+    "first-turn",
+  );
   await f.source.syncNotifications();
   await f.source.flushNotificationDeliveries();
   expect(f.finishNotices).toHaveLength(1);
@@ -1695,13 +1703,21 @@ test("remote parent follow-ups re-arm each turn and joined steers share one noti
       steer: true,
     });
   }
-  f.target.recordWorkerStarted(child);
-  f.target.recordWorkerNotice(child, "finished", "second", "Second result.");
+  f.target.recordWorkerStarted(child, "second-turn");
+  f.target.recordWorkerNotice(
+    child,
+    "finished",
+    "second",
+    formatWorkerFinish("Second result.", { totalUsd: 4 }),
+    "second-turn",
+  );
   f.target.recordWorkerNotice(child, "finished", "second", "Duplicate result.");
   await f.source.syncNotifications();
   await f.source.flushNotificationDeliveries();
   expect(f.finishNotices).toHaveLength(2);
   expect(f.finishNotices[1]?.text).toContain("Second result.");
+  expect(f.finishNotices[0]?.text).toContain("Session total spend: US$1.250000.");
+  expect(f.finishNotices[1]?.text).toContain("Session total spend: US$4.000000.");
   await expect(
     f.source.promptForAgent("other", "target", { agentId: child, prompt: "Refused.", messageId }),
   ).rejects.toThrow("No unique retained remote worker grant");
@@ -1947,4 +1963,25 @@ test("history pruning fences an in-flight read from the new watch", async () => 
     allowRead();
     spy.mockRestore();
   }
+});
+
+test("long remote failures retain spend after target restart and delivery", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerStarted(receipt.agentId!);
+  const { formatWorkerFinish } = loadAgentPolicy("report-notices");
+  f.target.recordWorkerNotice(
+    receipt.agentId!,
+    "failed",
+    "cost-failure",
+    formatWorkerFinish("Fixture error ".repeat(1000), { totalUsd: 17.52 }),
+  );
+  f.restartTarget();
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  expect(f.finishNotices[0]!.text).toContain("Session total spend: US$17.520000.");
 });

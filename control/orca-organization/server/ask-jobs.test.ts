@@ -125,10 +125,10 @@ test("billing errors remain visible after the in-memory ask job is lost", async 
       const call = askOnce({
         root,
         input,
-        keychain: { get: async () => "fixture-api-secret" },
+        keychain: { get: async () => "sk-ant-api03-fixture-only-secret" },
         spawnClaude: async () => ({
           is_error: true,
-          result: "credit balance too low fixture-api-secret",
+          result: "credit balance too low sk-ant-api03-fixture-only-secret",
         }),
       });
       finished = call.catch(() => undefined);
@@ -143,5 +143,8 @@ test("billing errors remain visible after the in-memory ask job is lost", async 
   assert.equal(freshJobs.result(id).error?.code, "UNKNOWN_JOB");
   assert.equal(readBilling(root).events[0].type, "ask.billing_error");
   assert.equal(readBilling(root).events[0].accountId, account.id);
-  assert.equal(JSON.stringify(readBilling(root)).includes("fixture-api-secret"), false);
+  assert.equal(
+    JSON.stringify(readBilling(root)).includes("sk-ant-api03-fixture-only-secret"),
+    false,
+  );
 });

@@ -817,3 +817,31 @@ test("local owner keeps account administration and explicit continuation", async
   assert.equal((await w.as(owner, () => w.handlers.read(null))).accounts.length, 3);
   assert.deepEqual(w.audit, []);
 });
+
+test("API accounts have only an optional reporting date, with save and clear actions", async () => {
+  const v = view();
+  v.accounts[0] = {
+    ...v.accounts[0],
+    credentialKind: "api-key",
+    topUpAt: "2026-10-01T00:00:00.000Z",
+  };
+  const writes = setup(v);
+  const field = await screen.findByLabelText("Top-up date for Work");
+  assert.equal(screen.queryByText(/API budget/), null);
+  fireEvent.change(field, { target: { value: "2026-10-02" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save top-up date for Work" }));
+  await waitFor(() =>
+    assert.deepEqual(writes.at(-1).input, { id: A, topUpAt: "2026-10-02T00:00:00.000Z" }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Clear top-up date for Work" }));
+  await waitFor(() => assert.deepEqual(writes.at(-1).input, { id: A, topUpAt: null }));
+});
+
+test("a fresh API account starts with no reporting date or cap", async () => {
+  const v = view();
+  v.accounts[0] = { ...v.accounts[0], credentialKind: "api-key", topUpAt: null };
+  setup(v);
+  assert.equal((await screen.findByLabelText("Top-up date for Work")).value, "");
+  assert.equal(screen.getByRole("button", { name: "Clear top-up date for Work" }).disabled, true);
+  assert.equal(screen.queryByText(/API budget/), null);
+});

@@ -47,6 +47,7 @@ export function askOnce(o: {
     timeoutMs?: number;
   };
   spawnClaude?: (o: any) => Promise<any>;
+  sessionId?: string | null;
   limitProbe?: boolean;
   now?: () => number;
 }): Promise<{ output: unknown; account: string; model: string; costUsd: number | null }>;

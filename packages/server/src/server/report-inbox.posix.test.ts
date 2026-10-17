@@ -10,7 +10,11 @@ import { NativeReportRegistry } from "./report-registry.js";
 import { NativeReportInbox } from "./report-inbox.js";
 import { MessageReceipts, type NativeQueuedMessage } from "./message-receipts/index.js";
 import { requireReportReader } from "./report-reader.js";
-import { requireNativeReportBatch, type NativeReportBatch } from "./report-batch.js";
+import {
+  createNativeReportBatch,
+  requireNativeReportBatch,
+  type NativeReportBatch,
+} from "./report-batch.js";
 import { ControllerChannel } from "./plugins/controller-channel.js";
 import { rpc, RPC_METHODS } from "../../../../control/src/control/rpc.mjs";
 import { readGrant } from "../../../../control/src/control/grant-file.mjs";
@@ -1886,6 +1890,129 @@ test("a late provider reply preserves the report expiry resolution", async () =>
     });
   } finally {
     accept("cleanup");
+    await f.cleanup();
+  }
+});
+
+test("native worker finish data retains total spend after receipt restart", async () => {
+  const f = await fixture();
+  try {
+    const [batch] = f.registry.captureLifecycleReports(
+      f.child,
+      "ended",
+      "fixture-cost-turn",
+      Date.now(),
+      17.52,
+    );
+    const data = requireNativeReportBatch(batch!).data;
+    await f.receipts.enqueue({
+      agentId: f.prime.agentId,
+      messageId: randomUUID(),
+      request: "Native finish metadata available.",
+      principal: { parent: data.parent, parentEpoch: data.parentEpoch },
+      boot: f.prime.boot,
+      attachmentBytes: 0,
+      authorize: () => {
+        requireNativeReportBatch(batch!);
+      },
+      reportBatch: batch!,
+    });
+    const recovered = new MessageReceipts(path.join(f.directory, "receipts"));
+    expect(await recovered.reportInbox(f.registry.readerForNativeIdentity(f.prime))).toMatchObject({
+      events: [{ kind: "ended", totalSpendUsd: 17.52 }],
+    });
+  } finally {
+    await rm(f.directory, { recursive: true, force: true });
+  }
+});
+
+test("cost metadata starts another bounded report batch without losing events", async () => {
+  const f = await fixture();
+  try {
+    const make = (batch: NativeReportBatch, messageId: string): NativeQueuedMessage => ({
+      agentId: f.prime.agentId,
+      messageId,
+      request: "Native cost metadata available.",
+      principal: { parent: f.prime },
+      boot: f.prime.boot,
+      attachmentBytes: 0,
+      reportBatch: batch,
+      authorize: () => {
+        requireNativeReportBatch(batch);
+      },
+      canDispatch: () => false,
+    });
+    for (let i = 0; i < 9; i++) {
+      const [batch] = f.registry.captureLifecycleReports(
+        f.child,
+        "ended",
+        `cost-turn-${i}`,
+        Date.now(),
+        i + 0.25,
+      );
+      await f.receipts.collectReport(batch!, make, () => {});
+    }
+    const recovered = new MessageReceipts(path.join(f.directory, "receipts"));
+    const view = (await recovered.reportInbox(f.registry.readerForNativeIdentity(f.prime))) as {
+      metadataCount: number;
+      events: Array<{ totalSpendUsd?: number }>;
+    };
+    expect(view.metadataCount).toBe(9);
+    expect(view.events.map((event) => event.totalSpendUsd).sort((a, b) => a! - b!)).toEqual(
+      Array.from({ length: 9 }, (_, i) => i + 0.25),
+    );
+    const files = await readdir(path.join(f.directory, "receipts"));
+    const reports = await Promise.all(
+      files
+        .filter((file) => /^[a-f0-9]{64}\.json$/.test(file))
+        .map(async (file) => {
+          const saved = JSON.parse(
+            await readFile(path.join(f.directory, "receipts", file), "utf8"),
+          ) as { report: unknown };
+          return saved.report;
+        }),
+    );
+    expect(reports.length).toBeGreaterThan(1);
+    for (const report of reports)
+      expect(Buffer.byteLength(JSON.stringify(report))).toBeLessThanOrEqual(4096);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("compact overflow retains event-linked spend after receipt restart", async () => {
+  const f = await fixture();
+  try {
+    const original = requireNativeReportBatch(f.batch);
+    const eventId = randomUUID();
+    const batch = createNativeReportBatch(
+      {
+        parent: original.data.parent,
+        parentEpoch: original.data.parentEpoch,
+        members: original.data.members,
+        overflow: [
+          { memberIndex: 0, id: eventId, kind: "ended", at: Date.now(), totalSpendUsd: 17.52 },
+        ],
+      },
+      original.requireCurrent,
+    );
+    await f.receipts.enqueue({
+      agentId: f.prime.agentId,
+      messageId: randomUUID(),
+      request: "Native cost metadata available.",
+      principal: { parent: f.prime },
+      boot: f.prime.boot,
+      attachmentBytes: 0,
+      authorize: () => {
+        requireNativeReportBatch(batch);
+      },
+      reportBatch: batch,
+    });
+    const recovered = new MessageReceipts(path.join(f.directory, "receipts"));
+    expect(await recovered.reportInbox(f.registry.readerForNativeIdentity(f.prime))).toMatchObject({
+      overflow: [{ totalSpendUsdByEvent: { [eventId]: 17.52 } }],
+    });
+  } finally {
     await f.cleanup();
   }
 });

@@ -483,7 +483,6 @@ export function wrapSessionProvider(provider: AgentProvider, inner: AgentSession
     usageSourceLabel: inner.usageSourceLabel?.bind(inner),
     limitResumeAccountBinding: inner.limitResumeAccountBinding?.bind(inner),
     usageCredential: inner.usageCredential?.bind(inner),
-    billingAccountKind: inner.billingAccountKind?.bind(inner),
   } satisfies ForwardedAgentSession;
 }
 

@@ -20,6 +20,7 @@ export const ReportMemberSchema = z
       .optional(),
     kind: z.enum(["ended", "needs-you", "blocked", "usage-limit", "handoff"]),
     at: z.number().int().nonnegative(),
+    totalSpendUsd: z.number().finite().nonnegative().optional(),
   })
   .strict();
 const ReportOverflowMemberSchema = z.union([
@@ -30,6 +31,7 @@ const ReportOverflowMemberSchema = z.union([
       id: z.string().uuid(),
       kind: ReportMemberSchema.shape.kind,
       at: z.number().int().nonnegative(),
+      totalSpendUsd: z.number().finite().nonnegative().optional(),
     })
     .strict(),
 ]);
@@ -68,6 +70,12 @@ export function validateReportBatchData(data: ReportBatchData): void {
   )
     throw new Error("Native report membership journal invalid");
 }
+export class NativeReportBatchResourceLimitError extends Error {
+  constructor() {
+    super("Native report batch resource limit");
+  }
+}
+
 export interface NativeReportBatch {
   readonly kind: "native-report-batch";
 }
@@ -89,7 +97,7 @@ export function createNativeReportBatch(
   )
     throw new Error("Report member identity conflict");
   if (Buffer.byteLength(canonicalJson(parsed)) > 4096)
-    throw new Error("Native report batch resource limit");
+    throw new NativeReportBatchResourceLimitError();
   validateReportBatchData(parsed);
   const handle = Object.freeze({ kind: "native-report-batch" as const });
   batches.set(handle, Object.freeze({ data: parsed, requireCurrent }));
@@ -147,7 +155,10 @@ export function mergeNativeReportBatches(
                       }),
                   );
                 if (memberIndex < 0) return member;
-                return { memberIndex, id: member.id, kind: member.kind, at: member.at };
+                return Object.assign(
+                  { memberIndex, id: member.id, kind: member.kind, at: member.at },
+                  member.totalSpendUsd !== undefined ? { totalSpendUsd: member.totalSpendUsd } : {},
+                );
               }),
           }
         : {}),
@@ -167,7 +178,12 @@ export function reportMembers(data: ReportBatchData): ReportMember[] {
       if (!("memberIndex" in item)) return item;
       const base = data.members[item.memberIndex];
       if (!base) throw new Error("Native report overflow source linkage invalid");
-      return Object.assign({}, base, { id: item.id, kind: item.kind, at: item.at });
+      return Object.assign({}, base, {
+        id: item.id,
+        kind: item.kind,
+        at: item.at,
+        totalSpendUsd: item.totalSpendUsd,
+      });
     }),
   ];
 }
