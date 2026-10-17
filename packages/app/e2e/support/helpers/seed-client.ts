@@ -155,7 +155,11 @@ export interface SeedDaemonClient {
     timeout?: number,
   ): Promise<{ status: string; final?: { lastError?: string | null } | null }>;
   archiveAgent(agentId: string): Promise<{ archivedAt: string }>;
-  refreshAgent(agentId: string): Promise<unknown>;
+  refreshAgent(
+    agentId: string,
+    requestId?: string,
+    options?: { confirmed?: boolean; restore?: boolean },
+  ): Promise<unknown>;
   fetchAgent(options: {
     agentId: string;
   }): Promise<{ agent: { id: string; archivedAt?: string | null } } | null>;
