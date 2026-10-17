@@ -171,6 +171,29 @@ describe("Claude terminal agent hooks", () => {
       installRegisteredAgentHooks({ configDir });
       expect(readFileSync(file, "utf8")).toBe(local);
       expect(readFileSync(record, "utf8")).toBe(installedHash);
+      expect(warn.mock.calls.filter((args) => args.includes(file))).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("keeps edited settings and offers changed hooks once", () => {
+    const configDir = createTempDir("paseo-claude-update-offer-");
+    installRegisteredAgentHooks({ configDir });
+    const file = join(configDir, "settings.json");
+    const settings = readSettings(configDir);
+    settings.theme = "local-theme";
+    settings.hooks = {};
+    const local = `${JSON.stringify(settings, null, 2)}\n`;
+    writeFileSync(file, local);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      installRegisteredAgentHooks({ configDir });
+      installRegisteredAgentHooks({ configDir });
+      expect(readFileSync(file, "utf8")).toBe(local);
+      const proposed = JSON.parse(readFileSync(`${file}.new`, "utf8"));
+      expect(proposed.theme).toBe("local-theme");
+      expect(Object.keys(proposed.hooks)).not.toHaveLength(0);
       expect(warn.mock.calls.filter((args) => args.includes(file))).toHaveLength(1);
     } finally {
       warn.mockRestore();

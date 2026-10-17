@@ -111,6 +111,7 @@ describe("syncSkills", () => {
       await syncSkills({ ...sandbox, skillNames: ["paseo"] });
       expect(warn.mock.calls.filter((args) => args.includes(file))).toHaveLength(1);
       expect(await fs.readFile(file, "utf8")).toBe("local instructions");
+      expect(await fs.readFile(`${file}.new`, "utf8")).toBe("bundle");
     } finally {
       warn.mockRestore();
     }

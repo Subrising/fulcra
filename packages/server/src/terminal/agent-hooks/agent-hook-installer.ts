@@ -2,6 +2,7 @@ import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import {
   assertInstructionPath,
+  offerInstructionUpdate,
   replaceInstructionFile,
   retireInstructionFile,
 } from "../../server/instruction-files.js";
@@ -209,8 +210,14 @@ function updateAgentHookConfig<TConfig>(
   const configPath = resolveAgentHookConfigPath(provider, options);
   assertInstructionPath(configPath);
   const currentRaw = existsSync(configPath) ? readFileSync(configPath, "utf8") : null;
-  const currentConfig =
-    currentRaw === null ? install.format.empty() : install.format.parse(currentRaw);
+  let currentConfig: TConfig;
+  try {
+    currentConfig = currentRaw === null ? install.format.empty() : install.format.parse(currentRaw);
+  } catch {
+    const proposal = install.format.stringify(update(install.format.empty()));
+    offerInstructionUpdate(configPath, Buffer.from(proposal));
+    return { configPath, changed: false };
+  }
   const nextConfig = update(currentConfig);
   const nextRaw = install.format.stringify(nextConfig);
 
@@ -250,7 +257,7 @@ function writeManagedHookConfig(
     currentRaw !== null &&
     (lstatSync(configPath).isSymbolicLink() || fileHash(currentRaw) !== previousHash)
   ) {
-    warnPreservedSettings(configPath);
+    offerInstructionUpdate(configPath, Buffer.from(nextRaw));
     return { configPath, changed: false };
   }
   if (matches) return { configPath, changed: false };
@@ -261,7 +268,7 @@ function writeManagedHookConfig(
       currentRaw === null ? undefined : fileHash(currentRaw),
     )
   ) {
-    warnPreservedSettings(configPath);
+    offerInstructionUpdate(configPath, Buffer.from(nextRaw));
     return { configPath, changed: false };
   }
   writePrivateFileAtomicSync(recordPath, `${fileHash(nextRaw)}\n`);

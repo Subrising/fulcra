@@ -8,8 +8,57 @@ import {
   unlinkSync,
   mkdirSync,
   readlinkSync,
+  readdirSync,
 } from "node:fs";
 import path from "node:path";
+
+export const INSTRUCTION_FILE_POLICY =
+  "Fulcra never overwrites, modifies or reinstalls a file that the user or an agent edited. If an upstream (Paseo) or Fulcra update brings a newer bundled version of an edited file, write it beside the file as <name>.new (or a dated copy), keep the user's file, and tell the owner once. Install a bundled file only if it is missing or byte-identical to an older bundled version.";
+
+/** Keep both user edits and earlier update offers. An existing offer is also the notice receipt. */
+export function offerInstructionUpdate(
+  file: string,
+  data: Buffer,
+): { path?: string; created: boolean } {
+  assertInstructionPath(file);
+  const current = info(file);
+  if (current?.isFile() && readFileSync(file).equals(data)) return { created: false };
+  const parent = path.dirname(file);
+  mkdirSync(parent, { recursive: true });
+  const primary = `${file}.new`;
+  const prefix = `${path.basename(file)}.new.`;
+  const candidates = [
+    primary,
+    ...readdirSync(parent)
+      .filter((name) => name.startsWith(prefix))
+      .sort()
+      .map((name) => path.join(parent, name)),
+  ];
+  for (const candidate of candidates) {
+    const stat = info(candidate);
+    if (!stat?.isFile()) continue;
+    try {
+      assertInstructionPath(candidate);
+    } catch {
+      continue;
+    }
+    if (readFileSync(candidate).equals(data)) return { path: candidate, created: false };
+  }
+  const date = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+  const dated = `${file}.new.${date}.${hash(data).slice(0, 16)}`;
+  for (let index = 0; ; index++) {
+    const candidate = index === 0 ? primary : index === 1 ? dated : `${dated}.${index}`;
+    if (info(candidate)) continue;
+    if (!replaceInstructionFile(candidate, data, undefined)) {
+      const placed = info(candidate);
+      if (placed?.isFile() && readFileSync(candidate).equals(data))
+        return { path: candidate, created: false };
+      continue;
+    }
+    console.warn("Fulcra kept the edited file: %s. The bundled version is at: %s", file, candidate);
+    return { path: candidate, created: true };
+  }
+}
 
 export const INSTRUCTION_BACKUP_PREFIX = ".instruction-sync-displaced-";
 const hash = (data: Buffer): string => createHash("sha256").update(data).digest("hex");

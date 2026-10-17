@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import {
   assertInstructionPath,
+  offerInstructionUpdate,
   INSTRUCTION_BACKUP_PREFIX,
   replaceInstructionFile,
   retireInstructionFile,
@@ -22,7 +23,6 @@ export interface SkillSyncResult {
   processedSkills: number;
 }
 
-const preservedSkillFiles = new Set<string>();
 export type ShippedSkillHashes = Record<string, string[]>;
 
 /** Hash history ships with the application, outside the user-owned skill directories. */
@@ -66,12 +66,6 @@ export function isLocalSkillEdit(
   return currentHash !== sourceHash && !shippedHashes.includes(currentHash);
 }
 
-export function warnPreservedSkillFile(file: string): void {
-  if (preservedSkillFiles.has(file)) return;
-  preservedSkillFiles.add(file);
-  console.warn("Preserved locally edited skill file: %s", file);
-}
-
 async function writeFileIfChanged(
   srcPath: string,
   dstPath: string,
@@ -86,8 +80,8 @@ async function writeFileIfChanged(
   const sourceHash = createHash("sha256").update(src).digest("hex");
   const currentHash = dst === null ? undefined : createHash("sha256").update(dst).digest("hex");
   if (isLocalSkillEdit(currentHash, installedHash, sourceHash, shippedHashes)) {
-    warnPreservedSkillFile(dstPath);
-    return { changed: false, managedHash: installedHash };
+    const offer = offerInstructionUpdate(dstPath, src);
+    return { changed: offer.created, managedHash: installedHash };
   }
   if (dst && src.equals(dst)) return { changed: false, managedHash: sourceHash };
   await fs.mkdir(path.dirname(dstPath), { recursive: true });
@@ -95,8 +89,8 @@ async function writeFileIfChanged(
   if (
     !replaceInstructionFile(dstPath, src, currentHash, mode === undefined ? 0o600 : mode & 0o777)
   ) {
-    warnPreservedSkillFile(dstPath);
-    return { changed: false, managedHash: installedHash };
+    const offer = offerInstructionUpdate(dstPath, src);
+    return { changed: offer.created, managedHash: installedHash };
   }
   return { changed: true, managedHash: sourceHash };
 }
@@ -256,7 +250,10 @@ async function syncDirectoryFiles(
     if (srcFileSet.has(rel)) continue;
     const dstPath = path.join(dstDir, rel);
     const currentHash = await hashFile(dstPath).catch(() => null);
-    if (currentHash !== previousHash) continue;
+    if (currentHash !== previousHash) {
+      if (currentHash !== null) managedHashes[rel] = previousHash;
+      continue;
+    }
     if (retireInstructionFile(dstPath, previousHash, dstDir)) {
       deletedRels.push(rel);
       changed++;

@@ -745,9 +745,31 @@ describe("installSkills / updateSkills", () => {
     expect((await autoUpdateInstalledSkills(sandbox.targets, ALL_SKILLS)).ops).toEqual([]);
     expect((await installSkills(sandbox.targets, ALL_SKILLS)).ops).toEqual([]);
     expect(await fs.readFile(local, "utf8")).toBe("local rules");
+    expect(await fs.readFile(`${local}.new`, "utf8")).toBe("bundle-v2");
     expect(
       await fs.readFile(path.join(sandbox.targets.claudeDir, "paseo", "SKILL.md"), "utf8"),
     ).toBe("bundle-v2");
+  });
+
+  it("offers an update at startup when only user overrides differ", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await installSkills(sandbox.targets, ALL_SKILLS);
+    for (const root of [sandbox.targets.agentsDir, sandbox.targets.claudeDir]) {
+      await fs.writeFile(path.join(root, "paseo", "SKILL.md"), "user instructions");
+    }
+    await writeBundleSkill(sandbox.targets.sourceDir, "paseo", { "SKILL.md": "bundle-v2" });
+    expect((await getSkillsStatus(sandbox.targets, ALL_SKILLS)).state).toBe("up-to-date");
+    for (const root of [sandbox.targets.agentsDir, sandbox.targets.claudeDir]) {
+      await expect(fs.access(path.join(root, "paseo", "SKILL.md.new"))).rejects.toThrow();
+    }
+    await autoUpdateInstalledSkills(sandbox.targets, ALL_SKILLS);
+    await autoUpdateInstalledSkills(sandbox.targets, ALL_SKILLS);
+    for (const root of [sandbox.targets.agentsDir, sandbox.targets.claudeDir]) {
+      expect(await fs.readFile(path.join(root, "paseo", "SKILL.md"), "utf8")).toBe(
+        "user instructions",
+      );
+      expect(await fs.readFile(path.join(root, "paseo", "SKILL.md.new"), "utf8")).toBe("bundle-v2");
+    }
   });
 
   it("updates a nested managed file recorded with Windows path separators", async () => {
