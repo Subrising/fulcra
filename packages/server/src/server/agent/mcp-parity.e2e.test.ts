@@ -971,6 +971,8 @@ test("archive safety reads actual daemon queues without changing the session", a
     await queue.start();
     const before = await client.fetchAgent({ agentId: agent.id });
     expect(before?.agent.archiveSafety).toEqual({
+      confirmationRequired: false,
+      reasons: [],
       inFlight: false,
       heldMessages: 0,
       heldReports: 0,
@@ -987,6 +989,8 @@ test("archive safety reads actual daemon queues without changing the session", a
     );
     const after = await client.fetchAgent({ agentId: agent.id });
     expect(after?.agent.archiveSafety).toEqual({
+      confirmationRequired: false,
+      reasons: [],
       inFlight: false,
       heldMessages: 1,
       heldReports: 0,
@@ -1032,6 +1036,8 @@ test.runIf(process.platform !== "win32")(
       await client.connect();
       const snapshot = await client.fetchAgent({ agentId });
       expect(snapshot?.agent.archiveSafety).toEqual({
+        confirmationRequired: false,
+        reasons: [],
         inFlight: false,
         heldMessages: 1,
         heldReports: 0,

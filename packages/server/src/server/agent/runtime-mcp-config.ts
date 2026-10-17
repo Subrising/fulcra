@@ -91,7 +91,22 @@ export function matchesPaseoInjectLabels(
   required: Record<string, string>,
 ): boolean {
   return Object.entries(required).every(
-    ([key, value]) => labels !== undefined && Object.hasOwn(labels, key) && labels[key] === value,
+    ([key, value]) =>
+      labels !== undefined &&
+      Object.hasOwn(labels, key) &&
+      (labels[key] === value || (key === "fulcra.mcp" && value === "on" && labels[key] === "lead")),
+  );
+}
+
+export function isPaseoPolicyLabelWrite(
+  labels: Record<string, unknown> | undefined,
+  required: Record<string, string>,
+): boolean {
+  return (
+    !!labels &&
+    (Object.keys(required).some((key) => Object.hasOwn(labels, key)) ||
+      Object.hasOwn(labels, "fulcra.mcp.groups") ||
+      Object.hasOwn(labels, "fulcra.mcp"))
   );
 }
 
@@ -103,13 +118,15 @@ export function assertPaseoInjectionLabelWrite(input: {
   callerLabels?: Record<string, string>;
   agentInput: boolean;
 }): void {
+  if (!isPaseoPolicyLabelWrite(input.labels, input.required)) return;
+  if (!input.callerAgentId && !input.agentInput) return;
   if (
-    !input.labels ||
-    !Object.keys(input.required).some((key) => Object.hasOwn(input.labels!, key))
+    input.callerAgentId &&
+    matchesPaseoInjectLabels(input.callerLabels, input.required) &&
+    (Object.keys(input.required).length > 0 ||
+      ["on", "lead"].includes(input.callerLabels?.["fulcra.mcp"] ?? ""))
   )
     return;
-  if (!input.callerAgentId && !input.agentInput) return;
-  if (input.callerAgentId && matchesPaseoInjectLabels(input.callerLabels, input.required)) return;
   throw new Error(
     "MCP token filter labels are reserved. Only the user or a lead with all matching injection labels can change them.",
   );

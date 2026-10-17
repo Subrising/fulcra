@@ -1,3 +1,4 @@
+import { sessionPaseoToolPolicy } from "./paseo-tool-policy.js";
 import { Bindings } from "../../../../../control/src/control/bindings.mjs";
 import { RoleSessions } from "../../../../../control/src/control/role-sessions.mjs";
 import { hash } from "../../../../../control/src/control/store.mjs";
@@ -624,6 +625,7 @@ test("native report end-to-end: actual MCP launch witness creates a scoped child
     featureValues: undefined,
   });
   const catalog = createPaseoToolCatalog({
+    paseoToolPolicy: sessionPaseoToolPolicy(undefined, { "fulcra.mcp": "lead" }),
     agentManager: f.manager,
     agentStorage: f.agentStorage,
     daemonConfigStore: f.finishConfig,
@@ -728,6 +730,7 @@ test("native create_agent from an ordinary parent validates placement and sends 
     featureValues: undefined,
   });
   const catalog = createPaseoToolCatalog({
+    paseoToolPolicy: sessionPaseoToolPolicy(undefined, { "fulcra.mcp": "lead" }),
     agentManager: f.manager,
     agentStorage: f.agentStorage,
     daemonConfigStore: f.finishConfig,
@@ -786,6 +789,7 @@ test("native finish switch off gives one report-up notice and no late native tur
     featureValues: undefined,
   });
   const catalog = createPaseoToolCatalog({
+    paseoToolPolicy: sessionPaseoToolPolicy(undefined, { "fulcra.mcp": "lead" }),
     agentManager: f.manager,
     agentStorage: f.agentStorage,
     daemonConfigStore: f.finishConfig,
@@ -831,6 +835,7 @@ async function defaultOwnedNoticeFixture(
     featureValues: undefined,
   });
   const catalog = createPaseoToolCatalog({
+    paseoToolPolicy: sessionPaseoToolPolicy(undefined, { "fulcra.mcp": "lead" }),
     agentManager: f.manager,
     agentStorage: f.agentStorage,
     daemonConfigStore: f.finishConfig,
@@ -1218,6 +1223,7 @@ test("a later send_agent_prompt arms a new report-up finish notice", async () =>
     featureValues: undefined,
   });
   const catalog = createPaseoToolCatalog({
+    paseoToolPolicy: sessionPaseoToolPolicy(undefined, { "fulcra.mcp": "lead" }),
     agentManager: f.manager,
     agentStorage: f.agentStorage,
     daemonConfigStore: f.finishConfig,
@@ -1281,6 +1287,7 @@ test("a busy parent sends a finish notice to the child's new parent", async () =
     featureValues: undefined,
   });
   const catalog = createPaseoToolCatalog({
+    paseoToolPolicy: sessionPaseoToolPolicy(undefined, { "fulcra.mcp": "lead" }),
     agentManager: f.manager,
     agentStorage: f.agentStorage,
     daemonConfigStore: f.finishConfig,
@@ -1358,6 +1365,7 @@ test("agent-scoped MCP create_agent wakes a CLI-style parent once without native
     featureValues: undefined,
   });
   const catalog = createPaseoToolCatalog({
+    paseoToolPolicy: sessionPaseoToolPolicy(undefined, { "fulcra.mcp": "lead" }),
     agentManager: f.manager,
     agentStorage: f.agentStorage,
     daemonConfigStore: f.finishConfig,
@@ -1404,6 +1412,7 @@ test("agent-scoped MCP create_agent wakes a Claude parent once when native queue
     featureValues: undefined,
   });
   const catalog = createPaseoToolCatalog({
+    paseoToolPolicy: sessionPaseoToolPolicy(undefined, { "fulcra.mcp": "lead" }),
     agentManager: f.manager,
     agentStorage: f.agentStorage,
     daemonConfigStore: f.finishConfig,
@@ -1449,6 +1458,7 @@ test("queued child message before native refusal still gives one finish notice",
     featureValues: undefined,
   });
   const catalog = createPaseoToolCatalog({
+    paseoToolPolicy: sessionPaseoToolPolicy(undefined, { "fulcra.mcp": "lead" }),
     agentManager: f.manager,
     agentStorage: f.agentStorage,
     daemonConfigStore: f.finishConfig,
@@ -1510,6 +1520,7 @@ test("native report admission failure uses the ordinary notice once", async () =
     featureValues: undefined,
   });
   const catalog = createPaseoToolCatalog({
+    paseoToolPolicy: sessionPaseoToolPolicy(undefined, { "fulcra.mcp": "lead" }),
     agentManager: f.manager,
     agentStorage: f.agentStorage,
     daemonConfigStore: f.finishConfig,
@@ -1556,6 +1567,7 @@ test("restart between child finish and native wake restores one notice", async (
     featureValues: undefined,
   });
   const catalog = createPaseoToolCatalog({
+    paseoToolPolicy: sessionPaseoToolPolicy(undefined, { "fulcra.mcp": "lead" }),
     agentManager: f.manager,
     agentStorage: f.agentStorage,
     daemonConfigStore: f.finishConfig,
@@ -1620,6 +1632,7 @@ test("durably accepted native wake makes restart report-up skip", async () => {
     featureValues: undefined,
   });
   const catalog = createPaseoToolCatalog({
+    paseoToolPolicy: sessionPaseoToolPolicy(undefined, { "fulcra.mcp": "lead" }),
     agentManager: f.manager,
     agentStorage: f.agentStorage,
     daemonConfigStore: f.finishConfig,
@@ -1679,6 +1692,7 @@ test("uncertain native wake uses the same notice id and gives one parent notice"
     featureValues: undefined,
   });
   const catalog = createPaseoToolCatalog({
+    paseoToolPolicy: sessionPaseoToolPolicy(undefined, { "fulcra.mcp": "lead" }),
     agentManager: f.manager,
     agentStorage: f.agentStorage,
     daemonConfigStore: f.finishConfig,
@@ -1751,6 +1765,7 @@ test("an uncertain native wake with an accepted notice starts no second parent t
     featureValues: undefined,
   });
   const catalog = createPaseoToolCatalog({
+    paseoToolPolicy: sessionPaseoToolPolicy(undefined, { "fulcra.mcp": "lead" }),
     agentManager: f.manager,
     agentStorage: f.agentStorage,
     daemonConfigStore: f.finishConfig,
@@ -1815,6 +1830,7 @@ test("a refused native permission wake leaves the request visible to the parent"
     featureValues: undefined,
   });
   const catalog = createPaseoToolCatalog({
+    paseoToolPolicy: sessionPaseoToolPolicy(undefined, { "fulcra.mcp": "lead" }),
     agentManager: f.manager,
     agentStorage: f.agentStorage,
     daemonConfigStore: f.finishConfig,
@@ -1887,6 +1903,7 @@ test("a child closed before finishing gives its parent one close notice", async 
     featureValues: undefined,
   });
   const catalog = createPaseoToolCatalog({
+    paseoToolPolicy: sessionPaseoToolPolicy(undefined, { "fulcra.mcp": "lead" }),
     agentManager: f.manager,
     agentStorage: f.agentStorage,
     daemonConfigStore: f.finishConfig,
@@ -1936,6 +1953,7 @@ test("an unavailable permission report cannot settle the finish wake", async () 
     featureValues: undefined,
   });
   const catalog = createPaseoToolCatalog({
+    paseoToolPolicy: sessionPaseoToolPolicy(undefined, { "fulcra.mcp": "lead" }),
     agentManager: f.manager,
     agentStorage: f.agentStorage,
     daemonConfigStore: f.finishConfig,
@@ -2061,6 +2079,7 @@ test("native report wake preserves delegated journal generation through actual W
     featureValues: undefined,
   });
   const catalog = createPaseoToolCatalog({
+    paseoToolPolicy: sessionPaseoToolPolicy(undefined, { "fulcra.mcp": "lead" }),
     agentManager: f.manager,
     agentStorage: f.agentStorage,
     daemonConfigStore: f.finishConfig,
@@ -2117,6 +2136,7 @@ test("native authenticated creation refuses replaced parent during child launch 
     featureValues: undefined,
   });
   const catalog = createPaseoToolCatalog({
+    paseoToolPolicy: sessionPaseoToolPolicy(undefined, { "fulcra.mcp": "lead" }),
     agentManager: f.manager,
     agentStorage: f.agentStorage,
     daemonConfigStore: f.finishConfig,
@@ -3264,6 +3284,10 @@ test("managed artifact actual owner opt-in, native tool origin and protected Ses
     await f.manager.waitForAgentRunStart(child.id);
     const snapshots = Object.create(ProviderSnapshotManager.prototype) as ProviderSnapshotManager;
     const catalog = createPaseoToolCatalog({
+      paseoToolPolicy: sessionPaseoToolPolicy(undefined, {
+        "fulcra.mcp": "lead",
+        "fulcra.mcp.groups": "artifacts",
+      }),
       agentManager: f.manager,
       agentStorage: f.agentStorage,
       daemonConfigStore: f.finishConfig,
@@ -4336,6 +4360,82 @@ test("multi-prime actual manager: human prime receive-only inbox, native owner r
     expect(f.authority.requireSequence(f.agent.id).humanAt).toBe(humanAt);
   } finally {
     owner.close();
+    await f.cleanup();
+  }
+});
+
+test("lead preset human RPC refresh preserves registered report ownership and rotates the report credential without a turn", async () => {
+  const f = await fixture("valid", true);
+  Reflect.set(f.manager, "mcpRefreshAdmission", () => ({
+    allowed: true,
+    revision: "fixture-owner-policy",
+  }));
+  const { scope } = await registerPrime(f);
+  const child = await f.manager.createAgent(
+    {
+      provider: "codex",
+      cwd: f.directory,
+      model: "gpt-5.4",
+    },
+    undefined,
+    { workspaceId: undefined },
+  );
+  const identity = (id: string) =>
+    Reflect.get(f.manager, "currentReportIdentity").call(f.manager, id);
+  const owner = f.authority.management.open(
+    {
+      pluginId: "orca-organization-next",
+      bundleDirectory: "/fixture/bundle",
+      isCurrent: () => true,
+    },
+    () => ({
+      id: "fixture-owner",
+      authentication: "protected-local-ipc",
+      deviceId: null,
+      permissions: ["command-centre.manage", "daemon.manage", "accounts.manage"],
+    }),
+  )!;
+  try {
+    await owner.invoke(randomUUID(), {
+      method: "report-parent-adopt",
+      input: {
+        messageId: randomUUID(),
+        child: identity(child.id),
+        parent: identity(f.agent.id),
+        scopes: [scope],
+        expectedEpoch: null,
+      },
+    });
+    const before = identity(f.agent.id);
+    const origin = f.nativeOrigin();
+    const oldGrant = JSON.parse(
+      await readFile(path.join(f.directory, "grants", "report", `${f.agent.id}.json`), "utf8"),
+    );
+    const turns = f.turnCount();
+    await f.authority.rpc(undefined, () =>
+      f.manager.updateAgentMetadata(f.agent.id, {
+        labels: { "fulcra.mcp": "lead", "fulcra.mcp.groups": "terminals" },
+      }),
+    );
+    const after = identity(f.agent.id);
+    expect(after.sessionId).toBe(before.sessionId);
+    expect(after.instanceId).not.toBe(before.instanceId);
+    expect(f.turnCount()).toBe(turns);
+    expect(f.manager.getPaseoToolPolicy(f.agent.id)?.allowedTools).toHaveLength(17);
+    const registry = Reflect.get(f.manager, "reportRegistry");
+    expect(registry.requireParent(identity(child.id), scope).parent).toEqual(after);
+    await expect(f.manager.nativeReportInbox(origin)).rejects.toThrow("replaced");
+    await expect(
+      f.manager.reportInboxRequest({
+        method: "events-inbox",
+        input: { sessionId: f.agent.id },
+        capability: oldGrant.capability,
+      }),
+    ).rejects.toThrow();
+    expect(await f.manager.nativeReportInbox(f.nativeOrigin())).toMatchObject({ metadataCount: 0 });
+  } finally {
+    owner.close();
+    await f.manager.closeAgent(child.id);
     await f.cleanup();
   }
 });

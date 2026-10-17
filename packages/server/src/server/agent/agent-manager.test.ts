@@ -15635,3 +15635,136 @@ test("computer-use malformed stored labels fail closed without blocking cold loa
     await f.cleanup();
   }
 });
+
+test("lead preset refresh retains identity, history and notice labels without starting a turn", async () => {
+  const f = await quietMcpFixture({ creationLabels: { "fulcra.mcp": "lead" } });
+  try {
+    const before = await f.timeline.fetchCommitted(f.created.id);
+    await f.manager.setLabels(f.created.id, { "fulcra.mcp.groups": "terminals" });
+    expect(f.manager.getPaseoToolPolicy(f.created.id)?.allowedTools).toHaveLength(17);
+    expect(f.manager.getPaseoToolPolicy(f.created.id)?.allowedTools).toContain("create_terminal");
+    expect(f.client.sessions[0].closeCount).toBe(1);
+    expect(f.client.sessions[1].startCount).toBe(0);
+    expect(f.client.sessions[1].historyCount).toBe(0);
+    expect(f.manager.getAgent(f.created.id)?.persistence?.sessionId).toBe(
+      f.input.expected.sessionId,
+    );
+    expect(await f.timeline.fetchCommitted(f.created.id)).toEqual(before);
+    expect((await f.storage.get(f.created.id))?.labels).toMatchObject({
+      keep: "yes",
+      "fulcra.mcp": "lead",
+      "fulcra.mcp.groups": "terminals",
+    });
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test.each(["turn", "permission", "child"])(
+  "lead preset refuses a policy swap with an active %s",
+  async (kind) => {
+    const f = await quietMcpFixture({ creationLabels: { "fulcra.mcp": "lead" } });
+    try {
+      let pending: AsyncGenerator<AgentStreamEvent> | undefined;
+      if (kind === "turn") pending = f.manager.streamAgent(f.created.id, "fixture turn");
+      if (kind === "permission")
+        f.client.sessions[0].pushEvent({
+          type: "permission_requested",
+          provider: "codex",
+          request: {
+            id: "policy-permission",
+            provider: "codex",
+            kind: "tool",
+            name: "fixture read",
+          },
+        });
+      if (kind === "child")
+        f.client.sessions[0].pushEvent({
+          type: "provider_subagent",
+          provider: "codex",
+          event: { type: "upsert", id: "policy-child", title: "Fixture child", status: "running" },
+        });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await expect(
+        f.manager.setLabels(f.created.id, { "fulcra.mcp.groups": "terminals" }),
+      ).rejects.toThrow("quiet");
+      expect(f.client.sessions[0].closeCount).toBe(0);
+      expect((await f.storage.get(f.created.id))?.labels?.["fulcra.mcp.groups"]).toBeUndefined();
+      expect(f.manager.getPaseoToolPolicy(f.created.id)?.allowedTools).toHaveLength(12);
+      if (pending) await drainAsyncGenerator(pending);
+    } finally {
+      await f.cleanup();
+    }
+  },
+);
+
+test("lead preset retains its original catalog and launch origin when host authority changes during preparation", async () => {
+  const preparing = deferred<void>();
+  const release = deferred<void>();
+  const admission = { revision: "original", allowed: true };
+  const directory = mkdtempSync(join(tmpdir(), "lean-origin-"));
+  const f = await quietMcpFixture({
+    creationLabels: { "fulcra.mcp": "lead" },
+    reportRegistryFile: join(directory, "reports.json"),
+    mcpRefreshAdmission: () => admission,
+    pluginLifecycle: {
+      emit: () => {},
+      before: async (_hook: string, request: { reason?: string }) => {
+        if (request.reason === "refresh") {
+          preparing.resolve();
+          await release.promise;
+        }
+        return request;
+      },
+    } as unknown as AgentManagerOptions["pluginLifecycle"],
+  });
+  const launches = Reflect.get(f.manager, "reportLaunches") as Map<string, unknown>;
+  const originalLaunch = launches.get(f.created.id);
+  try {
+    const operation = f.manager.setLabels(f.created.id, { "fulcra.mcp.groups": "browser" });
+    await preparing.promise;
+    admission.allowed = false;
+    admission.revision = "revoked";
+    release.resolve();
+    await expect(operation).rejects.toThrow("owned session");
+    expect(f.client.sessions[0].closeCount).toBe(0);
+    expect(launches.get(f.created.id)).toBe(originalLaunch);
+    expect(f.manager.getPaseoToolPolicy(f.created.id)?.allowedTools).toHaveLength(12);
+    expect((await f.storage.get(f.created.id))?.labels?.["fulcra.mcp.groups"]).toBeUndefined();
+  } finally {
+    release.resolve();
+    await f.cleanup();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("lead preset close failure retains the writer and does not open a replacement", async () => {
+  const f = await quietMcpFixture({ creationLabels: { "fulcra.mcp": "lead" } });
+  try {
+    f.client.sessions[0].failClose = true;
+    await expect(
+      f.manager.setLabels(f.created.id, { "fulcra.mcp.groups": "terminals" }),
+    ).rejects.toThrow();
+    expect(f.client.sessions).toHaveLength(1);
+    expect(f.manager.getAgent(f.created.id)?.session).toBe(f.client.sessions[0]);
+    expect((await f.storage.get(f.created.id))?.labels?.["fulcra.mcp.groups"]).toBeUndefined();
+    f.client.sessions[0].failClose = false;
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test.each([
+  { "fulcra.mcp": "lead", "fulcra.mcp.groups": "unknown" },
+  { "fulcra.mcp": "on", "fulcra.mcp.groups": "browser" },
+])("unarchive refuses invalid tool selection before changing saved state: %s", async (labels) => {
+  const f = await quietMcpFixture();
+  try {
+    await f.manager.archiveAgent(f.created.id);
+    const before = await f.storage.get(f.created.id);
+    await expect(f.manager.unarchiveSnapshot(f.created.id, { labels })).rejects.toThrow();
+    expect(await f.storage.get(f.created.id)).toEqual(before);
+  } finally {
+    await f.cleanup();
+  }
+});
