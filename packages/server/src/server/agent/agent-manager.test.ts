@@ -15768,3 +15768,65 @@ test.each([
     await f.cleanup();
   }
 });
+
+test("waitForAgentEvent waits through pending admission and removes its subscription", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-pending-event-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const entered = deferred<void>(),
+    releaseStart = deferred<void>(),
+    releaseFinish = deferred<void>();
+  class PendingSession extends TestAgentSession {
+    override async startTurn(): Promise<{ turnId: string }> {
+      entered.resolve();
+      await releaseStart.promise;
+      const turnId = "pending-event-turn";
+      void (async () => {
+        this.pushEvent({ type: "turn_started", provider: this.provider, turnId });
+        await releaseFinish.promise;
+        this.pushEvent({ type: "turn_completed", provider: this.provider, turnId });
+      })();
+      return { turnId };
+    }
+  }
+  class PendingClient extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      return new PendingSession(config);
+    }
+  }
+  const manager = new AgentManager({
+    clients: { codex: new PendingClient() },
+    registry: storage,
+    logger,
+  });
+  let id: string | null = null;
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    id = agent.id;
+    await startAgentRun(manager, id, "fixture", logger);
+    await entered.promise;
+    expect(manager.getAgent(id)?.lifecycle).toBe("idle");
+    const before = manager.subscriptionCount();
+    let resolved = false;
+    const waited = manager.waitForAgentEvent(id).then((result) => {
+      resolved = true;
+      return result;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(resolved).toBe(false);
+    releaseStart.resolve();
+    await manager.waitForAgentRunStart(id);
+    expect(resolved).toBe(false);
+    releaseFinish.resolve();
+    expect((await waited).status).toBe("idle");
+    expect(manager.subscriptionCount()).toBe(before);
+  } finally {
+    releaseStart.resolve();
+    releaseFinish.resolve();
+    if (id) await manager.closeAgent(id).catch(() => undefined);
+    await manager.flush();
+    await storage.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
