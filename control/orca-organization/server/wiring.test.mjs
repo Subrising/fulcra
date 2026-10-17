@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import contributePlugin from "../index.server";
-const contribute = (server) => contributePlugin({ before: () => () => {}, ...server });
+const contribute = (server, options) =>
+  contributePlugin({ before: () => () => {}, ...server }, options);
 import { state, reset } from "./wiring-test-adapters.mjs";
 const id = (n) => `11111111-1111-4111-8111-${String(n).padStart(12, "0")}`;
 // V3b (fix round 1, 1f69ce97): every invocation, read or mutation, carries its own host `ctx.management`; read
