@@ -1530,15 +1530,20 @@ export class MessageReceipts {
                 return false;
               }
             })
-            .map((member) => ({
-              eventId: member.id,
-              kind: member.kind,
-              scope: member.scope,
-              at: member.at,
-              resolution: "resolved-expired" as const,
-              consumed: false,
-              providerAccepted: receipt.state === "delivered",
-            })),
+            .map((member) =>
+              Object.assign(
+                {
+                  eventId: member.id,
+                  kind: member.kind,
+                  scope: member.scope,
+                  at: member.at,
+                  resolution: "resolved-expired" as const,
+                  consumed: false,
+                  providerAccepted: receipt.state === "delivered",
+                },
+                member.totalSpendUsd === undefined ? {} : { totalSpendUsd: member.totalSpendUsd },
+              ),
+            ),
         )
         .sort((a, b) => b.at - a.at)
         .slice(0, 24);
@@ -1562,6 +1567,9 @@ export class MessageReceipts {
                   kind: member.kind,
                   scope: member.scope,
                   at: member.at,
+                  ...(member.totalSpendUsd === undefined
+                    ? {}
+                    : { totalSpendUsd: member.totalSpendUsd }),
                   metadataCommitted: true,
                   wakeState:
                     receipt.state === "queued" && receipt.collectingUntil
@@ -1583,6 +1591,7 @@ export class MessageReceipts {
             {
               scope: import("@getpaseo/protocol/native-intercom").NativeReportScope;
               eventIds: string[];
+              totalSpendUsdByEvent: Record<string, number>;
               counts: Partial<Record<import("../report-batch.js").ReportMember["kind"], number>>;
             }
           >();
@@ -1598,7 +1607,14 @@ export class MessageReceipts {
             }
             publishedMembers.push(member);
             const key = digest(member.scope);
-            const group = grouped.get(key) ?? { scope: member.scope, eventIds: [], counts: {} };
+            const group = grouped.get(key) ?? {
+              scope: member.scope,
+              eventIds: [],
+              counts: {},
+              totalSpendUsdByEvent: {},
+            };
+            if (member.totalSpendUsd !== undefined)
+              group.totalSpendUsdByEvent[member.id] = member.totalSpendUsd;
             group.eventIds.push(member.id);
             group.counts[member.kind] = (group.counts[member.kind] ?? 0) + 1;
             grouped.set(key, group);
@@ -1607,6 +1623,7 @@ export class MessageReceipts {
             scope: group.scope,
             eventIds: group.eventIds,
             counts: group.counts,
+            totalSpendUsdByEvent: group.totalSpendUsdByEvent,
             count: group.eventIds.length,
             metadataCommitted: true,
             wakeState: receipt.collectingUntil ? "collecting" : receipt.state,

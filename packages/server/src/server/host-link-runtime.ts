@@ -1,3 +1,5 @@
+import { sessionCost } from "./agent/session-cost.js";
+import { loadAgentPolicy } from "./limit-resume/policy.js";
 import { startHostLimitSharing } from "./host-limit-sharing.js";
 import { realpathSync } from "node:fs";
 import type { Logger } from "pino";
@@ -49,6 +51,13 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
       .filter((item) => item.type === "assistant_message");
     return messages.at(-1)?.text?.slice(0, 3000) ?? "";
   }
+  const { formatWorkerFinish } = loadAgentPolicy("report-notices");
+  function finishText(id: string, text: string): string {
+    return formatWorkerFinish(
+      text,
+      sessionCost((agentManager.getAgent(id) ?? agentStorage.getCached(id))?.costRecords),
+    );
+  }
   let service: HostLinks | null = null;
   const unsubscribe = agentManager.subscribe(
     (event) => {
@@ -59,7 +68,7 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
             event.agent.id,
             "failed",
             "state-error",
-            event.agent.lastError ?? "The remote worker failed.",
+            finishText(event.agent.id, event.agent.lastError ?? "The remote worker failed."),
           );
         } catch (error) {
           logger.error(
@@ -76,21 +85,24 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
             event.agentId,
             "finished",
             event.event.turnId ?? "initial",
-            `The remote worker finished its turn.\n${lastWorkerMessage(event.agentId)}`,
+            finishText(
+              event.agentId,
+              `The remote worker finished its turn.\n${lastWorkerMessage(event.agentId)}`,
+            ),
           );
         else if (event.event.type === "turn_failed")
           service.recordWorkerNotice(
             event.agentId,
             "failed",
             event.event.turnId ?? "initial",
-            event.event.error,
+            finishText(event.agentId, event.event.error),
           );
         else if (event.event.type === "turn_canceled")
           service.recordWorkerNotice(
             event.agentId,
             "failed",
             event.event.turnId ?? "initial",
-            `The remote turn stopped: ${event.event.reason}`,
+            finishText(event.agentId, `The remote turn stopped: ${event.event.reason}`),
           );
         else if (event.event.type === "permission_resolved")
           service.resolveWorkerPermission(event.agentId, event.event.requestId);
@@ -377,14 +389,14 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
             pending.agentId,
             "failed",
             "recovered",
-            "The remote turn stopped before daemon recovery.",
+            finishText(pending.agentId, "The remote turn stopped before daemon recovery."),
           );
         else if (record.lastStatus === "idle")
           service!.recordWorkerNotice(
             pending.agentId,
             "finished",
             "recovered",
-            "The remote worker's completed turn was recovered.",
+            finishText(pending.agentId, "The remote worker's completed turn was recovered."),
           );
       }
       service!.startNotifications();

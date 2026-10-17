@@ -159,7 +159,14 @@ describe("AgentStorage", () => {
     );
     const armed = await storage.armFinishNotice(child, parentId, "native");
     await storage.applySnapshot(child);
-    expect(await storage.recordFinishNotice(childId, "turn-1", "finished")).toMatchObject({
+    const cost = {
+      totalUsd: 17.52,
+      lastTurnUsd: 7.87,
+      recordedTurns: 2,
+      accounts: [{ accountId: null, totalUsd: 17.52 }],
+    };
+    expect(await storage.recordFinishNotice(childId, "turn-1", "finished", cost)).toMatchObject({
+      sessionCost: cost,
       owner: "native",
       parentId,
       messageId: armed.messageId,
@@ -168,6 +175,7 @@ describe("AgentStorage", () => {
     });
     const recovered = new AgentStorage(storagePath, logger);
     expect(await recovered.getFinishNotice(childId)).toMatchObject({
+      sessionCost: cost,
       owner: "native",
       status: "pending",
       messageId: armed.messageId,

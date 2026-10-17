@@ -252,8 +252,8 @@ export function createAccountHandlers(d: Deps) {
         enabled?: boolean;
         priority?: number;
         clearLimit?: true;
-        budget?: { limitUsd: number; startAt: string };
-        dailyLimitUsd?: number;
+        budget?: { limitUsd: number | null; startAt: string };
+        dailyLimitUsd?: number | null;
         token?: string;
         signIn?: true;
         remove?: true;

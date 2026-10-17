@@ -2,6 +2,7 @@ export interface ReportAgent {
   id: string;
   title?: string | null;
   config?: unknown;
+  sessionCost?: { totalUsd: number; warning?: string };
 }
 export interface PendingFinish {
   workerId: string;
@@ -69,3 +70,10 @@ export declare function quietReportReason(input: {
   sentAt: number | null;
   startedAt?: number;
 }): string | null;
+
+export declare function formatSessionSpend(cost?: { totalUsd: number; warning?: string }): string;
+
+export declare function formatWorkerFinish(
+  text: string,
+  cost?: { totalUsd: number; warning?: string },
+): string;

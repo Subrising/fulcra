@@ -1,3 +1,4 @@
+import { loadAgentPolicy } from "./limit-resume/policy.js";
 import express from "express";
 import { mkdtemp, rm, chmod } from "node:fs/promises";
 import {
@@ -1665,4 +1666,25 @@ test("editing a legacy account cannot make its old limit override a newer local 
     readFileSync(path.join(f.targetPool, "accounts", "remote-limits.json"), "utf8"),
   );
   expect(stored.observations[0].observedAt).toBe(createdAt);
+});
+
+test("long remote failures retain spend after target restart and delivery", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerStarted(receipt.agentId!);
+  const { formatWorkerFinish } = loadAgentPolicy("report-notices");
+  f.target.recordWorkerNotice(
+    receipt.agentId!,
+    "failed",
+    "cost-failure",
+    formatWorkerFinish("Fixture error ".repeat(1000), { totalUsd: 17.52 }),
+  );
+  f.restartTarget();
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  expect(f.finishNotices[0]!.text).toContain("Session total spend: US$17.520000.");
 });

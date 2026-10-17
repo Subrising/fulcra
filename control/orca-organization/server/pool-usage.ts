@@ -106,8 +106,12 @@ export function createPoolUsage(root: () => string, now = Date.now) {
               unit: "usd",
               used: daily.usedUsd,
               limit: daily.limitUsd,
-              remaining: Math.max(0, daily.limitUsd - daily.usedUsd),
-              tone: toneFromUsedPct((daily.usedUsd / daily.limitUsd) * 100),
+              remaining:
+                daily.limitUsd === null ? null : Math.max(0, daily.limitUsd - daily.usedUsd),
+              tone:
+                daily.limitUsd === null
+                  ? "default"
+                  : toneFromUsedPct((daily.usedUsd / daily.limitUsd) * 100),
             },
             {
               id: "api-budget",

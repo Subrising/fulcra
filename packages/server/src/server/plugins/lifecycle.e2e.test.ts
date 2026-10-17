@@ -754,13 +754,16 @@ export default function(server) {
     expect(inspected.stdout).toContain("9.65");
     const usage = await client.listUsageReports({ agentId: legacy.id });
     expect(usage.sessionCost).toMatchObject({ totalUsd: 9.65, lastTurnUsd: 5.65 });
-    // Restore, then use the native label update to set the test worker's cap.
+    // A legacy cap label must not stop another turn.
     await client.fetchAgents({ subscribe: {} });
     await client.updateAgent(agent.id, { labels: { "fulcra.session-cost-cap-usd": "9.65" } });
-    await expect(client.sendMessage(agent.id, "This must not start")).rejects.toThrow(
-      /session cost cap/,
+    costs.push(1);
+    await client.sendMessage(agent.id, "Continue with a legacy label");
+    await client.waitForAgentUpsert(
+      agent.id,
+      (s) => s.status === "idle" && s.sessionCost?.recordedTurns === 3,
     );
-    expect(started).toBe(2);
+    expect(started).toBe(3);
     costs.push(2);
     const internal = await daemon.daemon.agentManager.createAgent(
       { provider: "claude", cwd: root, internal: true, modeId: "bypassPermissions" },
@@ -803,7 +806,7 @@ export default function(server) {
     await expect(
       client.sendMessage(other.id, "Account cap must survive without revisiting the helper"),
     ).rejects.toThrow(/daily UTC cost cap/);
-    expect(started).toBe(3);
+    expect(started).toBe(4);
   } finally {
     await client.close();
     await daemon.close();

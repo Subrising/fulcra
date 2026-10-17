@@ -234,8 +234,7 @@ export function accountBudget(a) {
   if (!isApiAccount(a)) return null;
   return (
     a.budget ?? {
-      limitUsd:
-        a.name === "personal-workspace-api" ? 200 : a.name === "work-workspace-api" ? 500 : null,
+      limitUsd: null,
       startAt: a.createdAt,
     }
   );
@@ -319,7 +318,8 @@ export async function readUsageAsync(root, now = Date.now()) {
 export function choose(s, provider, now = Date.now(), except = [], usage = {}) {
   const budgetHeld = (a) => {
     const budget = accountBudget(a);
-    return budget && s.budgetActions?.[`${a.id}:${budget.startAt}`]?.targetId;
+    const action = budget && s.budgetActions?.[`${a.id}:${budget.startAt}`];
+    return (budget?.limitUsd !== null || action?.cause === "billing-error") && action?.targetId;
   };
   const ready = s.accounts.filter(
     (a) =>
@@ -435,7 +435,11 @@ export async function setAccount(root, id, patch, expectedEpoch) {
       }
     }
     if (patch.dailyLimitUsd !== undefined) {
-      if (!isApiAccount(a) || !Number.isFinite(patch.dailyLimitUsd) || patch.dailyLimitUsd <= 0)
+      if (
+        !isApiAccount(a) ||
+        (patch.dailyLimitUsd !== null &&
+          (!Number.isFinite(patch.dailyLimitUsd) || patch.dailyLimitUsd <= 0))
+      )
         throw Error("Invalid daily API cost cap");
       a.dailyLimitUsd = patch.dailyLimitUsd;
     }
@@ -443,8 +447,7 @@ export async function setAccount(root, id, patch, expectedEpoch) {
       const b = patch.budget;
       if (
         !isApiAccount(a) ||
-        !Number.isFinite(b?.limitUsd) ||
-        b.limitUsd <= 0 ||
+        (b?.limitUsd !== null && (!Number.isFinite(b?.limitUsd) || b.limitUsd <= 0)) ||
         !Number.isFinite(Date.parse(b?.startAt))
       )
         throw Error("Invalid API budget");
@@ -971,7 +974,7 @@ export function publicView(s, now = Date.now()) {
       status: accountStatus(a, now),
       credentialKind: isApiAccount(a) ? "api-key" : "subscription",
       budget: accountBudget(a),
-      ...(isApiAccount(a) ? { dailyLimitUsd: a.dailyLimitUsd ?? 40 } : {}),
+      ...(isApiAccount(a) ? { dailyLimitUsd: a.dailyLimitUsd ?? null } : {}),
       limitNote: isApiAccount(a) ? null : a.limitNote,
       limitKind: accountLimit(a, now)?.kind ?? null,
       sessions: Object.entries(s.assignments)

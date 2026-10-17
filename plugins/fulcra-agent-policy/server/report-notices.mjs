@@ -69,7 +69,7 @@ export function formatCombinedNotice(items) {
     const text = (item.lastMessage ?? "").trim();
     const snippet =
       text.length > COMBINED_SNIPPET_CHARS ? `${text.slice(0, COMBINED_SNIPPET_CHARS)}…` : text;
-    return `- Worker ${titleOf(item.worker)} (${item.worker.id}): ${snippet || "(no message)"}`;
+    return `- Worker ${titleOf(item.worker)} (${item.worker.id}): ${snippet || "(no message)"}\n${formatSessionSpend(item.worker.sessionCost)}`;
   };
   const shown = items.slice(0, COMBINED_LIST_LIMIT).map(line);
   const rest = items.length - shown.length;
@@ -84,12 +84,20 @@ export function titleOf(agent) {
   const live = typeof config?.title === "string" ? config.title.trim() : "";
   return agent.title?.trim() || live || agent.id.slice(0, 8);
 }
+export function formatSessionSpend(cost) {
+  return cost
+    ? `Session total spend: US$${cost.totalUsd.toFixed(6)}.${cost.warning ? ` ${cost.warning}` : ""}`
+    : "Session total spend: unavailable.";
+}
+export function formatWorkerFinish(text, cost) {
+  return `${formatSessionSpend(cost)}\n${text}`;
+}
 export function formatReportUpNotice(input) {
   const text = (input.lastMessage ?? "").trim();
   const snippet =
     text.length > REPORT_UP_SNIPPET_CHARS ? `${text.slice(0, REPORT_UP_SNIPPET_CHARS)}…` : text;
   const verb = input.failed ? "ended a turn with an error" : "finished a turn";
-  return `Worker ${titleOf(input.worker)} (${input.worker.id}) ${verb}: ${snippet || "(no message)"}`;
+  return `Worker ${titleOf(input.worker)} (${input.worker.id}) ${verb}: ${snippet || "(no message)"}\n${formatSessionSpend(input.worker.sessionCost)}`;
 }
 export function reportUpSwitches(setting, idleLeadNudge) {
   return {

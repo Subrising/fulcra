@@ -171,6 +171,7 @@ export function createAccountBudgets(
           pending: [],
           notified: false,
         });
+        action.cause = lowCredit ? "billing-error" : "budget";
         if (target && !action.targetId) {
           action.targetId = target.id;
           action.pending = candidates(s, account.id);

@@ -39,7 +39,7 @@ const account = z
     priority: z.number().int(),
     status,
     credentialKind: z.enum(["api-key", "subscription"]).optional(),
-    dailyLimitUsd: z.number().positive().finite().optional(),
+    dailyLimitUsd: z.number().positive().finite().nullable().optional(),
     budget: z
       .object({ limitUsd: z.number().positive().nullable(), startAt: z.string().datetime() })
       .nullable()
@@ -153,9 +153,12 @@ export const accountUpdateRpc = defineContract({
       enabled: z.boolean().optional(),
       priority: z.number().int().min(1).max(99).optional(),
       clearLimit: z.literal(true).optional(),
-      dailyLimitUsd: z.number().positive().finite().optional(),
+      dailyLimitUsd: z.number().positive().finite().nullable().optional(),
       budget: z
-        .object({ limitUsd: z.number().positive().finite(), startAt: z.string().datetime() })
+        .object({
+          limitUsd: z.number().positive().finite().nullable(),
+          startAt: z.string().datetime(),
+        })
         .strict()
         .optional(),
       token: z.string().max(1024).optional(),

@@ -14,6 +14,7 @@ import {
   rotate as rotateAccount,
   switchSession,
   setAccount,
+  choose,
   launchEnv,
 } from "./accounts.mjs";
 import { accountSpend, recordAccountCost, readBilling } from "./account-billing.mjs";
@@ -58,7 +59,7 @@ test("API costs persist once per producing call and respect the account's start 
   );
   const stored = readAccounts(root);
   assert.equal(accountSpend(root, stored.accounts[0]).usedUsd, 37.2);
-  assert.equal(accountSpend(root, stored.accounts[1]).limitUsd, 500);
+  assert.equal(accountSpend(root, stored.accounts[1]).limitUsd, null);
   assert.equal(accountSpend(root, stored.accounts[1]).usedUsd, 5);
 });
 test("local, remote and ask limit records never limit API accounts", async (t) => {
@@ -109,6 +110,8 @@ test("95% switches all pooled Claude sessions after busy turns finish and notifi
     time = Date.now();
   const a = await addAccount(root, { provider: "claude", name: "personal-workspace-api" }, time);
   const b = await addAccount(root, { provider: "claude", name: "work-workspace-api" }, time);
+  await setAccount(root, a.id, { budget: { limitUsd: 200, startAt: a.createdAt } });
+  await setAccount(root, b.id, { budget: { limitUsd: 500, startAt: b.createdAt } });
   const ids = [randomUUID(), randomUUID()];
   for (const id of ids) await assign(root, id, "claude", time);
   await update(root, (s) => {
@@ -184,6 +187,9 @@ test("credit errors persist secret-free ask.billing_error and cause failover bel
   await createAccountBudgets({ store: { get: () => null } }, root).check();
   assert.equal(readAccounts(root).defaults.claude, b.id);
   assert.equal(readAccounts(root).accounts[0].limitedUntil, null);
+  assert.equal(readAccounts(root).budgetActions[`${a.id}:${a.createdAt}`].cause, "billing-error");
+  await setAccount(root, b.id, { enabled: false });
+  assert.equal(choose(readAccounts(root), "claude"), null);
   if (["darwin", "win32"].includes(process.platform)) {
     assert.equal(launchEnv("claude", a, { token, root }).ANTHROPIC_API_KEY, "");
     assert.equal(JSON.stringify(launchEnv("claude", a, { token, root })).includes(token), false);
@@ -198,6 +204,7 @@ test("a persisted billing update triggers budget failover without a polling moni
   const root = world(t);
   const a = await addAccount(root, { provider: "claude", name: "personal-workspace-api" });
   const b = await addAccount(root, { provider: "claude", name: "work-workspace-api" });
+  await setAccount(root, a.id, { budget: { limitUsd: 200, startAt: a.createdAt } });
   let notice;
   const notified = new Promise((resolve) => {
     notice = resolve;
@@ -309,7 +316,7 @@ test("daily cap survives restart, resets at UTC midnight, and leaves subscriptio
   assert.doesNotThrow(() => assertApiSpendAllowed(root, input, now));
 });
 
-test("account and session caps refuse at the exact boundary", async (t) => {
+test("explicit account caps refuse at the exact boundary", async (t) => {
   const { assertApiSpendAllowed } = await import("./account-billing.mjs");
   const root = world(t);
   const a = await addAccount(root, { provider: "claude", name: "API" });
@@ -318,16 +325,6 @@ test("account and session caps refuse at the exact boundary", async (t) => {
     dailyLimitUsd: 100,
     budget: { limitUsd: 20, startAt: "2026-10-01T00:00:00Z" },
   });
-  const input = {
-    provider: "claude",
-    accountId: a.id,
-    labels: { "fulcra.session-cost-cap-usd": "15" },
-    sessionCost: { totalUsd: 15 },
-  };
-  assert.throws(() => assertApiSpendAllowed(root, input), /session cost cap reached/);
-  assert.doesNotThrow(() =>
-    assertApiSpendAllowed(root, { ...input, sessionCost: { totalUsd: 14.99 } }),
-  );
   await recordAccountCost(root, { id: "cap", accountId: a.id, costUsd: 20 });
   assert.throws(
     () => assertApiSpendAllowed(root, { provider: "claude", accountId: a.id }),
@@ -339,7 +336,7 @@ test("account and session caps refuse at the exact boundary", async (t) => {
 test("50% and 80% warnings carry affected sessions and remain once after restart", async (t) => {
   const root = world(t);
   const a = await addAccount(root, { provider: "claude", name: "API" });
-  await setAccount(root, a.id, { credentialKind: "api-key" });
+  await setAccount(root, a.id, { credentialKind: "api-key", dailyLimitUsd: 40 });
   const id = randomUUID();
   await assign(root, id, "claude");
   const notices = [];
@@ -411,8 +408,6 @@ test("removed subscription launch accounts stay unaffected; missing API accounts
   const input = {
     provider: "claude",
     accountId,
-    labels: { "fulcra.session-cost-cap-usd": "1" },
-    sessionCost: { totalUsd: 2 },
   };
   assert.doesNotThrow(() => assertApiSpendAllowed(root, { ...input, accountKind: "subscription" }));
   assert.throws(
@@ -522,4 +517,76 @@ test("retention drops old checkpointed turns but preserves live legacy and curre
       .amountUsd,
     4,
   );
+});
+
+test("fresh API accounts have no caps or spend warnings, including legacy account names", async (t) => {
+  const { dailySpend, assertApiSpendAllowed } = await import("./account-billing.mjs");
+  const { publicView } = await import("./accounts.mjs");
+  const root = world(t);
+  const notices = [];
+  for (const name of ["personal-workspace-api", "work-workspace-api", "API"]) {
+    const a = await addAccount(root, { provider: "claude", name });
+    await setAccount(root, a.id, { credentialKind: "api-key" });
+    const account = readAccounts(root).accounts.find((row) => row.id === a.id);
+    assert.equal(account.budget, undefined);
+    assert.equal(account.dailyLimitUsd, undefined);
+    await recordAccountCost(root, { id: name, accountId: a.id, costUsd: 1000 });
+    assert.deepEqual(accountSpend(root, account), {
+      startAt: a.createdAt,
+      limitUsd: null,
+      usedUsd: 1000,
+    });
+    assert.equal(dailySpend(root, account).limitUsd, null);
+    assert.doesNotThrow(() => assertApiSpendAllowed(root, { provider: "claude", accountId: a.id }));
+  }
+  await createAccountBudgets(
+    {
+      wakes: {
+        accountBudget: (...args) => {
+          notices.push(args);
+          return 1;
+        },
+      },
+    },
+    root,
+  ).check();
+  assert.deepEqual(notices, []);
+  for (const account of publicView(readAccounts(root)).accounts) {
+    assert.equal(account.dailyLimitUsd, null);
+    assert.equal(account.budget.limitUsd, null);
+  }
+});
+
+test("owner can clear explicit daily and account caps without clearing cost totals", async (t) => {
+  const { assertApiSpendAllowed } = await import("./account-billing.mjs");
+  const root = world(t);
+  const a = await addAccount(root, { provider: "claude", name: "API" });
+  await setAccount(root, a.id, {
+    credentialKind: "api-key",
+    dailyLimitUsd: 40,
+    budget: { limitUsd: 20, startAt: a.createdAt },
+  });
+  await recordAccountCost(root, { id: "large", accountId: a.id, costUsd: 1000 });
+  const input = { provider: "claude", accountId: a.id };
+  assert.throws(() => assertApiSpendAllowed(root, input), /account cost cap/);
+  await setAccount(root, a.id, { budget: { limitUsd: null, startAt: a.createdAt } });
+  assert.throws(() => assertApiSpendAllowed(root, input), /daily UTC cost cap/);
+  await setAccount(root, a.id, { dailyLimitUsd: null });
+  assert.doesNotThrow(() => assertApiSpendAllowed(root, input));
+  assert.equal(accountSpend(root, readAccounts(root).accounts[0]).usedUsd, 1000);
+});
+
+test("old cap actions cannot hold an uncapped API account or a cleared owner budget", async (t) => {
+  const root = world(t);
+  const a = await addAccount(root, { provider: "claude", name: "personal-workspace-api" });
+  await update(root, (state) => {
+    state.budgetActions = {
+      [`${a.id}:${a.createdAt}`]: { accountId: a.id, targetId: randomUUID() },
+    };
+  });
+  assert.equal(choose(readAccounts(root), "claude").id, a.id);
+  await setAccount(root, a.id, { budget: { limitUsd: 20, startAt: a.createdAt } });
+  assert.equal(choose(readAccounts(root), "claude"), null);
+  await setAccount(root, a.id, { budget: { limitUsd: null, startAt: a.createdAt } });
+  assert.equal(choose(readAccounts(root), "claude").id, a.id);
 });

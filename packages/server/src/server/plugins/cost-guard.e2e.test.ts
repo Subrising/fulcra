@@ -22,8 +22,6 @@ async function fixture() {
   for (const account of [a, b])
     await setAccount(pool, account.id, {
       credentialKind: "api-key",
-      budget: { limitUsd: 200, startAt: "2026-10-01T00:00:00Z" },
-      dailyLimitUsd: 200,
     });
   let account = a.id;
   let kind: "api-key" | "subscription" = "api-key";
@@ -105,6 +103,9 @@ export default function(server) {
     get client() {
       return client;
     },
+    get storage() {
+      return daemon.daemon.agentStorage;
+    },
     get manager() {
       return daemon.daemon.agentManager;
     },
@@ -163,8 +164,10 @@ test("restart, reload and account switch count new turns with reused provider ID
     });
     expect(Object.keys(readBilling(f.pool).calls)).toHaveLength(4);
     await f.client.updateAgent(agent.id, { labels: { "fulcra.session-cost-cap-usd": "14" } });
-    await expect(f.client.sendMessage(agent.id, "Capped turn")).rejects.toThrow(/session cost cap/);
-    expect(f.started).toBe(4);
+    expect((await f.turn(agent.id, 1000)).sessionCost?.totalUsd).toBe(1014);
+    await f.restart();
+    expect((await f.turn(agent.id, 1)).sessionCost?.totalUsd).toBe(1015);
+    expect(f.started).toBe(6);
   } finally {
     await f.close();
   }
@@ -215,6 +218,30 @@ test("disabled guard refuses API turns while subscription turns still run", asyn
     const sub = await f.create();
     expect((await f.turn(sub.id, 1)).status).toBe("idle");
     expect(f.started).toBe(2);
+  } finally {
+    await f.close();
+  }
+}, 60_000);
+
+test("worker finish data retains total spend including the last turn across daemon restart", async () => {
+  const f = await fixture();
+  try {
+    const parent = await f.create();
+    const child = await f.create();
+    await f.turn(child.id, 9.65);
+    f.switchAccount();
+    await f.manager.reloadAgentSession(child.id);
+    await f.client.updateAgent(child.id, { labels: { "paseo.parent-agent-id": parent.id } });
+    await f.storage.armFinishNotice(f.manager.getAgent(child.id)!, parent.id, "report-up");
+    await f.turn(child.id, 7.87);
+    const notice = await f.storage.getFinishNotice(child.id);
+    expect(notice?.sessionCost).toMatchObject({
+      totalUsd: 17.52,
+      lastTurnUsd: 7.87,
+      recordedTurns: 2,
+    });
+    await f.restart();
+    expect((await f.storage.getFinishNotice(child.id))?.sessionCost).toEqual(notice?.sessionCost);
   } finally {
     await f.close();
   }

@@ -1148,13 +1148,26 @@ test("native collector overflow is metadata-only in the same bounded membership 
       ...f.events[0]!,
       id: randomUUID(),
       kind: index === 8 ? ("blocked" as const) : ("ended" as const),
+      totalSpendUsd: index + 0.25,
     }));
     for (const event of events)
       await f.receipts.collectReport(f.registry.captureReportBatch([event]), make, ready);
     expect(await f.request()).toMatchObject({
       metadataCount: 9,
       overflowCount: 1,
-      overflow: [{ count: 1, counts: { blocked: 1 }, providerAccepted: false }],
+      events: [{ totalSpendUsd: 0.25 }],
+      overflow: [
+        {
+          count: 1,
+          counts: { blocked: 1 },
+          providerAccepted: false,
+          totalSpendUsdByEvent: { [events[8]!.id]: 8.25 },
+        },
+      ],
+    });
+    const recovered = new MessageReceipts(path.join(f.directory, "receipts"));
+    expect(await recovered.reportInbox(f.registry.readerForNativeIdentity(f.prime))).toMatchObject({
+      overflow: [{ totalSpendUsdByEvent: { [events[8]!.id]: 8.25 } }],
     });
     await vi.advanceTimersByTimeAsync(2000);
     await f.receipts.maintenance(() => {});
@@ -1887,5 +1900,37 @@ test("a late provider reply preserves the report expiry resolution", async () =>
   } finally {
     accept("cleanup");
     await f.cleanup();
+  }
+});
+
+test("native worker finish data retains total spend after receipt restart", async () => {
+  const f = await fixture();
+  try {
+    const [batch] = f.registry.captureLifecycleReports(
+      f.child,
+      "ended",
+      "fixture-cost-turn",
+      Date.now(),
+      17.52,
+    );
+    const data = requireNativeReportBatch(batch!).data;
+    await f.receipts.enqueue({
+      agentId: f.prime.agentId,
+      messageId: randomUUID(),
+      request: "Native finish metadata available.",
+      principal: { parent: data.parent, parentEpoch: data.parentEpoch },
+      boot: f.prime.boot,
+      attachmentBytes: 0,
+      authorize: () => {
+        requireNativeReportBatch(batch!);
+      },
+      reportBatch: batch!,
+    });
+    const recovered = new MessageReceipts(path.join(f.directory, "receipts"));
+    expect(await recovered.reportInbox(f.registry.readerForNativeIdentity(f.prime))).toMatchObject({
+      events: [{ kind: "ended", totalSpendUsd: 17.52 }],
+    });
+  } finally {
+    await rm(f.directory, { recursive: true, force: true });
   }
 });

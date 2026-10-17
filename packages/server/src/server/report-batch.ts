@@ -20,6 +20,7 @@ export const ReportMemberSchema = z
       .optional(),
     kind: z.enum(["ended", "needs-you", "blocked", "usage-limit", "handoff"]),
     at: z.number().int().nonnegative(),
+    totalSpendUsd: z.number().finite().nonnegative().optional(),
   })
   .strict();
 const ReportOverflowMemberSchema = z.union([
@@ -30,6 +31,7 @@ const ReportOverflowMemberSchema = z.union([
       id: z.string().uuid(),
       kind: ReportMemberSchema.shape.kind,
       at: z.number().int().nonnegative(),
+      totalSpendUsd: z.number().finite().nonnegative().optional(),
     })
     .strict(),
 ]);
@@ -147,7 +149,10 @@ export function mergeNativeReportBatches(
                       }),
                   );
                 if (memberIndex < 0) return member;
-                return { memberIndex, id: member.id, kind: member.kind, at: member.at };
+                return Object.assign(
+                  { memberIndex, id: member.id, kind: member.kind, at: member.at },
+                  member.totalSpendUsd !== undefined ? { totalSpendUsd: member.totalSpendUsd } : {},
+                );
               }),
           }
         : {}),
@@ -167,7 +172,12 @@ export function reportMembers(data: ReportBatchData): ReportMember[] {
       if (!("memberIndex" in item)) return item;
       const base = data.members[item.memberIndex];
       if (!base) throw new Error("Native report overflow source linkage invalid");
-      return Object.assign({}, base, { id: item.id, kind: item.kind, at: item.at });
+      return Object.assign({}, base, {
+        id: item.id,
+        kind: item.kind,
+        at: item.at,
+        totalSpendUsd: item.totalSpendUsd,
+      });
     }),
   ];
 }

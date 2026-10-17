@@ -176,7 +176,7 @@ export function dailySpend(root, account, billing = readBilling(root), now = Dat
         : sum,
     0,
   );
-  return { startAt: start, limitUsd: account.dailyLimitUsd ?? 40, usedUsd };
+  return { startAt: start, limitUsd: account.dailyLimitUsd ?? null, usedUsd };
 }
 
 /** The call site supplies the launch account, never a mutable current assignment. */
@@ -198,16 +198,6 @@ export function assertApiSpendAllowed(root, input, now = Date.now()) {
     if (spend.limitUsd !== null && spend.usedUsd >= spend.limitUsd)
       throw Error(
         `API ${scope} cost cap reached ($${spend.usedUsd.toFixed(2)} / $${spend.limitUsd.toFixed(2)}). No turn started.`,
-      );
-  }
-  const raw = input.labels?.["fulcra.session-cost-cap-usd"];
-  if (raw !== undefined) {
-    const cap = Number(raw);
-    if (!Number.isFinite(cap) || cap <= 0)
-      throw Error("Invalid session cost cap. No turn started.");
-    if ((input.sessionCost?.totalUsd ?? 0) >= cap)
-      throw Error(
-        `API session cost cap reached ($${input.sessionCost.totalUsd.toFixed(2)} / $${cap.toFixed(2)}). No turn started.`,
       );
   }
 }

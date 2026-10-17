@@ -38,6 +38,7 @@ interface FakeChat {
   lifecycle?: string;
   archivedAt?: string;
   backgroundWork?: { count: number };
+  costRecords?: import("./agent/session-cost.js").SessionCostRecords;
 }
 
 const LEAD = "11111111-1111-4111-8111-111111111111";
@@ -47,6 +48,7 @@ function fixture(
   chats: FakeChat[],
   options: {
     enabled?: boolean;
+    routing?: ReportUpDeps["routing"];
     deliver?: (leadId: string, prompt: string) => Promise<void>;
     /** The permission, limit and idle-lead notices; default on, as the service does. */
     otherEnabled?: boolean;
@@ -81,6 +83,8 @@ function fixture(
   } as unknown as AgentManager;
   const storage = {
     get: async (id: string) => byId.get(id) ?? null,
+    getCached: (id: string) => byId.get(id) ?? null,
+    getFinishNotice: async () => null,
     list: async () => [...byId.values()],
   } as unknown as AgentStorage;
   let enabled = options.enabled ?? true;
@@ -89,6 +93,7 @@ function fixture(
   manager.nativeReportOwnsFinish = () => nativeOwnsFinish;
   const service = new ReportUpService({
     remoteNotice: options.remoteNotice,
+    routing: options.routing,
     agentManager: manager,
     agentStorage: storage,
     isEnabled: () => enabled,
@@ -2638,3 +2643,65 @@ test("worker completion and ledger changes wake idle leads through the isolated 
     rmSync(dir, { recursive: true, force: true });
   }
 }, 30000);
+
+test("worker finish notices include total session spend across turns and accounts", async () => {
+  const f = fixture([
+    { id: LEAD, title: "Lead", labels: {} },
+    {
+      id: WORKER,
+      title: "Worker",
+      labels: { [REPORTS_TO_LABEL]: LEAD },
+      lastMessage: "Done",
+      costRecords: {
+        cursors: {},
+        turns: {
+          first: { accountId: "account-a", amountUsd: 9.65, at: "2026-10-17T01:00:00Z" },
+          second: { accountId: "account-b", amountUsd: 7.87, at: "2026-10-17T02:00:00Z" },
+        },
+      },
+    },
+  ]);
+  try {
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.prompt).toContain("Session total spend: US$17.520000.");
+  } finally {
+    f.service.stop();
+  }
+});
+
+test("ledger-routed worker results include spend without an owned finish notice", async () => {
+  const routing = {
+    enabledForLead: () => false,
+    observeEnd: async () => ({
+      fresh: true,
+      result: { state: "DONE", line: "DONE fixture result" },
+    }),
+  } as unknown as NonNullable<ReportUpDeps["routing"]>;
+  const f = fixture(
+    [
+      { id: LEAD, title: "Lead", labels: {} },
+      {
+        id: WORKER,
+        title: "Worker",
+        labels: { [REPORTS_TO_LABEL]: LEAD },
+        lastMessage: "DONE fixture result",
+        costRecords: {
+          cursors: {},
+          turns: { final: { accountId: null, amountUsd: 9.65, at: "2026-10-17T01:00:00Z" } },
+        },
+      },
+    ],
+    { routing },
+  );
+  try {
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.prompt).toContain("DONE fixture result");
+    expect(f.delivered[0]!.prompt).toContain("Session total spend: US$9.650000.");
+  } finally {
+    f.service.stop();
+  }
+});

@@ -39,15 +39,13 @@ export function dailySpend(
   account: Account,
   billing?: ReturnType<typeof readBilling>,
   now?: number,
-): { startAt: string; limitUsd: number; usedUsd: number } | null;
+): { startAt: string; limitUsd: number | null; usedUsd: number } | null;
 export function assertApiSpendAllowed(
   root: string,
   input: {
     provider: string;
     accountId: string | null;
     accountKind?: "api-key" | "subscription";
-    labels?: Record<string, string>;
-    sessionCost?: { totalUsd: number };
   },
   now?: number,
 ): void;

@@ -1402,6 +1402,7 @@ export class NativeReportRegistry {
     kind: ReportMember["kind"],
     lifecycleId: string,
     at: number,
+    totalSpendUsd?: number,
   ) {
     if (!this.state || this.unhealthy || this.updating || !lifecycleId || lifecycleId.length > 200)
       throw new Error("Native lifecycle report registration unavailable");
@@ -1421,7 +1422,8 @@ export class NativeReportRegistry {
         .digest("hex");
       const id = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
       const origin = { lifecycleId };
-      const detail = this.captureReportBatch([{ id, source, scope, kind, at, origin }]);
+      const spend = totalSpendUsd === undefined ? {} : { totalSpendUsd };
+      const detail = this.captureReportBatch([{ id, source, scope, kind, at, origin, ...spend }]);
       const owner = this.projectState(this.state!, scope.projectId);
       if (!owner || owner.prime.agentId === sourceRegistration.parent.agentId) return [detail];
       const route = { ownerEpoch: owner.epoch };
@@ -1434,6 +1436,7 @@ export class NativeReportRegistry {
         sourceEpoch: sourceRegistration.epoch,
         origin,
         route,
+        ...spend,
       };
       const captured = structuredClone({ owner, parent: this.requireParent(source, scope) });
       const guard = () => {
@@ -1495,6 +1498,7 @@ export class NativeReportRegistry {
               sourceEpoch: links[index]!.sourceEpoch,
             },
             event.origin ? { origin: event.origin } : {},
+            event.totalSpendUsd === undefined ? {} : { totalSpendUsd: event.totalSpendUsd },
           ),
         ),
       },

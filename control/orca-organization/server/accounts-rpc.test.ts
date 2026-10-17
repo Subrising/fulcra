@@ -980,3 +980,29 @@ test(
     assert.equal(readAccounts(root).accounts[0].localRevoked, true);
   },
 );
+
+test("only the owner can set and clear optional API spend caps", async (t) => {
+  const root = scratch();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const a = await addAccount(root, { provider: "claude", name: "Fixture API" });
+  await setAccount(root, a.id, { credentialKind: "api-key" });
+  const { accountUpdateRpc, accountsRpc } = await import("../shared/accounts");
+  const initial = await handlers(root).read(paseo);
+  assert.equal(accountsRpc.output.parse(initial).accounts[0]?.dailyLimitUsd, null);
+  const patch = accountUpdateRpc.input.parse({
+    id: a.id,
+    dailyLimitUsd: 40,
+    budget: { limitUsd: 200, startAt: a.createdAt },
+  });
+  assert.equal((await mover(root, DEVICE([]))(patch)).ok, false);
+  assert.equal(readAccounts(root).accounts[0].dailyLimitUsd, undefined);
+  assert.equal((await mover(root)(patch)).ok, true);
+  const clear = accountUpdateRpc.input.parse({
+    id: a.id,
+    dailyLimitUsd: null,
+    budget: { limitUsd: null, startAt: a.createdAt },
+  });
+  assert.equal((await mover(root)(clear)).ok, true);
+  assert.equal(readAccounts(root).accounts[0].dailyLimitUsd, null);
+  assert.equal(readAccounts(root).accounts[0].budget?.limitUsd, null);
+});

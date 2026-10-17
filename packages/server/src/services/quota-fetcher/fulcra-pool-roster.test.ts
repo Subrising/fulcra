@@ -397,3 +397,46 @@ it("native pool usage crosses the plugin subprocess and WebSocket with one bound
     await rm(root, { recursive: true, force: true });
   }
 }, 60000);
+
+it("API usage reports retain spend without default limits, and show explicit limits", async () => {
+  const createdAt = new Date().toISOString();
+  const root = home([
+    acct(WORK, "claude", "personal-workspace-api", { credentialKind: "api-key", createdAt }),
+  ]);
+  const { recordAccountCost } =
+    await import("../../../../../control/orca-organization/server/account-billing.mjs");
+  const { setAccount } =
+    await import("../../../../../control/orca-organization/server/accounts.mjs");
+  await recordAccountCost(root, { id: "fixture", accountId: WORK, costUsd: 1000 });
+  const source = createPoolUsage(() => root);
+  const report = await source.fetch({ accountId: WORK, provider: "claude" });
+  expect(report.status).toBe("available");
+  if (report.status !== "available") throw Error("Expected available API costs");
+  expect(report.balances).toEqual([
+    expect.objectContaining({
+      id: "api-daily-budget",
+      used: 1000,
+      limit: null,
+      remaining: null,
+      tone: "default",
+    }),
+    expect.objectContaining({
+      id: "api-budget",
+      used: 1000,
+      limit: null,
+      remaining: null,
+      tone: "default",
+    }),
+  ]);
+  await setAccount(root, WORK, {
+    dailyLimitUsd: 2000,
+    budget: { limitUsd: 2000, startAt: createdAt },
+  });
+  const capped = await source.fetch({ accountId: WORK, provider: "claude" });
+  expect(capped.status).toBe("available");
+  if (capped.status !== "available") throw Error("Expected available API costs");
+  expect(capped.balances).toEqual([
+    expect.objectContaining({ used: 1000, limit: 2000, remaining: 1000 }),
+    expect.objectContaining({ used: 1000, limit: 2000, remaining: 1000 }),
+  ]);
+});

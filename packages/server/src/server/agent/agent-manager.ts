@@ -1869,6 +1869,7 @@ export class AgentManager {
         kind,
         lifecycleId,
         Date.now(),
+        finish ? sessionCost(agent.costRecords)?.totalUsd : undefined,
       );
       this.dispatchObservedReportBatches(agent.id, kind, lifecycleId, finish, batches);
     } catch {
@@ -2395,34 +2396,10 @@ export class AgentManager {
     });
   }
 
-  private assertSessionCostCapWrite(
-    patch: AgentLabelPatch | undefined,
-    labels: Record<string, string> | undefined,
-  ): void {
-    const capKey = "fulcra.session-cost-cap-usd";
-    if (patch && Object.hasOwn(patch, capKey) && patch[capKey] !== labels?.[capKey]) {
-      const caller = this.agentCallers.getStore();
-      caller?.validate?.();
-      const source = this.trustedPlugins.currentInputSource();
-      const value = patch[capKey];
-      const automated = caller?.agentId || source === "agent" || source === "plugin";
-      if (
-        automated &&
-        (value === null ||
-          (labels?.[capKey] !== undefined && Number(value) > Number(labels[capKey])))
-      )
-        throw new Error("Only the owner connection can raise or remove a session cost cap.");
-      if (value !== null && (!Number.isFinite(Number(value)) || Number(value) <= 0))
-        throw new Error("Session cost cap must be a positive USD value.");
-    }
-  }
-
   private assertArchiveLeadLabelWrite(
     patch: AgentLabelPatch | undefined,
     labels: Record<string, string> | undefined,
   ): void {
-    this.assertSessionCostCapWrite(patch, labels);
-
     if (
       !patch ||
       !isArchiveLead({ labels: labels ?? {} }) ||
@@ -8360,7 +8337,9 @@ export class AgentManager {
       return null;
     }
     if (!notice || notice.status !== "armed") return null;
-    return this.registry.recordFinishNotice(agent.id, turnId, reason).then(() => undefined);
+    return this.registry
+      .recordFinishNotice(agent.id, turnId, reason, sessionCost(agent.costRecords))
+      .then(() => undefined);
   }
 
   private onCompletedWithOwnedFinish(params: {
