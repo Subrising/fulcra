@@ -104,7 +104,7 @@ async function fixture() {
             payload: promptPayload(
               text,
               { clientMessageId: messageId, clearPendingPermissions: true },
-              { unarchive: true, replaceRunning: true, activeTurnBehavior: "interrupt" },
+              { unarchive: false, replaceRunning: true, activeTurnBehavior: "interrupt" },
             ),
           }),
         )

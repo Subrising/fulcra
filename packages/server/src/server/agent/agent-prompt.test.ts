@@ -15,6 +15,7 @@ import { AgentManager } from "./agent-manager.js";
 import { AgentStorage } from "./agent-storage.js";
 import {
   startAgentRun,
+  sendPromptToAgent,
   SteerUnavailableError,
   type AgentRunController,
   formatSystemNotificationPrompt,
@@ -1089,3 +1090,40 @@ test("legacy native finish notifications include cumulative spend before a long 
   expect(prompt).toContain("Session total spend: US$17.520000.");
   expect(prompt.indexOf("Session total spend")).toBeLessThan(prompt.indexOf("Fixture result"));
 });
+
+test.each([undefined, false, true])(
+  "a prompt refuses archive with legacy unarchive=%s",
+  async (unarchive) => {
+    const root = mkdtempSync(join(tmpdir(), "send-keeps-archive-"));
+    const storage = new AgentStorage(join(root, "agents"), createTestLogger());
+    await storage.initialize();
+    const { createTestAgentClients } = await import("../test-utils/fake-agent-client.js");
+    const manager = new AgentManager({
+      registry: storage,
+      logger: createTestLogger(),
+      clients: createTestAgentClients(),
+    });
+    try {
+      const agent = await manager.createAgent({ provider: "codex", cwd: root }, undefined, {
+        workspaceId: undefined,
+      });
+      await manager.archiveAgent(agent.id);
+      const before = await storage.get(agent.id);
+      await expect(
+        sendPromptToAgent({
+          agentManager: manager,
+          agentStorage: storage,
+          agentId: agent.id,
+          prompt: "Do not restore",
+          unarchive,
+          logger: createTestLogger(),
+        }),
+      ).rejects.toThrow("The receiver is archived. Restore it first.");
+      expect(await storage.get(agent.id)).toEqual(before);
+      expect(manager.getAgent(agent.id)).toBeNull();
+    } finally {
+      await manager.flush();
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);

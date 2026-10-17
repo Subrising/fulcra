@@ -5401,7 +5401,10 @@ test("refresh_agent_request leaves workspace archival independent when its direc
   expect(workspaces.get(workspaceId)?.archivedAt).toBe("2026-03-10T00:00:00.000Z");
   expect(projects.get(cwd)?.archivedAt).toBe("2026-03-10T00:00:00.000Z");
   expect(unarchivedWorkspaceIds).toEqual([]);
-  expect(findByType(emitted, "rpc_error")).toBeUndefined();
+  expect(findByType(emitted, "rpc_error")?.payload).toMatchObject({
+    code: "agent_refresh_failed",
+    error: expect.stringMatching(/archived/i),
+  });
 });
 
 test("refresh_agent_request leaves workspace archival independent when its directory is missing", async () => {
@@ -5592,7 +5595,10 @@ test("refresh_agent_request does not recreate or unarchive a deleted worktree", 
   expect(workspaces.get(workspaceId)?.archivedAt).toBe("2026-03-10T00:00:00.000Z");
   expect(workspaces.get(workspaceId)?.workspaceId).toBe(workspaceId);
   expect(unarchivedWorkspaceIds).toEqual([]);
-  expect(findByType(emitted, "rpc_error")).toBeUndefined();
+  expect(findByType(emitted, "rpc_error")?.payload).toMatchObject({
+    code: "agent_refresh_failed",
+    error: expect.stringMatching(/archived/i),
+  });
 });
 
 test("refresh_agent_request does not inspect an archived worktree branch", async () => {
@@ -5683,7 +5689,10 @@ test("refresh_agent_request does not inspect an archived worktree branch", async
   });
 
   expect(workspaces.get(workspaceId)?.archivedAt).toBe("2026-03-10T00:00:00.000Z");
-  expect(findByType(emitted, "rpc_error")).toBeUndefined();
+  expect(findByType(emitted, "rpc_error")?.payload).toMatchObject({
+    code: "agent_refresh_failed",
+    error: expect.stringMatching(/archived/i),
+  });
 });
 
 function createRecreateWorktreeRepo(): { tempDir: string; repoDir: string } {
@@ -5702,7 +5711,7 @@ function createRecreateWorktreeRepo(): { tempDir: string; repoDir: string } {
   return { tempDir, repoDir };
 }
 
-test("legacy refresh_agent_request restores a real deleted worktree", async () => {
+test("legacy refresh_agent_request preserves an archived worktree and project", async () => {
   const { tempDir, repoDir } = createRecreateWorktreeRepo();
   const branch = "feature/keep";
   execFileSync("git", ["branch", branch], { cwd: repoDir, stdio: "pipe" });
@@ -5812,11 +5821,15 @@ test("legacy refresh_agent_request restores a real deleted worktree", async () =
     requestId: "req-refresh-real-recreate",
   });
 
-  expect(findByType(emitted, "rpc_error")).toBeUndefined();
-  expect(existsSync(worktreePath)).toBe(true);
+  expect(findByType(emitted, "rpc_error")?.payload).toMatchObject({
+    code: "agent_refresh_failed",
+    error: expect.stringMatching(/archived/i),
+  });
+  expect(existsSync(worktreePath)).toBe(false);
   expect(workspaces.get(workspaceId)?.workspaceId).toBe(workspaceId);
   expect(workspaces.get(workspaceId)?.cwd).toBe(worktreePath);
-  expect(workspaces.get(workspaceId)?.archivedAt).toBeNull();
+  expect(workspaces.get(workspaceId)?.archivedAt).toBe("2026-03-10T00:00:00.000Z");
+  expect(projects.get(projectId)?.archivedAt).toBe("2026-03-10T00:00:00.000Z");
 
   rmSync(tempDir, { recursive: true, force: true });
 });

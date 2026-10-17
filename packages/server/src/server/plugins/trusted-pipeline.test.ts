@@ -110,7 +110,7 @@ test.each([undefined, "steer"] as const)(
       "approved",
       { clientMessageId: "bound" },
       {
-        unarchive: true,
+        unarchive: false,
         replaceRunning: true,
         activeTurnBehavior: behavior,
         clearPendingPermissions: false,
@@ -152,7 +152,7 @@ test.each(["synchronous", "provider"] as const)(
     const payload = promptPayload(
       "retry",
       { clientMessageId: "bound" },
-      { unarchive: true, replaceRunning: true, clearPendingPermissions: false },
+      { unarchive: false, replaceRunning: true, clearPendingPermissions: false },
     );
     await f.send("retry", f.token(payload));
     await vi.waitFor(() =>

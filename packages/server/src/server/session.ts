@@ -390,7 +390,6 @@ type ProviderSubagentManagerEvent = Extract<
 const REVIEW_EXPLAIN_MODEL = "claude-haiku-4-5-20251001";
 const LEGACY_PROVIDER_IDS = new Set(["claude", "codex", "opencode"]);
 const MIN_VERSION_ALL_PROVIDERS = "0.1.45";
-const MIN_VERSION_EXPLICIT_WORKSPACE_RECOVERY = "0.1.105";
 const TIMELINE_TURN_PAGE_DEFAULT = 100;
 const TIMELINE_TURN_PAGE_MAX = 500;
 function errorToFriendlyMessage(error: unknown): string {
@@ -416,12 +415,6 @@ function isAppVersionAtLeast(appVersion: string | null, minVersion: string): boo
 
 function clientSupportsAllProviders(appVersion: string | null): boolean {
   return isAppVersionAtLeast(appVersion, MIN_VERSION_ALL_PROVIDERS);
-}
-
-function clientUsesLegacyWorkspaceRestore(appVersion: string | null): boolean {
-  return (
-    appVersion !== null && !isAppVersionAtLeast(appVersion, MIN_VERSION_EXPLICIT_WORKSPACE_RECOVERY)
-  );
 }
 
 type DeleteFencedAgentStorage = AgentStorage & {
@@ -5797,30 +5790,24 @@ export class Session {
     try {
       const snapshot = await this.agentManager.withPersistenceRestore(handle, async () => {
         const matched = await this.findAgentByHandle(handle);
-        if (msg.confirmed && !this.supports(CLIENT_CAPS.archiveConfirmation))
-          throw new Error("Protected restore requires confirmation from the app.");
-        const restore = async () => {
-          const effectiveOverrides = matched
-            ? { ...buildConfigOverrides(matched.record), ...overrides }
-            : overrides;
-          const restoredSnapshot = matched
-            ? await this.agentManager.withUnarchivedSnapshot(matched.record.id, () =>
-                ensureAgentLoaded(matched.record.id, {
-                  agentManager: this.agentManager,
-                  agentStorage: this.agentStorage,
-                  logger: this.sessionLogger,
-                  configOverrides: effectiveOverrides,
-                }),
-              )
-            : await this.agentManager.resumeAgentFromPersistence(handle, effectiveOverrides);
-          await unarchiveAgentState(this.agentStorage, this.agentManager, restoredSnapshot.id);
-          await this.agentManager.hydrateTimelineFromProvider(restoredSnapshot.id);
-          await this.agentUpdates.forwardLiveAgent(restoredSnapshot);
-          return restoredSnapshot;
-        };
-        return matched && msg.confirmed
-          ? this.agentManager.withRestoreConfirmation(matched.record.id, restore)
-          : restore();
+        if (matched?.record.archivedAt)
+          throw new Error(
+            "Agent is archived. Use fulcra agent reload <id> for a worker or Unarchive in the app.",
+          );
+        const effectiveOverrides = matched
+          ? { ...buildConfigOverrides(matched.record), ...overrides }
+          : overrides;
+        const resumed = matched
+          ? await ensureUnarchivedAgentLoaded(matched.record.id, {
+              agentManager: this.agentManager,
+              agentStorage: this.agentStorage,
+              logger: this.sessionLogger,
+              configOverrides: effectiveOverrides,
+            })
+          : await this.agentManager.resumeAgentFromPersistence(handle, effectiveOverrides);
+        await this.agentManager.hydrateTimelineFromProvider(resumed.id);
+        await this.agentUpdates.forwardLiveAgent(resumed);
+        return resumed;
       });
       const timelineSize = this.agentManager.getTimeline(snapshot.id).length;
       if (requestId) {
@@ -6002,8 +5989,13 @@ export class Session {
     this.sessionLogger.info({ agentId }, `Refreshing agent ${agentId} from persistence`);
 
     try {
-      const admissionAgent = this.agentManager.getAgent(agentId) ??
-        (await this.agentStorage.get(agentId)) ?? { id: agentId };
+      const admissionAgent = (await this.agentStorage.get(agentId)) ??
+        this.agentManager.getAgent(agentId) ?? { id: agentId };
+      // Reload is maintenance. Restore needs explicit intent and the archive admission.
+      if (!msg.restore && "archivedAt" in admissionAgent && admissionAgent.archivedAt)
+        throw new Error(
+          "Agent is archived. Use fulcra agent reload <id> for a worker. Update the app to use Unarchive.",
+        );
       const operationHandle = this.agentManager.trustedPlugins.input(
         admissionAgent,
         "configure",
@@ -6011,29 +6003,30 @@ export class Session {
         () => this.agentManager.trustedPlugins.captureOperation(),
         commandPayload("reload", { options: { rehydrateFromDisk: true } }),
       );
-      this.agentManager.trustedPlugins.input(
-        admissionAgent,
-        "unarchive",
-        undefined,
-        () => undefined,
-        commandPayload("unarchive"),
-        operationHandle,
-      );
-      if (msg.confirmed && !this.supports(CLIENT_CAPS.archiveConfirmation))
-        throw new Error("Protected restore requires confirmation from the app.");
-      const restore = async () => {
-        await this.agentManager.preflightRestore(agentId);
-        await this.restoreOwningWorkspaceForLegacyAgentRefresh(agentId);
-        await unarchiveAgentState(
-          this.agentStorage,
-          this.agentManager,
-          agentId,
+      if (msg.restore) {
+        this.agentManager.trustedPlugins.input(
+          admissionAgent,
+          "unarchive",
           undefined,
+          () => undefined,
+          commandPayload("unarchive"),
           operationHandle,
         );
-      };
-      if (msg.confirmed) await this.agentManager.withRestoreConfirmation(agentId, restore);
-      else await restore();
+        if (msg.confirmed && !this.supports(CLIENT_CAPS.archiveConfirmation))
+          throw new Error("Protected restore requires confirmation from the app.");
+        const restore = async () => {
+          await this.agentManager.preflightRestore(agentId);
+          await unarchiveAgentState(
+            this.agentStorage,
+            this.agentManager,
+            agentId,
+            undefined,
+            operationHandle,
+          );
+        };
+        if (msg.confirmed) await this.agentManager.withRestoreConfirmation(agentId, restore);
+        else await restore();
+      }
       let snapshot: ManagedAgent;
       const existing = this.agentManager.getAgent(agentId);
       if (existing) {
@@ -6058,10 +6051,8 @@ export class Session {
         if (!toAgentPersistenceHandle(registeredProviderIds, record.persistence)) {
           throw new Error(`Agent ${agentId} cannot be refreshed because it lacks persistence`);
         }
-        // Share the loader's per-agent in-flight operation with timeline fetches.
-        // Unarchiving publishes the record before provider resume finishes, so
-        // the agent pane can otherwise race this request and resume it twice.
-        snapshot = await ensureAgentLoaded(agentId, {
+        // Share the loader's operation and reject an archive that raced admission.
+        snapshot = await ensureUnarchivedAgentLoaded(agentId, {
           agentManager: this.agentManager,
           agentStorage: this.agentStorage,
           broadcastTimeline: true,
@@ -7368,23 +7359,6 @@ export class Session {
       }
     }
     await this.refreshRecoveredWorkspaceForExternalMutation(workspace);
-  }
-
-  private async restoreOwningWorkspaceForLegacyAgentRefresh(agentId: string): Promise<void> {
-    // COMPAT(worktreeRestore): clients older than v0.1.105 used refresh_agent_request
-    // as their explicit recovery RPC. Remove after 2027-01-11.
-    if (!clientUsesLegacyWorkspaceRestore(this.appVersion)) {
-      return;
-    }
-    const record = await this.agentStorage.get(agentId);
-    if (!record?.workspaceId) {
-      return;
-    }
-    const recovery = await this.workspaceRecovery.inspect(record.workspaceId);
-    if (recovery.kind !== "recoverable") {
-      return;
-    }
-    await this.restoreWorkspaceAndEmit(record.workspaceId);
   }
 
   private async createPaseoWorktree(
@@ -9897,7 +9871,7 @@ export class Session {
           activeTurnBehavior: behavior,
           steerOnly: behavior === "steer",
           clearPendingPermissions: true,
-          unarchive: !finalCheck,
+          unarchive: false,
           runOptions: { [FINAL_INPUT_CHECK]: check },
           logger: this.sessionLogger,
         });
@@ -10073,6 +10047,14 @@ export class Session {
         "Send through the parent host as <child>@<server> to receive finish notices.",
       );
     return true;
+  }
+
+  private async assertSendReceiverUnarchived(agentId: string): Promise<void> {
+    const target = await this.agentStorage.get(agentId);
+    if (target?.archivedAt)
+      throw Object.assign(new Error("The receiver is archived. Restore it first."), {
+        code: "QUEUED_RECEIVER_CLOSED",
+      });
   }
 
   private async queuedMessageSessionId(
@@ -10281,6 +10263,7 @@ export class Session {
 
     try {
       const agentId = resolved.agentId;
+      await this.assertSendReceiverUnarchived(agentId);
       if (await this.holdOrRefuseAgentMessage(msg, agentId)) return;
       const prompt = buildAgentPrompt(msg.text, msg.images, msg.attachments);
       if (msg.nativeQueue) {

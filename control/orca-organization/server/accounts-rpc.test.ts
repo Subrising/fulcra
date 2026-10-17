@@ -1004,3 +1004,41 @@ test("only the owner can set the top-up reporting date; cap settings do not exis
   assert.equal((await mover(root)({ id: a.id, topUpAt: null })).ok, true);
   assert.equal(readAccounts(root).accounts[0].topUpAt, null);
 });
+
+test("account switch and takeover skip archived native sessions without changing the pool", async (t) => {
+  const root = scratch();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const account = await addAccount(root, { provider: "claude", name: "Archive fixture" });
+  await setAccount(root, account.id, { auth: "ok" });
+  let calls = 0;
+  const h = createAccountHandlers({
+    root: () => root,
+    configRoles: () => null,
+    takeOver: async () => {
+      calls++;
+      return { ok: true };
+    },
+  });
+  const native = {
+    agents: {
+      ref: () => ({
+        refresh: async () => {},
+        current: () => ({
+          provider: "claude",
+          archivedAt: "2026-01-01T00:00:00.000Z",
+        }),
+      }),
+    },
+  };
+  const before = readAccounts(root);
+  for (const run of [
+    () => h.switch({ agentId: "archived", account: account.id }, native),
+    () => h.takeover({ agentId: "archived", account: account.id }, native),
+  ]) {
+    const result = await asOwner(run);
+    assert.equal(result.ok, false);
+    assert.match(result.message!, /archived/i);
+    assert.deepEqual(readAccounts(root), before);
+    assert.equal(calls, 0);
+  }
+});

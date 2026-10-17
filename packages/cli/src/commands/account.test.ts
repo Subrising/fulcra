@@ -114,3 +114,18 @@ it("revokes an account in one management request and returns deletion failures",
     { method: "organization.accounts.update", input: { id: "account-id", revoke: true } },
   ]);
 });
+
+it("skips archived sessions before any account RPC", async () => {
+  const p = port({ ok: true, message: "unexpected" });
+  const client = {
+    ...p.client,
+    fetchAgent: async () => ({
+      agent: {
+        id: "archived-session",
+        archivedAt: "2026-01-01T00:00:00.000Z",
+      },
+    }),
+  };
+  await expect(switchAccountSession(client, "archived", "Work")).rejects.toThrow(/archived/i);
+  expect(p.calls).toEqual([]);
+});

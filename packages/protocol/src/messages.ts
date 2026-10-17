@@ -2064,6 +2064,8 @@ export const RefreshAgentRequestMessageSchema = z.object({
   inputProvenance: z.string().optional(),
   type: z.literal("refresh_agent_request"),
   agentId: z.string(),
+  // Only an explicit owner restore can clear archive state. Reload omits this flag.
+  restore: z.boolean().optional(),
   confirmed: z.boolean().optional(),
   requestId: z.string(),
 });
