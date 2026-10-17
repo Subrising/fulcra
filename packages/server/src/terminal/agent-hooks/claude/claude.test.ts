@@ -2,10 +2,10 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { isPlatform } from "../../../test-utils/platform.js";
 import { buildTerminalEnvironment } from "../../terminal.js";
-import { buildAgentHookShellCommand } from "../agent-hook-installer.js";
+import { buildAgentHookShellCommand, installAgentHooks } from "../agent-hook-installer.js";
 import {
   AGENT_HOOK_PROVIDERS,
   installRegisteredAgentHooks,
@@ -65,6 +65,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 describe("Claude terminal agent hooks", () => {
+  it("adopts unchanged shipped hook-only settings and upgrades their hooks", () => {
+    const configDir = createTempDir("paseo-shipped-hooks-");
+    const file = join(configDir, "settings.json");
+    const shipped = readFileSync(new URL("./fixtures/shipped-settings.json", import.meta.url));
+    writeFileSync(file, shipped);
+    installRegisteredAgentHooks({ configDir });
+    const record = join(configDir, ".settings.json.paseo-installed.sha256");
+    expect(readFileSync(record, "utf8")).toMatch(/^[a-f0-9]{64}\n$/);
+    const provider = AGENT_HOOK_PROVIDERS.claude;
+    installAgentHooks(
+      { ...provider, events: [...provider.events, { event: "TestBundledEvent" }] },
+      { configDir },
+    );
+    expect(hookCommands(readSettings(configDir), "TestBundledEvent")).not.toHaveLength(0);
+  });
   it("installs registered provider hooks idempotently", () => {
     const configDir = createTempDir("paseo-claude-config-");
     const provider = AGENT_HOOK_PROVIDERS.claude;
@@ -86,7 +101,7 @@ describe("Claude terminal agent hooks", () => {
     expect(registeredAgentHooksAreInstalled({ configDir })).toBe(true);
   });
 
-  it("preserves unrelated user hooks", () => {
+  it("preserves an existing settings file without an installation record", () => {
     const configDir = createTempDir("paseo-claude-config-preserve-");
     writeFileSync(
       join(configDir, "settings.json"),
@@ -114,10 +129,10 @@ describe("Claude terminal agent hooks", () => {
     expect(hookCommands(settings, "Stop")).toContain("say done");
     expect(
       hookCommands(settings, "Stop").some((command) => command.includes("hooks claude Stop")),
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it("uninstalls only marker-matched hooks", () => {
+  it("preserves local settings edits during uninstall", () => {
     const configDir = createTempDir("paseo-claude-config-uninstall-");
     installRegisteredAgentHooks({ configDir });
     const settings = readSettings(configDir);
@@ -133,11 +148,75 @@ describe("Claude terminal agent hooks", () => {
     };
     writeFileSync(join(configDir, "settings.json"), `${JSON.stringify(settings, null, 2)}\n`);
 
+    const editedBytes = readFileSync(join(configDir, "settings.json"), "utf8");
     uninstallRegisteredAgentHooks({ configDir });
 
+    expect(readFileSync(join(configDir, "settings.json"), "utf8")).toBe(editedBytes);
     const nextSettings = readSettings(configDir);
-    expect(hookCommands(nextSettings, "Stop")).toEqual(["say still-here"]);
+    expect(hookCommands(nextSettings, "Stop")).toContain("say still-here");
     expect(registeredAgentHooksAreInstalled({ configDir })).toBe(false);
+  });
+
+  it("keeps edited settings through repeated installer runs", () => {
+    const configDir = createTempDir("paseo-claude-edited-");
+    installRegisteredAgentHooks({ configDir });
+    const file = join(configDir, "settings.json");
+    const settings = readSettings(configDir);
+    settings.theme = "local-theme";
+    const local = `${JSON.stringify(settings, null, 2)}\n`;
+    writeFileSync(file, local);
+    installRegisteredAgentHooks({ configDir });
+    installRegisteredAgentHooks({ configDir });
+    expect(readFileSync(file, "utf8")).toBe(local);
+  });
+
+  it("does not adopt user settings when the generated hooks already match", () => {
+    const configDir = createTempDir("paseo-claude-owned-");
+    installRegisteredAgentHooks({ configDir });
+    const file = join(configDir, "settings.json");
+    const record = join(configDir, ".settings.json.paseo-installed.sha256");
+    const installedHash = readFileSync(record, "utf8");
+    const settings = readSettings(configDir);
+    settings.theme = "local-theme";
+    const local = `${JSON.stringify(settings, null, 2)}\n`;
+    writeFileSync(file, local);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      installRegisteredAgentHooks({ configDir });
+      installRegisteredAgentHooks({ configDir });
+      expect(readFileSync(file, "utf8")).toBe(local);
+      expect(readFileSync(record, "utf8")).toBe(installedHash);
+      expect(warn.mock.calls.filter((args) => args.includes(file))).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("keeps edited settings and offers changed hooks once", () => {
+    const configDir = createTempDir("paseo-claude-update-offer-");
+    installRegisteredAgentHooks({ configDir });
+    const file = join(configDir, "settings.json");
+    const settings = readSettings(configDir);
+    settings.theme = "local-theme";
+    settings.hooks = {};
+    const local = `${JSON.stringify(settings, null, 2)}\n`;
+    writeFileSync(file, local);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      installRegisteredAgentHooks({ configDir });
+      installRegisteredAgentHooks({ configDir });
+      expect(readFileSync(file, "utf8")).toBe(local);
+      const proposed = JSON.parse(readFileSync(`${file}.new`, "utf8"));
+      expect(proposed.theme).toBeUndefined();
+      expect(Object.keys(proposed.hooks)).not.toHaveLength(0);
+      expect(warn.mock.calls.filter((args) => args.includes(file))).toHaveLength(1);
+      settings.theme = "another local theme";
+      writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`);
+      installRegisteredAgentHooks({ configDir });
+      expect(warn.mock.calls.filter((args) => args.includes(file))).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("builds a minimal gated hook command", () => {

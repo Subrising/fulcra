@@ -2,8 +2,12 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { AgentSkillSelection } from "@getpaseo/protocol/messages";
+import { offerInstructionUpdate } from "../../instruction-files.js";
 import {
   isLegacyCodexCopy,
+  isLocalSkillEdit,
+  readShippedSkillHashes,
+  type ShippedSkillHashes,
   listFilesRecursive,
   readManagedFilesManifest,
   removeSkill,
@@ -106,6 +110,35 @@ async function hashSkills(rootDir: string, names: readonly string[]): Promise<Ta
   return out;
 }
 
+/** Locally edited files are intentional overrides, not pending bundle updates. */
+async function hashInstalledSkills(
+  rootDir: string,
+  names: readonly string[],
+  bundle: TargetSkills,
+  shippedHashes: ShippedSkillHashes,
+): Promise<TargetSkills> {
+  const installed = await hashSkills(rootDir, names);
+  for (const [name, files] of installed) {
+    const source = bundle.get(name);
+    if (!source) continue;
+    const manifest = await readManagedFilesManifest(path.join(rootDir, name));
+    for (const [rel, sourceHash] of source) {
+      if (
+        !isLocalSkillEdit(
+          files.get(rel),
+          manifest?.files[rel],
+          sourceHash,
+          shippedHashes[`${name}/${rel}`],
+        )
+      )
+        continue;
+      // This map is only a convergence comparison. Disk bytes remain untouched.
+      files.set(rel, sourceHash);
+    }
+  }
+  return installed;
+}
+
 function diff(
   bundle: TargetSkills,
   disks: readonly TargetSkills[],
@@ -163,10 +196,11 @@ export async function getSkillsStatus(
 ): Promise<SkillsStatus> {
   const available = await listBundledSkills(targets.sourceDir);
   const names = managedSkillNames(available);
-  const [bundle, agentsDisk, claudeDisk, codexDisk] = await Promise.all([
-    hashSkills(targets.sourceDir, available),
-    hashSkills(targets.agentsDir, names),
-    hashSkills(targets.claudeDir, names),
+  const bundle = await hashSkills(targets.sourceDir, available);
+  const shippedHashes = await readShippedSkillHashes(targets.sourceDir);
+  const [agentsDisk, claudeDisk, codexDisk] = await Promise.all([
+    hashInstalledSkills(targets.agentsDir, names, bundle, shippedHashes),
+    hashInstalledSkills(targets.claudeDir, names, bundle, shippedHashes),
     hashSkills(targets.codexDir, names),
   ]);
   const disks = [agentsDisk, claudeDisk];
@@ -176,8 +210,14 @@ export async function getSkillsStatus(
     if (ops.some((op) => op.name === name)) continue;
     if (!(await isLegacyCodexCopy(name, targets))) continue;
     if (!desired.has(name)) ops.push({ kind: "delete", name });
-    else if (await readManagedFilesManifest(path.join(targets.codexDir, name))) {
-      ops.push({ kind: "update", name });
+    else {
+      const manifest = await readManagedFilesManifest(path.join(targets.codexDir, name));
+      if (
+        Object.entries(manifest?.files ?? {}).some(
+          ([rel, hash]) => codexDisk.get(name)?.get(rel) === hash,
+        )
+      )
+        ops.push({ kind: "update", name });
     }
   }
   ops.sort((a, b) => compareStrings(a.name, b.name));
@@ -197,6 +237,7 @@ async function applySkills(
 ): Promise<SkillsStatus> {
   const status = initialStatus ?? (await getSkillsStatus(targets, selection));
 
+  const desired = resolveDesiredSkills(selection, status.available);
   const writes = status.ops
     .filter((op) => op.kind === "add" || op.kind === "update")
     .map((op) => op.name);
@@ -208,6 +249,37 @@ async function applySkills(
       codexDir: targets.codexDir,
       skillNames: writes,
     });
+  }
+
+  // Status reads are read-only. Maintenance offers updates even when the only
+  // differences are intentional local overrides and no replacement is planned.
+  const shippedHashes = await readShippedSkillHashes(targets.sourceDir);
+  for (const name of status.installed.filter((installedName) => desired.has(installedName))) {
+    const sourceDir = path.join(targets.sourceDir, name);
+    const sourceFiles = await hashSkillDir(sourceDir);
+    if (!sourceFiles) continue;
+    for (const root of [targets.agentsDir, targets.claudeDir, targets.codexDir]) {
+      if (root === targets.codexDir && !(await isLegacyCodexCopy(name, targets))) continue;
+      const skillDir = path.join(root, name);
+      const installedFiles = await hashSkillDir(skillDir);
+      if (!installedFiles) continue;
+      const manifest = await readManagedFilesManifest(skillDir);
+      for (const [rel, sourceHash] of sourceFiles) {
+        if (
+          !isLocalSkillEdit(
+            installedFiles.get(rel),
+            manifest?.files[rel],
+            sourceHash,
+            shippedHashes[`${name}/${rel}`],
+          )
+        )
+          continue;
+        offerInstructionUpdate(
+          path.join(skillDir, rel),
+          await fs.readFile(path.join(sourceDir, rel)),
+        );
+      }
+    }
   }
 
   for (const op of status.ops) {
@@ -248,7 +320,7 @@ export async function autoUpdateInstalledSkills(
   selection: SkillSelection,
 ): Promise<SkillsStatus> {
   const status = await getSkillsStatus(targets, selection);
-  if (status.state !== "drift") return status;
+  if (status.state === "not-installed") return status;
   // Automatic maintenance may repair selected skills, but removal is an
   // interactive operation because managed directories can contain user files.
   return applySkills(targets, selection, nonDestructivePlan(status));

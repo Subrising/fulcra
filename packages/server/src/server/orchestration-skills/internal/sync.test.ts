@@ -1,7 +1,8 @@
 import { promises as fs } from "node:fs";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { removeSkill, syncSkills } from "./sync";
 
 interface Sandbox {
@@ -47,13 +48,109 @@ describe("syncSkills", () => {
     await fs.rm(sandbox.root, { recursive: true, force: true });
   });
 
-  it("overwrites on-disk skill content when the bundle differs", async () => {
+  it("updates a shipped legacy file without an ownership record", async () => {
+    await writeBundleSkill(sandbox.sourceDir, "paseo", { "SKILL.md": "new bundle" });
+    await fs.writeFile(
+      path.join(sandbox.sourceDir, ".bundled-skill-hashes.json"),
+      JSON.stringify({
+        version: 1,
+        files: { "paseo/SKILL.md": [createHash("sha256").update("released bundle").digest("hex")] },
+      }),
+    );
+    const file = path.join(sandbox.agentsDir, "paseo", "SKILL.md");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, "released bundle");
+    await syncSkills({ ...sandbox, skillNames: ["paseo"] });
+    expect(await fs.readFile(file, "utf8")).toBe("new bundle");
+    expect(await fs.readFile(path.join(sandbox.claudeDir, "paseo/SKILL.md"), "utf8")).toBe(
+      "new bundle",
+    );
+  });
+
+  it("does not adopt a known local edit when a later bundle matches it", async () => {
+    await writeBundleSkill(sandbox.sourceDir, "paseo", { "SKILL.md": "bundle-v1" });
+    const options = { ...sandbox, skillNames: ["paseo"] };
+    await syncSkills(options);
+    const file = path.join(sandbox.agentsDir, "paseo/SKILL.md");
+    const record = path.join(path.dirname(file), ".paseo-managed-files.json");
+    const originalRecord = await fs.readFile(record, "utf8");
+    await fs.writeFile(file, "local instructions");
+    await writeBundleSkill(sandbox.sourceDir, "paseo", { "SKILL.md": "local instructions" });
+    await syncSkills(options);
+    expect(await fs.readFile(record, "utf8")).toBe(originalRecord);
+    await writeBundleSkill(sandbox.sourceDir, "paseo", { "SKILL.md": "bundle-v3" });
+    await syncSkills(options);
+    expect(await fs.readFile(file, "utf8")).toBe("local instructions");
+  });
+
+  it("preserves a local rollback to a known shipped version", async () => {
+    await writeBundleSkill(sandbox.sourceDir, "paseo", { "SKILL.md": "bundle-v2" });
+    await fs.writeFile(
+      path.join(sandbox.sourceDir, ".bundled-skill-hashes.json"),
+      JSON.stringify({
+        version: 1,
+        files: { "paseo/SKILL.md": [createHash("sha256").update("bundle-v1").digest("hex")] },
+      }),
+    );
+    const options = { ...sandbox, skillNames: ["paseo"] };
+    await syncSkills(options);
+    const file = path.join(sandbox.agentsDir, "paseo/SKILL.md");
+    await fs.writeFile(file, "bundle-v1");
+    await syncSkills(options);
+    expect(await fs.readFile(file, "utf8")).toBe("bundle-v1");
+  });
+
+  it("logs one notice per edited path during repeated maintenance", async () => {
+    await writeBundleSkill(sandbox.sourceDir, "paseo", { "SKILL.md": "bundle" });
+    const file = path.join(sandbox.agentsDir, "paseo", "SKILL.md");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, "local instructions");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await syncSkills({ ...sandbox, skillNames: ["paseo"] });
+      await syncSkills({ ...sandbox, skillNames: ["paseo"] });
+      expect(warn.mock.calls.filter((args) => args.includes(file))).toHaveLength(1);
+      expect(await fs.readFile(file, "utf8")).toBe("local instructions");
+      expect(await fs.readFile(`${file}.new`, "utf8")).toBe("bundle");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it.each([2, 8])(
+    "keeps a valid ownership receipt when %i daemons install together",
+    async (count) => {
+      await writeBundleSkill(sandbox.sourceDir, "paseo", { "SKILL.md": "released bundle" });
+      const options = { ...sandbox, skillNames: ["paseo"] };
+      await Promise.all(Array.from({ length: count }, () => syncSkills(options)));
+      for (const root of [sandbox.agentsDir, sandbox.claudeDir]) {
+        const file = path.join(root, "paseo", "SKILL.md");
+        const record = JSON.parse(
+          await fs.readFile(path.join(root, "paseo", ".paseo-managed-files.json"), "utf8"),
+        );
+        expect(record.files["SKILL.md"]).toBe(
+          createHash("sha256")
+            .update(await fs.readFile(file))
+            .digest("hex"),
+        );
+      }
+    },
+  );
+
+  it("updates an unchanged managed file when the bundle differs", async () => {
     await writeBundleSkill(sandbox.sourceDir, "paseo", {
       "SKILL.md": "new paseo content",
     });
     const onDiskSkill = path.join(sandbox.agentsDir, "paseo");
     await fs.mkdir(onDiskSkill, { recursive: true });
     await fs.writeFile(path.join(onDiskSkill, "SKILL.md"), "old paseo content");
+    await fs.writeFile(
+      path.join(onDiskSkill, ".paseo-managed-files.json"),
+      JSON.stringify({
+        version: 1,
+        files: { "SKILL.md": createHash("sha256").update("old paseo content").digest("hex") },
+      }),
+    );
 
     const result = await syncSkills({
       sourceDir: sandbox.sourceDir,
@@ -78,6 +175,37 @@ describe("syncSkills", () => {
     await expect(fs.stat(path.join(sandbox.codexDir, "paseo", "SKILL.md"))).rejects.toMatchObject({
       code: "ENOENT",
     });
+  });
+
+  it("keeps local edits and the last installed hash across repeated bundle updates", async () => {
+    await writeBundleSkill(sandbox.sourceDir, "paseo", { "SKILL.md": "bundle-v1" });
+    const options = { ...sandbox, skillNames: ["paseo"] };
+    await syncSkills(options);
+    const edited = path.join(sandbox.agentsDir, "paseo", "SKILL.md");
+    await fs.writeFile(edited, "local worker rules");
+    const initialManifest = await fs.readFile(
+      path.join(path.dirname(edited), ".paseo-managed-files.json"),
+      "utf8",
+    );
+    await writeBundleSkill(sandbox.sourceDir, "paseo", { "SKILL.md": "bundle-v2" });
+    await syncSkills(options);
+    await syncSkills(options);
+    expect(await fs.readFile(edited, "utf8")).toBe("local worker rules");
+    expect(
+      await fs.readFile(path.join(path.dirname(edited), ".paseo-managed-files.json"), "utf8"),
+    ).toBe(initialManifest);
+    expect(await fs.readFile(path.join(sandbox.claudeDir, "paseo", "SKILL.md"), "utf8")).toBe(
+      "bundle-v2",
+    );
+  });
+
+  it("keeps pre-existing files with no installation record", async () => {
+    await writeBundleSkill(sandbox.sourceDir, "paseo", { "SKILL.md": "bundle" });
+    const edited = path.join(sandbox.agentsDir, "paseo", "SKILL.md");
+    await fs.mkdir(path.dirname(edited), { recursive: true });
+    await fs.writeFile(edited, "local rules without a manifest");
+    await syncSkills({ ...sandbox, skillNames: ["paseo"] });
+    expect(await fs.readFile(edited, "utf8")).toBe("local rules without a manifest");
   });
 
   it("installs new bundled skills, including references/, when not present on disk", async () => {
@@ -181,7 +309,7 @@ describe("syncSkills", () => {
       skillNames: ["paseo"],
     });
 
-    expect(await fs.readFile(path.join(onDiskSkill, "SKILL.md"), "utf-8")).toBe("new");
+    expect(await fs.readFile(path.join(onDiskSkill, "SKILL.md"), "utf-8")).toBe("old");
     expect(await fs.readFile(path.join(onDiskSkill, "my-context.md"), "utf-8")).toBe(
       "user context",
     );

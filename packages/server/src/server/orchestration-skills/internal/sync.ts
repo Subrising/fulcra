@@ -1,6 +1,13 @@
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import {
+  assertInstructionPath,
+  offerInstructionUpdate,
+  INSTRUCTION_BACKUP_PREFIX,
+  replaceInstructionFile,
+  retireInstructionFile,
+} from "../../instruction-files.js";
 
 export interface SkillSyncOptions {
   sourceDir: string;
@@ -16,6 +23,31 @@ export interface SkillSyncResult {
   processedSkills: number;
 }
 
+export type ShippedSkillHashes = Record<string, string[]>;
+
+/** Hash history ships with the application, outside the user-owned skill directories. */
+export async function readShippedSkillHashes(sourceDir: string): Promise<ShippedSkillHashes> {
+  const raw = await fs
+    .readFile(path.join(sourceDir, ".bundled-skill-hashes.json"), "utf8")
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+  if (raw === null) return {};
+  const parsed = JSON.parse(raw) as { version: number; files: ShippedSkillHashes };
+  if (
+    parsed.version !== 1 ||
+    !parsed.files ||
+    Object.values(parsed.files).some(
+      (hashes) =>
+        !Array.isArray(hashes) ||
+        hashes.some((hash) => typeof hash !== "string" || !/^[a-f0-9]{64}$/.test(hash)),
+    )
+  )
+    throw new Error("Invalid bundled skill hash history");
+  return parsed.files;
+}
+
 const MANAGED_FILES_MANIFEST = ".paseo-managed-files.json";
 
 interface ManagedFilesManifest {
@@ -23,13 +55,44 @@ interface ManagedFilesManifest {
   files: Record<string, string>;
 }
 
-async function writeFileIfChanged(srcPath: string, dstPath: string): Promise<boolean> {
+export function isLocalSkillEdit(
+  currentHash: string | undefined,
+  installedHash: string | undefined,
+  sourceHash: string,
+  shippedHashes: readonly string[] = [],
+): boolean {
+  if (currentHash === undefined) return false;
+  if (installedHash !== undefined) return currentHash !== installedHash;
+  return currentHash !== sourceHash && !shippedHashes.includes(currentHash);
+}
+
+async function writeFileIfChanged(
+  srcPath: string,
+  dstPath: string,
+  installedHash: string | undefined,
+  shippedHashes: readonly string[],
+): Promise<{ changed: boolean; managedHash?: string }> {
   const src = await fs.readFile(srcPath);
-  const dst = await fs.readFile(dstPath).catch(() => null);
-  if (dst && src.equals(dst)) return false;
+  const dst = await fs.readFile(dstPath).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  const sourceHash = createHash("sha256").update(src).digest("hex");
+  const currentHash = dst === null ? undefined : createHash("sha256").update(dst).digest("hex");
+  if (isLocalSkillEdit(currentHash, installedHash, sourceHash, shippedHashes)) {
+    const offer = offerInstructionUpdate(dstPath, src);
+    return { changed: offer.created, managedHash: installedHash };
+  }
+  if (dst && src.equals(dst)) return { changed: false, managedHash: sourceHash };
   await fs.mkdir(path.dirname(dstPath), { recursive: true });
-  await fs.writeFile(dstPath, src);
-  return true;
+  const mode = (await fs.stat(dstPath).catch(() => null))?.mode;
+  if (
+    !replaceInstructionFile(dstPath, src, currentHash, mode === undefined ? 0o600 : mode & 0o777)
+  ) {
+    const offer = offerInstructionUpdate(dstPath, src);
+    return { changed: offer.created, managedHash: installedHash };
+  }
+  return { changed: true, managedHash: sourceHash };
 }
 
 export async function listFilesRecursive(rootDir: string): Promise<string[]> {
@@ -38,8 +101,14 @@ export async function listFilesRecursive(rootDir: string): Promise<string[]> {
     const entries = await fs.readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
-      const rel = path.relative(rootDir, full);
-      if (rel === MANAGED_FILES_MANIFEST) continue;
+      const rel = path.relative(rootDir, full).split(path.sep).join("/");
+      if (
+        rel === MANAGED_FILES_MANIFEST ||
+        entry.name.startsWith(INSTRUCTION_BACKUP_PREFIX) ||
+        entry.name.startsWith(".instruction-sync-stage-") ||
+        entry.name.startsWith(".fulcra-offer-")
+      )
+        continue;
       if (entry.isDirectory()) {
         await walk(full);
       } else if (entry.isFile()) {
@@ -57,12 +126,21 @@ export async function readManagedFilesManifest(
   const raw = await fs
     .readFile(path.join(dstDir, MANAGED_FILES_MANIFEST), "utf-8")
     .catch(() => null);
+  return parseManagedFilesManifest(raw);
+}
+
+function parseManagedFilesManifest(raw: string | null): ManagedFilesManifest | null {
   if (!raw) return null;
   const parsed = safeParseJson(raw) as Partial<ManagedFilesManifest> | null;
   if (!parsed) return null;
   if (parsed.version !== 1 || typeof parsed.files !== "object" || parsed.files === null)
     return null;
-  return { version: 1, files: parsed.files as Record<string, string> };
+  const files: Record<string, string> = {};
+  for (const [rel, value] of Object.entries(parsed.files)) {
+    if (typeof value !== "string") return null;
+    files[rel.replaceAll("\\", "/")] = value;
+  }
+  return { version: 1, files };
 }
 
 function safeParseJson(raw: string): unknown {
@@ -82,13 +160,35 @@ async function writeManifestIfChanged(
   dstDir: string,
   files: Record<string, string>,
 ): Promise<boolean> {
-  const manifest: ManagedFilesManifest = { version: 1, files };
-  const next = `${JSON.stringify(manifest, null, 2)}\n`;
+  // Another daemon may have committed ownership while this scan was in flight.
+  // Retain its receipt only when the installed bytes still prove that ownership.
   const manifestPath = path.join(dstDir, MANAGED_FILES_MANIFEST);
   const current = await fs.readFile(manifestPath, "utf-8").catch(() => null);
+  const concurrent = parseManagedFilesManifest(current);
+  await assertManagedPathsStayInsideSkill(dstDir, Object.keys(concurrent?.files ?? {}));
+  for (const [rel, recordedHash] of Object.entries(concurrent?.files ?? {})) {
+    if (files[rel] === recordedHash) continue;
+    if ((await hashFile(path.join(dstDir, rel)).catch(() => null)) === recordedHash)
+      files[rel] = recordedHash;
+  }
+  const manifest: ManagedFilesManifest = { version: 1, files };
+  const next = `${JSON.stringify(manifest, null, 2)}\n`;
+  // A losing installer has no ownership to record. It must not win an empty
+  // receipt before the daemon that installed the bytes records their hash.
+  if (current === null && Object.keys(files).length === 0) return false;
   if (current === next) return false;
   await fs.mkdir(dstDir, { recursive: true });
-  await fs.writeFile(manifestPath, next);
+  if (
+    !replaceInstructionFile(
+      manifestPath,
+      Buffer.from(next),
+      current === null ? undefined : createHash("sha256").update(current).digest("hex"),
+    )
+  ) {
+    // A competing receipt is safe to keep. Never turn record contention into a
+    // failed daemon startup after the instruction bytes were already checked.
+    return false;
+  }
   return true;
 }
 
@@ -110,6 +210,7 @@ async function pruneEmptyParentDirs(rootDir: string, rels: readonly string[]): P
 }
 
 async function assertManagedPathsStayInsideSkill(rootDir: string, rels: readonly string[]) {
+  assertInstructionPath(rootDir);
   for (const rel of rels) {
     const normalized = path.normalize(rel);
     if (
@@ -134,13 +235,15 @@ async function assertManagedPathsStayInsideSkill(rootDir: string, rels: readonly
   }
 }
 
-async function syncDirectoryFiles(srcDir: string, dstDir: string): Promise<number> {
+async function syncDirectoryFiles(
+  srcDir: string,
+  dstDir: string,
+  shippedHashes: ShippedSkillHashes,
+  skillName: string,
+): Promise<number> {
   const files = await listFilesRecursive(srcDir);
   const srcFileSet = new Set(files);
-  const srcHashes: Record<string, string> = {};
-  for (const rel of files) {
-    srcHashes[rel] = await hashFile(path.join(srcDir, rel));
-  }
+  const managedHashes: Record<string, string> = {};
   await assertManagedPathsStayInsideSkill(dstDir, [MANAGED_FILES_MANIFEST]);
   const previousManifest = await readManagedFilesManifest(dstDir);
   await assertManagedPathsStayInsideSkill(dstDir, [
@@ -150,9 +253,15 @@ async function syncDirectoryFiles(srcDir: string, dstDir: string): Promise<numbe
   ]);
   let changed = 0;
   for (const rel of files) {
-    if (await writeFileIfChanged(path.join(srcDir, rel), path.join(dstDir, rel))) {
-      changed++;
-    }
+    const result = await writeFileIfChanged(
+      path.join(srcDir, rel),
+      path.join(dstDir, rel),
+      previousManifest?.files[rel.split(path.sep).join("/")],
+      shippedHashes[`${skillName}/${rel}`] ?? [],
+    );
+    if (result.changed) changed++;
+    if (result.managedHash !== undefined)
+      managedHashes[rel.split(path.sep).join("/")] = result.managedHash;
   }
 
   const deletedRels: string[] = [];
@@ -160,13 +269,17 @@ async function syncDirectoryFiles(srcDir: string, dstDir: string): Promise<numbe
     if (srcFileSet.has(rel)) continue;
     const dstPath = path.join(dstDir, rel);
     const currentHash = await hashFile(dstPath).catch(() => null);
-    if (currentHash !== previousHash) continue;
-    await fs.rm(dstPath, { force: true });
-    deletedRels.push(rel);
-    changed++;
+    if (currentHash !== previousHash) {
+      if (currentHash !== null) managedHashes[rel] = previousHash;
+      continue;
+    }
+    if (retireInstructionFile(dstPath, previousHash, dstDir)) {
+      deletedRels.push(rel);
+      changed++;
+    }
   }
   await pruneEmptyParentDirs(dstDir, deletedRels);
-  if (await writeManifestIfChanged(dstDir, srcHashes)) changed++;
+  if (await writeManifestIfChanged(dstDir, managedHashes)) changed++;
   return changed;
 }
 
@@ -216,15 +329,25 @@ async function retireManagedSkill(dstDir: string): Promise<number> {
   const files = Object.keys(manifest.files);
   await assertManagedPathsStayInsideSkill(dstDir, [MANAGED_FILES_MANIFEST, ...files]);
   const removed: string[] = [];
+  const retained: Record<string, string> = {};
   for (const [rel, previousHash] of Object.entries(manifest.files)) {
     const filePath = path.join(dstDir, rel);
     const currentHash = await hashFile(filePath).catch(() => null);
-    if (currentHash !== previousHash) continue;
-    await fs.rm(filePath);
-    removed.push(rel);
+    if (currentHash === null) continue;
+    if (
+      currentHash === previousHash &&
+      retireInstructionFile(filePath, previousHash, path.dirname(dstDir))
+    )
+      removed.push(rel);
+    else retained[rel] = previousHash;
   }
   await pruneEmptyParentDirs(dstDir, removed);
-  await fs.rm(path.join(dstDir, MANAGED_FILES_MANIFEST));
+  if (Object.keys(retained).length > 0) {
+    await writeManifestIfChanged(dstDir, retained);
+    return removed.length;
+  }
+  const manifestPath = path.join(dstDir, MANAGED_FILES_MANIFEST);
+  retireInstructionFile(manifestPath, await hashFile(manifestPath), path.dirname(dstDir));
   await fs.rmdir(dstDir).catch((error: NodeJS.ErrnoException) => {
     if (error.code !== "ENOTEMPTY" && error.code !== "ENOENT") throw error;
   });
@@ -232,6 +355,7 @@ async function retireManagedSkill(dstDir: string): Promise<number> {
 }
 
 export async function syncSkills(options: SkillSyncOptions): Promise<SkillSyncResult> {
+  const shippedHashes = await readShippedSkillHashes(options.sourceDir);
   let changedFiles = 0;
   let processedSkills = 0;
 
@@ -245,11 +369,15 @@ export async function syncSkills(options: SkillSyncOptions): Promise<SkillSyncRe
       changedFiles += await syncDirectoryFiles(
         bundleSkillDir,
         path.join(options.agentsDir, skillName),
+        shippedHashes,
+        skillName,
       );
 
       changedFiles += await syncDirectoryFiles(
         bundleSkillDir,
         path.join(options.claudeDir, skillName),
+        shippedHashes,
+        skillName,
       );
 
       // Retain user edits to the old dedicated Codex copy.
