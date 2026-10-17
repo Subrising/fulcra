@@ -14,6 +14,9 @@ Run the provider and parser tests:
 npx vitest run packages/server/src/server/agent/providers/codex-app-server-agent.test.ts packages/server/src/server/agent/providers/codex/computer-use.test.ts --bail=1
 ```
 
+If the launch context changes, run the full manager test file.
+Its exact context checks cover create, import, resume, and reload.
+
 Run the manager and host-policy checks:
 
 ```sh

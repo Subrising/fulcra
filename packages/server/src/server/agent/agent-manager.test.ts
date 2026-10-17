@@ -4394,6 +4394,7 @@ test("createAgent passes daemon launch env through the provider launch context",
   });
   expect(client.lastLaunchContext).toEqual({
     agentId: snapshot.id,
+    computerUsePolicy: { approve: expect.any(Function), changed: expect.any(Function) },
     env: {
       PASEO_AGENT_ID: snapshot.id,
       PASEO_AGENT_CWD: workdir,
@@ -5724,6 +5725,7 @@ test("resumeAgentFromPersistence keeps metadata config, applies overrides, and p
   expect(client.lastResumeOverrides).not.toHaveProperty("modeId");
   expect(client.lastResumeLaunchContext).toEqual({
     agentId: resumed.id,
+    computerUsePolicy: { approve: expect.any(Function), changed: expect.any(Function) },
     env: {
       PASEO_AGENT_ID: resumed.id,
       PASEO_AGENT_CWD: workdir,
@@ -5832,6 +5834,7 @@ test("importProviderSession imports the selected session without listing and pub
   expect(client.importInput).toEqual({ providerHandleId: "thread-selected", cwd: workdir });
   expect(client.importLaunchContext).toEqual({
     agentId: imported.id,
+    computerUsePolicy: { approve: expect.any(Function), changed: expect.any(Function) },
     env: {
       PASEO_AGENT_ID: imported.id,
       PASEO_AGENT_CWD: workdir,
@@ -5935,6 +5938,7 @@ test("reloadAgentSession passes daemon launch env through the provider launch co
 
   expect(client.lastCreateLaunchContext).toEqual({
     agentId: snapshot.id,
+    computerUsePolicy: { approve: expect.any(Function), changed: expect.any(Function) },
     env: {
       PASEO_AGENT_ID: snapshot.id,
       PASEO_AGENT_CWD: workdir,
@@ -5947,6 +5951,7 @@ test("reloadAgentSession passes daemon launch env through the provider launch co
 
   expect(client.lastResumeLaunchContext).toEqual({
     agentId: snapshot.id,
+    computerUsePolicy: { approve: expect.any(Function), changed: expect.any(Function) },
     env: {
       PASEO_AGENT_ID: snapshot.id,
       PASEO_AGENT_CWD: workdir,
