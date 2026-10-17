@@ -18,7 +18,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   for (const close of cleanups.splice(0).toReversed()) await close();
 });
-async function fixture() {
+async function fixture(parentLabel = PARENT_AGENT_ID_LABEL) {
   const root = await mkdtemp(path.join(tmpdir(), "send-finish-"));
   const prompts: string[] = [];
   const daemon = await createTestPaseoDaemon({
@@ -47,7 +47,7 @@ async function fixture() {
     { provider: "codex", cwd: root, modeId: "full-access", title: "Child" },
     undefined,
     {
-      labels: { [PARENT_AGENT_ID_LABEL]: parent.id },
+      labels: { [parentLabel]: parent.id },
     },
   );
   await manager.flush();
@@ -249,11 +249,7 @@ test("a remote relay without a return route refuses the task unless it opts out"
 });
 
 test("a plain reporting-line child gets a saved finish notice", async () => {
-  const f = await fixture();
-  await f.manager.setLabels(f.child.id, {
-    "paseo.parent-agent-id": "",
-    "fulcra.reports-to": f.parent.id,
-  });
+  const f = await fixture("fulcra.reports-to");
   await f.client.sendAgentMessage(f.child.id, "work", { sender: { agentId: f.parent.id } });
   await f.finish();
   expect(await f.storage.getFinishNotice(f.child.id)).toMatchObject({
