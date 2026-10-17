@@ -1,86 +1,72 @@
 import { describe, expect, it } from "vitest";
-import { chatLeads, chatStatusLabel } from "./sidebar-chat-leads";
+import type { Seat } from "../../../../control/orca-organization/shared/roles";
+import { liveProjectSeats, chatStatusLabel } from "./sidebar-chat-leads";
 
-const chat = (id: string, title: string, labels: Record<string, string>, extra = {}) => ({
-  id,
-  title,
-  status: "idle",
-  labels,
-  ...extra,
-});
-const line = { "fulcra.reports-to": "role:main-assistant" };
+const seat = {
+  role: "project-orchestrator",
+  seat: "project",
+  projectId: "project",
+  state: "assigned",
+  sessionId: "lead",
+  sessionPresent: true,
+  sessionTaskMatches: true,
+  sessionGenerationChanged: false,
+} as Seat;
+const projects = {
+  available: true,
+  projects: [{ id: "project", name: "Example", status: "in_progress" }],
+};
+const agents = new Map([["lead", { status: "idle", archivedAt: null }]]);
 
-describe("chatLeads", () => {
-  it("finds a seatless chat that reports to the main assistant, on any computer, by title", () => {
-    const sessions = {
-      mini: { agents: new Map([["b", chat("b", "Zed lead", line)]]) },
-      book: {
-        agents: new Map([
-          ["a", chat("a", "Remote project lead", line)],
-          ["w", chat("w", "Worker", { "fulcra.reports-to": "a" })],
-        ]),
-      },
-    };
-    expect(chatLeads(sessions, new Set()).map((l) => [l.serverId, l.agentId, l.title])).toEqual([
-      ["book", "a", "Remote project lead"],
-      ["mini", "b", "Zed lead"],
-    ]);
-  });
-
-  it("includes a labeled nested lead without changing its reporting line", () => {
-    const sessions = {
-      book: {
-        agents: new Map([
-          ["lead", chat("lead", "Game lead", { role: "game-lead", "fulcra.reports-to": "parent" })],
-          [
-            "worker",
-            chat("worker", "Worker", { role: "implementation", "fulcra.reports-to": "parent" }),
-          ],
-        ]),
-      },
-    };
-    expect(chatLeads(sessions, new Set()).map((lead) => lead.agentId)).toEqual(["lead"]);
-  });
-
-  it.each(["lead", "project-lead", "game-lead"])("accepts the exact role %s", (role) => {
-    const sessions = { book: { agents: new Map([["lead", chat("lead", "Lead", { role })]]) } };
-    expect(chatLeads(sessions, new Set()).map((lead) => lead.agentId)).toEqual(["lead"]);
-  });
-
-  it.each(["unknown-lead", "team-lead", "game-lead-extra", "Lead"])(
-    "rejects the unknown role %s",
-    (role) => {
-      const sessions = { book: { agents: new Map([["other", chat("other", "Other", { role })]]) } };
-      expect(chatLeads(sessions, new Set())).toEqual([]);
+describe("liveProjectSeats", () => {
+  it.each(["idle", "running", "error", "initializing"])(
+    "keeps a current seated lead with status %s",
+    (status) => {
+      expect(liveProjectSeats([seat], projects, new Map([["lead", { status }]]))).toEqual([seat]);
     },
   );
-
-  it("leaves out shown, archived, closed, main assistant and other-line chats", () => {
-    const sessions = {
-      mini: {
-        agents: new Map([
-          ["seated", chat("seated", "Seated", line)],
-          ["old", chat("old", "Old", line, { archivedAt: "2026-10-01" })],
-          ["shut", chat("shut", "Shut", line, { status: "closed" })],
-          ["main", chat("main", "Main", { ...line, "fulcra.seat": "main-assistant" })],
-          ["owner", chat("owner", "Owner", { "fulcra.reports-to": "owner" })],
-          ["none", chat("none", "None", {})],
-          ["ok", chat("ok", "", line)],
-        ]),
-      },
+  it.each([
+    { role: "prime" },
+    { state: "vacant" },
+    { projectId: null },
+    { sessionId: null },
+    { sessionPresent: false },
+    { sessionTaskMatches: false },
+    { sessionGenerationChanged: true },
+  ])("rejects a stale or non-lead seat: %j", (patch) => {
+    expect(liveProjectSeats([{ ...seat, ...patch } as Seat], projects, agents)).toEqual([]);
+  });
+  it.each([
+    undefined,
+    { available: false, projects: projects.projects },
+    { available: true, projects: [] },
+    { available: true, projects: [{ ...projects.projects[0]!, status: "archived" }] },
+    { available: true, projects: [{ ...projects.projects[0]!, archivedAt: "2026-01-01" }] },
+  ])("requires a known non-archived project: %j", (read) => {
+    expect(liveProjectSeats([seat], read, agents)).toEqual([]);
+  });
+  it.each([
+    undefined,
+    new Map(),
+    new Map([["lead", { status: "closed" }]]),
+    new Map([["lead", { status: "idle", archivedAt: "2026-01-01" }]]),
+    new Map([["lead", { status: "unavailable" }]]),
+  ])("requires a live native session: %j", (read) => {
+    expect(liveProjectSeats([seat], projects, read)).toEqual([]);
+  });
+  it("does not promote a reloaded label-only session or its saved orchestrator title", () => {
+    const reloaded = {
+      status: "idle",
+      labels: { "fulcra.reports-to": "role:main-assistant", role: "lead" },
+      title: "Saved project orchestrator",
+      updatedAt: new Date().toISOString(),
     };
-    const found = chatLeads(sessions, new Set(["seated"]));
-    expect(found.map((l) => l.agentId)).toEqual(["ok"]);
-    expect(found[0]!.title).toBe("Lead");
+    expect(liveProjectSeats([], projects, new Map([["old", reloaded]]))).toEqual([]);
   });
 });
 
-describe("chatStatusLabel", () => {
-  it("uses the Team map words and nothing for an unknown status", () => {
-    expect(chatStatusLabel("running")).toBe("Working");
-    expect(chatStatusLabel("idle")).toBe("Idle");
-    expect(chatStatusLabel("error")).toBe("Needs attention");
-    expect(chatStatusLabel(undefined)).toBeNull();
-    expect(chatStatusLabel("weird")).toBeNull();
-  });
+it("uses shared status words", () => {
+  expect(chatStatusLabel("running")).toBe("Working");
+  expect(chatStatusLabel("idle")).toBe("Idle");
+  expect(chatStatusLabel(undefined)).toBeNull();
 });

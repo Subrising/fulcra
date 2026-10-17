@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { navigateToAgent } from "@/utils/navigate-to-agent";
 import { Pressable, Text, View } from "react-native";
 import { EditingTextInput, type EditingTextInputHandle } from "@/components/ui/text-input";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -28,7 +27,6 @@ import { useOrganizationIntakePreferences } from "@/stores/organization-intake-p
 import { mergeMainAssistants, useMainAssistantReads } from "./home-computer";
 import { mainAssistant } from "../../../../control/orca-organization/shared/team";
 import { useSessionStore } from "@/stores/session-store";
-import { useLeadsMemory, type RememberedLead } from "@/stores/leads-memory-store";
 import { pluginRegistry, useControllerPlugin, useUntrustedPlugins } from "./registry";
 import { PluginInstallationProvider } from "./installation-provider";
 import { usePluginHostNavigation } from "./host-navigation";
@@ -39,7 +37,7 @@ import { fleetRpc, type Fleet } from "../../../../control/orca-organization/shar
 import { projectsRpc } from "../../../../control/orca-organization/shared/projects";
 import { STATE_LABEL, stateOf } from "../../../../control/orca-organization/client/team-tree";
 import { create } from "zustand";
-import { chatLeads } from "./sidebar-chat-leads";
+import { liveProjectSeats } from "./sidebar-chat-leads";
 import { effectiveChatStatus, lastKnownStatusLine } from "@getpaseo/protocol/chat-status";
 
 import type { Theme } from "@/styles/theme";
@@ -279,7 +277,7 @@ export function PrimeSidebarRows({
             directory={available ? query.data! : null}
             nodes={nodes}
             projectName={projectName}
-            projectsKnown={projects.data !== undefined}
+            projects={projects.isError ? undefined : projects.data}
             navigation={navigation}
             leadership={leadership}
             onBeforeNavigate={onBeforeNavigate}
@@ -379,7 +377,7 @@ function LeadRows({
   directory,
   nodes,
   projectName,
-  projectsKnown,
+  projects,
   navigation,
   leadership,
   onBeforeNavigate,
@@ -388,38 +386,20 @@ function LeadRows({
   directory: { primes?: Seat[]; projectSeats?: Seat[] } | null;
   nodes: ReadonlyMap<string, FleetNode>;
   projectName: ReadonlyMap<string, string>;
-  /** False while the projects read has failed or not answered: a seated lead is then still shown. */
-  projectsKnown: boolean;
+  projects: Parameters<typeof liveProjectSeats>[1];
   navigation: ReturnType<typeof usePluginHostNavigation>;
   leadership: () => void;
   onBeforeNavigate?: () => void;
 }) {
-  // Leads of archived projects are hidden with their project, but only when the project list was read: a failed
-  // projects read must not hide every seated lead.
-  const leads = (directory?.projectSeats ?? []).filter(
-    (seat) =>
-      seat.state === "assigned" &&
-      seat.projectId &&
-      (!projectsKnown || projectName.has(seat.projectId)),
+  const sessions = useSessionStore((state) => state.sessions);
+  const leads = liveProjectSeats(
+    directory?.projectSeats ?? [],
+    projects,
+    sessions[serverId]?.agents,
   );
   const main = directory ? mainAssistant(directory.primes) : null;
   const mainNode = main?.sessionId ? nodes.get(main.sessionId) : undefined;
-  const { live: remote, remembered: rememberedLeads } = useOtherHostLeads(serverId);
-  const sessions = useSessionStore((state) => state.sessions);
-  const seatedIds = new Set([
-    ...[main, ...leads, ...remote.map((lead) => lead.seat)].flatMap((seat) =>
-      seat?.sessionId ? [seat.sessionId] : [],
-    ),
-    // A remembered lead stays one row even while its chat is still in this app's chat list.
-    ...rememberedLeads.map((lead) => lead.sessionId),
-  ]);
-  const chatLeadRows = useMemo(
-    () => chatLeads(sessions, seatedIds),
-    // seatedIds is rebuilt each render from the values below.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessions, [...seatedIds].sort().join(",")],
-  );
-  const hosts = useHosts();
+  const remote = useOtherHostLeads(serverId);
   const listMain = useLeadsListedMainAssistant((state) => state.set);
   const listed = main !== null;
   useEffect(() => {
@@ -458,22 +438,6 @@ function LeadRows({
           />
         );
       })}
-      {chatLeadRows.map((lead) => (
-        <ChatLeadRow
-          key={`chat:${lead.serverId}:${lead.agentId}`}
-          lead={lead}
-          hostLabel={hosts.find((host) => host.serverId === lead.serverId)?.label}
-          navigation={navigation}
-          onBeforeNavigate={onBeforeNavigate}
-        />
-      ))}
-      {rememberedLeads.map((lead) => (
-        <RememberedLeadRow
-          key={`remembered:${lead.serverId}:${lead.seat}`}
-          lead={lead}
-          onBeforeNavigate={onBeforeNavigate}
-        />
-      ))}
       {remote.map((lead) => (
         <LeadRow
           key={`remote:${lead.serverId}:${lead.seat.seat}`}
@@ -506,9 +470,8 @@ export interface OtherHostLead {
   hostLabel: string;
   seat: Seat;
   project: string;
-  /** False when the projects read failed: `project` is then a placeholder, never to be remembered. */
-  projectKnown: boolean;
   node: FleetNode | undefined;
+  projects: Parameters<typeof liveProjectSeats>[1];
 }
 
 /**
@@ -516,24 +479,23 @@ export interface OtherHostLead {
  * computer's name. The same reads the pinned main assistant makes (role directory, projects, fleet), from each online
  * computer except the home computer. A computer that does not answer shows no rows; the home computer's leads stay.
  */
-function useOtherHostLeads(homeServerId: string): {
-  live: OtherHostLead[];
-  remembered: ShownRememberedLead[];
-} {
+function useOtherHostLeads(homeServerId: string): OtherHostLead[] {
   const hosts = useHosts();
+  const sessions = useSessionStore((state) => state.sessions);
   const ids = useMemo(
     () => hosts.map((host) => host.serverId).filter((id) => id !== homeServerId),
     [hosts, homeServerId],
   );
   const statuses = useHostRuntimeConnectionStatuses(ids);
   const untrusted = useUntrustedPlugins();
-  const needsUpdate = (id: string) =>
-    untrusted.some(
-      (plugin) => plugin.serverId === id && plugin.id === pluginRegistry.controllerPluginId(id),
-    );
-  // An online computer whose Fulcra is not trusted here cannot be read; it is shown from memory.
   const key = ids
-    .filter((id) => statuses.get(id) === "online" && !needsUpdate(id))
+    .filter(
+      (id) =>
+        statuses.get(id) === "online" &&
+        !untrusted.some(
+          (plugin) => plugin.serverId === id && plugin.id === pluginRegistry.controllerPluginId(id),
+        ),
+    )
     .sort()
     .join(",");
   const query = useFetchQuery({
@@ -550,113 +512,21 @@ function useOtherHostLeads(homeServerId: string): {
     dataShape: "list",
     retry: 1,
   });
-  const memory = useLeadsMemory((state) => state.byHost);
-  const remember = useLeadsMemory((state) => state.remember);
-  const labelOf = useCallback(
-    (id: string) => hosts.find((host) => host.serverId === id)?.label ?? "another computer",
-    [hosts],
-  );
-  // Only reads for the computers in the current key count. After a computer goes offline, the list query keeps the
-  // previous key's data for a moment; using it would show a computer's leads twice for one read.
-  const results = useMemo(() => {
-    const current = new Set(key ? key.split(",") : []);
-    return new Map(
-      (key ? (query.data ?? []) : [])
-        .filter((read) => current.has(read.serverId))
-        .map((read) => [read.serverId, read.leads]),
-    );
-  }, [key, query.data]);
-  const memoryRef = useRef(memory);
-  memoryRef.current = memory;
-  // What each computer answered is kept, so it can be shown when the computer is away.
-  useEffect(() => {
-    for (const [id, leads] of results) {
-      if (leads === null) continue;
-      // A failed projects read names no project. The name remembered for the same seat is kept; if there is none,
-      // nothing is saved this time, so the placeholder is never remembered. The next read tries again.
-      const earlier = new Map((memoryRef.current[id] ?? []).map((lead) => [lead.seat, lead]));
-      const entries: RememberedLead[] = [];
-      for (const lead of leads) {
-        const before = earlier.get(lead.seat.seat);
-        const project = lead.projectKnown ? lead.project : before?.project;
-        if (project === undefined) break;
-        entries.push({
-          seat: lead.seat.seat,
-          sessionId: lead.seat.sessionId ?? "",
-          project,
-          title: lead.projectKnown
-            ? chatName(lead.node, `Lead · ${project}`)
-            : (before?.title ?? chatName(lead.node, `Lead · ${project}`)),
-        });
-      }
-      if (entries.length === leads.length) remember(id, entries);
-    }
-  }, [results, remember]);
-  const live = useMemo(
-    () =>
-      [...results.entries()].flatMap(([id, leads]) =>
-        (leads ?? []).map(
-          (lead): OtherHostLead => ({
-            serverId: lead.serverId,
-            seat: lead.seat,
-            project: lead.project,
-            projectKnown: lead.projectKnown,
-            node: lead.node,
-            hostLabel: labelOf(id),
-          }),
-        ),
-      ),
-    [results, labelOf],
-  );
-  const shownRemembered = useMemo(
-    () =>
-      ids.flatMap((id): ShownRememberedLead[] => {
-        const note = rememberedNote(
-          labelOf(id),
-          needsUpdate(id),
-          statuses.get(id) === "online",
-          results.get(id),
-        );
-        // Read fine just now: the live rows show. Not read yet: remembered rows, not greyed, so nothing flickers.
-        if (note === LIVE) return [];
-        return (memory[id] ?? []).map(
-          (lead): ShownRememberedLead => ({
-            seat: lead.seat,
-            sessionId: lead.sessionId,
-            project: lead.project,
-            title: lead.title,
-            serverId: id,
-            note,
-          }),
-        );
-      }),
-    // needsUpdate reads `untrusted` and `ids`; both are listed.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [ids, memory, results, statuses, untrusted, labelOf],
-  );
-  return { live, remembered: shownRemembered };
-}
-
-export interface ShownRememberedLead extends RememberedLead {
-  serverId: string;
-  /** Why the lead is greyed: "<computer> offline", "update Fulcra on <computer>", or null while it is being read. */
-  note: string | null;
-}
-
-const LIVE = Symbol("read now");
-
-/** LIVE when the computer was read now; else the reason its remembered leads are greyed (null: not read yet). */
-export function rememberedNote(
-  label: string,
-  needsUpdate: boolean,
-  online: boolean,
-  read: unknown[] | null | undefined,
-): string | null | typeof LIVE {
-  if (needsUpdate) return `update Fulcra on ${label}`;
-  if (!online) return `${label} offline`;
-  if (read === null) return `Command Centre not answering on ${label}`;
-  if (read === undefined) return null;
-  return LIVE;
+  const current = new Set(key ? key.split(",") : []);
+  return (query.isError ? [] : (query.data ?? [])).flatMap(({ serverId, leads }) => {
+    if (!current.has(serverId) || !leads) return [];
+    const agents = sessions[serverId]?.agents;
+    return leads
+      .filter((lead) => liveProjectSeats([lead.seat], lead.projects, agents).length > 0)
+      .map((lead) => ({
+        serverId: lead.serverId,
+        seat: lead.seat,
+        project: lead.project,
+        projects: lead.projects,
+        node: lead.node,
+        hostLabel: hosts.find((host) => host.serverId === serverId)?.label ?? "another computer",
+      }));
+  });
 }
 
 async function readHostLeads(serverId: string): Promise<Omit<OtherHostLead, "hostLabel">[] | null> {
@@ -668,29 +538,25 @@ async function readHostLeads(serverId: string): Promise<Omit<OtherHostLead, "hos
       available?: boolean;
       projectSeats?: Seat[];
     } | null;
-    // A reply that says it is unavailable is a failed read, not "no leads": the remembered leads stay.
+    // A failed read cannot prove that a project lead is current.
     if (!directory?.available) return null;
     const seats = (directory.projectSeats ?? []).filter(
-      (seat) => seat.state === "assigned" && seat.projectId,
+      (seat) => seat.role === "project-orchestrator" && seat.state === "assigned" && seat.projectId,
     );
     if (!seats.length) return [];
     const [projects, fleet] = (await Promise.all([
       client.invokePluginRpc(plugin, "organization.projects", {}).catch(() => null),
       client.invokePluginRpc(plugin, "organization.fleet", {}).catch(() => null),
-    ])) as [{ projects?: { id: string; name: string }[] } | null, Fleet | null];
+    ])) as [Parameters<typeof liveProjectSeats>[1] | null, Fleet | null];
     const names = new Map((projects?.projects ?? []).map((p) => [p.id, p.name]));
     const nodes = new Map((fleet?.nodes ?? []).map((node) => [node.id, node]));
-    // Leads of archived projects are hidden with their project, as on the home computer. A failed projects read
-    // hides nothing (the lead is then named "project").
-    return seats
-      .filter((seat) => !projects || names.has(seat.projectId!))
-      .map((seat) => ({
-        serverId,
-        seat,
-        project: names.get(seat.projectId!) ?? "project",
-        projectKnown: names.has(seat.projectId!),
-        node: seat.sessionId ? nodes.get(seat.sessionId) : undefined,
-      }));
+    return seats.map((seat) => ({
+      serverId,
+      seat,
+      projects: projects ?? undefined,
+      project: names.get(seat.projectId!) ?? "project",
+      node: seat.sessionId ? nodes.get(seat.sessionId) : undefined,
+    }));
   } catch {
     return null;
   }
@@ -779,38 +645,6 @@ export function PinnedMainAssistant({ onBeforeNavigate }: { onBeforeNavigate?: (
           />
         );
       })}
-      <SessionLeadRows
-        shownIds={new Set(shown.map((entry) => entry.sessionId))}
-        onBeforeNavigate={onBeforeNavigate}
-      />
-    </>
-  );
-}
-
-/** List already-authorized session data when no Command Centre Leads section is mounted. */
-function SessionLeadRows({
-  shownIds,
-  onBeforeNavigate,
-}: {
-  shownIds: ReadonlySet<string>;
-  onBeforeNavigate?: () => void;
-}) {
-  const sections = useLeadsListedMainAssistant((state) => state.sections);
-  const sessions = useSessionStore((state) => state.sessions);
-  const hosts = useHosts();
-  const leads = useMemo(() => chatLeads(sessions, shownIds), [sessions, shownIds]);
-  const collapsed = useSidebarCollapsedSectionsStore((state) => state.collapsedLeads);
-  if (sections.size > 0 || collapsed) return null;
-  return (
-    <>
-      {leads.map((lead) => (
-        <ChatLeadRow
-          key={`${lead.serverId}:${lead.agentId}`}
-          lead={lead}
-          hostLabel={hosts.find((host) => host.serverId === lead.serverId)?.label}
-          onBeforeNavigate={onBeforeNavigate}
-        />
-      ))}
     </>
   );
 }
@@ -996,118 +830,6 @@ export function leadStatusLine(
     return lastKnownStatusLine(chatStatus);
   }
   return `${STATE_LABEL[stateOf(node)]} · ${hostLabel ?? node.host}`;
-}
-
-/**
- * A lead found in the chat list: a chat that reports to the main assistant and holds no seat (for example a lead on
- * another computer that is not seated in this computer's Command Centre). It opens its chat on the computer it lives
- * on and takes "+" new work there, as a seated lead does (0.2.15, FU-57). Its computer is named.
- */
-function ChatLeadRow({
-  lead,
-  hostLabel,
-  navigation,
-  onBeforeNavigate,
-}: {
-  lead: { serverId: string; agentId: string; title: string; status: string | undefined };
-  hostLabel: string | undefined;
-  navigation?: ReturnType<typeof usePluginHostNavigation>;
-  onBeforeNavigate?: () => void;
-}) {
-  const status = ["Lead", lastKnownStatusLine(lead.status), hostLabel ?? "another computer"].join(
-    " · ",
-  );
-  // The navigation of the computer the chat lives on, as for a remembered lead.
-  const hostNavigation = usePluginHostNavigation(lead.serverId);
-  const [composing, setComposing] = useState(false);
-  const open = useCallback(() => {
-    const result =
-      hostNavigation.openAgentOnHost?.({ serverId: lead.serverId, agentId: lead.agentId }) ??
-      navigation?.openAgentOnHost?.({ serverId: lead.serverId, agentId: lead.agentId });
-    if (result !== "requested") {
-      // The chat is in this computer's loaded chat list, so its computer is there: open it anyway, instead of the
-      // Leads page, when the host registry check refuses (the owner saw the Leads page, 11 Oct).
-      navigateToAgent({ serverId: lead.serverId, agentId: lead.agentId });
-    }
-    onBeforeNavigate?.();
-  }, [hostNavigation, lead.agentId, lead.serverId, navigation, onBeforeNavigate]);
-  const toggleCompose = useCallback(() => setComposing((value) => !value), []);
-  const sent = useCallback(() => {
-    setComposing(false);
-    open();
-  }, [open]);
-  return (
-    <View style={styles.row}>
-      <View style={styles.line}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Open ${lead.title} conversation`}
-          onPress={open}
-          testID={`sidebar-chat-lead-${lead.serverId}-${lead.agentId}`}
-          style={styles.main}
-        >
-          <ThemedUsers size={14} uniProps={mutedColor} />
-          <LeadLine title={lead.title} status={status} wrap />
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`New work for ${lead.title}`}
-          onPress={toggleCompose}
-          testID={`sidebar-chat-lead-${lead.serverId}-${lead.agentId}-new-work`}
-          style={styles.plus}
-        >
-          <ThemedPlus size={14} uniProps={mutedColor} />
-        </Pressable>
-      </View>
-      {composing ? (
-        <NewWorkBox
-          title={lead.title}
-          serverId={lead.serverId}
-          agentId={lead.agentId}
-          onSent={sent}
-          onCancel={toggleCompose}
-        />
-      ) : null}
-    </View>
-  );
-}
-
-/**
- * A lead another computer reported earlier, shown greyed because that computer is offline, needs an update, or did not
- * answer. A press opens its chat, which says plainly when the computer is offline.
- */
-function RememberedLeadRow({
-  lead,
-  onBeforeNavigate,
-}: {
-  lead: ShownRememberedLead;
-  onBeforeNavigate?: () => void;
-}) {
-  const navigation = usePluginHostNavigation(lead.serverId);
-  const open = useCallback(() => {
-    if (
-      navigation.openAgentOnHost?.({ serverId: lead.serverId, agentId: lead.sessionId }) ===
-      "requested"
-    )
-      onBeforeNavigate?.();
-  }, [lead.serverId, lead.sessionId, navigation, onBeforeNavigate]);
-  const status = ["Lead", lead.project, lead.note ?? "last known"].join(" · ");
-  return (
-    <View style={[styles.row, lead.note ? styles.greyed : null]}>
-      <View style={styles.line}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Open ${lead.title} conversation. ${lead.note ?? ""}`.trim()}
-          onPress={open}
-          testID={`sidebar-remembered-lead-${lead.serverId}-${lead.seat}`}
-          style={styles.main}
-        >
-          <ThemedUsers size={14} uniProps={mutedColor} />
-          <LeadLine title={lead.title} status={status} />
-        </Pressable>
-      </View>
-    </View>
-  );
 }
 
 function LeadRow({

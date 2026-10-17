@@ -111,7 +111,7 @@ const RECONNECTING = /Reconnecting to host|isn't connected|^Connecting$|is offli
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
-function pluginSources() {
+function pluginSources(sessionIds: string[]) {
   const seat = (n: number, role: string, projectId: string | null) => ({
     role,
     seat: projectId ?? "main",
@@ -119,14 +119,14 @@ function pluginSources() {
     state: "assigned",
     revision: 1,
     task: null,
-    sessionId: null,
+    sessionId: projectId ? sessionIds[n - 2] : null,
     session: null,
     note: null,
     at: null,
     membershipAt: null,
-    sessionPresent: false,
+    sessionPresent: Boolean(projectId),
     sessionGenerationChanged: false,
-    sessionTaskMatches: false,
+    sessionTaskMatches: Boolean(projectId),
     dispatch: null,
   });
   const projects = Array.from({ length: LEADS }, (_, i) => ({
@@ -400,15 +400,6 @@ for (const size of SIZES) {
       sockets.add(socket);
     });
     try {
-      const sources = pluginSources();
-      await writeFile(
-        path.join(directory, "paseo-plugin.json"),
-        JSON.stringify({ id: PLUGIN_ID, requirements: pluginRequirements }),
-      );
-      await writeFile(path.join(directory, "index.client.tsx"), sources.client);
-      await writeFile(path.join(directory, "index.server.ts"), sources.server);
-      await client.patchDaemonConfig({ pluginsEnabled: true });
-      await client.installDirectoryPlugin(directory);
       for (let i = 0; i < 3; i++) {
         const workspace = await seedWorkspace({
           repoPrefix: `fu62-${i}-`,
@@ -425,9 +416,39 @@ for (const size of SIZES) {
         if (i < 2) await workspace.client.setWorkspacePinned(workspace.workspaceId, true);
       }
 
+      const sessionIds: string[] = [];
+      for (let i = 0; i < LEADS; i++) {
+        const agent = await seeded[0]!.client.createAgent({
+          provider: "mock",
+          cwd: seeded[0]!.workspaceDirectory,
+          workspaceId: seeded[0]!.workspaceId,
+          title: `Synthetic seated lead ${i + 1}`,
+        });
+        sessionIds.push(agent.id);
+      }
+      const sources = pluginSources(sessionIds);
+      await writeFile(
+        path.join(directory, "paseo-plugin.json"),
+        JSON.stringify({ id: PLUGIN_ID, requirements: pluginRequirements }),
+      );
+      await writeFile(path.join(directory, "index.client.tsx"), sources.client);
+      await writeFile(path.join(directory, "index.server.ts"), sources.server);
+      await client.patchDaemonConfig({ pluginsEnabled: true });
+      await client.installDirectoryPlugin(directory);
+      const orphan = await seeded[0]!.client.createAgent({
+        provider: "mock",
+        cwd: seeded[0]!.workspaceDirectory,
+        workspaceId: seeded[0]!.workspaceId,
+        title: "Synthetic old project orchestrator",
+        labels: { "fulcra.reports-to": "role:main-assistant", role: "lead" },
+      });
+
       const results: Record<string, unknown> = {};
       {
         await openSidebar(page, seeded[0]!.workspaceId);
+        await expect(
+          page.getByTestId(`sidebar-chat-lead-${getServerId()}-${orphan.id}`),
+        ).toHaveCount(0);
         const result = await measure(page);
         results[size.name] = result;
         await writeFile(path.join(shots, "measurements.json"), JSON.stringify(results, null, 2));

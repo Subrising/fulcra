@@ -1,68 +1,49 @@
-import {
-  MAIN_ASSISTANT_REF,
-  MAIN_ASSISTANT_ROLE,
-  REPORTS_TO_LABEL,
-  SEAT_LABEL,
-} from "@getpaseo/protocol/agent-labels";
-import { chatStatusWord, effectiveChatStatus } from "@getpaseo/protocol/chat-status";
-
-// Fulcra 0.2.14: leads the sidebar finds in the chat list. The role directory lists only chats with a seat, so a
-// chat that reports to the main assistant without a seat (a lead on another computer) never showed.
+import type { Seat } from "../../../../control/orca-organization/shared/roles";
+import { chatStatusWord } from "@getpaseo/protocol/chat-status";
 
 interface ChatRecord {
-  id: string;
-  title?: string | null;
   status?: string;
-  requiresAttention?: boolean | null;
-  attentionReason?: string | null;
   archivedAt?: unknown;
-  labels?: Record<string, string> | null;
 }
 
-export interface ChatLead {
-  serverId: string;
-  agentId: string;
-  title: string;
-  status: string | undefined;
+interface Projects {
+  available: boolean;
+  projects: readonly { id: string; name: string; status: string; archivedAt?: unknown }[];
 }
 
-type Sessions = Record<string, { agents: ReadonlyMap<string, ChatRecord> } | undefined>;
-
-// Display labels recognized by report-up/project cleanup, plus the existing game-lead label.
-// These labels grant no authority. Unknown suffixes do not define a lead.
-const LEAD_ROLES = new Set(["lead", "project-lead", "game-lead"]);
-
-function isLead(agent: ChatRecord): boolean {
-  if (agent.labels?.[REPORTS_TO_LABEL]?.trim() === MAIN_ASSISTANT_REF) return true;
-  const role = agent.labels?.role?.trim() || agent.labels?.["fulcra.role"]?.trim();
-  return LEAD_ROLES.has(role ?? "");
-}
-
-/**
- * Open chats, on every connected computer, that report to the main assistant or carry an explicit lead role: they act
- * as leads. Chats already shown from the role directory (`shownIds`) and the main assistant itself are left out.
- */
-export function chatLeads(sessions: Sessions, shownIds: ReadonlySet<string>): ChatLead[] {
-  const leads: ChatLead[] = [];
-  for (const [serverId, session] of Object.entries(sessions)) {
-    for (const agent of session?.agents.values() ?? []) {
-      if (agent.archivedAt || agent.status === "closed" || shownIds.has(agent.id)) continue;
-      if (!isLead(agent)) continue;
-      if (agent.labels?.[SEAT_LABEL]?.trim() === MAIN_ASSISTANT_ROLE) continue;
-      leads.push({
-        serverId,
-        agentId: agent.id,
-        title: agent.title?.trim() || "Lead",
-        status: effectiveChatStatus(agent),
-      });
-    }
-  }
-  return leads.sort(
-    (a, b) => a.title.localeCompare(b.title) || a.serverId.localeCompare(b.serverId),
+/** Labels and saved lead names cannot establish a current project seat. */
+export function liveProjectSeats(
+  seats: readonly Seat[],
+  projects: Projects | undefined,
+  agents: ReadonlyMap<string, ChatRecord> | undefined,
+): Seat[] {
+  if (!projects?.available || !agents) return [];
+  const active = new Set(
+    projects.projects
+      .filter((project) => project.status !== "archived" && !project.archivedAt)
+      .map((project) => project.id),
   );
+  return seats.filter((seat) => {
+    if (
+      seat.role !== "project-orchestrator" ||
+      seat.state !== "assigned" ||
+      !seat.projectId ||
+      !active.has(seat.projectId) ||
+      !seat.sessionId ||
+      !seat.sessionPresent ||
+      !seat.sessionTaskMatches ||
+      seat.sessionGenerationChanged
+    )
+      return false;
+    const agent = agents.get(seat.sessionId);
+    return Boolean(
+      agent &&
+      !agent.archivedAt &&
+      ["idle", "running", "error", "initializing"].includes(agent.status ?? ""),
+    );
+  });
 }
 
-/** A chat's own status from the chat list, in the words shared with the Leads page; null when it has none. */
 export function chatStatusLabel(status: string | undefined): string | null {
   return chatStatusWord(status);
 }
