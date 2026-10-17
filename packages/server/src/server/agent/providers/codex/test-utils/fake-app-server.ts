@@ -118,13 +118,13 @@ export interface FakeCodexAppServer {
   waitForApprovalDecision(itemId: string): Promise<unknown>;
   requestMcpElicitation(params: {
     threadId: string;
-    turnId: string | null;
+    turnId?: string | null;
     serverName: string;
     message: string;
     requestedSchema: Record<string, unknown>;
-  }): void;
-  waitForMcpElicitationDecision(): Promise<unknown>;
-  resolvesMcpElicitation(): void;
+  }): number;
+  waitForMcpElicitationDecision(requestId?: number): Promise<unknown>;
+  resolvesMcpElicitation(requestId?: number): void;
 }
 
 export function createCodexAppServerChildProcess(): CodexAppServerChildProcess {
@@ -613,25 +613,24 @@ export function createFakeCodexAppServer(
           },
         })}\n`,
       );
+      return requestId;
     },
-    async waitForMcpElicitationDecision() {
-      if (mcpElicitationRequestId === undefined) {
+    async waitForMcpElicitationDecision(requestId = mcpElicitationRequestId) {
+      if (requestId === undefined) {
         throw new Error("No pending fake Codex app-server MCP elicitation");
       }
       const message = await waitForMessage(
         (candidate) =>
-          candidate.id === mcpElicitationRequestId &&
-          !("method" in candidate) &&
-          "result" in candidate,
+          candidate.id === requestId && !("method" in candidate) && "result" in candidate,
         "MCP elicitation response",
       );
       return message.result;
     },
-    resolvesMcpElicitation() {
-      if (mcpElicitationRequestId === undefined) {
+    resolvesMcpElicitation(requestId = mcpElicitationRequestId) {
+      if (requestId === undefined) {
         throw new Error("No pending fake Codex app-server MCP elicitation");
       }
-      writeNotification("serverRequest/resolved", { requestId: mcpElicitationRequestId });
+      writeNotification("serverRequest/resolved", { requestId });
     },
   };
 }

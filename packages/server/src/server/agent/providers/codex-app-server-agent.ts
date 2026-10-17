@@ -1,3 +1,4 @@
+import { computerUseApp, type ComputerUseDecision } from "./codex/computer-use.js";
 import { validateProviderOptions } from "../provider-options.js";
 import {
   baselineForSession,
@@ -3530,6 +3531,7 @@ function resolveCodexParentSubagentId(
 interface CodexPendingPermissionHandler {
   resolve: (value: unknown) => void;
   kind: "command" | "file" | "question" | "mcp_elicitation" | "plan";
+  computerUseApp?: string;
   questions?: CodexQuestionPrompt[];
   plan?: { text: string; turnId: string | undefined };
 }
@@ -3595,6 +3597,10 @@ export class CodexAppServerAgentSession implements AgentSession {
   private persistedProviderSubagentEvents: AgentStreamEvent[] = [];
   private pendingPermissions = new Map<string, AgentPermissionRequest>();
   private mcpElicitationPermissionIds = new Map<number, string>();
+  private computerUseDecisions = new Map<string, ComputerUseDecision>();
+  private computerUsePending = new Map<string, Promise<unknown>>();
+  private computerUseTurnMode: string | null = null;
+  private computerUseFollowers = new Map<number, (answer: unknown) => void>();
   private pendingPermissionHandlers = new Map<string, CodexPendingPermissionHandler>();
   private resolvedPermissionRequests = new Set<string>();
   private pendingAgentMessages = new Map<string, string>();
@@ -3709,6 +3715,18 @@ export class CodexAppServerAgentSession implements AgentSession {
     );
     this.harnessEnvironment = deps.environment ?? buildCodexAppServerEnv();
     this.asyncQuestions = new CodexAsyncQuestions(resumeHandle?.metadata?.asyncQuestions);
+    const decisions = z
+      .record(z.string(), z.enum(["accept", "decline"]))
+      .safeParse(resumeHandle?.metadata?.computerUseDecisions);
+    if (decisions.success) {
+      for (const [app, action] of Object.entries(decisions.data)) {
+        this.computerUseDecisions.set(app, {
+          action,
+          content: action === "accept" ? {} : null,
+          _meta: null,
+        });
+      }
+    }
     this.codexHome = deps.codexHome ?? resolveCodexHomeDir(process.env);
     this.config.thinkingOptionId = normalizeCodexThinkingOptionId(this.config.thinkingOptionId);
     this.serviceTier = readCodexServiceTier(this.config.featureValues);
@@ -4621,6 +4639,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   private prepareForegroundTurnIdentification(turnId: string, options?: AgentRunOptions): void {
+    this.computerUseTurnMode = this.currentMode;
     this.activeForegroundTurnId = turnId;
     this.activeClientMessageId = options?.clientMessageId ?? null;
     this.currentTurnId = null;
@@ -5211,6 +5230,14 @@ export class CodexAppServerAgentSession implements AgentSession {
       this.emitDeniedToolCallTimelineEvent({ requestId, response, pendingRequest });
     }
 
+    if (pending.computerUseApp && !(response.behavior === "deny" && response.interrupt)) {
+      const action = response.behavior === "allow" ? "accept" : "decline";
+      this.computerUseDecisions.set(pending.computerUseApp, {
+        action,
+        content: action === "accept" ? {} : null,
+        _meta: null,
+      });
+    }
     this.emitEvent({
       type: "permission_resolved",
       provider: CODEX_PROVIDER,
@@ -5451,6 +5478,9 @@ export class CodexAppServerAgentSession implements AgentSession {
         systemPrompt: this.config.systemPrompt,
         mcpServers: this.config.mcpServers,
         asyncQuestions: this.asyncQuestions.serialize(),
+        computerUseDecisions: Object.fromEntries(
+          [...this.computerUseDecisions].map(([app, decision]) => [app, decision.action]),
+        ),
       },
     };
   }
@@ -5563,11 +5593,18 @@ export class CodexAppServerAgentSession implements AgentSession {
       if (pending.kind === "plan") {
         this.recordPlanOutcome(requestId, "canceled");
       }
-      pending.resolve({ decision: "cancel" });
+      pending.resolve(
+        pending.computerUseApp
+          ? { action: "cancel", content: null, _meta: null }
+          : { decision: "cancel" },
+      );
       this.pendingPermissionHandlers.delete(requestId);
       this.pendingPermissions.delete(requestId);
     }
     this.mcpElicitationPermissionIds.clear();
+    for (const resolve of this.computerUseFollowers.values())
+      resolve({ action: "cancel", content: null, _meta: null });
+    this.computerUseFollowers.clear();
     this.resolvedPermissionRequests.clear();
   }
 
@@ -6037,6 +6074,12 @@ export class CodexAppServerAgentSession implements AgentSession {
     }
     const notificationParams = toObjectRecord(params);
     if (method === "serverRequest/resolved" && typeof notificationParams?.requestId === "number") {
+      const follower = this.computerUseFollowers.get(notificationParams.requestId);
+      if (follower) {
+        this.computerUseFollowers.delete(notificationParams.requestId);
+        follower({ action: "cancel", content: null, _meta: null });
+        return;
+      }
       const requestId = this.mcpElicitationPermissionIds.get(notificationParams.requestId);
       if (requestId) {
         const pending = this.pendingPermissionHandlers.get(requestId);
@@ -7985,6 +8028,32 @@ export class CodexAppServerAgentSession implements AgentSession {
     });
   }
 
+  private fullAccessComputerUse(): boolean {
+    const preset = MODE_PRESETS[this.currentMode];
+    return (
+      !this.config.internal &&
+      this.initialResumePurpose === "interactive" &&
+      this.currentMode === "full-access" &&
+      (!this.activeForegroundTurnId || this.computerUseTurnMode === "full-access") &&
+      (this.providerOptions.approval_policy ?? preset?.approvalPolicy) === "never" &&
+      (this.providerOptions.sandbox_mode ?? preset?.sandbox) === "danger-full-access"
+    );
+  }
+
+  private auditComputerUse(app: string): void {
+    const timestamp = new Date().toISOString();
+    this.emitEvent({
+      type: "timeline",
+      provider: CODEX_PROVIDER,
+      timestamp,
+      item: {
+        type: "notification",
+        level: "info",
+        message: `Computer Use auto-accepted: ${app} at ${timestamp}.`,
+      },
+    });
+  }
+
   private handleMcpElicitationRequest(params: unknown, serverRequestId: number): Promise<unknown> {
     const parsed = z
       .object({
@@ -8004,6 +8073,34 @@ export class CodexAppServerAgentSession implements AgentSession {
     const requiredFields = toObjectRecord(parsed.requestedSchema)?.required;
     if (Array.isArray(requiredFields) && requiredFields.length > 0) {
       return Promise.resolve({ action: "decline", content: null, _meta: null });
+    }
+    const app =
+      this.fullAccessComputerUse() && parsed.threadId === this.currentThreadId
+        ? computerUseApp(parsed)
+        : null;
+    if (app) {
+      const prior = this.computerUseDecisions.get(app);
+      if (prior) {
+        if (prior.action === "accept") this.auditComputerUse(app);
+        return Promise.resolve(prior);
+      }
+      const pending = this.computerUsePending.get(app);
+      if (pending) {
+        return new Promise((resolve) => {
+          this.computerUseFollowers.set(serverRequestId, resolve);
+          void pending.then((answer) => {
+            if (!this.computerUseFollowers.delete(serverRequestId)) return;
+            if (toObjectRecord(answer)?.action === "accept") this.auditComputerUse(app);
+            resolve(answer);
+          });
+        });
+      }
+      if (this.config.computerUse?.allowApps.includes(app)) {
+        const decision: ComputerUseDecision = { action: "accept", content: {}, _meta: null };
+        this.computerUseDecisions.set(app, decision);
+        this.auditComputerUse(app);
+        return Promise.resolve(decision);
+      }
     }
     const requestId = `permission-${randomUUID()}`;
     const request: AgentPermissionRequest = {
@@ -8027,10 +8124,21 @@ export class CodexAppServerAgentSession implements AgentSession {
     };
     this.pendingPermissions.set(requestId, request);
     this.mcpElicitationPermissionIds.set(serverRequestId, requestId);
-    this.emitEvent({ type: "permission_requested", provider: CODEX_PROVIDER, request });
-    return new Promise((resolve) => {
-      this.pendingPermissionHandlers.set(requestId, { resolve, kind: "mcp_elicitation" });
+    const response = new Promise<unknown>((resolve) => {
+      this.pendingPermissionHandlers.set(requestId, {
+        resolve,
+        kind: "mcp_elicitation",
+        computerUseApp: app ?? undefined,
+      });
     });
+    if (app) {
+      this.computerUsePending.set(app, response);
+      void response.then(() => {
+        this.computerUsePending.delete(app);
+      });
+    }
+    this.emitEvent({ type: "permission_requested", provider: CODEX_PROVIDER, request });
+    return response;
   }
 }
 

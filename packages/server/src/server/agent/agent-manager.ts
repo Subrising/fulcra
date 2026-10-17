@@ -1,3 +1,4 @@
+import { computerUseFromLabels } from "./providers/codex/computer-use.js";
 import { SessionCostOutbox, type PendingSessionCost } from "./session-cost-outbox.js";
 import { recordSessionCost, sessionCost, type SessionCostRecords } from "./session-cost.js";
 import { queuedAgentMessagesFor } from "../queued-agent-messages.js";
@@ -829,7 +830,17 @@ function validateAgentId(agentId: string, source: string): string {
 function applyLabelPatch(
   labels: Record<string, string>,
   patch: AgentLabelPatch,
+  provider: AgentProvider,
 ): Record<string, string> {
+  if (
+    provider === "codex" &&
+    Object.hasOwn(patch, "computerUse.allowApps") &&
+    patch["computerUse.allowApps"] !== labels["computerUse.allowApps"]
+  ) {
+    throw new Error(
+      "computerUse.allowApps is fixed at job creation. Start a new job to change it.",
+    );
+  }
   const nextLabels = { ...labels };
   for (const [key, value] of Object.entries(patch)) {
     if (value === null) {
@@ -2961,6 +2972,7 @@ export class AgentManager {
     this.assertAcceptingAgentRegistrations();
     const resolvedAgentId = validateAgentId(agentId ?? this.idFactory(), "createAgent");
     this.assertInjectionLabelWrite(options.labels);
+    if (config.provider === "codex") computerUseFromLabels(options.labels);
     options = withoutSeatLabel(options);
     if (this.pluginLifecycle && !config.internal) {
       // Update-7 W3 (R1 P-3 seam): a create with a caller shows the hook the caller's provider, mode and mode class,
@@ -3145,6 +3157,15 @@ export class AgentManager {
     const record = this.registry ? await this.registry.get(resolvedAgentId) : null;
     requireRecord?.(record);
     this.assertChangedInjectionLabels(options?.labels, record?.labels);
+    if (
+      record?.provider === "codex" &&
+      options?.labels &&
+      options.labels["computerUse.allowApps"] !== record.labels["computerUse.allowApps"]
+    ) {
+      throw new Error(
+        "computerUse.allowApps is fixed at job creation. Start a new job to change it.",
+      );
+    }
     const labels = options?.labels ?? record?.labels;
     const currentResumeOptions = record
       ? { purpose: record.archivedAt ? ("history" as const) : ("interactive" as const) }
@@ -4864,7 +4885,7 @@ export class AgentManager {
     const liveAgent = this.agents.get(agentId);
     if (liveAgent) {
       this.assertArchiveLeadLabelWrite(patch, liveAgent.labels);
-      liveAgent.labels = applyLabelPatch(liveAgent.labels, patch);
+      liveAgent.labels = applyLabelPatch(liveAgent.labels, patch, liveAgent.provider);
       this.touchUpdatedAt(liveAgent);
       await this.persistSnapshot(liveAgent);
       this.emitState(liveAgent, { persist: false });
@@ -4891,7 +4912,9 @@ export class AgentManager {
     const nextRecord = {
       ...record,
       ...(patch.title ? { title: patch.title } : {}),
-      ...(patch.labels ? { labels: applyLabelPatch(record.labels, patch.labels) } : {}),
+      ...(patch.labels
+        ? { labels: applyLabelPatch(record.labels, patch.labels, record.provider) }
+        : {}),
       updatedAt: this.nextStoredUpdatedAt(record),
     };
     await registry.upsert(nextRecord);
@@ -5206,7 +5229,9 @@ export class AgentManager {
     const restored: StoredAgentRecord = {
       ...record,
       ...(updates?.workspaceId ? { workspaceId: updates.workspaceId } : {}),
-      ...(updates?.labels ? { labels: applyLabelPatch(record.labels, updates.labels) } : {}),
+      ...(updates?.labels
+        ? { labels: applyLabelPatch(record.labels, updates.labels, record.provider) }
+        : {}),
       archivedAt: null,
       updatedAt: this.nextStoredUpdatedAt(record),
     };
@@ -9692,6 +9717,11 @@ export class AgentManager {
         nativeReportWitness: reportLaunch?.witness,
       }),
     );
+    if (storedConfig.provider === "codex") {
+      launchConfig.computerUse = computerUseFromLabels(
+        options.labels ?? this.agents.get(agentId)?.labels,
+      );
+    }
     return { storedConfig, launchConfig, paseoToolPolicy };
   }
 

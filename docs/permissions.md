@@ -99,6 +99,31 @@ first. A refresh resumes the same provider session and asserts the resumed ident
 the timeline and native session id survive; a provider that resumes anything else fails
 the refresh.
 
+## Computer-use app consent for a job
+
+A lead can name apps when it creates a Codex worker:
+
+```json
+{
+  "provider": "codex",
+  "title": "App task",
+  "initialPrompt": "Complete the app task.",
+  "settings": { "modeId": "full-access" },
+  "labels": { "computerUse.allowApps": "[\"VRoid Studio\",\"Simulator\"]" }
+}
+```
+
+The label is a JSON array of exact app names. It is fixed when the job starts.
+It applies only to full-access Codex sessions with `approval_policy=never` and `sandbox_mode=danger-full-access`.
+A listed app needs no lead approval. Each automatic accept writes the app name and UTC time to the session timeline.
+An unlisted app asks the lead once. The session remembers explicit accepts and declines, including after reload.
+Concurrent requests for the same app share that answer. A canceled request can ask again.
+Other MCP forms and URLs keep their existing behavior. Restricted sessions and Claude keep their existing behavior.
+
+Codex native approval policy does not answer MCP elicitations. Those requests use a separate protocol path.
+This grant covers only the empty app-consent form from the computer-use MCP server.
+It does not grant operating-system access or remove operating-system prompts.
+
 ## Hub
 
 The Hub authenticates as a service principal. Its locally selected grants decide whether it may execute agents, manage the daemon, manage tunnels, or manage access.
