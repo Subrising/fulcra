@@ -1,4 +1,9 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { QueuedAgentMessages, queuedAgentMessagesFor } from "../queued-agent-messages.js";
+import { FINAL_INPUT_CHECK } from "../agent/agent-sdk-types.js";
+import { commitFinalInputCheck, recordFinalInputHandoff } from "../agent/final-input-check.js";
+import { createPaseoToolCatalog } from "../agent/tools/paseo-tools.js";
+import { ProviderSnapshotManager } from "../agent/provider-snapshot-manager.js";
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { realpathSync, watch } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -172,7 +177,7 @@ test("WebSocket sends steer the native turn and combine three queued messages in
     await manager.trustedPlugins.daemon(() => manager.cancelAgentRun(target.id));
     await first;
     await iterator.return(undefined);
-    await vi.waitFor(() => expect(prompts).toHaveLength(1));
+    await vi.waitFor(() => expect(prompts).toHaveLength(1), { timeout: 5000 });
     expect(prompts).toEqual([
       `Message 1 from ${sender.id}:\none\n\nMessage 2 from ${sender.id}:\ntwo\n\nMessage 3 from ${sender.id}:\nthree`,
     ]);
@@ -346,6 +351,152 @@ test("two isolated daemons create one remote worker and deliver a role notice th
     expect(invalid.status).toBe(403);
     expect(target.daemon.agentManager.listAgents()).toHaveLength(2);
 
+    const parentInputs: string[] = [];
+    const offParent = source.daemon.agentManager.subscribe(
+      (event) => {
+        if (
+          event.type === "agent_stream" &&
+          event.agentId === lead.id &&
+          event.event.type === "timeline" &&
+          event.event.item.type === "user_message"
+        )
+          parentInputs.push(event.event.item.text);
+      },
+      { replayState: false },
+    );
+    const sourceClient = new DaemonClient({
+      url: `ws://127.0.0.1:${source.port}/ws`,
+      password: "source-test-password",
+    });
+    await sourceClient.connect();
+    try {
+      const destination = `${receipt.agentId}@${target.daemon.getServerId()}`;
+      const catalog = createPaseoToolCatalog({
+        agentManager: source.daemon.agentManager,
+        agentStorage: source.daemon.agentStorage,
+        providerSnapshotManager: Object.create(ProviderSnapshotManager.prototype),
+        callerAgentId: lead.id,
+        serverId: source.daemon.getServerId(),
+        logger: createTestLogger(),
+      });
+      for (const [index, route] of ["send", "steer", "MCP"].entries()) {
+        if (route === "MCP")
+          await catalog.executeTool("send_agent_prompt", {
+            agentId: destination,
+            prompt: "Remote follow-up.",
+          });
+        else
+          await sourceClient.sendAgentMessage(destination, "Remote follow-up.", {
+            sender: { agentId: lead.id },
+            ...(route === "steer" ? { activeTurnBehavior: "steer" as const } : {}),
+          });
+        await vi.waitFor(() => expect(parentInputs).toHaveLength(index + 1), { timeout: 20000 });
+        expect(parentInputs[index]).toContain(receipt.agentId!);
+        await source.daemon.agentManager.waitForAgentEvent(lead.id);
+      }
+      for (const route of ["queue", "fallback", "native steer"]) {
+        const remoteManager = target.daemon.agentManager;
+        const live = remoteManager.getAgent(receipt.agentId!)!;
+        const startsBefore = turns.filter((id) => id === live.id).length;
+        const noticesBefore = parentInputs.length;
+        vi.spyOn(live.session!, "startTurn").mockResolvedValueOnce({ turnId: `held-${route}` });
+        const iterator = remoteManager.trustedPlugins.agentInput(() =>
+          remoteManager.streamAgent(live.id, "held work"),
+        );
+        const first = iterator.next();
+        await vi.waitFor(() =>
+          expect(remoteManager.getAgent(live.id)?.activeForegroundTurnId).toBe(`held-${route}`),
+        );
+        live.session!.steerActiveTurn = vi.fn(async (_prompt, options) => {
+          if (route === "fallback") return { status: "unavailable" as const };
+          commitFinalInputCheck(options?.[FINAL_INPUT_CHECK]);
+          recordFinalInputHandoff(options?.[FINAL_INPUT_CHECK]);
+          return { status: "accepted" as const };
+        });
+        for (const text of ["one", "two", "three"]) {
+          await sourceClient.sendAgentMessage(destination, text, {
+            sender: { agentId: lead.id },
+            ...(route !== "queue" ? { activeTurnBehavior: "steer" as const } : {}),
+          });
+        }
+        expect(parentInputs).toHaveLength(noticesBefore);
+        Reflect.get(live.session!, "notifySubscribers").call(live.session, {
+          type: "turn_completed",
+          provider: "codex",
+          turnId: `held-${route}`,
+        });
+        await first;
+        await iterator.return(undefined);
+        await vi.waitFor(() => expect(parentInputs).toHaveLength(noticesBefore + 1), {
+          timeout: 20000,
+        });
+        expect(turns.filter((id) => id === live.id).length - startsBefore).toBe(
+          route === "native steer" ? 1 : 2,
+        );
+        await source.daemon.agentManager.waitForAgentEvent(lead.id);
+      }
+      await sourceClient.sendAgentMessage(destination, "Quiet remote follow-up.", {
+        sender: { agentId: lead.id },
+        notifyOnFinish: false,
+      });
+      await vi.waitFor(() =>
+        expect(
+          inputs.some(
+            (item) => item.id === receipt.agentId && item.text === "Quiet remote follow-up.",
+          ),
+        ).toBe(true),
+      );
+      await target.daemon.agentManager.waitForAgentEvent(receipt.agentId!);
+      expect(parentInputs).toHaveLength(6);
+      const remoteManager = target.daemon.agentManager;
+      const remoteStorage = target.daemon.agentStorage;
+      const live = remoteManager.getAgent(receipt.agentId!)!;
+      vi.spyOn(live.session!, "startTurn").mockResolvedValueOnce({ turnId: "held-recovery" });
+      const iterator = remoteManager.trustedPlugins.agentInput(() =>
+        remoteManager.streamAgent(live.id, "held recovery work"),
+      );
+      const first = iterator.next();
+      await vi.waitFor(() =>
+        expect(remoteManager.getAgent(live.id)?.activeForegroundTurnId).toBe("held-recovery"),
+      );
+      for (const text of ["recovery one", "recovery two", "recovery three"])
+        await sourceClient.sendAgentMessage(destination, text, { sender: { agentId: lead.id } });
+      const queue = queuedAgentMessagesFor({
+        agentManager: remoteManager,
+        agentStorage: remoteStorage,
+        logger: createTestLogger(),
+      });
+      await queue.close();
+      const records = JSON.parse(await readFile(remoteStorage.heldMessagesPath, "utf8"));
+      for (const record of records)
+        if (record.agentId === live.id && record.state === "queued") record.state = "dispatching";
+      await writeFile(remoteStorage.heldMessagesPath, JSON.stringify(records));
+      const restored = new QueuedAgentMessages({
+        agentManager: remoteManager,
+        agentStorage: remoteStorage,
+        logger: createTestLogger(),
+      });
+      try {
+        await restored.start();
+        await vi.waitFor(() => expect(parentInputs).toHaveLength(7), { timeout: 20000 });
+        expect(parentInputs[6]).toContain("3 queued message(s)");
+        expect(parentInputs[6]).toContain("uncertain; do not replay");
+        Reflect.get(live.session!, "notifySubscribers").call(live.session, {
+          type: "turn_completed",
+          provider: "codex",
+          turnId: "held-recovery",
+        });
+        await first;
+        await iterator.return(undefined);
+        expect(inputs.some((item) => item.text.includes("recovery one"))).toBe(false);
+      } finally {
+        await restored.close();
+      }
+    } finally {
+      offParent();
+      await sourceClient.close();
+    }
+
     const manager = target.daemon.agentManager;
     await manager.setAgentMode(main.id, "auto-review");
     await sendPromptToAgent({
@@ -355,7 +506,9 @@ test("two isolated daemons create one remote worker and deliver a role notice th
       prompt: 'printf "ok" > permission.txt',
       logger: createTestLogger(),
     });
-    expect((await manager.waitForAgentEvent(main.id)).permission).not.toBe(null);
+    expect((await manager.waitForAgentEvent(main.id, { waitForActive: true })).permission).not.toBe(
+      null,
+    );
     let stopWatch = () => {};
     const queued = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -420,4 +573,4 @@ test("two isolated daemons create one remote worker and deliver a role notice th
     await target?.close();
     await source.close();
   }
-}, 60000);
+}, 120000);

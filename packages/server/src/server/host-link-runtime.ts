@@ -1,5 +1,6 @@
 import { sessionCost } from "./agent/session-cost.js";
 import { loadAgentPolicy } from "./limit-resume/policy.js";
+import { queuedAgentMessagesFor } from "./queued-agent-messages.js";
 import { startHostLimitSharing } from "./host-limit-sharing.js";
 import { realpathSync } from "node:fs";
 import type { Logger } from "pino";
@@ -18,6 +19,7 @@ import { heldSendsFor } from "./held-sends.js";
 import { findRoleHolder, reportsTo, type LineAgent } from "./reporting-lines.js";
 import {
   HostLinks,
+  registerHostLinks,
   HostLinkError,
   type HostLinkDelivery,
   type HostLinkRoleNotice,
@@ -79,7 +81,8 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
       }
       if (event.type !== "agent_stream" || !service) return;
       try {
-        if (event.event.type === "turn_started") service.recordWorkerStarted(event.agentId);
+        if (event.event.type === "turn_started")
+          service.recordWorkerStarted(event.agentId, event.event.turnId);
         else if (event.event.type === "turn_completed")
           service.recordWorkerNotice(
             event.agentId,
@@ -89,6 +92,7 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
               event.agentId,
               `The remote worker finished its turn.\n${lastWorkerMessage(event.agentId)}`,
             ),
+            event.event.turnId,
           );
         else if (event.event.type === "turn_failed")
           service.recordWorkerNotice(
@@ -96,6 +100,7 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
             "failed",
             event.event.turnId ?? "initial",
             finishText(event.agentId, event.event.error),
+            event.event.turnId,
           );
         else if (event.event.type === "turn_canceled")
           service.recordWorkerNotice(
@@ -103,6 +108,7 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
             "failed",
             event.event.turnId ?? "initial",
             finishText(event.agentId, `The remote turn stopped: ${event.event.reason}`),
+            event.event.turnId,
           );
         else if (event.event.type === "permission_resolved")
           service.resolveWorkerPermission(event.agentId, event.event.requestId);
@@ -124,7 +130,7 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
   );
   const deliver = async (delivery: HostLinkDelivery, notice: boolean) => {
     const run = async () => {
-      const final = createFinalInputCheck(delivery.check);
+      const final = createFinalInputCheck(delivery.check, delivery.beforeSend);
       delivery.check();
       await sendPromptToAgent({
         agentManager,
@@ -353,9 +359,32 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
         await waitForFinalInputHandoff(final);
       }),
     notice: roleNotice,
-    prompt: (request) =>
-      heldSendsFor(agentManager, logger).holdAndWait(request.agentId, () =>
-        deliver(request, false),
+    prompt: async (request) => {
+      if (request.steer) {
+        try {
+          await deliver(request, false);
+          return;
+        } catch (error) {
+          if (!(error instanceof SteerUnavailableError)) throw error;
+        }
+      }
+      if (!request.parent)
+        throw new HostLinkError("refused", "Remote prompt has no parent identity.");
+      await queuedAgentMessagesFor({ agentManager, agentStorage, logger }).enqueue(
+        request.agentId,
+        {
+          text: request.text,
+          messageId: request.messageId,
+          sender: request.parent,
+          hostLinkMessageId: request.messageId,
+        },
+        input.serverId,
+      );
+    },
+    promptState: (agentId, messageId) =>
+      queuedAgentMessagesFor({ agentManager, agentStorage, logger }).messageState(
+        agentId,
+        messageId,
       ),
     inspect: async (id) => {
       const agent = agentManager.getAgent(id);
@@ -367,13 +396,16 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
       };
     },
   });
+  registerHostLinks(agentManager, service);
   const stopSharing = startHostLimitSharing(service, input.home, () =>
     logger.warn("Account limit sharing failed; the next pass will retry."),
   );
   let closed = false;
-  const recover = () => {
+  const recover = async () => {
     if (closed) return;
     try {
+      await service!.recoverPromptAdmissions();
+      if (closed) return;
       for (const pending of service!.pendingNoticeWorkers()) {
         const record = agentStorage
           .listCached()

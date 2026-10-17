@@ -15,6 +15,17 @@ import type { AgentSessionConfig } from "./agent-sdk-types.js";
 import { AgentOwnerSchema, daemonExecutionKey, type DaemonAgentOwner } from "./agent-owner.js";
 import { getParentAgentIdFromLabels } from "@getpaseo/protocol/agent-labels";
 
+/** Saved parent labels remain authoritative. Plain reporting lines support CLI-created children. */
+export function finishNoticeParentId(
+  labels: Record<string, string> | null | undefined,
+): string | null {
+  const parent = getParentAgentIdFromLabels(labels);
+  if (parent) return parent;
+  const line = labels?.["fulcra.parent-session"] || labels?.["fulcra.reports-to"];
+  const parsed = z.string().uuid().safeParse(line);
+  return parsed.success ? parsed.data : null;
+}
+
 const FinishNoticeSchema = z
   .object({
     parentId: z.string().uuid(),
@@ -222,26 +233,38 @@ export class AgentStorage {
     };
     await this.queueRecordMutation(agent.id, (existing) => {
       const record = existing ?? toStoredAgentRecord(agent);
-      if (getParentAgentIdFromLabels(record.labels) !== parentId || record.finishNotice)
+      if (finishNoticeParentId(record.labels) !== parentId || record.finishNotice)
         throw new Error("Finish notice ownership changed");
       return { ...record, finishNotice: notice };
     });
     return notice;
   }
 
-  async rearmFinishNotice(agentId: string, parentId: string): Promise<FinishNotice | null> {
+  async rearmFinishNotice(
+    agentId: string,
+    parentId: string,
+    reuseArmed = false,
+  ): Promise<FinishNotice | null> {
     await this.load();
     let next: FinishNotice | null = null;
     await this.queueRecordMutation(agentId, (record) => {
       const prior = record?.finishNotice;
-      if (!record || !prior || getParentAgentIdFromLabels(record.labels) !== parentId) return null;
+      if (!record || finishNoticeParentId(record.labels) !== parentId) return null;
+      if (reuseArmed && prior?.parentId === parentId && prior.status === "armed") {
+        next = prior;
+        return null;
+      }
+      if (!prior && !reuseArmed) return null;
       if (
+        prior &&
         prior.status !== "delivered" &&
         prior.status !== "cancelled" &&
         prior.status !== "unknown" &&
         !(prior.status === "pending" && prior.retryAfterRefusal)
       )
-        throw new Error("Previous finish notice is still active");
+        throw Object.assign(new Error("Previous finish notice is still active"), {
+          code: "FINISH_NOTICE_PENDING",
+        });
       next = {
         parentId: z.string().uuid().parse(parentId),
         owner: "report-up",
@@ -369,7 +392,7 @@ export class AgentStorage {
         !record?.finishNotice ||
         record.finishNotice.status !== "pending" ||
         record.finishNotice.messageId !== messageId ||
-        getParentAgentIdFromLabels(record.labels) !== parentId
+        finishNoticeParentId(record.labels) !== parentId
       )
         throw new Error("Finish notice reparent changed");
       next = { ...record.finishNotice, parentId: z.string().uuid().parse(parentId) };

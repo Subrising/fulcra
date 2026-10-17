@@ -642,6 +642,27 @@ export function hasArmedFinishNotification(
   );
 }
 
+/** Use the saved owner when present. Repeated inputs in one turn keep the same notice. */
+export async function armPromptFinishNotification(
+  params: SetupFinishNotificationParams,
+): Promise<string | null> {
+  let notice;
+  try {
+    notice = await params.agentStorage.rearmFinishNotice(
+      params.childAgentId,
+      params.callerAgentId,
+      true,
+    );
+  } catch (error) {
+    if ((error as { code?: string })?.code === "FINISH_NOTICE_PENDING")
+      throw new SteerUnavailableError(params.childAgentId);
+    throw error;
+  }
+  if (notice) return notice.messageId;
+  setupFinishNotification(params);
+  return null;
+}
+
 export function setupFinishNotification(params: SetupFinishNotificationParams): void {
   const {
     agentManager,

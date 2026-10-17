@@ -1510,6 +1510,8 @@ export const FetchAgentRequestMessageSchema = z.object({
 });
 
 export const SendAgentMessageRequestSchema = z.object({
+  /** Parent sends arm a finish notice unless explicitly disabled. */
+  notifyOnFinish: z.boolean().optional(),
   queue: z.literal(true).optional(),
   // COMPAT(nativeQueuedMessages): added v0.2.0; require feature before requesting, remove gate after 2027-10-01.
   nativeQueue: z.literal(true).optional(),

@@ -25,7 +25,11 @@ import {
 } from "./host-links.js";
 import { startHostLimitSharing } from "./host-limit-sharing.js";
 import { mountHostLinkRoutes } from "./host-link-routes.js";
-import { HostLinkReceiptSchema, type HostLinkConfig } from "./host-link-contracts.js";
+import {
+  HostLinkReceiptSchema,
+  HostLinkJournalSchema,
+  type HostLinkConfig,
+} from "./host-link-contracts.js";
 import {
   accountStatus,
   addAccount,
@@ -168,8 +172,9 @@ async function fixture() {
       notices.push(`${target}:${input.text}`);
       return target;
     },
-    prompt: async (input: { check: () => void; text: string }) => {
+    prompt: async (input: { check: () => void; text: string; beforeSend?: () => void }) => {
       input.check();
+      input.beforeSend?.();
       prompts.push(input.text);
     },
     inspect: async (id: string) => ({ agentId: id, status: "idle", lastMessage: "Done." }),
@@ -1184,7 +1189,7 @@ test("FU-170 crash recovery retains an attempted notice without replay", async (
   await f.source.syncNotifications();
   await f.source.flushNotificationDeliveries();
   const file = path.join(f.sourceHome, "host-links-outbox.json");
-  const journal = JSON.parse(readFileSync(file, "utf8"));
+  const journal = HostLinkJournalSchema.parse(JSON.parse(readFileSync(file, "utf8")));
   Object.values(journal).forEach((entry: unknown) => {
     const record = entry as { receivedNotices: Array<{ state: string }> };
     record.receivedNotices[0]!.state = "sending";
@@ -1666,6 +1671,298 @@ test("editing a legacy account cannot make its old limit override a newer local 
     readFileSync(path.join(f.targetPool, "accounts", "remote-limits.json"), "utf8"),
   );
   expect(stored.observations[0].observedAt).toBe(createdAt);
+});
+
+test("remote parent follow-ups re-arm each turn and joined steers share one notice", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  const child = receipt.agentId!;
+  const { formatWorkerFinish } = loadAgentPolicy("report-notices");
+  f.target.recordWorkerStarted(child, "first-turn");
+  f.target.recordWorkerNotice(
+    child,
+    "finished",
+    "first",
+    formatWorkerFinish("First result.", { totalUsd: 1.25 }),
+    "first-turn",
+  );
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  for (const id of [
+    "22222222-2222-4222-8222-222222222222",
+    "33333333-3333-4333-8333-333333333333",
+  ]) {
+    await f.source.promptForAgent("lead", "target", {
+      agentId: child,
+      prompt: "Follow-up.",
+      messageId: id,
+      steer: true,
+    });
+  }
+  f.target.recordWorkerStarted(child, "second-turn");
+  f.target.recordWorkerNotice(
+    child,
+    "finished",
+    "second",
+    formatWorkerFinish("Second result.", { totalUsd: 4 }),
+    "second-turn",
+  );
+  f.target.recordWorkerNotice(child, "finished", "second", "Duplicate result.");
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(2);
+  expect(f.finishNotices[1]?.text).toContain("Second result.");
+  expect(f.finishNotices[0]?.text).toContain("Session total spend: US$1.250000.");
+  expect(f.finishNotices[1]?.text).toContain("Session total spend: US$4.000000.");
+  await expect(
+    f.source.promptForAgent("other", "target", { agentId: child, prompt: "Refused.", messageId }),
+  ).rejects.toThrow("No unique retained remote worker grant");
+});
+
+test("a remote follow-up can enable notices after creation opted out", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: false,
+  });
+  await f.source.promptForAgent("lead", "target", {
+    agentId: receipt.agentId!,
+    prompt: "Follow-up.",
+    messageId: "22222222-2222-4222-8222-222222222222",
+  });
+  f.target.recordWorkerStarted(receipt.agentId!);
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "next", "Result.");
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+});
+
+test("a late prior-turn response cannot close a new remote notice watch", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerStarted(receipt.agentId!);
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "old", "Old result.");
+  const realFetch = globalThis.fetch;
+  let release!: () => void;
+  let observed!: () => void;
+  const responseReady = new Promise<void>((resolve) => {
+    observed = resolve;
+  });
+  const barrier = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let delay = true;
+  const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, options) => {
+    const result = await realFetch(url, options);
+    if (delay && JSON.parse(String(options?.body)).kind === "notices") {
+      delay = false;
+      observed();
+      await barrier;
+    }
+    return result;
+  });
+  try {
+    const stale = f.source.syncNotifications();
+    await responseReady;
+    await f.source.promptForAgent("lead", "target", {
+      agentId: receipt.agentId!,
+      prompt: "Next task.",
+      messageId: "22222222-2222-4222-8222-222222222222",
+    });
+    release();
+    await stale;
+    expect(retainedReturn(f.sourceHome).complete).toBe(false);
+    f.target.recordWorkerStarted(receipt.agentId!);
+    f.target.recordWorkerNotice(receipt.agentId!, "finished", "next", "New result.");
+    await f.source.syncNotifications();
+    await f.source.flushNotificationDeliveries();
+    expect(f.finishNotices).toHaveLength(2);
+    expect(retainedReturn(f.sourceHome).complete).toBe(true);
+  } finally {
+    release();
+    spy.mockRestore();
+  }
+});
+
+test("acknowledged history remains bounded beyond 128 results", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  const history = Array.from({ length: 128 }, (_, index) => ({
+    id: String(index).padStart(64, "0"),
+    kind: "finished",
+    text: `Historical result ${index}.`,
+  }));
+  const inboxFile = path.join(f.deps.home, "host-links-inbox.json");
+  const outboxFile = path.join(f.sourceHome, "host-links-outbox.json");
+  const inbox = HostLinkJournalSchema.parse(JSON.parse(readFileSync(inboxFile, "utf8")));
+  const outbox = HostLinkJournalSchema.parse(JSON.parse(readFileSync(outboxFile, "utf8")));
+  const owner = Object.values(inbox).find((entry) => entry.profile)!;
+  Object.assign(owner, { notices: history, complete: true, finishArmed: false });
+  const sourceEntry = Object.values(outbox)[0]!;
+  Object.assign(sourceEntry, {
+    complete: true,
+    receivedNotices: history.map((notice) => ({
+      id: notice.id,
+      kind: notice.kind,
+      text: notice.text,
+      state: "delivered",
+      attempts: 0,
+      nextAt: 0,
+    })),
+  });
+  writePrivateFileAtomicSync(inboxFile, JSON.stringify(inbox));
+  writePrivateFileAtomicSync(outboxFile, JSON.stringify(outbox));
+  for (let index = 0; index < 3; index++) {
+    await f.source.promptForAgent("lead", "target", {
+      agentId: receipt.agentId!,
+      prompt: "Next task.",
+      messageId: `22222222-2222-4222-8222-${String(index).padStart(12, "0")}`,
+    });
+    f.target.recordWorkerStarted(receipt.agentId!);
+    f.target.recordWorkerNotice(receipt.agentId!, "finished", `turn-${index}`, `Result ${index}.`);
+    await f.source.syncNotifications();
+    await f.source.flushNotificationDeliveries();
+  }
+  expect(f.finishNotices).toHaveLength(3);
+  expect(retainedReturn(f.sourceHome).receivedNotices?.length).toBeLessThan(3);
+});
+
+test("failed remote admission settles the retained receipt and never retries the task", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "old", "Old result.");
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  const prompt = vi
+    .spyOn(f.deps, "prompt")
+    .mockRejectedValue(new HostLinkError("refused", "Fixture admission refused."));
+  const request = {
+    agentId: receipt.agentId!,
+    prompt: "Next task.",
+    messageId: "22222222-2222-4222-8222-222222222222",
+  };
+  await expect(f.source.promptForAgent("lead", "target", request)).rejects.toMatchObject({
+    code: "refused",
+  });
+  await expect(f.source.promptForAgent("lead", "target", request)).rejects.toMatchObject({
+    code: "refused",
+  });
+  expect(prompt).toHaveBeenCalledOnce();
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(2);
+  expect(f.finishNotices[1]?.text).toContain("not delivered");
+});
+
+test("interrupted admission returns one uncertain result without replay", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "old", "Old result.");
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  const promptId = "22222222-2222-4222-8222-222222222222";
+  await f.source.promptForAgent("lead", "target", {
+    agentId: receipt.agentId!,
+    prompt: "Next task.",
+    messageId: promptId,
+  });
+  const file = path.join(f.deps.home, "host-links-inbox.json");
+  const journal = HostLinkJournalSchema.parse(JSON.parse(readFileSync(file, "utf8")));
+  const pending = Object.values(journal).find(
+    (entry) => entry.promptRequest && entry.receipt.messageId === promptId,
+  )!;
+  pending.receipt.state = "pending";
+  writePrivateFileAtomicSync(file, JSON.stringify(journal));
+  Object.assign(f.deps, { promptState: async () => null });
+  const target = f.restartTarget();
+  await target.recoverPromptAdmissions();
+  await target.recoverPromptAdmissions();
+  expect(f.prompts).toHaveLength(1);
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(2);
+  expect(f.finishNotices[1]?.text).toContain("uncertain; do not replay");
+});
+
+test("history pruning fences an in-flight read from the new watch", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "old", "Old result.");
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  const realFetch = globalThis.fetch;
+  let allowPrompt!: () => void, allowRead!: () => void;
+  let promptReady!: () => void, readReady!: () => void;
+  const promptStarted = new Promise<void>((resolve) => {
+    promptReady = resolve;
+  });
+  const readStarted = new Promise<void>((resolve) => {
+    readReady = resolve;
+  });
+  const promptBarrier = new Promise<void>((resolve) => {
+    allowPrompt = resolve;
+  });
+  const readBarrier = new Promise<void>((resolve) => {
+    allowRead = resolve;
+  });
+  let delay = true;
+  const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, options) => {
+    const kind = JSON.parse(String(options?.body)).kind;
+    if (kind === "prompt") {
+      promptReady();
+      await promptBarrier;
+    }
+    const response = await realFetch(url, options);
+    if (kind === "notices" && delay) {
+      delay = false;
+      readReady();
+      await readBarrier;
+    }
+    return response;
+  });
+  try {
+    const prompt = f.source.promptForAgent("lead", "target", {
+      agentId: receipt.agentId!,
+      prompt: "Next task.",
+      messageId: "22222222-2222-4222-8222-222222222222",
+    });
+    await promptStarted;
+    const stale = f.source.syncNotifications();
+    await readStarted;
+    allowPrompt();
+    await prompt;
+    allowRead();
+    await stale;
+    await f.source.flushNotificationDeliveries();
+    expect(f.finishNotices).toHaveLength(1);
+    f.target.recordWorkerNotice(receipt.agentId!, "finished", "next", "New result.");
+    await f.source.syncNotifications();
+    await f.source.flushNotificationDeliveries();
+    expect(f.finishNotices).toHaveLength(2);
+  } finally {
+    allowPrompt();
+    allowRead();
+    spy.mockRestore();
+  }
 });
 
 test("long remote failures retain spend after target restart and delivery", async () => {

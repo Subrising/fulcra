@@ -314,3 +314,34 @@ describe("send reporting lines", () => {
     expect(connection).not.toHaveBeenCalled();
   });
 });
+
+it("explicit opt-out reaches the daemon for sends and steers", async () => {
+  senderStamp.mockReturnValue({ agentId: "sender" });
+  for (const flags of [[], ["--steer"]]) {
+    await parsedSend(["target", "quiet", "--no-wait", "--no-notify-on-finish", ...flags]);
+    expect(client.sendAgentMessage).toHaveBeenLastCalledWith(
+      "target",
+      "quiet",
+      expect.objectContaining({ notifyOnFinish: false }),
+    );
+  }
+});
+
+it("remote parent sends keep their message identity and return for the finish notice", async () => {
+  senderStamp.mockReturnValue({ agentId: "sender" });
+  const result = await parsedSend(["22222222-2222-4222-8222-222222222222@remote", "follow-up"]);
+  expect(result.data.status).toBe("sent");
+  expect(client.sendAgentMessage).toHaveBeenCalledWith(
+    "22222222-2222-4222-8222-222222222222@remote",
+    "follow-up",
+    expect.objectContaining({ messageId: expect.any(String) }),
+  );
+  expect(client.waitForFinish).not.toHaveBeenCalled();
+});
+
+it("waits for local titles containing @", async () => {
+  senderStamp.mockReturnValue({ agentId: "sender" });
+  const result = await parsedSend(["Child @ home", "local task"]);
+  expect(result.data.status).toBe("completed");
+  expect(client.waitForFinish).toHaveBeenCalledOnce();
+});
