@@ -123,6 +123,8 @@ export interface ReviveDeps {
   settleMs?: number;
   gapMs?: number;
   sessions?: ReviveSessions;
+  /** Saved open states are restored. Start delivery without waiting for provider recovery. */
+  onSessionsReady?: () => void;
   /** The notice step; tests replace it. */
   deliver?: (leadId: string, prompt: string) => Promise<void>;
 }
@@ -208,6 +210,7 @@ export async function reviveAfterRestart(
   const result: ReviveResult = { reopened: [], continued: [], closed: [] };
   if (!deps.isEnabled()) {
     await fs.rm(file, { force: true });
+    deps.onSessionsReady?.();
     return result;
   }
   const restartedAt = stopRecord ? new Date(stopRecord.stoppedAt) : now();
@@ -231,6 +234,7 @@ export async function reviveAfterRestart(
     isLoaded,
   );
   await fs.rm(file, { force: true });
+  deps.onSessionsReady?.();
   const interrupted = [
     ...new Set([
       ...(stopRecord?.interruptedIds ?? []).filter(notLaterThanStop),

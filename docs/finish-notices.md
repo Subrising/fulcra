@@ -5,6 +5,11 @@ Several messages in one turn share one notice. Queued messages form one combined
 A notice marked `delivered` covers its earlier turn only.
 When cost is available, each finish notice includes cumulative session spend, including earlier turns.
 
+After a restart, queued delivery starts when saved open sessions are available.
+An idle, unpaused receiver can start its queued turn while other sessions recover their providers.
+The parent notice is armed before the receiver starts.
+Paused input stays held. Its finish notice stays unarmed until resume. See [provider pauses](notice-pause.md).
+
 Use `fulcra send <child> --prompt-file task.txt --no-wait` on the parent host.
 Use `--steer` to join the current turn when the provider supports steering.
 Use `--no-notify-on-finish` to opt out for that message.
@@ -28,7 +33,7 @@ Do not edit saved session records to create a notice.
 Run the scratch-daemon route tests:
 
 ```sh
-npm exec --workspace=@getpaseo/server -- vitest run src/server/daemon-e2e/send-finish-notice.e2e.test.ts src/server/daemon-e2e/reporting-lines-role.e2e.test.ts
+npm exec --workspace=@getpaseo/server -- vitest run src/server/daemon-e2e/reloaded-cli-send.e2e.test.ts src/server/daemon-e2e/send-finish-notice.e2e.test.ts src/server/daemon-e2e/reporting-lines-role.e2e.test.ts
 ```
 
 These tests use synthetic providers and isolated homes. They check real daemon transports and notice delivery.
