@@ -96,7 +96,7 @@ test.describe("Worktree restore", () => {
           .not.toBeNull();
       }
     } else {
-      await client.refreshAgent(agent.id).catch(() => undefined);
+      await client.refreshAgent(agent.id, undefined, { restore: true }).catch(() => undefined);
       await expect
         .poll(() => fetchAgentArchivedAt(client, agent.id), { timeout: 30_000 })
         .toBeNull();
@@ -477,7 +477,7 @@ test.describe("Worktree restore", () => {
       title: `unrecoverable-${randomUUID().slice(0, 8)}`,
     });
     await archiveLocalWorkspaceFromDaemon(worktreeClient, project.workspaceId);
-    await client.refreshAgent(agent.id).catch(() => undefined);
+    await client.refreshAgent(agent.id, undefined, { restore: true }).catch(() => undefined);
     await expect.poll(() => fetchAgentArchivedAt(client, agent.id), { timeout: 30_000 }).toBeNull();
 
     const displacedProjectPath = `${tempRepo.path}-missing`;

@@ -31,7 +31,7 @@ export async function runRestoreCommand(
     const agent = await findAgentToArchive(client, id);
     if (!agent) throw new Error(`Agent not found: ${id}`);
     if (agent.archivedAt) {
-      const restored = await client.refreshAgent(agent.id);
+      const restored = await client.refreshAgent(agent.id, undefined, { restore: true });
       if (restored.agentId !== agent.id) throw new Error("Restore changed the agent ID.");
     }
     return {

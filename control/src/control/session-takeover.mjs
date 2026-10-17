@@ -49,10 +49,11 @@ export async function takeOverSession(
       if (control.native.route?.(sessionId))
         return refused("Switch this session on the host that runs it");
       const observed = await control.native.inspect(sessionId);
+      if (observed.archivedAt)
+        return refused("This session is archived. Restore it before switching accounts");
       if (
         current?.mode === "delegated" &&
-        (observed.archivedAt ||
-          (observed.boot ?? null) !== current.boot ||
+        ((observed.boot ?? null) !== current.boot ||
           observed.humanAt >= current.grantedAt ||
           control.promptIdentityChanged(observed, current))
       ) {
@@ -64,6 +65,8 @@ export async function takeOverSession(
         return refused("Human activity or changed identity revoked delegation");
       }
       const snapshot = await control.native.snapshot(sessionId);
+      if (snapshot.archivedAt)
+        return refused("This session is archived. Restore it before switching accounts");
       if (
         !["idle", "error", "closed"].includes(snapshot.status) ||
         observed.pending ||

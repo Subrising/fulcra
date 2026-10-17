@@ -63,6 +63,8 @@ export async function runReloadCommand(
       throw error;
     }
 
+    if (agents.find((agent) => agent.id === agentId)?.archivedAt)
+      throw { code: "AGENT_ARCHIVED", message: `Agent is archived: ${agentId}` };
     const result = await client.refreshAgent(agentId);
 
     await client.close();

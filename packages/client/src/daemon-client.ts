@@ -3589,12 +3589,13 @@ export class DaemonClient {
   async refreshAgent(
     agentId: string,
     requestId?: string,
-    options?: { confirmed?: boolean },
+    options?: { confirmed?: boolean; restore?: boolean },
   ): Promise<AgentRefreshedStatusPayload> {
     const resolvedRequestId = this.createRequestId(requestId);
     const message = SessionInboundMessageSchema.parse({
       type: "refresh_agent_request",
       agentId,
+      ...(options?.restore ? { restore: true } : {}),
       ...(options?.confirmed ? { confirmed: true } : {}),
       requestId: resolvedRequestId,
     });
