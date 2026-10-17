@@ -853,7 +853,7 @@ describe("skills controller", () => {
   );
 
   it.skipIf(process.platform === "win32")(
-    "restores updates made through a relative skill-directory symlink",
+    "refuses updates through a relative skill-directory symlink",
     async () => {
       const selection: SkillSelection = { mode: "custom", skills: ["paseo"] };
       const gated = createGatedUnwritableSelectionStore(selection);
@@ -867,10 +867,7 @@ describe("skills controller", () => {
       await symlink(path.relative(readOnly.targets.claudeDir, shared), live, "dir");
       await writeFile(path.join(readOnly.targets.sourceDir, "paseo", "SKILL.md"), "paseo-v2");
 
-      const save = readOnly.controller.save(selection);
-      await gated.persistenceStarted;
-      gated.failPersistence();
-      await expect(save).rejects.toThrow("selection store is read-only");
+      await expect(readOnly.controller.save(selection)).rejects.toThrow(/symbolic link/);
 
       expect((await lstat(live)).isSymbolicLink()).toBe(true);
       expect(await readFile(path.join(shared, "SKILL.md"), "utf8")).toBe("paseo-v1");

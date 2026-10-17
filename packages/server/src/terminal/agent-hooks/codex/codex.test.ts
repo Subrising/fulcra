@@ -77,7 +77,7 @@ describe("Codex terminal agent hooks", () => {
     expect(agentHooksAreInstalled(codexAgentHookProvider, { configDir })).toBe(true);
   });
 
-  it("preserves unrelated user hooks", () => {
+  it("preserves an unowned existing hook file", () => {
     const configDir = createTempDir("paseo-codex-config-preserve-");
     writeFileSync(
       join(configDir, "hooks.json"),
@@ -100,13 +100,10 @@ describe("Codex terminal agent hooks", () => {
     installAgentHooks(codexAgentHookProvider, { configDir });
 
     const stopCommands = commandHooks(readHooksFile(configDir), "Stop").map((hook) => hook.command);
-    expect(stopCommands).toEqual([
-      "say codex done",
-      'if [ -n "$PASEO_TERMINAL_ID" ]; then "${PASEO_HOOK_CLI:-paseo}" hooks codex Stop; fi',
-    ]);
+    expect(stopCommands).toEqual(["say codex done"]);
   });
 
-  it("uninstalls only marker-matched hooks", () => {
+  it("preserves edited hook files during uninstall", () => {
     const configDir = createTempDir("paseo-codex-config-uninstall-");
     installAgentHooks(codexAgentHookProvider, { configDir });
     const config = readHooksFile(configDir);
@@ -122,12 +119,14 @@ describe("Codex terminal agent hooks", () => {
     };
     writeFileSync(join(configDir, "hooks.json"), `${JSON.stringify(config, null, 2)}\n`);
 
+    const edited = readFileSync(join(configDir, "hooks.json"), "utf8");
     uninstallAgentHooks(codexAgentHookProvider, { configDir });
 
-    expect(commandHooks(readHooksFile(configDir), "Stop").map((hook) => hook.command)).toEqual([
+    expect(readFileSync(join(configDir, "hooks.json"), "utf8")).toBe(edited);
+    expect(commandHooks(readHooksFile(configDir), "Stop").map((hook) => hook.command)).toContain(
       "say still-here",
-    ]);
-    expect(agentHooksAreInstalled(codexAgentHookProvider, { configDir })).toBe(false);
+    );
+    expect(agentHooksAreInstalled(codexAgentHookProvider, { configDir })).toBe(true);
   });
 
   it.each([

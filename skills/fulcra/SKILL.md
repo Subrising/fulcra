@@ -7,7 +7,7 @@ description: Coordinate persistent Claude and Codex sessions in Fulcra, from pri
 
 Fulcra organizes persistent sessions as **primes → project orchestrators →
 sessions**. Resolve the user's project and existing team before creating work.
-Keep their session identities so revisions and handoffs resume the same chats.
+Keep session identities for revisions and handoffs within the current job.
 Use the tools actually exposed by the current host; loading this skill does not
 enroll a session or grant control.
 
@@ -25,6 +25,18 @@ primes. If ownership or a route is unavailable, report that gap rather than
 infer authority. Making a prime, demoting one, or transferring project ownership
 is an explicit owner action. Preserve the existing children and history through
 that action; do not recreate a team to change its hierarchy.
+
+## User instructions
+
+Read the user's own instruction files before you start work:
+
+- Claude Code: `~/.claude/CLAUDE.md` and the project's `CLAUDE.md` files.
+- Codex: `~/.codex/AGENTS.md`, any `AGENTS.override.md`, and the project's `AGENTS.md` files.
+- Both providers: the user's own skills and the current job brief.
+
+Use those files for session policy, work methods and delivery checks.
+This bundled skill describes Fulcra tools. It does not replace user instructions.
+A worker brief can point to those files without copying their rules.
 
 ## Start an isolated job
 
@@ -52,9 +64,9 @@ ID only when the tool's receipt permits it.
 An explicitly granted manager instead uses `manager_workers`,
 `manager_create_worker`, `manager_inspect_worker` and `manager_assign_worker`.
 Creation returns the owned `cwd`; stage the worktree and inputs there before
-assignment. Keep these persistent sessions rather than substituting disposable
-subagents. Use only the host and allowance the installation authorizes; do not
-adopt a discovered human session or confer recursive manager authority.
+assignment. Follow the user's instruction files for worker creation and reuse.
+Use only the host the installation authorizes. Do not adopt a
+discovered human session or confer recursive manager authority.
 
 ## Send and wait natively
 
@@ -65,13 +77,13 @@ CLI session, discover the installed syntax with `fulcra --help` and
 ```sh
 fulcra ls --json
 fulcra inspect <session-id> --json
-fulcra send <session-id> --prompt-file follow-up.md --no-wait
 fulcra wait <session-id> --timeout 50s --json
 fulcra logs <session-id>
 ```
 
-Keep the same selected host/home across these commands. Write arbitrary text to
-a UTF-8 file and pass `--prompt-file`; do not interpolate it into shell code.
+Keep the same selected host/home across these commands. Start and steer workers
+through a native tool that arms the finish notice. For other authorized CLI text,
+write a UTF-8 file and pass `--prompt-file`; do not interpolate it into shell code.
 Ordinary CLI sends can end delegation through human input semantics; they are
 not a substitute for scoped manager or role sends.
 
@@ -123,31 +135,11 @@ state the situation, concrete options and your recommendation. An answer or
 approval must come from its authorized owner route; do not choose for the user
 or treat a worker's request as approval.
 
-## Deliver changes with ADW's verification loop
+## Job briefs
 
-Software changes run through ADW's loop by default (`adw` skill; one page:
-`control/docs/adw-verification-loop.md`). The loop is: define the acceptance
-targets, build, verify on the real target, fix, re-verify, until every check
-passes or the iteration cap escalates with the diff to target.
-
-- **Worker:** builds in its own worktree, self-verifies against the acceptance
-  matrix on the real target and records each result with `adw accept record`.
-  It may fix build, compile and test breakage without asking. Its own review
-  loops (Superpowers per-task review, `/complete-work`, GSD code-review) are
-  self-checks, not the independent review.
-- **Lead:** owns the contract and acceptance matrix before work starts, runs ONE
-  whole-candidate review of the integrated candidate, folds every finding and
-  acceptance failure into one repair batch, then runs ONE cumulative-delta
-  review. Never review per fix, slice or commit. Runs `adw gate`.
-- **Prime:** sees the outcome — gate verdict, evidence index, ESCALATE items and
-  owner decisions — and does not re-review or re-sign evidence.
-
-When writing a brief, name the outcome, worktree, files and the acceptance items
-to verify. Do not ask for hand-built receipts, pins, seals, hash packets, intake
-files, ledgers or boards: the ADW ledger, git, CI and test output are the record.
-An ACK means "received, proceeding" and never gates work. Fold every item for a
-worker into one message. Put owner process decisions into the ADW contract or
-policy rather than only into an inbox.
+Include the worktree, assigned files, intended result and acceptance checks in a brief.
+Point to the user's instruction files for work methods and delivery policy.
+Use the session's report and native completion event to deliver the result.
 
 ## Accounts, defaults and usage
 
@@ -168,9 +160,8 @@ Read the session's actual account label and session-bound usage, plus the
 all-account rundown when available. A host's saved CLI login is not evidence of
 the account a pooled session uses. Preserve unavailable/stale readings; do not
 infer capacity from session counts or treat a quota reset as permission to replay
-an instruction. Account subscription usage, session context/token observations
-and task instruction allowances are separate measures. Do not raise an exhausted
-allowance or buy credits without owner authorization.
+an instruction. Account subscription usage and session context/token observations
+are separate measures. Use the native usage view for available readings.
 
 Keep credentials, private account homes and machine-specific identities out of
 prompts, skill files and reports. Never read an operator secret to manufacture
