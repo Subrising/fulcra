@@ -1073,3 +1073,21 @@ test("the MCP queue refuses an archived receiver without a new receipt", async (
   expect(f.pending()).toBe(0);
   expect(await f.storage.get(f.target.id)).toEqual(before);
 });
+
+test.each([false, true])(
+  "archive refusal precedes a provider pause (agent sender: %s)",
+  async (agentSender) => {
+    const f = await fixture("claude");
+    await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+    await f.host.daemon(() => f.manager.archiveAgent(f.target.id));
+    const before = await f.storage.get(f.target.id);
+    await f.send("Do not restore or queue", agentSender ? f.sender.id : undefined);
+    expect(f.messages.findLast((m) => m.type === "send_agent_message_response")).toMatchObject({
+      payload: { accepted: false, error: "The receiver is archived. Restore it first." },
+    });
+    expect(f.pending()).toBe(0);
+    expect(f.prompts).toEqual([]);
+    expect((await f.storage.getFinishNotice(f.target.id))?.status).not.toBe("armed");
+    expect(await f.storage.get(f.target.id)).toEqual(before);
+  },
+);
