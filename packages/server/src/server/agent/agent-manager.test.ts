@@ -3755,6 +3755,49 @@ test("quiet MCP refresh leaves matching entries alone and removes only an unrefe
   }
 });
 
+test.each([
+  ["resident", "lead"],
+  ["resident", "implementation"],
+  ["resident", undefined],
+  ["dormant", "lead"],
+  ["dormant", "implementation"],
+  ["dormant", undefined],
+])("account-switch reconnect preserves role and project: %s %s", async (kind, role) => {
+  const f = await quietMcpFixture();
+  try {
+    const labels = role
+      ? { role, "fulcra.role": role, "fulcra.project": "synthetic-project" }
+      : { "fulcra.reports-to": "role:main-assistant" };
+    await f.manager.setLabels(f.created.id, labels);
+    if (kind === "dormant") await f.manager.closeAgent(f.created.id);
+    const before = (await f.storage.get(f.created.id))!;
+    const history = await f.timeline.fetchCommitted(f.created.id);
+    const state = (await f.manager.getAgentMcpRefreshState(f.created.id))!;
+    const result = await f.manager.refreshAgentMcp({
+      agentId: f.created.id,
+      expected: {
+        provider: state.provider,
+        sessionId: state.sessionId!,
+        configRevision: state.configRevision,
+      },
+      changes: {},
+      reconnect: true,
+    });
+    expect(result.outcome).toBe("refreshed");
+    const after = (await f.storage.get(f.created.id))!;
+    expect(after.labels).toEqual(before.labels);
+    expect(f.manager.getAgent(f.created.id)?.labels).toEqual(before.labels);
+    expect(after.workspaceId).toBe(before.workspaceId);
+    expect(after.cwd).toBe(before.cwd);
+    expect(after.id).toBe(before.id);
+    expect(after.persistence?.sessionId).toBe(before.persistence?.sessionId);
+    expect(await f.timeline.fetchCommitted(f.created.id)).toEqual(history);
+    expect(f.client.sessions[1].startCount).toBe(0);
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test("quiet MCP reconnect replaces a same-config runtime once while preserving identity and history", async () => {
   const f = await quietMcpFixture();
   try {
