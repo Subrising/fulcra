@@ -1,3 +1,4 @@
+import { hostLinksFor } from "../host-links.js";
 import { QueuedAgentMessages, queuedAgentMessagesFor } from "../queued-agent-messages.js";
 import { FINAL_INPUT_CHECK } from "../agent/agent-sdk-types.js";
 import { commitFinalInputCheck, recordFinalInputHandoff } from "../agent/final-input-check.js";
@@ -435,6 +436,28 @@ test("two isolated daemons create one remote worker and deliver a role notice th
         );
         await source.daemon.agentManager.waitForAgentEvent(lead.id);
       }
+      const pausedManager = target.daemon.agentManager;
+      const pauseFile = path.join(target.paseoHome, "pause.json");
+      const armRemote = vi.spyOn(hostLinksFor(pausedManager)!, "armQueuedPrompt");
+      const priorTurns = turns.filter((id) => id === receipt.agentId).length;
+      const priorNotices = parentInputs.length;
+      await writeFile(pauseFile, JSON.stringify({ pausedProviders: ["codex"] }));
+      for (const [index, text] of ["paused remote one", "paused remote two"].entries())
+        await sourceClient.sendAgentMessage(destination, text, {
+          sender: { agentId: lead.id },
+          ...(index === 1 ? { activeTurnBehavior: "steer" as const } : {}),
+        });
+      expect(armRemote).not.toHaveBeenCalled();
+      expect(turns.filter((id) => id === receipt.agentId)).toHaveLength(priorTurns);
+      expect(parentInputs).toHaveLength(priorNotices);
+      await writeFile(pauseFile, JSON.stringify({ pausedProviders: [] }));
+      await vi.waitFor(() => expect(parentInputs).toHaveLength(priorNotices + 1), {
+        timeout: 20000,
+      });
+      expect(turns.filter((id) => id === receipt.agentId)).toHaveLength(priorTurns + 1);
+      expect(armRemote).toHaveBeenCalledTimes(2);
+      armRemote.mockRestore();
+      await source.daemon.agentManager.waitForAgentEvent(lead.id);
       await sourceClient.sendAgentMessage(destination, "Quiet remote follow-up.", {
         sender: { agentId: lead.id },
         notifyOnFinish: false,
@@ -447,7 +470,7 @@ test("two isolated daemons create one remote worker and deliver a role notice th
         ).toBe(true),
       );
       await target.daemon.agentManager.waitForAgentEvent(receipt.agentId!);
-      expect(parentInputs).toHaveLength(6);
+      expect(parentInputs).toHaveLength(7);
       const remoteManager = target.daemon.agentManager;
       const remoteStorage = target.daemon.agentStorage;
       const live = remoteManager.getAgent(receipt.agentId!)!;
@@ -478,9 +501,9 @@ test("two isolated daemons create one remote worker and deliver a role notice th
       });
       try {
         await restored.start();
-        await vi.waitFor(() => expect(parentInputs).toHaveLength(7), { timeout: 20000 });
-        expect(parentInputs[6]).toContain("3 queued message(s)");
-        expect(parentInputs[6]).toContain("uncertain; do not replay");
+        await vi.waitFor(() => expect(parentInputs).toHaveLength(8), { timeout: 20000 });
+        expect(parentInputs[7]).toContain("3 queued message(s)");
+        expect(parentInputs[7]).toContain("uncertain; do not replay");
         Reflect.get(live.session!, "notifySubscribers").call(live.session, {
           type: "turn_completed",
           provider: "codex",
@@ -574,3 +597,57 @@ test("two isolated daemons create one remote worker and deliver a role notice th
     await source.close();
   }
 }, 120000);
+test("paused PC completion notices cross the socket without starting Claude", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "notice-pause-"));
+  const prompts: Array<{ provider: string; prompt: unknown }> = [];
+  let daemon: TestPaseoDaemon | undefined;
+  let client: DaemonClient | undefined;
+  try {
+    daemon = await createTestPaseoDaemon({
+      paseoHomeRoot: root,
+      cleanup: false,
+      agentClients: {
+        claude: createTestAgentClient("claude", {
+          onStartTurn: (prompt) => prompts.push({ provider: "claude", prompt }),
+        }),
+        codex: createTestAgentClient("codex", {
+          onStartTurn: (prompt) => prompts.push({ provider: "codex", prompt }),
+        }),
+      },
+    });
+    const manager = daemon.daemon.agentManager;
+    const owner = await manager.createAgent({ provider: "claude", cwd: root }, undefined, {
+      workspaceId: undefined,
+    });
+    const active = await manager.createAgent({ provider: "codex", cwd: root }, undefined, {
+      workspaceId: undefined,
+    });
+    const pause = path.join(daemon.paseoHome, "pause.json");
+    await writeFile(pause, JSON.stringify({ pausedProviders: ["claude"] }));
+    client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws` });
+    await client.connect();
+    await client.sendAgentMessage(owner.id, "PC receipt one");
+    await client.sendAgentMessage(owner.id, "PC receipt two");
+    expect(prompts).toEqual([]);
+    const held = JSON.parse(
+      await readFile(path.join(daemon.paseoHome, "held-messages.json"), "utf8"),
+    );
+    expect(held.filter((record: { state: string }) => record.state === "queued")).toHaveLength(2);
+    await client.sendAgentMessage(active.id, "Codex receipt");
+    await vi.waitFor(() => expect(prompts.filter((p) => p.provider === "codex")).toHaveLength(1));
+    expect(prompts.filter((p) => p.provider === "claude")).toHaveLength(0);
+    await writeFile(pause, JSON.stringify({ pausedProviders: [] }));
+    await vi.waitFor(() => expect(prompts.filter((p) => p.provider === "claude")).toHaveLength(1));
+    expect(String(prompts.find((p) => p.provider === "claude")!.prompt)).toContain(
+      "PC receipt one",
+    );
+    expect(String(prompts.find((p) => p.provider === "claude")!.prompt)).toContain(
+      "PC receipt two",
+    );
+  } finally {
+    await client?.close();
+    await daemon?.close();
+    if (daemon) await rm(daemon.staticDir, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
+  }
+}, 30_000);

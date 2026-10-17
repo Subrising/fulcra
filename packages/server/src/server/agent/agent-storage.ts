@@ -195,6 +195,10 @@ export class AgentStorage {
     this.logger = logger.child({ module: "agent", component: "agent-storage" });
   }
 
+  get noticePausePath(): string {
+    return path.join(path.dirname(this.baseDir), "pause.json");
+  }
+
   get heldMessagesPath(): string {
     return path.join(path.dirname(this.baseDir), "held-messages.json");
   }

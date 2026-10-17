@@ -1,4 +1,7 @@
 import { hostLinksFor } from "./host-links.js";
+import { watch, type FSWatcher } from "node:fs";
+import { dirname, basename } from "node:path";
+import { noticePaused, noticePauseVersion, NoticePausedError } from "./notice-pause.js";
 import { leadEventsFor, withLeadEvent } from "./lead-events.js";
 import { randomUUID } from "node:crypto";
 import { DIRECT_LINK_LABEL, MAIN_ASSISTANT_ROLE } from "@getpaseo/protocol/agent-labels";
@@ -17,7 +20,7 @@ import {
 import { buildAgentPrompt } from "./agent/prompt-attachments.js";
 import { FINAL_INPUT_CHECK } from "./agent/agent-sdk-types.js";
 import { ensureAgentLoaded } from "./agent/agent-loading.js";
-import { createFinalInputCheck } from "./agent/final-input-check.js";
+import { createFinalInputCheck, assertFinalInputCheck } from "./agent/final-input-check.js";
 import { writeJsonQueueFile } from "./atomic-file.js";
 import { HeldQueueFullError, MAX_HELD_PER_TARGET } from "./held-sends.js";
 import {
@@ -37,10 +40,11 @@ const RequestSchema = SendAgentMessageRequestSchema.pick({
   messageId: true,
   sender: true,
 }).extend({
-  sender: SendAgentMessageRequestSchema.shape.sender.unwrap(),
+  sender: SendAgentMessageRequestSchema.shape.sender,
   sessionMode: z.string().optional(),
   notifyOnFinish: z.boolean().optional(),
   hostLinkMessageId: z.string().uuid().optional(),
+  pauseNotice: z.literal(true).optional(),
 });
 const RecordSchema = z.object({
   id: z.string(),
@@ -68,16 +72,19 @@ interface Deps {
   deferStart?: boolean;
 }
 
-/** Plain agent input only. Plugin and owner inputs keep their separate admission paths. */
+/** Plain agent input and paused owner notices. Plugin capabilities never enter this queue. */
 export class QueuedAgentMessages {
   private records: Record[] = [];
   private tail: Promise<unknown> = Promise.resolve();
   private initialized = false;
   private stopped = false;
   private active = false;
+  private pauseWatcher?: FSWatcher;
+  private pauseVersion?: string;
   private unhealthy = false;
   private readonly deliveryListeners = new Set<() => void>();
   private readonly draining = new Set<string>();
+  private readonly rekick = new Set<string>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly unsubscribe: () => void;
 
@@ -95,7 +102,7 @@ export class QueuedAgentMessages {
           this.kick(id);
           // A prior result must settle before the next task takes its saved notice slot.
           for (const record of this.records)
-            if (record.state === "queued" && record.request.sender.agentId === id)
+            if (record.state === "queued" && record.request.sender?.agentId === id)
               this.kick(record.agentId);
         }
         // The run releases its foreground fence after publishing its terminal event.
@@ -155,7 +162,18 @@ export class QueuedAgentMessages {
   async start(): Promise<void> {
     await this.serial(() => this.load());
     this.active = true;
-    for (const record of this.records) if (record.state === "queued") this.kick(record.agentId);
+    this.pauseVersion ??= noticePauseVersion(this.deps.agentStorage.noticePausePath);
+    this.pauseWatcher ??= watch(dirname(this.deps.agentStorage.noticePausePath), (_event, file) => {
+      if (file && file.toString() !== basename(this.deps.agentStorage.noticePausePath)) return;
+      const version = noticePauseVersion(this.deps.agentStorage.noticePausePath);
+      if (!file && version === this.pauseVersion) return;
+      this.pauseVersion = version;
+      for (const record of this.records)
+        if (["queued", "dispatching"].includes(record.state)) this.kick(record.agentId);
+    });
+    this.pauseWatcher.unref();
+    for (const record of this.records)
+      if (["queued", "dispatching"].includes(record.state)) this.kick(record.agentId);
   }
 
   async enqueue(
@@ -169,6 +187,16 @@ export class QueuedAgentMessages {
       await this.load();
       if (this.stopped) throw new Error("The message queue is closed");
       const body = RequestSchema.parse(structuredClone(request));
+      if (body.messageId) {
+        const existing = this.records.find(
+          (r) => r.agentId === agentId && r.request.messageId === body.messageId,
+        );
+        if (existing) {
+          if (JSON.stringify(existing.request) !== JSON.stringify(body))
+            throw new Error("Message ID content changed");
+          return;
+        }
+      }
       if (Buffer.byteLength(JSON.stringify(body)) > 256 * 1024)
         throw new Error("Queued message exceeds 256 KiB");
       if (
@@ -270,6 +298,7 @@ export class QueuedAgentMessages {
 
   async close(): Promise<void> {
     this.stopped = true;
+    this.pauseWatcher?.close();
     for (const listener of this.deliveryListeners) listener();
     this.unsubscribe();
     for (const timer of this.timers.values()) clearTimeout(timer);
@@ -307,6 +336,7 @@ export class QueuedAgentMessages {
         reason,
         record.state === "uncertain",
       );
+    if (!record.request.sender) return;
     tellSenderUndelivered({
       ...this.deps,
       sender: record.request.sender,
@@ -340,9 +370,10 @@ export class QueuedAgentMessages {
     for (const record of pending) {
       record.state = "refused";
       record.reason = reason;
-      if (record.request.notifyOnFinish)
+      if (record.request.notifyOnFinish && record.request.sender)
         disarmFinishNotification(agentManager, agentId, record.request.sender.agentId);
       const sender = record.request.sender;
+      if (!sender) continue;
       const server = sender.serverId || record.localServerId;
       const key = JSON.stringify([server, sender.agentId]);
       const group = senders.get(key) ?? [];
@@ -361,6 +392,7 @@ export class QueuedAgentMessages {
       );
       if (remoteIds.length)
         hostLinksFor(agentManager)?.failQueuedPrompts(agentId, remoteIds, reason);
+      if (!record.request.sender) continue;
       tellSenderUndelivered({
         ...this.deps,
         sender: record.request.sender,
@@ -374,13 +406,20 @@ export class QueuedAgentMessages {
   }
 
   private kick(agentId: string): void {
-    if (!this.active || this.stopped || this.draining.has(agentId)) return;
+    if (!this.active || this.stopped) return;
+    if (this.draining.has(agentId)) {
+      this.rekick.add(agentId);
+      return;
+    }
     this.draining.add(agentId);
     void this.serial(() => this.drain(agentId))
       .catch((error) => {
         this.deps.logger.warn({ err: error, agentId }, "Queued agent delivery failed");
       })
-      .finally(() => this.draining.delete(agentId));
+      .finally(() => {
+        this.draining.delete(agentId);
+        if (this.rekick.delete(agentId)) this.kick(agentId);
+      });
   }
 
   private schedule(agentId: string, resumeAt: number): void {
@@ -408,12 +447,14 @@ export class QueuedAgentMessages {
     }
     const { agentManager, agentStorage } = this.deps;
     const target = agentManager.getAgent(agentId) ?? (await agentStorage.get(agentId));
-    const line = await decideSend(
-      lineStoreOf(this.deps),
-      record.request.sender,
-      agentId,
-      record.localServerId,
-    );
+    const line = record.request.sender
+      ? await decideSend(
+          lineStoreOf(this.deps),
+          record.request.sender,
+          agentId,
+          record.localServerId,
+        )
+      : null;
     if (
       !target ||
       target.archivedAt ||
@@ -440,6 +481,7 @@ export class QueuedAgentMessages {
 
   private checkRemotePrompt(record: Record): void {
     if (!record.request.hostLinkMessageId) return;
+    if (!record.request.sender) throw new Error("The remote prompt sender is missing.");
     const links = hostLinksFor(this.deps.agentManager);
     if (!links) throw new Error("The remote prompt return route is unavailable.");
     links.checkQueuedPrompt(
@@ -450,6 +492,8 @@ export class QueuedAgentMessages {
   }
 
   private captureLineCheck(record: Record, agentId: string): () => string | null {
+    if (!record.request.sender) return () => null;
+    const sender = record.request.sender;
     const { agentManager, agentStorage } = this.deps;
     const read = () => {
       const agents = new Map<string, LineAgent>(
@@ -460,10 +504,8 @@ export class QueuedAgentMessages {
       );
       for (const live of agentManager.listAgents()) agents.set(live.id, live);
       const target = agents.get(agentId) ?? null;
-      const remote = Boolean(
-        record.request.sender.serverId && record.request.sender.serverId !== record.localServerId,
-      );
-      const senderAgent = remote ? null : (agents.get(record.request.sender.agentId) ?? null);
+      const remote = Boolean(sender.serverId && sender.serverId !== record.localServerId);
+      const senderAgent = remote ? null : (agents.get(sender.agentId) ?? null);
       const holder = findRoleHolder([...agents.values()], MAIN_ASSISTANT_ROLE);
       const mainAssistantId = holder && "id" in holder ? holder.id : null;
       const identity = (agent: LineAgent | null) =>
@@ -487,7 +529,7 @@ export class QueuedAgentMessages {
         reason = "The sending chat is closed or archived";
       else {
         const decision = checkReportingLine({
-          sender: record.request.sender,
+          sender,
           senderAgent,
           target,
           senderParent: null,
@@ -515,11 +557,28 @@ export class QueuedAgentMessages {
     };
   }
 
+  private async holdPausedDelivery(agentId: string): Promise<boolean> {
+    const target =
+      this.deps.agentManager.getAgent(agentId) ?? (await this.deps.agentStorage.get(agentId));
+    if (noticePaused(this.deps.agentStorage.noticePausePath, target)) {
+      const held = this.records.filter(
+        (record) => record.agentId === agentId && record.state === "queued",
+      );
+      if (held.some((record) => !record.request.pauseNotice)) {
+        for (const record of held) record.request.pauseNotice = true;
+        await this.save();
+      }
+      return true;
+    }
+    return false;
+  }
+
   private async drain(agentId: string): Promise<void> {
     await this.load();
     const { agentManager } = this.deps;
     if (this.stopped || (await this.refuseClosedReceiver(agentId))) return;
     if (agentManager.hasInFlightRun(agentId)) return;
+    if (await this.holdPausedDelivery(agentId)) return;
     const waiting = this.records.filter((r) => r.agentId === agentId && r.state === "queued");
     if (!waiting.length) return;
     const resumeAt = Math.max(...waiting.map((r) => r.resumeAt ?? 0));
@@ -527,11 +586,7 @@ export class QueuedAgentMessages {
       this.schedule(agentId, resumeAt);
       return;
     }
-    // A mode change applies to a whole turn. Preserve order across incompatible mode requests.
-    const firstDifferentMode = waiting.findIndex(
-      (r) => r.request.sessionMode !== waiting[0]!.request.sessionMode,
-    );
-    const candidates = firstDifferentMode < 0 ? waiting : waiting.slice(0, firstDifferentMode);
+    const candidates = selectQueuedBatch(waiting);
     const eligible = await this.eligibleRecords(candidates, agentId);
     if (await this.refuseClosedReceiver(agentId, candidates)) return;
     if (this.stopped || agentManager.hasInFlightRun(agentId)) {
@@ -568,8 +623,12 @@ export class QueuedAgentMessages {
   ): Promise<void> {
     const { agentManager, logger } = this.deps;
     const prompt = promptForBatch(eligible);
+    const armed = new Map<string, string | null>();
     try {
-      await agentManager.trustedPlugins.agentInput(async () => {
+      const asSource = eligible[0]!.request.sender
+        ? <T>(run: () => Promise<T>) => agentManager.trustedPlugins.agentInput(run)
+        : <T>(run: () => Promise<T>) => agentManager.trustedPlugins.rpc(undefined, run);
+      await asSource(async () => {
         if (this.stopped || agentManager.hasInFlightRun(agentId))
           throw new SteerUnavailableError(agentId);
         await loadQueuedReceiver(this.deps, agentId, eligible[0]!.sessionId);
@@ -579,6 +638,10 @@ export class QueuedAgentMessages {
           eligible[0]!.sessionId,
           () => this.stopped,
           () => {
+            if (
+              noticePaused(this.deps.agentStorage.noticePausePath, agentManager.getAgent(agentId))
+            )
+              throw new NoticePausedError();
             const refused = eligible.flatMap((record) => {
               const reason = lineChecks.get(record)!();
               return reason ? [{ record, reason }] : [];
@@ -588,7 +651,7 @@ export class QueuedAgentMessages {
           eligible.some((record) => record.request.hostLinkMessageId)
             ? () => {
                 for (const record of eligible) {
-                  if (record.request.hostLinkMessageId)
+                  if (record.request.hostLinkMessageId && record.request.sender)
                     hostLinksFor(agentManager)!.armQueuedPrompt(
                       agentId,
                       record.request.hostLinkMessageId,
@@ -598,14 +661,19 @@ export class QueuedAgentMessages {
               }
             : undefined,
         );
+        const priorNotice = await this.deps.agentStorage.getFinishNotice(agentId);
         for (const record of eligible) {
-          if (record.request.notifyOnFinish)
-            await armPromptFinishNotification({
+          if (record.request.notifyOnFinish && record.request.sender) {
+            assertFinalInputCheck(check);
+            const messageId = await armPromptFinishNotification({
               ...this.deps,
               childAgentId: agentId,
               callerAgentId: record.request.sender.agentId,
               forNextTurn: true,
             });
+            if (!(priorNotice?.status === "armed" && priorNotice.messageId === messageId))
+              armed.set(record.request.sender.agentId, messageId);
+          }
         }
         await withLeadEvent("queued_delivery", () =>
           sendPromptToAgentAndWaitForStart({
@@ -623,19 +691,26 @@ export class QueuedAgentMessages {
       });
       for (const record of eligible) {
         record.state = "delivered";
-        leadEventsFor(agentManager)?.suppress(record.request.sender.agentId, {
-          eventId: record.id,
-          sourceId: agentId,
-          kind: "delivery_receipt",
-        });
+        if (record.request.sender)
+          leadEventsFor(agentManager)?.suppress(record.request.sender.agentId, {
+            eventId: record.id,
+            sourceId: agentId,
+            kind: "delivery_receipt",
+          });
       }
     } catch (error) {
+      if (error instanceof NoticePausedError)
+        for (const [callerId, messageId] of armed) {
+          disarmFinishNotification(agentManager, agentId, callerId);
+          if (messageId)
+            await this.deps.agentStorage.settleFinishNotice(agentId, messageId, "cancelled");
+        }
       if (await this.refuseClosedReceiver(agentId)) return;
       if (error instanceof QueuedLinesChangedError) {
         for (const { record, reason } of error.refused) {
           record.state = "refused";
           record.reason = reason;
-          if (record.request.notifyOnFinish)
+          if (record.request.notifyOnFinish && record.request.sender)
             disarmFinishNotification(agentManager, agentId, record.request.sender.agentId);
           this.tell(record, reason);
         }
@@ -659,21 +734,44 @@ export class QueuedAgentMessages {
   private batchFailed(agentId: string, eligible: Record[], error: unknown): void {
     const { agentManager } = this.deps;
     const limit = recipientLimit(error);
+    if (error instanceof NoticePausedError) this.rekick.add(agentId);
     for (const record of eligible) {
-      if (record.request.notifyOnFinish)
+      if (record.request.notifyOnFinish && record.request.sender)
         disarmFinishNotification(agentManager, agentId, record.request.sender.agentId);
       record.state = failureState(error, limit);
       record.reason = error instanceof Error ? error.message : String(error);
       if (limit) record.resumeAt = limit.resumeAt;
     }
     if (limit) this.schedule(agentId, limit.resumeAt);
-    else if (!(error instanceof SteerUnavailableError))
+    else if (!(error instanceof SteerUnavailableError) && !(error instanceof NoticePausedError))
       this.tellBatch(eligible, eligible[0]?.reason ?? "Delivery is uncertain.");
   }
 }
 
+function selectQueuedBatch(waiting: Record[]): Record[] {
+  // A mode change applies to a whole turn. Preserve order across incompatible mode requests.
+  const firstDifferentMode = waiting.findIndex(
+    (r) =>
+      r.request.sessionMode !== waiting[0]!.request.sessionMode ||
+      Boolean(r.request.sender) !== Boolean(waiting[0]!.request.sender),
+  );
+  const sameSender = (record: Record) =>
+    record.request.sender?.agentId === waiting[0]!.request.sender?.agentId &&
+    record.request.sender?.serverId === waiting[0]!.request.sender?.serverId;
+  const ordinary = firstDifferentMode < 0 ? waiting : waiting.slice(0, firstDifferentMode);
+  return waiting[0]!.request.pauseNotice
+    ? waiting.filter(
+        (record) =>
+          record.request.pauseNotice &&
+          sameSender(record) &&
+          record.request.sessionMode === waiting[0]!.request.sessionMode,
+      )
+    : ordinary;
+}
+
 function failureState(error: unknown, limit: { resumeAt: number } | null): Record["state"] {
-  if (error instanceof SteerUnavailableError || limit) return "queued";
+  if (error instanceof SteerUnavailableError || error instanceof NoticePausedError || limit)
+    return "queued";
   const code = (error as { code?: unknown } | null)?.code;
   if (code === "QUEUED_RECEIVER_CLOSED" || code === "QUEUED_RECEIVER_CHANGED") return "refused";
   return "uncertain";
@@ -686,7 +784,7 @@ function promptForBatch(eligible: Record[]): ReturnType<typeof buildAgentPrompt>
       : eligible
           .map(
             (record, i) =>
-              `Message ${i + 1} from ${record.request.sender.agentId}${record.request.sender.serverId ? `@${record.request.sender.serverId}` : ""}:\n${record.request.text}`,
+              `Message ${i + 1} from ${record.request.sender?.agentId ?? "owner"}${record.request.sender?.serverId ? `@${record.request.sender.serverId}` : ""}:\n${record.request.text}`,
           )
           .join("\n\n");
   const prompt = buildAgentPrompt(

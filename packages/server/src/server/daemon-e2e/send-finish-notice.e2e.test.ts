@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
@@ -22,6 +22,7 @@ async function fixture(
   parentLabel = PARENT_AGENT_ID_LABEL,
   childTitle = "Child",
   costs: number[] = [],
+  childProvider: "codex" | "claude" = "codex",
 ) {
   const root = await mkdtemp(path.join(tmpdir(), "send-finish-"));
   const prompts: string[] = [];
@@ -47,7 +48,13 @@ async function fixture(
   };
   const daemon = await createTestPaseoDaemon({
     paseoHomeRoot: root,
-    agentClients: { codex: provider },
+    agentClients: {
+      claude: createTestAgentClient("claude", {
+        onStartTurn: (prompt) =>
+          prompts.push(typeof prompt === "string" ? prompt : JSON.stringify(prompt)),
+      }),
+      codex: provider,
+    },
   });
   let client: DaemonClient | undefined;
   cleanups.push(async () => {
@@ -63,7 +70,7 @@ async function fixture(
     {},
   );
   const child = await manager.createAgent(
-    { provider: "codex", cwd: root, modeId: "full-access", title: childTitle },
+    { provider: childProvider, cwd: root, modeId: "full-access", title: childTitle },
     undefined,
     {
       labels: { [parentLabel]: parent.id },
@@ -303,4 +310,164 @@ test("parent follow-ups report cumulative spend in each finish notice", async ()
     expect(f.notices()[index]).toContain(`Session total spend: US$${total.toFixed(6)}.`);
   }
   expect((await f.client.fetchAgent(f.child.id))?.agent.sessionCost?.totalUsd).toBe(4);
+});
+
+test.each(["API queue", "API steer", "MCP", "CLI"])(
+  "%s holds a paused Claude parent send without arming and resumes one notice",
+  async (route) => {
+    const f = await fixture(PARENT_AGENT_ID_LABEL, "Child", [], "claude");
+    await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+    const arm = vi.spyOn(f.storage, "rearmFinishNotice");
+    for (const text of ["held one", "held two"]) {
+      if (route === "MCP")
+        await f.catalog.executeTool("send_agent_prompt", { agentId: f.child.id, prompt: text });
+      else if (route === "CLI")
+        await promisify(execFile)(
+          process.execPath,
+          [
+            "--import",
+            "tsx",
+            path.resolve("../cli/src/index.ts"),
+            "send",
+            f.child.id,
+            text,
+            "--no-wait",
+            "--host",
+            `127.0.0.1:${f.daemon.port}`,
+            "--json",
+          ],
+          {
+            timeout: 15000,
+            env: {
+              ...process.env,
+              PASEO_HOME: f.daemon.paseoHome,
+              PASEO_AGENT_ID: f.parent.id,
+              PASEO_WORKSPACE_ID: "",
+              PASEO_PASSWORD: "",
+            },
+          },
+        );
+      else
+        await f.client.sendAgentMessage(f.child.id, text, {
+          sender: { agentId: f.parent.id },
+          ...(route === "API steer" ? { activeTurnBehavior: "steer" as const } : {}),
+        });
+    }
+    const records = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
+    expect(records.filter((r: { state: string }) => r.state === "queued")).toHaveLength(2);
+    expect(arm).not.toHaveBeenCalled();
+    expect(await f.storage.getFinishNotice(f.child.id)).toBeNull();
+    expect(hasArmedFinishNotification(f.manager, f.child.id, f.parent.id)).toBe(false);
+    expect(f.prompts).toEqual([]);
+    await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: [] }));
+    await f.finish();
+    expect(f.prompts.filter((p) => p.includes("held one") && p.includes("held two"))).toHaveLength(
+      1,
+    );
+    expect(await f.storage.getFinishNotice(f.child.id)).toMatchObject({ status: "delivered" });
+  },
+);
+
+test("a paused parent send keeps its explicit finish notice opt-out", async () => {
+  const f = await fixture(PARENT_AGENT_ID_LABEL, "Child", [], "claude");
+  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+  await f.client.sendAgentMessage(f.child.id, "quiet held work", {
+    sender: { agentId: f.parent.id },
+    notifyOnFinish: false,
+  });
+  expect(f.prompts).toEqual([]);
+  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: [] }));
+  await vi.waitFor(() => expect(f.prompts).toContain("quiet held work"));
+  await f.manager.waitForAgentEvent(f.child.id);
+  expect(await f.storage.getFinishNotice(f.child.id)).toBeNull();
+  expect(f.notices()).toHaveLength(0);
+});
+
+test.each([false, true])(
+  "a pause before arming retains the parent send (steer=%s)",
+  async (steer) => {
+    const f = await fixture(PARENT_AGENT_ID_LABEL, "Child", [], "claude");
+    const prior = f.storage.getFinishNotice.bind(f.storage);
+    vi.spyOn(f.storage, "getFinishNotice").mockImplementationOnce(async (id) => {
+      const value = await prior(id);
+      await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+      return value;
+    });
+    const arm = vi.spyOn(f.storage, "rearmFinishNotice");
+    await f.client.sendAgentMessage(f.child.id, "arming race", {
+      sender: { agentId: f.parent.id },
+      ...(steer ? { activeTurnBehavior: "steer" as const } : {}),
+    });
+    await vi.waitFor(async () => {
+      const records = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
+      expect(records).toContainEqual(expect.objectContaining({ state: "queued" }));
+      expect(await f.storage.getFinishNotice(f.child.id)).toBeNull();
+    });
+    expect(arm).not.toHaveBeenCalled();
+    expect(f.prompts).toEqual([]);
+    await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: [] }));
+    await f.finish();
+  },
+);
+
+test.each([false, true])(
+  "a pause at final handoff clears the new arm (steer=%s)",
+  async (steer) => {
+    const f = await fixture(PARENT_AGENT_ID_LABEL, "Child", [], "claude");
+    const start = f.child.session!.startTurn.bind(f.child.session);
+    vi.spyOn(f.child.session!, "startTurn").mockImplementationOnce(async (...args) => {
+      await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+      return start(...args);
+    });
+    await f.client.sendAgentMessage(f.child.id, "handoff race", {
+      sender: { agentId: f.parent.id },
+      ...(steer ? { activeTurnBehavior: "steer" as const } : {}),
+    });
+    await vi.waitFor(async () =>
+      expect(await f.storage.getFinishNotice(f.child.id)).toMatchObject({ status: "cancelled" }),
+    );
+    expect(hasArmedFinishNotification(f.manager, f.child.id, f.parent.id)).toBe(false);
+    expect(f.prompts).toEqual([]);
+    await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: [] }));
+    await f.finish();
+  },
+);
+
+test("a paused follow-up keeps prior spend and reports the resumed cumulative total", async () => {
+  const f = await fixture(PARENT_AGENT_ID_LABEL, "Child", [1.25, 2.75]);
+  await f.client.sendAgentMessage(f.child.id, "earlier work", {
+    sender: { agentId: f.parent.id },
+  });
+  await f.finish();
+  await vi.waitFor(async () =>
+    expect(await f.storage.getFinishNotice(f.child.id)).toMatchObject({
+      status: "delivered",
+      sessionCost: { totalUsd: 1.25 },
+    }),
+  );
+  const before = await f.storage.getFinishNotice(f.child.id);
+  const inputsBefore = f.prompts.length;
+  await writeFile(
+    f.storage.noticePausePath,
+    JSON.stringify({
+      pausedProviders: ["codex"],
+      exceptSessions: [f.parent.id],
+    }),
+  );
+  const arm = vi.spyOn(f.storage, "rearmFinishNotice");
+  for (const text of ["held follow-up one", "held follow-up two"])
+    await f.client.sendAgentMessage(f.child.id, text, { sender: { agentId: f.parent.id } });
+  expect(f.prompts).toHaveLength(inputsBefore);
+  expect(arm).not.toHaveBeenCalled();
+  expect(await f.storage.getFinishNotice(f.child.id)).toEqual(before);
+  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: [] }));
+  await vi.waitFor(() => expect(f.notices()).toHaveLength(2));
+  await f.manager.waitForAgentEvent(f.parent.id);
+  await vi.waitFor(async () =>
+    expect(await f.storage.getFinishNotice(f.child.id)).toMatchObject({
+      status: "delivered",
+      sessionCost: { totalUsd: 4 },
+    }),
+  );
+  expect(f.notices()[1]).toContain("Session total spend: US$4.000000.");
 });

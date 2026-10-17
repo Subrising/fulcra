@@ -1,3 +1,4 @@
+import { noticePaused, NoticePausedError } from "../../notice-pause.js";
 import { hostLinksFor, type HostLinks } from "../../host-links.js";
 import { randomUUID } from "node:crypto";
 import { HostLinkSpawnSchema } from "../../host-link-contracts.js";
@@ -2196,10 +2197,19 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         }
         const receiver = agentManager.getAgent(agentId);
         const check = callerAgentId
-          ? queuedReceiverCheck(agentManager, agentId, receiver?.persistence?.sessionId ?? null)
+          ? queuedReceiverCheck(
+              agentManager,
+              agentId,
+              receiver?.persistence?.sessionId ?? null,
+              undefined,
+              () => {
+                if (noticePaused(agentStorage.noticePausePath, agentManager.getAgent(agentId)))
+                  throw new NoticePausedError();
+              },
+            )
           : undefined;
-        if (callerAgentId && notifyOnFinish) backgroundNotify = await armFinishNotification(true);
         try {
+          if (callerAgentId && notifyOnFinish) backgroundNotify = await armFinishNotification(true);
           const send = callerAgentId ? sendPromptToAgentAndWaitForStart : sendPromptToAgent;
           const result = await send({
             agentManager,
@@ -2248,13 +2258,21 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         };
       };
       if (callerAgentId) noteAgentMessage(callerAgentId, agentId);
-      if (callerAgentId && agentManager.hasInFlightRun(agentId))
-        return queueForTurnEnd(callerAgentId);
+      const shouldQueuePrompt = async () => {
+        if (!callerAgentId) return false;
+        if (agentManager.hasInFlightRun(agentId)) return true;
+        const target = agentManager.getAgent(agentId) ?? (await agentStorage.get(agentId));
+        return noticePaused(agentStorage.noticePausePath, target);
+      };
+      if (await shouldQueuePrompt()) return queueForTurnEnd(callerAgentId!);
       try {
         await dispatch();
       } catch (error) {
         const limit = recipientLimit(error);
-        if (callerAgentId && (limit || error instanceof SteerUnavailableError))
+        if (
+          callerAgentId &&
+          (limit || error instanceof SteerUnavailableError || error instanceof NoticePausedError)
+        )
           return queueForTurnEnd(callerAgentId, limit?.resumeAt);
         throw error;
       }

@@ -1,5 +1,6 @@
 import { sessionCost } from "./session-cost.js";
 import { loadAgentPolicy } from "../limit-resume/policy.js";
+import { noticePaused, NoticePausedError } from "../notice-pause.js";
 import { leadEventsFor, withLeadEvent } from "../lead-events.js";
 import {
   assertFinalInputCheck,
@@ -646,6 +647,10 @@ export function hasArmedFinishNotification(
 export async function armPromptFinishNotification(
   params: SetupFinishNotificationParams,
 ): Promise<string | null> {
+  const target =
+    params.agentManager.getAgent(params.childAgentId) ??
+    (await params.agentStorage.get(params.childAgentId));
+  if (noticePaused(params.agentStorage.noticePausePath, target)) throw new NoticePausedError();
   let notice;
   try {
     notice = await params.agentStorage.rearmFinishNotice(

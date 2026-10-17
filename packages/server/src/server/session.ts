@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { hostLinksFor } from "./host-links.js";
 import { armPromptFinishNotification, disarmFinishNotification } from "./agent/agent-prompt.js";
+import {
+  createFinalInputCheck,
+  assertFinalInputCheck as assertNoticeFinalCheck,
+} from "./agent/final-input-check.js";
+import { sendPromptToAgentAndWaitForStart } from "./agent/agent-prompt.js";
+import { noticePaused, NoticePausedError } from "./notice-pause.js";
 import { sessionCost } from "./agent/session-cost.js";
 import { noteDeliveredReport } from "./lead-events.js";
 import { archiveReportCount } from "./archive-observation.js";
@@ -133,7 +139,6 @@ import { ensureAgentLoaded, ensureUnarchivedAgentLoaded } from "./agent/agent-lo
 import {
   sendPromptToAgent,
   SteerUnavailableError,
-  waitForAgentRunStartWithTimeout,
   unarchiveAgentState,
 } from "./agent/agent-prompt.js";
 import {
@@ -9865,33 +9870,25 @@ export class Session {
       signal?: AbortSignal,
       finalCheck?: object,
     ) => {
+      signal?.throwIfAborted();
+      const provider =
+        this.agentManager.getAgent(agentId)?.provider ??
+        (await this.agentStorage.get(agentId))?.provider;
+      const check = createFinalInputCheck(
+        () => {
+          assertNoticeFinalCheck(finalCheck);
+          if (noticePaused(this.agentStorage.noticePausePath, this.agentManager.getAgent(agentId)))
+            throw new NoticePausedError();
+        },
+        undefined,
+        !["claude", "codex"].includes(provider ?? ""),
+      );
       const caller = msg.sender;
       let armed: string | null | undefined;
       const priorNotice = await this.agentStorage.getFinishNotice(agentId);
-      if (caller && msg.notifyOnFinish !== false) {
-        const decision = await decideSend(
-          this.lineStore(),
-          caller,
-          agentId,
-          this.localServerId ?? null,
-        );
-        if (decision?.allowed && decision.why === "child") {
-          if (caller.serverId && caller.serverId !== this.localServerId)
-            throw new Error(
-              "Send through the parent host as <child>@<server> to receive finish notices.",
-            );
-          armed = await armPromptFinishNotification({
-            agentManager: this.agentManager,
-            agentStorage: this.agentStorage,
-            childAgentId: agentId,
-            callerAgentId: caller.agentId,
-            forNextTurn: !this.agentManager.hasInFlightRun(agentId),
-            logger: this.sessionLogger,
-          });
-        }
-      }
       try {
-        const result = await sendPromptToAgent({
+        armed = await this.armAgentMessageNotice(msg, agentId);
+        await sendPromptToAgentAndWaitForStart({
           agentManager: this.agentManager,
           agentStorage: this.agentStorage,
           agentId,
@@ -9901,12 +9898,9 @@ export class Session {
           steerOnly: behavior === "steer",
           clearPendingPermissions: true,
           unarchive: !finalCheck,
-          ...(finalCheck ? { runOptions: { [FINAL_INPUT_CHECK]: finalCheck } } : {}),
+          runOptions: { [FINAL_INPUT_CHECK]: check },
           logger: this.sessionLogger,
         });
-        if (result.disposition === "turn_started") {
-          await waitForAgentRunStartWithTimeout(this.agentManager, agentId, signal);
-        }
       } catch (error) {
         if (
           armed !== undefined &&
@@ -9916,7 +9910,22 @@ export class Session {
           disarmFinishNotification(this.agentManager, agentId, caller.agentId);
           if (armed) await this.agentStorage.settleFinishNotice(agentId, armed, "cancelled");
         }
-        throw error;
+        if (!(error instanceof NoticePausedError)) throw error;
+        if (this.pluginOriginId || msg.inputProvenance !== undefined)
+          throw new ProvenanceRefusedError({ cause: error });
+        if (msg.sender) throw new SteerUnavailableError(agentId);
+        await queuedAgentMessagesFor({
+          agentManager: this.agentManager,
+          agentStorage: this.agentStorage,
+          logger: this.sessionLogger,
+        }).enqueue(agentId, {
+          text: msg.text,
+          images: msg.images,
+          attachments: msg.attachments,
+          messageId: msg.messageId,
+          pauseNotice: true,
+        });
+        deliveryNote("Provider paused. Notice saved. No turn was started.");
       }
     };
     const held = heldSendsFor(this.agentManager, this.sessionLogger);
@@ -10025,10 +10034,27 @@ export class Session {
         // A message that carries a plugin's provenance token cannot wait: its token is bound to this attempt, and a
         // later delivery would run as plain owner input, a different source than the plugin sent it as
         // (0.2.13 review). It is refused instead, with the reason, and the sender sends it again when the chat is idle.
-        if (msg.inputProvenance !== undefined) throw new ProvenanceRefusedError({ cause: error });
+        if (this.pluginOriginId || msg.inputProvenance !== undefined)
+          throw new ProvenanceRefusedError({ cause: error });
         holdOwnerMessage();
       }
     };
+  }
+
+  private async armAgentMessageNotice(
+    msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
+    agentId: string,
+  ): Promise<string | null | undefined> {
+    if (!msg.sender || msg.notifyOnFinish === false) return;
+    if (!(await this.parentSendNeedsNotice(msg.sender, agentId))) return;
+    return armPromptFinishNotification({
+      agentManager: this.agentManager,
+      agentStorage: this.agentStorage,
+      childAgentId: agentId,
+      callerAgentId: msg.sender.agentId,
+      forNextTurn: !this.agentManager.hasInFlightRun(agentId),
+      logger: this.sessionLogger,
+    });
   }
 
   private async parentSendNeedsNotice(
@@ -10099,22 +10125,86 @@ export class Session {
     msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
     agentId: string,
     prompt: ReturnType<typeof buildAgentPrompt>,
-    queuedSessionId: string | null | undefined,
     send: () => Promise<void>,
+    prepare: () => Promise<void>,
   ): Promise<void> {
     if (msg.messageId) {
       await this.messageReceipts.send({
         agentId,
         messageId: msg.messageId,
         request: this.agentMessageReceiptRequest(msg, prompt),
-        prepare: async () => {
-          await this.prepareAgentMessage(agentId, msg.text, queuedSessionId);
-        },
+        prepare,
         send,
       });
-    } else {
-      await send();
+    } else await send();
+  }
+
+  private async holdOrRefuseAgentMessage(
+    msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
+    agentId: string,
+  ): Promise<boolean> {
+    const refusal = await this.reportingLineRefusal(msg.sender, agentId);
+    if (refusal) {
+      this.emit({
+        type: "send_agent_message_response",
+        payload: { requestId: msg.requestId, agentId, accepted: false, error: refusal },
+      });
+      return true;
     }
+    return this.holdPausedAgentMessage(msg, agentId);
+  }
+
+  private async holdPausedAgentMessage(
+    msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
+    agentId: string,
+  ): Promise<boolean> {
+    const pauseTarget =
+      this.agentManager.getAgent(agentId) ?? (await this.agentStorage.get(agentId));
+    if (noticePaused(this.agentStorage.noticePausePath, pauseTarget)) {
+      if (this.pluginOriginId || msg.inputProvenance !== undefined || msg.nativeQueue)
+        throw new ProvenanceRefusedError();
+      const hold = async () => {
+        await queuedAgentMessagesFor({
+          agentManager: this.agentManager,
+          agentStorage: this.agentStorage,
+          logger: this.sessionLogger,
+        }).enqueue(
+          agentId,
+          {
+            text: msg.text,
+            images: msg.images,
+            attachments: msg.attachments,
+            messageId: msg.messageId,
+            sender: msg.sender,
+            notifyOnFinish:
+              Boolean(msg.sender) &&
+              msg.notifyOnFinish !== false &&
+              (await this.parentSendNeedsNotice(msg.sender!, agentId)),
+            pauseNotice: true,
+          },
+          this.localServerId,
+        );
+      };
+      if (msg.messageId) {
+        await this.messageReceipts.send({
+          agentId,
+          messageId: msg.messageId,
+          request: this.agentMessageReceiptRequest(
+            msg,
+            buildAgentPrompt(msg.text, msg.images, msg.attachments),
+          ),
+          prepare: async () => {},
+          send: hold,
+        });
+      } else await hold();
+      this.emitAgentMessageAccepted(
+        msg.requestId,
+        agentId,
+        "Provider paused. Notice saved. No turn was started.",
+      );
+      return true;
+    }
+    return false;
   }
 
   private async routeAgentMessage(
@@ -10191,15 +10281,7 @@ export class Session {
 
     try {
       const agentId = resolved.agentId;
-      const refusal = await this.reportingLineRefusal(msg.sender, agentId);
-      if (refusal) {
-        this.emit({
-          type: "send_agent_message_response",
-          payload: { requestId: msg.requestId, agentId, accepted: false, error: refusal },
-        });
-        return;
-      }
-
+      if (await this.holdOrRefuseAgentMessage(msg, agentId)) return;
       const prompt = buildAgentPrompt(msg.text, msg.images, msg.attachments);
       if (msg.nativeQueue) {
         if (!msg.messageId || msg.messageId.length > 256)
@@ -10251,7 +10333,9 @@ export class Session {
       const send = this.agentMessageSender(msg, agentId, prompt, (note) => {
         deliveryNote = note;
       });
-      await this.sendAgentMessageWithReceipt(msg, agentId, prompt, queuedSessionId, send);
+      await this.sendAgentMessageWithReceipt(msg, agentId, prompt, send, async () => {
+        await this.prepareAgentMessage(agentId, msg.text, queuedSessionId);
+      });
 
       this.emitAgentMessageAccepted(msg.requestId, agentId, deliveryNote);
     } catch (error) {
