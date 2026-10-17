@@ -117,6 +117,23 @@ describe("syncSkills", () => {
     }
   });
 
+  it("keeps a valid ownership receipt when two daemons install together", async () => {
+    await writeBundleSkill(sandbox.sourceDir, "paseo", { "SKILL.md": "released bundle" });
+    const options = { ...sandbox, skillNames: ["paseo"] };
+    await Promise.all([syncSkills(options), syncSkills(options)]);
+    for (const root of [sandbox.agentsDir, sandbox.claudeDir]) {
+      const file = path.join(root, "paseo", "SKILL.md");
+      const record = JSON.parse(
+        await fs.readFile(path.join(root, "paseo", ".paseo-managed-files.json"), "utf8"),
+      );
+      expect(record.files["SKILL.md"]).toBe(
+        createHash("sha256")
+          .update(await fs.readFile(file))
+          .digest("hex"),
+      );
+    }
+  });
+
   it("updates an unchanged managed file when the bundle differs", async () => {
     await writeBundleSkill(sandbox.sourceDir, "paseo", {
       "SKILL.md": "new paseo content",

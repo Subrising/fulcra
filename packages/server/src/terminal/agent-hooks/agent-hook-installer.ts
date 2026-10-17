@@ -8,7 +8,13 @@ import {
 } from "../../server/instruction-files.js";
 import { homedir } from "node:os";
 import path from "node:path";
-import { writePrivateFileAtomicSync } from "../../server/private-files.js";
+
+// Hook-only files from releases before whole-file ownership receipts.
+const SHIPPED_HOOK_HASHES: Record<string, readonly string[]> = {
+  claude: ["be2546f2a6b073fe958644a8cfe775db50855834388486aae9282afa36337d27"],
+  codex: ["7eca8de2b9ef6906c3d84aac162b1f100f8ec1670275d8de29cef3ec9765ccc6"],
+  opencode: ["ab95ec67c18fe25f5f28deff383ecf986ff850087080d5c049b11c3a65217282"],
+};
 
 export interface AgentHookEventDefinition {
   event: string;
@@ -83,7 +89,7 @@ export function installAgentHooks<TConfig>(
   options: AgentHookInstallOptions = {},
 ): AgentHookInstallResult {
   if (provider.install.kind === "plugin-file") {
-    return installAgentHookPluginFile(provider.install, options);
+    return installAgentHookPluginFile(provider.install, options, provider.id);
   }
 
   const format = provider.install.format;
@@ -99,7 +105,12 @@ export function uninstallAgentHooks<TConfig>(
   }
 
   const format = provider.install.format;
-  return updateAgentHookConfig(provider, options, (config) => format.uninstall(config, provider));
+  return updateAgentHookConfig(
+    provider,
+    options,
+    (config) => format.uninstall(config, provider),
+    false,
+  );
 }
 
 export function agentHooksAreInstalled<TConfig>(
@@ -159,13 +170,20 @@ export function buildAgentHookWindowsCommand<TConfig>(
 function installAgentHookPluginFile(
   install: AgentHookPluginFileInstallStrategy,
   options: AgentHookInstallOptions,
+  providerId: string,
 ): AgentHookInstallResult {
   const configPath = resolveAgentHookInstallPath(install, options);
   assertInstructionPath(configPath);
   const currentRaw = existsSync(configPath) ? readFileSync(configPath, "utf8") : null;
   const nextRaw = normalizeRawConfig(install.source);
 
-  return writeManagedHookConfig(configPath, currentRaw, nextRaw);
+  return writeManagedHookConfig(
+    configPath,
+    currentRaw,
+    nextRaw,
+    nextRaw,
+    SHIPPED_HOOK_HASHES[providerId],
+  );
 }
 
 function uninstallAgentHookPluginFile(
@@ -183,8 +201,9 @@ function uninstallAgentHookPluginFile(
   assertInstructionPath(recordPath);
   const previousHash = existsSync(recordPath) ? readFileSync(recordPath, "utf8").trim() : undefined;
   if (
-    normalizeRawConfig(raw) !== normalizeRawConfig(install.source) &&
-    fileHash(raw) !== previousHash
+    previousHash !== undefined
+      ? fileHash(raw) !== previousHash
+      : normalizeRawConfig(raw) !== normalizeRawConfig(install.source)
   ) {
     warnPreservedSettings(configPath);
     return { configPath, changed: false };
@@ -202,6 +221,7 @@ function updateAgentHookConfig<TConfig>(
   provider: AgentHookProvider<TConfig>,
   options: AgentHookInstallOptions,
   update: (config: TConfig) => TConfig,
+  installing = true,
 ): AgentHookInstallResult {
   const install = provider.install;
   if (install.kind !== "config-file") {
@@ -210,18 +230,25 @@ function updateAgentHookConfig<TConfig>(
   const configPath = resolveAgentHookConfigPath(provider, options);
   assertInstructionPath(configPath);
   const currentRaw = existsSync(configPath) ? readFileSync(configPath, "utf8") : null;
+  if (!installing && currentRaw === null) return { configPath, changed: false };
+  const bundledRaw = install.format.stringify(update(install.format.empty()));
   let currentConfig: TConfig;
   try {
     currentConfig = currentRaw === null ? install.format.empty() : install.format.parse(currentRaw);
   } catch {
-    const proposal = install.format.stringify(update(install.format.empty()));
-    offerInstructionUpdate(configPath, Buffer.from(proposal));
+    if (installing) offerInstructionUpdate(configPath, Buffer.from(bundledRaw), true);
     return { configPath, changed: false };
   }
   const nextConfig = update(currentConfig);
   const nextRaw = install.format.stringify(nextConfig);
 
-  return writeManagedHookConfig(configPath, currentRaw, nextRaw);
+  return writeManagedHookConfig(
+    configPath,
+    currentRaw,
+    nextRaw,
+    installing ? bundledRaw : null,
+    SHIPPED_HOOK_HASHES[provider.id],
+  );
 }
 
 function hookInstallRecord(configPath: string): string {
@@ -247,31 +274,48 @@ function writeManagedHookConfig(
   configPath: string,
   currentRaw: string | null,
   nextRaw: string,
+  bundledRaw: string | null = nextRaw,
+  shippedHashes: readonly string[] = [],
 ): AgentHookInstallResult {
   const recordPath = hookInstallRecord(configPath);
   assertInstructionPath(configPath);
   assertInstructionPath(recordPath);
-  const previousHash = existsSync(recordPath) ? readFileSync(recordPath, "utf8").trim() : undefined;
+  const previousRecord = existsSync(recordPath) ? readFileSync(recordPath) : null;
+  const previousHash = previousRecord?.toString("utf8").trim();
+  const currentHash = currentRaw === null ? undefined : fileHash(currentRaw);
+  const owned =
+    currentRaw === null ||
+    (previousHash !== undefined
+      ? currentHash === previousHash
+      : shippedHashes.includes(currentHash!));
   const matches = currentRaw !== null && normalizeRawConfig(currentRaw) === nextRaw;
-  if (
-    currentRaw !== null &&
-    (lstatSync(configPath).isSymbolicLink() || fileHash(currentRaw) !== previousHash)
-  ) {
-    offerInstructionUpdate(configPath, Buffer.from(nextRaw));
+  if (matches) {
+    if (owned && previousHash === undefined && currentHash !== undefined)
+      replaceInstructionFile(recordPath, Buffer.from(`${currentHash}\n`), undefined);
     return { configPath, changed: false };
   }
-  if (matches) return { configPath, changed: false };
+  if (!owned) {
+    if (bundledRaw !== null)
+      offerInstructionUpdate(configPath, Buffer.from(bundledRaw), bundledRaw !== nextRaw);
+    return { configPath, changed: false };
+  }
   if (
     !replaceInstructionFile(
       configPath,
       Buffer.from(nextRaw),
       currentRaw === null ? undefined : fileHash(currentRaw),
+      currentRaw === null ? 0o600 : lstatSync(configPath).mode & 0o777,
     )
   ) {
-    offerInstructionUpdate(configPath, Buffer.from(nextRaw));
+    if (bundledRaw !== null)
+      offerInstructionUpdate(configPath, Buffer.from(bundledRaw), bundledRaw !== nextRaw);
     return { configPath, changed: false };
   }
-  writePrivateFileAtomicSync(recordPath, `${fileHash(nextRaw)}\n`);
+  replaceInstructionFile(
+    recordPath,
+    Buffer.from(`${fileHash(nextRaw)}\n`),
+    previousRecord === null ? undefined : fileHash(previousRecord.toString()),
+  );
   return { configPath, changed: true };
 }
 

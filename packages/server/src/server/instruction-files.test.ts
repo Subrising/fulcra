@@ -95,6 +95,9 @@ describe("bundled update offers", () => {
       created: false,
     });
     expect(warn).toHaveBeenCalledTimes(1);
+    fs.unlinkSync(`${file}.new`);
+    expect(reloaded.offerInstructionUpdate(file, Buffer.from("new bundle")).created).toBe(false);
+    expect(warn).toHaveBeenCalledTimes(1);
   });
   it("keeps edited update copies and uses a dated copy for another version", () => {
     const { file } = setup();

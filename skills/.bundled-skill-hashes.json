@@ -6,19 +6,29 @@
       "7d58e39b90750e43d4456c91625670c19fe47552fa430bf6fe7afee141b769e7",
       "95ee5c3bd38304f4c8b73cc035e27210ce0199dcd72c360110ae6c55fa94a29b"
     ],
-    "paseo-advisor/SKILL.md": ["1fc60440869fea6fda35001b68ee7bf2334eb465bb44eacb0a340bc1fefe34aa"],
+    "paseo-advisor/SKILL.md": [
+      "1fc60440869fea6fda35001b68ee7bf2334eb465bb44eacb0a340bc1fefe34aa"
+    ],
     "paseo-committee/SKILL.md": [
       "a9cd5572ca90ca7bdb9b55820d31a2811e621848dd327c2bf1c2dd34258b88e9"
     ],
-    "paseo-handoff/SKILL.md": ["7e833acb4193ca7005a3eec2aa4571169ad962216e29ff9b0241ea0a419851f7"],
-    "paseo-help/SKILL.md": ["049bfb5c67029fa341d244d004f1050950a555a1010530e812039a5b572161c3"],
+    "paseo-handoff/SKILL.md": [
+      "7e833acb4193ca7005a3eec2aa4571169ad962216e29ff9b0241ea0a419851f7"
+    ],
+    "paseo-help/SKILL.md": [
+      "049bfb5c67029fa341d244d004f1050950a555a1010530e812039a5b572161c3"
+    ],
     "paseo-plugin/SKILL.md": [
       "752d5e98d8c9277564cb82c24d0b07a41b5ea9610c65287da7df9407f7c78605",
       "78d01638f256f5a206c13bd3960a851d376c2baf9911774ed91e5eb3bf85c199",
       "db936264fa67b17c44e81fb51f5416df47280a98e4189cfa8b228a02a1236405"
     ],
-    "paseo/SKILL.md": ["2acef8bb200dd8fc84d99eb231c63cd8cdcf9d34df905ac4a24dd0fb11df0a0b"],
+    "paseo/SKILL.md": [
+      "2acef8bb200dd8fc84d99eb231c63cd8cdcf9d34df905ac4a24dd0fb11df0a0b"
+    ],
     "verify-api-accounts/SKILL.md": [
+      "4df5146e2f72f08139fadc7b3c5bce8db2ee0d9e6ca2209391b4004e6fd828af",
+      "d2ab9d832418d3b7fffab8a6986a4a39d996613fe28f5b8d4546b4f8c64ede76",
       "ebb93903458df91ac6dc111fb8fde6c8a9bb846c8f37ebddc2602ccb66094bb6"
     ],
     "verify-idle-nudges/SKILL.md": [

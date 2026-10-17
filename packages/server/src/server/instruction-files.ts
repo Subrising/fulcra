@@ -19,6 +19,7 @@ export const INSTRUCTION_FILE_POLICY =
 export function offerInstructionUpdate(
   file: string,
   data: Buffer,
+  mergeOnly = false,
 ): { path?: string; created: boolean } {
   assertInstructionPath(file);
   const current = info(file);
@@ -26,6 +27,10 @@ export function offerInstructionUpdate(
   const parent = path.dirname(file);
   mkdirSync(parent, { recursive: true });
   const primary = `${file}.new`;
+  const receipt = path.join(
+    parent,
+    `.fulcra-offer-${hash(Buffer.from(path.basename(file)))}-${hash(data)}.receipt`,
+  );
   const prefix = `${path.basename(file)}.new.`;
   const candidates = [
     primary,
@@ -44,6 +49,8 @@ export function offerInstructionUpdate(
     }
     if (readFileSync(candidate).equals(data)) return { path: candidate, created: false };
   }
+  // A removed offer is an owner choice. Keep the receipt and do not notify again.
+  if (info(receipt)) return { created: false };
   const date = new Date().toISOString().slice(0, 10).replaceAll("-", "");
   const dated = `${file}.new.${date}.${hash(data).slice(0, 16)}`;
   for (let index = 0; ; index++) {
@@ -55,7 +62,15 @@ export function offerInstructionUpdate(
         return { path: candidate, created: false };
       continue;
     }
-    console.warn("Fulcra kept the edited file: %s. The bundled version is at: %s", file, candidate);
+    if (replaceInstructionFile(receipt, Buffer.from("offered\n"), undefined)) {
+      console.warn(
+        mergeOnly
+          ? "Fulcra kept the edited file: %s. Merge the bundled settings at %s. Do not replace your file."
+          : "Fulcra kept the edited file: %s. The bundled version is at: %s",
+        file,
+        candidate,
+      );
+    }
     return { path: candidate, created: true };
   }
 }

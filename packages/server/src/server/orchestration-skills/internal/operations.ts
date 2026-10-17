@@ -210,8 +210,14 @@ export async function getSkillsStatus(
     if (ops.some((op) => op.name === name)) continue;
     if (!(await isLegacyCodexCopy(name, targets))) continue;
     if (!desired.has(name)) ops.push({ kind: "delete", name });
-    else if (await readManagedFilesManifest(path.join(targets.codexDir, name))) {
-      ops.push({ kind: "update", name });
+    else {
+      const manifest = await readManagedFilesManifest(path.join(targets.codexDir, name));
+      if (
+        Object.entries(manifest?.files ?? {}).some(
+          ([rel, hash]) => codexDisk.get(name)?.get(rel) === hash,
+        )
+      )
+        ops.push({ kind: "update", name });
     }
   }
   ops.sort((a, b) => compareStrings(a.name, b.name));
@@ -252,7 +258,8 @@ async function applySkills(
     const sourceDir = path.join(targets.sourceDir, name);
     const sourceFiles = await hashSkillDir(sourceDir);
     if (!sourceFiles) continue;
-    for (const root of [targets.agentsDir, targets.claudeDir]) {
+    for (const root of [targets.agentsDir, targets.claudeDir, targets.codexDir]) {
+      if (root === targets.codexDir && !(await isLegacyCodexCopy(name, targets))) continue;
       const skillDir = path.join(root, name);
       const installedFiles = await hashSkillDir(skillDir);
       if (!installedFiles) continue;

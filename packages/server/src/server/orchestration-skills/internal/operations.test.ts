@@ -568,6 +568,18 @@ describe("installSkills / updateSkills", () => {
     ).toBe("untracked skill");
   });
 
+  it("offers an update when the edited Codex copy links to shared skills", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await installSkills(sandbox.targets, ALL_SKILLS);
+    await fs.mkdir(path.dirname(sandbox.targets.codexDir), { recursive: true });
+    await fs.symlink(sandbox.targets.agentsDir, sandbox.targets.codexDir, "dir");
+    const file = path.join(sandbox.targets.agentsDir, "paseo", "SKILL.md");
+    await fs.writeFile(file, "user instructions");
+    expect((await autoUpdateInstalledSkills(sandbox.targets, ALL_SKILLS)).state).toBe("up-to-date");
+    expect(await fs.readFile(file, "utf8")).toBe("user instructions");
+    expect(await fs.readFile(`${file}.new`, "utf8")).toBe("paseo-v1");
+  });
+
   it.each([
     { alias: "codex", target: "agents" },
     { alias: "codex", target: "claude" },

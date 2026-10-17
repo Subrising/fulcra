@@ -105,7 +105,8 @@ export async function listFilesRecursive(rootDir: string): Promise<string[]> {
       if (
         rel === MANAGED_FILES_MANIFEST ||
         entry.name.startsWith(INSTRUCTION_BACKUP_PREFIX) ||
-        entry.name.startsWith(".instruction-sync-stage-")
+        entry.name.startsWith(".instruction-sync-stage-") ||
+        entry.name.startsWith(".fulcra-offer-")
       )
         continue;
       if (entry.isDirectory()) {
@@ -155,6 +156,15 @@ async function writeManifestIfChanged(
   dstDir: string,
   files: Record<string, string>,
 ): Promise<boolean> {
+  // Another daemon may have committed ownership while this scan was in flight.
+  // Retain its receipt only when the installed bytes still prove that ownership.
+  const concurrent = await readManagedFilesManifest(dstDir);
+  await assertManagedPathsStayInsideSkill(dstDir, Object.keys(concurrent?.files ?? {}));
+  for (const [rel, recordedHash] of Object.entries(concurrent?.files ?? {})) {
+    if (files[rel] === recordedHash) continue;
+    if ((await hashFile(path.join(dstDir, rel)).catch(() => null)) === recordedHash)
+      files[rel] = recordedHash;
+  }
   const manifest: ManagedFilesManifest = { version: 1, files };
   const next = `${JSON.stringify(manifest, null, 2)}\n`;
   const manifestPath = path.join(dstDir, MANAGED_FILES_MANIFEST);
@@ -168,7 +178,9 @@ async function writeManifestIfChanged(
       current === null ? undefined : createHash("sha256").update(current).digest("hex"),
     )
   ) {
-    throw new Error("Skill ownership record changed during installation");
+    // A competing receipt is safe to keep. Never turn record contention into a
+    // failed daemon startup after the instruction bytes were already checked.
+    return false;
   }
   return true;
 }
@@ -310,14 +322,25 @@ async function retireManagedSkill(dstDir: string): Promise<number> {
   const files = Object.keys(manifest.files);
   await assertManagedPathsStayInsideSkill(dstDir, [MANAGED_FILES_MANIFEST, ...files]);
   const removed: string[] = [];
+  const retained: Record<string, string> = {};
   for (const [rel, previousHash] of Object.entries(manifest.files)) {
     const filePath = path.join(dstDir, rel);
     const currentHash = await hashFile(filePath).catch(() => null);
-    if (currentHash !== previousHash) continue;
-    if (retireInstructionFile(filePath, previousHash, path.dirname(dstDir))) removed.push(rel);
+    if (currentHash === null) continue;
+    if (
+      currentHash === previousHash &&
+      retireInstructionFile(filePath, previousHash, path.dirname(dstDir))
+    )
+      removed.push(rel);
+    else retained[rel] = previousHash;
   }
   await pruneEmptyParentDirs(dstDir, removed);
-  await fs.rm(path.join(dstDir, MANAGED_FILES_MANIFEST));
+  if (Object.keys(retained).length > 0) {
+    await writeManifestIfChanged(dstDir, retained);
+    return removed.length;
+  }
+  const manifestPath = path.join(dstDir, MANAGED_FILES_MANIFEST);
+  retireInstructionFile(manifestPath, await hashFile(manifestPath), path.dirname(dstDir));
   await fs.rmdir(dstDir).catch((error: NodeJS.ErrnoException) => {
     if (error.code !== "ENOTEMPTY" && error.code !== "ENOENT") throw error;
   });

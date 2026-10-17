@@ -5,7 +5,7 @@ import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isPlatform } from "../../../test-utils/platform.js";
 import { buildTerminalEnvironment } from "../../terminal.js";
-import { buildAgentHookShellCommand } from "../agent-hook-installer.js";
+import { buildAgentHookShellCommand, installAgentHooks } from "../agent-hook-installer.js";
 import {
   AGENT_HOOK_PROVIDERS,
   installRegisteredAgentHooks,
@@ -65,6 +65,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 describe("Claude terminal agent hooks", () => {
+  it("adopts unchanged shipped hook-only settings and upgrades their hooks", () => {
+    const configDir = createTempDir("paseo-shipped-hooks-");
+    const file = join(configDir, "settings.json");
+    const shipped = readFileSync(new URL("./fixtures/shipped-settings.json", import.meta.url));
+    writeFileSync(file, shipped);
+    installRegisteredAgentHooks({ configDir });
+    const record = join(configDir, ".settings.json.paseo-installed.sha256");
+    expect(readFileSync(record, "utf8")).toMatch(/^[a-f0-9]{64}\n$/);
+    const provider = AGENT_HOOK_PROVIDERS.claude;
+    installAgentHooks(
+      { ...provider, events: [...provider.events, { event: "TestBundledEvent" }] },
+      { configDir },
+    );
+    expect(hookCommands(readSettings(configDir), "TestBundledEvent")).not.toHaveLength(0);
+  });
   it("installs registered provider hooks idempotently", () => {
     const configDir = createTempDir("paseo-claude-config-");
     const provider = AGENT_HOOK_PROVIDERS.claude;
@@ -192,8 +207,12 @@ describe("Claude terminal agent hooks", () => {
       installRegisteredAgentHooks({ configDir });
       expect(readFileSync(file, "utf8")).toBe(local);
       const proposed = JSON.parse(readFileSync(`${file}.new`, "utf8"));
-      expect(proposed.theme).toBe("local-theme");
+      expect(proposed.theme).toBeUndefined();
       expect(Object.keys(proposed.hooks)).not.toHaveLength(0);
+      expect(warn.mock.calls.filter((args) => args.includes(file))).toHaveLength(1);
+      settings.theme = "another local theme";
+      writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`);
+      installRegisteredAgentHooks({ configDir });
       expect(warn.mock.calls.filter((args) => args.includes(file))).toHaveLength(1);
     } finally {
       warn.mockRestore();
