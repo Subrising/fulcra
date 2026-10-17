@@ -692,7 +692,7 @@ test("native report end-to-end: actual MCP launch witness creates a scoped child
         events: [{ kind: "ended", providerAccepted: false }],
       }),
     );
-    expect(f.turnCount()).toBe(3);
+    await vi.waitFor(() => expect(f.turnCount()).toBe(3));
     expect(f.authority.requireSequence(f.agent.id).humanAt).toBe(humanAt);
     const projection = await catalog.executeTool("supervisor_inbox", {});
     const events = (projection.structuredContent as { events: { eventId: string }[] }).events;
