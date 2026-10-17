@@ -37,14 +37,22 @@ History loading reads JSONL one record at a time. The journal cache keeps byte l
 compact projection and file-index facts. Page reads load only contributing records from disk.
 The original journal remains authoritative. Active sessions can still keep their displayed timeline.
 
-The process shares a 128 MiB input allowance across transcript and journal loads. A larger input
-runs alone. Concurrent identical Claude resumes share their load until it completes.
-The journal metadata cache has a shared 64 MiB allowance. Entries in use or awaiting an index write
-stay pinned. Unused entries leave the cache first. Cache eviction never removes a history file.
+The process shares a 128 MiB input allowance across full transcript and journal replays.
+A separate 16 MiB allowance serves commits and small page reads. Large inputs use one lane alone.
+These allowances bound concurrent parsing work. Converted provider history remains until its session consumes it.
+Concurrent identical Claude resumes share parsed data. Each caller keeps its own mutable session.
+Closing a caller abandons its load. Closing the last caller also cancels a queued or active read.
 
-Each load logs `history.load` with its source, boundary, input bytes, heap use, and heap limit.
-`journalCacheBytes` reports the conservative metadata charge. `pluginCacheBytes` counts retained
-client bundles, catalog snapshots, and log-tail payloads. These charges are not heap measurements.
+Live agents pin journal metadata until their runtime closes. Pending operations and index writes also pin it.
+Unused journal metadata has a shared 128 MiB cache allowance. Eviction removes memory, never a history file.
+Closing a durable runtime also releases its duplicate parent timeline. Closed pages read the journal.
+An unused index larger than that allowance is rebuilt on its next access. Active timeline payloads still need memory.
+The cache charge includes projection and turn-index overhead. A small-row calibration checks it against retained heap.
+
+Each full load logs `history.load` at info level with its source, boundary, input bytes, heap use, and heap limit.
+Small page materialisations use debug level. `journalCacheBytes` includes live pins and unused metadata charges.
+`pluginCacheBytes` counts retained client bundles, catalog snapshots, and log-tail payloads.
+These charges are separate from measured heap use.
 
 ## Segments
 

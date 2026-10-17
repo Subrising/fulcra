@@ -1,4 +1,9 @@
-import { historyLoadBudget, logHistoryLoad, readHistoryLines } from "../../history-load.js";
+import {
+  CoalescedHistoryLoads,
+  historyLoadBudget,
+  logHistoryLoad,
+  readHistoryLines,
+} from "../../history-load.js";
 import { readWorkflowLinks } from "./subagents/workflow-replay-source.js";
 import { recordedClaudeUsage } from "../../usage-recording.js";
 import {
@@ -82,6 +87,7 @@ import { foldSubagentObservations, type SubagentObservation } from "./subagents/
 import {
   observeReplayWorkflows,
   parseClaudeWorkflowRun,
+  type ClaudeWorkflowRun,
 } from "./subagents/workflow-replay-source.js";
 import { readClaudeWorkflowResultFile } from "./subagents/workflow-output.js";
 import { buildClaudeFeatures, claudeModelSupportsFastMode } from "./feature-definitions.js";
@@ -1592,7 +1598,6 @@ export class ClaudeAgentClient implements AgentClient {
   private readonly now: () => number;
   private versionForKey: { version: string | null; at: number } | null = null;
   private readonly rewindSdk: ClaudeRewindSdk;
-  private readonly resuming = new Map<string, ClaudeAgentSession>();
 
   constructor(options: ClaudeAgentClientOptions) {
     this.defaults = options.defaults;
@@ -1648,10 +1653,7 @@ export class ClaudeAgentClient implements AgentClient {
       cwd: merged.cwd,
     };
     const claudeConfig = this.assertConfig(mergedConfig);
-    const key = JSON.stringify([handle, claudeConfig, launchContext]);
-    const pending = this.resuming.get(key);
-    if (pending) return pending;
-    const session = new ClaudeAgentSession(claudeConfig, {
+    return new ClaudeAgentSession(claudeConfig, {
       defaults: this.defaults,
       runtimeSettings: this.runtimeSettings,
       handle,
@@ -1662,11 +1664,6 @@ export class ClaudeAgentClient implements AgentClient {
       resolveBinary: this.resolveBinary,
       rewindSdk: this.rewindSdk,
     });
-    this.resuming.set(key, session);
-    void session.whenHistoryLoaded().finally(() => {
-      if (this.resuming.get(key) === session) this.resuming.delete(key);
-    });
-    return session;
   }
 
   async getCatalogCacheKey(_options: FetchCatalogOptions): Promise<string> {
@@ -1780,7 +1777,9 @@ export class ClaudeAgentClient implements AgentClient {
       rootIsProjectDir: Boolean(options?.cwd),
     });
     const parsed = await Promise.all(
-      candidates.map((candidate) => parseClaudeSessionDescriptor(candidate.path, candidate.mtime)),
+      candidates.map((candidate) =>
+        parseClaudeSessionDescriptor(candidate.path, candidate.mtime, this.logger),
+      ),
     );
     return parsed
       .filter((session): session is ImportableProviderSession => session !== null)
@@ -2283,6 +2282,7 @@ class ClaudeAgentSession implements AgentSession {
   private historyPending = false;
   // FU-77: the transcript is read without blocking the main thread; readers of persistedHistory await this first.
   private historyLoad: Promise<void> = Promise.resolve();
+  private readonly historyAbort = new AbortController();
   private turnState: TurnState = "idle";
   private nextTurnOrdinal = 1;
   private cancelCurrentTurn: (() => void) | null = null;
@@ -2761,10 +2761,6 @@ class ClaudeAgentSession implements AgentSession {
     await this.interruptActiveTurn();
   }
 
-  whenHistoryLoaded(): Promise<void> {
-    return this.historyLoad;
-  }
-
   async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
     await this.historyLoad;
     if (
@@ -3081,6 +3077,10 @@ class ClaudeAgentSession implements AgentSession {
       "provider.claude.session_close.start",
     );
     this.closed = true;
+    this.historyAbort.abort();
+    this.persistedHistory = [];
+    this.persistedProviderSubagentEvents = [];
+    this.historyPending = false;
     this.rejectAllPendingPermissions(new Error("Claude session closed"));
     this.cancelCurrentTurn?.();
     this.subscribers.clear();
@@ -5512,30 +5512,25 @@ class ClaudeAgentSession implements AgentSession {
         );
         return;
       }
-      const sidechains = await readClaudeSidechainHistory(historyPath);
-      const replayBytes = (await promises.stat(historyPath)).size + sidechains.bytes;
-      const release = await historyLoadBudget.acquire(replayBytes);
-      logHistoryLoad(this.logger, "start", "claude", replayBytes);
+      const lease = await sharedClaudeHistory.acquire(
+        historyPath,
+        this.historyAbort.signal,
+        (signal) => readParsedClaudeHistory(historyPath!, this.logger, signal),
+      );
       try {
-        const facts = new ClaudeReplayFacts();
-        const parentTimeline: PreparedClaudeHistoryEntry[] = [];
-        const inlineSidechains: ClaudeHistoryEntry[] = [];
-        for await (const entry of readClaudeHistoryFile(historyPath)) {
-          if (entry.isSidechain !== true) facts.observe(entry);
-          if (entry.isSidechain === true && typeof entry.agentId === "string")
-            inlineSidechains.push(entry);
-          if (!entry.isSidechain) parentTimeline.push(this.preparePersistedHistoryEntry(entry));
+        this.historyAbort.signal.throwIfAborted();
+        const replay = this.ingestPersistedSidechains(lease.value);
+        const timeline: PersistedTimelineEntry[] = [];
+        for (const entry of lease.value.parentEntries) {
+          this.ingestPersistedHistoryRecord(cloneClaudeHistoryEntry(entry), timeline, replay);
         }
-        const replay = await this.ingestPersistedSidechains(facts, inlineSidechains, sidechains);
-        for (const entry of parentTimeline) this.ingestPreparedHistoryEntry(entry, replay);
-        logHistoryLoad(this.logger, "end", "claude", replayBytes);
-      } catch (error) {
-        logHistoryLoad(this.logger, "error", "claude", replayBytes);
-        throw error;
+        for (const entry of timeline) this.persistedHistory.push(entry);
+        if (this.persistedHistory.length) this.historyPending = true;
       } finally {
-        release();
+        lease.release();
       }
     } catch (error) {
+      if (this.historyAbort.signal.aborted) return;
       this.logger.warn(
         { err: error, sessionId, historyPath },
         "Failed to load Claude history from transcript",
@@ -5543,47 +5538,9 @@ class ClaudeAgentSession implements AgentSession {
     }
   }
 
-  private async ingestPersistedSidechains(
-    facts: ClaudeReplayFacts,
-    inlineSidechains: ClaudeHistoryEntry[],
-    sidechains: ClaudeSidechainHistory,
-  ): Promise<ClaudeReplayOwnership> {
-    const sidechainEntries = inlineSidechains;
-    for (const file of sidechains.files) {
-      for await (const entry of readClaudeHistoryFile(file)) {
-        if (entry.isSidechain === true && typeof entry.agentId === "string")
-          sidechainEntries.push(entry);
-      }
-    }
-    const metaByAgentId = new Map<string, ClaudeSubagentMeta>();
-    for (const [agentId, file] of sidechains.metaFilesByAgentId) {
-      try {
-        const meta = parseClaudeSubagentMeta(await promises.readFile(file, "utf8"));
-        if (meta) metaByAgentId.set(agentId, meta);
-      } catch {
-        /* A missing or partial metadata file does not hide the transcript. */
-      }
-    }
-    const workflows = [];
-    for (const file of sidechains.workflowFiles) {
-      try {
-        const workflow = parseClaudeWorkflowRun(await promises.readFile(file, "utf8"));
-        if (workflow) workflows.push(workflow);
-      } catch {
-        /* A missing or partial workflow summary does not hide other history. */
-      }
-    }
+  private ingestPersistedSidechains(data: ParsedClaudeHistory): ClaudeReplayOwnership {
+    const { sidechainEntries, metaByAgentId, workflows, facts, entriesByRunId } = data;
     const parentFacts = facts.parent();
-    const entriesByRunId = new Map<string, ClaudeHistoryEntry[]>();
-    for (const [runId, files] of sidechains.workflowSidechainFilesByRunId) {
-      const entries: ClaudeHistoryEntry[] = [];
-      for (const file of files) {
-        for await (const entry of readClaudeHistoryFile(file)) {
-          if (entry.type !== "user" || isToolResultUserEntry(entry)) entries.push(entry);
-        }
-      }
-      entriesByRunId.set(runId, entries);
-    }
     // Replay produces the same observations the live task protocol produces, then folds them
     // with the same function, so identity and status are derived once for both paths.
     const subagentReplay = observeReplaySubagents({
@@ -5594,7 +5551,8 @@ class ClaudeAgentSession implements AgentSession {
         parentFacts: readClaudeReplayParentFacts(entries as ClaudeHistoryEntry[]),
       })),
       parent: parentFacts,
-      convertEntry: (entry) => this.convertHistoryEntry(entry as ClaudeHistoryEntry),
+      convertEntry: (entry) =>
+        this.convertHistoryEntry(cloneClaudeHistoryEntry(entry as ClaudeHistoryEntry)),
     });
     const observations = [
       ...subagentReplay.observations,
@@ -5602,7 +5560,8 @@ class ClaudeAgentSession implements AgentSession {
         workflows,
         parentLinks: facts.workflowLinks(),
         entriesByRunId,
-        convertEntry: (entry) => this.convertHistoryEntry(entry as ClaudeHistoryEntry),
+        convertEntry: (entry) =>
+          this.convertHistoryEntry(cloneClaudeHistoryEntry(entry as ClaudeHistoryEntry)),
       }),
     ];
     const restoredProviderSubagentIds = new Set(
@@ -5630,53 +5589,66 @@ class ClaudeAgentSession implements AgentSession {
     return replay;
   }
 
-  private preparePersistedHistoryEntry(entry: ClaudeHistoryEntry): PreparedClaudeHistoryEntry {
-    return {
-      items: this.convertHistoryEntry(entry),
-      taskSnapshot: this.taskState.observe(entry),
-      timestamp: normalizeProviderReplayTimestamp(entry.timestamp) ?? undefined,
-      notificationToolUseId: readTaskNotificationToolUseIdFromHistoryRecord(entry),
-      uuid: typeof entry.uuid === "string" ? entry.uuid : undefined,
-      visibleUser:
-        entry.type === "user" &&
-        !isSyntheticHistoryUserEntry(entry) &&
-        !isToolResultUserEntry(entry),
-      assistant: entry.type === "assistant",
-    };
-  }
-
-  private ingestPreparedHistoryEntry(
-    entry: PreparedClaudeHistoryEntry,
+  private ingestPersistedHistoryRecord(
+    entry: ClaudeHistoryEntry,
+    timeline: PersistedTimelineEntry[],
     replay: ClaudeReplayOwnership,
   ): void {
-    const notificationToolUseId = entry.notificationToolUseId;
-    if (notificationToolUseId && replay.restoredIds.has(notificationToolUseId)) return;
-    const historyTimestamp = entry.timestamp;
+    if (entry.isSidechain) {
+      return;
+    }
+    const notificationToolUseId = readTaskNotificationToolUseIdFromHistoryRecord(entry);
+    if (notificationToolUseId && replay.restoredIds.has(notificationToolUseId)) {
+      return;
+    }
+
+    const historyTimestamp = normalizeProviderReplayTimestamp(entry.timestamp);
     const notificationOwner = notificationToolUseId
       ? replay.toolOwners.get(notificationToolUseId)
       : undefined;
     if (notificationOwner) {
-      for (const item of entry.items)
+      for (const item of this.convertHistoryEntry(entry)) {
         this.persistedProviderSubagentEvents.push({
           type: "provider_subagent",
           provider: "claude",
-          event: { type: "timeline", id: notificationOwner, item, timestamp: historyTimestamp },
+          event: {
+            type: "timeline",
+            id: notificationOwner,
+            item,
+            timestamp: historyTimestamp ?? undefined,
+          },
         });
+      }
       return;
     }
-    if (entry.visibleUser && entry.uuid) {
+    const taskSnapshot = this.taskState.observe(entry);
+    const items = [
+      ...(taskSnapshot ? [taskSnapshot] : []),
+      ...this.convertHistoryEntry(entry).map((item) =>
+        labelReplayedSubagentCard(item, replay.subagentToolCalls),
+      ),
+    ];
+    const isVisibleUserEntry =
+      entry.type === "user" &&
+      typeof entry.uuid === "string" &&
+      !isSyntheticHistoryUserEntry(entry) &&
+      !isToolResultUserEntry(entry);
+    if (isVisibleUserEntry && typeof entry.uuid === "string") {
       this.rememberUserMessageId(entry.uuid);
       this.rememberRewindUserAnchor(entry.uuid);
     }
-    if (entry.assistant && entry.uuid) this.rememberRewindAssistantAnchor(entry.uuid);
-    if (entry.taskSnapshot)
-      this.persistedHistory.push({ item: entry.taskSnapshot, timestamp: historyTimestamp });
-    for (const item of entry.items)
-      this.persistedHistory.push({
-        item: labelReplayedSubagentCard(item, replay.subagentToolCalls),
-        timestamp: historyTimestamp,
-      });
-    if (this.persistedHistory.length) this.historyPending = true;
+    if (entry.type === "assistant" && typeof entry.uuid === "string") {
+      this.rememberRewindAssistantAnchor(entry.uuid);
+    }
+
+    if (items.length > 0) {
+      timeline.push(
+        ...items.map((item) => ({
+          item,
+          timestamp: historyTimestamp ?? undefined,
+        })),
+      );
+    }
   }
 
   private resolveHistoryPath(sessionId: string): string | null {
@@ -6393,20 +6365,167 @@ function normalizeHistoryBlocks(content: unknown): ClaudeContentChunk[] | null {
   return null;
 }
 
-interface PreparedClaudeHistoryEntry {
-  items: AgentTimelineItem[];
-  taskSnapshot: AgentTimelineItem | null;
-  timestamp?: string;
-  notificationToolUseId: string | null;
-  uuid?: string;
-  visibleUser: boolean;
-  assistant: boolean;
+interface ParsedClaudeHistory {
+  parentEntries: ClaudeHistoryEntry[];
+  sidechainEntries: ClaudeHistoryEntry[];
+  facts: ClaudeReplayFacts;
+  metaByAgentId: Map<string, ClaudeSubagentMeta>;
+  workflows: ClaudeWorkflowRun[];
+  entriesByRunId: Map<string, ClaudeHistoryEntry[]>;
+}
+const sharedClaudeHistory = new CoalescedHistoryLoads<ParsedClaudeHistory>();
+
+async function readParsedClaudeHistory(historyPath: string, logger: Logger, signal: AbortSignal) {
+  signal.throwIfAborted();
+  const sidechains = await readClaudeSidechainHistory(historyPath);
+  const replayBytes = (await promises.stat(historyPath)).size + sidechains.bytes;
+  const release = await historyLoadBudget.acquire(replayBytes, signal);
+  try {
+    logHistoryLoad(logger, "start", "claude", replayBytes);
+    const data: ParsedClaudeHistory = {
+      parentEntries: [],
+      sidechainEntries: [],
+      facts: new ClaudeReplayFacts(),
+      metaByAgentId: new Map(),
+      workflows: [],
+      entriesByRunId: new Map(),
+    };
+    for await (const entry of readClaudeHistoryFile(historyPath, signal)) {
+      if (entry.isSidechain !== true) data.facts.observe(entry);
+      if (entry.isSidechain === true && typeof entry.agentId === "string")
+        data.sidechainEntries.push(entry);
+      if (!entry.isSidechain) data.parentEntries.push(entry);
+    }
+    await readParsedClaudeSidechains(data, sidechains, signal);
+    return {
+      value: data,
+      release: () => {
+        try {
+          logHistoryLoad(logger, "end", "claude", replayBytes);
+        } finally {
+          release();
+        }
+      },
+    };
+  } catch (error) {
+    try {
+      logHistoryLoad(logger, "error", "claude", replayBytes);
+    } finally {
+      release();
+    }
+    throw error;
+  }
+}
+async function readParsedClaudeSidechains(
+  data: ParsedClaudeHistory,
+  sidechains: ClaudeSidechainHistory,
+  signal: AbortSignal,
+): Promise<void> {
+  for (const file of sidechains.files)
+    for await (const entry of readClaudeHistoryFile(file, signal)) {
+      if (entry.isSidechain === true && typeof entry.agentId === "string")
+        data.sidechainEntries.push(entry);
+    }
+  for (const [agentId, file] of sidechains.metaFilesByAgentId) {
+    try {
+      const meta = parseClaudeSubagentMeta(
+        await promises.readFile(file, { encoding: "utf8", signal }),
+      );
+      if (meta) data.metaByAgentId.set(agentId, meta);
+    } catch {
+      signal.throwIfAborted(); /* Optional sidecars can be partial or absent. */
+    }
+  }
+  for (const file of sidechains.workflowFiles) {
+    try {
+      const workflow = parseClaudeWorkflowRun(
+        await promises.readFile(file, { encoding: "utf8", signal }),
+      );
+      if (workflow) data.workflows.push(workflow);
+    } catch {
+      signal.throwIfAborted(); /* Optional run summaries can be partial or absent. */
+    }
+  }
+  for (const [runId, files] of sidechains.workflowSidechainFilesByRunId) {
+    const entries: ClaudeHistoryEntry[] = [];
+    for (const file of files)
+      for await (const entry of readClaudeHistoryFile(file, signal)) {
+        if (entry.type !== "user" || isToolResultUserEntry(entry)) entries.push(entry);
+      }
+    data.entriesByRunId.set(runId, entries);
+  }
 }
 
-async function* readClaudeHistoryFile(file: string): AsyncGenerator<ClaudeHistoryEntry> {
+/** Only these source fields affect conversion, task state, routing, or rewind anchors. */
+const CLAUDE_REPLAY_FIELDS = [
+  "message",
+  "type",
+  "subtype",
+  "isCompactSummary",
+  "isSidechain",
+  "agentId",
+  "timestamp",
+  "uuid",
+  "effort",
+  "isSynthetic",
+  "isMeta",
+  "compact_metadata",
+  "compactMetadata",
+  "compactionMetadata",
+  "message_id",
+  "task_id",
+  "tool_use_id",
+  "status",
+  "summary",
+  "output_file",
+  "content",
+];
+function compactClaudeHistoryEntry(entry: Record<string, unknown>): ClaudeHistoryEntry {
+  const compact: ClaudeHistoryEntry = {};
+  for (const field of CLAUDE_REPLAY_FIELDS) if (field in entry) compact[field] = entry[field];
+  const message = toObjectRecord(entry.message);
+  if (message) {
+    const kept: Record<string, unknown> = {};
+    for (const field of ["content", "model", "usage", "stop_reason"])
+      if (field in message) kept[field] = message[field];
+    compact.message = kept;
+  }
+  for (const field of ["toolUseResult", "tool_use_result"]) {
+    if (!(field in entry)) continue;
+    const result = toObjectRecord(entry[field]);
+    if (!result) {
+      compact[field] = entry[field];
+      continue;
+    }
+    const kept: Record<string, unknown> = {};
+    for (const key of ["success", "task", "taskId", "statusChange", "tasks"])
+      if (key in result) kept[key] = result[key];
+    compact[field] = kept;
+  }
+  return compact;
+}
+function cloneClaudeHistoryEntry(entry: ClaudeHistoryEntry): ClaudeHistoryEntry {
+  const copy: ClaudeHistoryEntry = {};
+  for (const [key, value] of Object.entries(entry)) copy[key] = cloneClaudeReplayValue(value);
+  return copy;
+}
+function cloneClaudeReplayValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(cloneClaudeReplayValue);
+  const record = toObjectRecord(value);
+  if (!record) return value;
+  return Object.fromEntries(
+    Object.entries(record).map(([key, child]) => [key, cloneClaudeReplayValue(child)]),
+  );
+}
+
+async function* readClaudeHistoryFile(
+  file: string,
+  signal?: AbortSignal,
+): AsyncGenerator<ClaudeHistoryEntry> {
+  signal?.throwIfAborted();
   const handle = await promises.open(file, "r");
   try {
-    for await (const line of readHistoryLines(handle, true)) {
+    for await (const line of readHistoryLines(handle, true, signal)) {
       const trimmed = line.text.trim();
       if (!trimmed) continue;
       let entry: Record<string, unknown> | undefined;
@@ -6415,7 +6534,7 @@ async function* readClaudeHistoryFile(file: string): AsyncGenerator<ClaudeHistor
       } catch {
         continue;
       } // A malformed Claude record does not hide later messages.
-      if (entry) yield entry;
+      if (entry) yield compactClaudeHistoryEntry(entry);
     }
   } finally {
     await handle.close();
@@ -6468,7 +6587,9 @@ class ClaudeReplayFacts {
       if (!block) continue;
       this.observeToolCall(block);
       if (block.type === "tool_use" && block.name === "Workflow")
-        this.workflowEntries.push({ message: { content: [block] } });
+        this.workflowEntries.push({
+          message: { content: [{ type: "tool_use", name: "Workflow", id: block.id }] },
+        });
       if (block.type !== "tool_result" || typeof block.tool_use_id !== "string") continue;
       this.outcomes.set(block.tool_use_id, { failed: block.is_error === true });
       const result = JSON.stringify(block.content);
@@ -6944,14 +7065,8 @@ function applyClaudeSessionEntryToAccumulator(
 async function parseClaudeSessionDescriptor(
   filePath: string,
   mtime: Date,
+  logger: Logger,
 ): Promise<ImportableProviderSession | null> {
-  let content: string;
-  try {
-    content = await fsPromises.readFile(filePath, "utf8");
-  } catch {
-    return null;
-  }
-
   const acc: ClaudeSessionDescriptorAccumulator = {
     sessionId: null,
     cwd: null,
@@ -6962,15 +7077,33 @@ async function parseClaudeSessionDescriptor(
     lastPromptPreview: null,
   };
 
-  for (const line of content.split(/\r?\n/)) {
-    if (!line || !shouldParseClaudeSessionDescriptorLine(line, acc)) continue;
-    let entry: unknown;
+  let release: (() => void) | undefined;
+  let replayBytes = 0;
+  try {
+    replayBytes = (await fsPromises.stat(filePath)).size;
+    release = await historyLoadBudget.acquire(replayBytes);
+    logHistoryLoad(logger, "start", "claude_catalog", replayBytes);
+    const handle = await fsPromises.open(filePath, "r");
     try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
+      for await (const { text: line } of readHistoryLines(handle, true)) {
+        if (!line || !shouldParseClaudeSessionDescriptorLine(line, acc)) continue;
+        let entry: unknown;
+        try {
+          entry = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        applyClaudeSessionEntryToAccumulator(entry, acc);
+      }
+    } finally {
+      await handle.close();
     }
-    applyClaudeSessionEntryToAccumulator(entry, acc);
+    logHistoryLoad(logger, "end", "claude_catalog", replayBytes);
+  } catch {
+    if (release) logHistoryLoad(logger, "error", "claude_catalog", replayBytes);
+    return null;
+  } finally {
+    release?.();
   }
 
   const { sessionId, cwd } = acc;

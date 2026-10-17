@@ -93,7 +93,7 @@ describe("ClaudeAgentSession persisted history load", () => {
     );
   });
 
-  test("coalesces only concurrent resumes and logs load memory", async () => {
+  test("coalesces data while each resume keeps its own session and complete history", async () => {
     mkdirSync(path.dirname(transcriptPath()), { recursive: true });
     writeFileSync(
       transcriptPath(),
@@ -111,10 +111,14 @@ describe("ClaudeAgentSession persisted history load", () => {
       client.resumeSession(handle, { cwd }),
       client.resumeSession(handle, { cwd }),
     ]);
-    expect(first).toBe(second);
+    expect(first).not.toBe(second);
     const events = [];
     for await (const event of first.streamHistory()) events.push(event);
     expect(events).toHaveLength(1);
+    const other = [];
+    for await (const event of second.streamHistory()) other.push(event);
+    expect(other).toEqual(events);
+    await second.close();
     expect(records.filter((record) => record.msg === "history.load")).toEqual([
       expect.objectContaining({
         boundary: "start",
@@ -138,6 +142,40 @@ describe("ClaudeAgentSession persisted history load", () => {
     expect(later).not.toBe(first);
     for await (const event of later.streamHistory()) void event;
     await later.close();
+  });
+
+  test("closing a queued history load allows a fresh resume", async () => {
+    const { historyLoadBudget } = await import("../../history-load.js");
+    mkdirSync(path.dirname(transcriptPath()), { recursive: true });
+    writeFileSync(
+      transcriptPath(),
+      JSON.stringify({ type: "user", message: { content: "fresh" } }),
+    );
+    const release = await historyLoadBudget.acquire(Number.MAX_SAFE_INTEGER);
+    const client = new ClaudeAgentClient({
+      logger: pino({ level: "silent" }),
+      queryFactory: () => {
+        throw new Error("No query");
+      },
+      resolveVersion: async () => "2.1.220",
+    });
+    try {
+      const handle = { provider: "claude", sessionId: SESSION_ID };
+      const closed = await client.resumeSession(handle, { cwd });
+      await closed.close();
+      const fresh = await client.resumeSession(handle, { cwd });
+      expect(fresh).not.toBe(closed);
+      release();
+      const events = [];
+      for await (const event of fresh.streamHistory()) events.push(event);
+      expect(JSON.stringify(events)).toContain("fresh");
+      const abandoned = [];
+      for await (const event of closed.streamHistory()) abandoned.push(event);
+      expect(abandoned).toEqual([]);
+      await fresh.close();
+    } finally {
+      release();
+    }
   });
 
   test("a resumed transcript is replayed after the async read", async () => {
@@ -307,4 +345,74 @@ describe("bounded history readers", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+test("shared replay data survives one consumer cancel and releases the last lease", async () => {
+  const { CoalescedHistoryLoads } = await import("../../history-load.js");
+  const loads = new CoalescedHistoryLoads<{ text: string }>();
+  let finish!: (value: { value: { text: string }; release: () => void }) => void;
+  let calls = 0,
+    releases = 0;
+  const start = (_signal: AbortSignal) => {
+    calls++;
+    return new Promise<{ value: { text: string }; release: () => void }>((resolve) => {
+      finish = resolve;
+    });
+  };
+  const first = new AbortController(),
+    second = new AbortController();
+  const canceled = loads.acquire("same", first.signal, start);
+  const kept = loads.acquire("same", second.signal, start);
+  await Promise.resolve();
+  first.abort(new Error("closed consumer"));
+  await expect(canceled).rejects.toThrow("closed consumer");
+  finish({
+    value: { text: "complete" },
+    release: () => {
+      releases++;
+    },
+  });
+  const lease = await kept;
+  expect(lease.value).toEqual({ text: "complete" });
+  expect(calls).toBe(1);
+  expect(releases).toBe(0);
+  lease.release();
+  lease.release();
+  expect(releases).toBe(1);
+  const next = loads.acquire("same", new AbortController().signal, start);
+  await Promise.resolve();
+  finish({
+    value: { text: "new" },
+    release: () => {
+      releases++;
+    },
+  });
+  const nextLease = await next;
+  expect(nextLease.value.text).toBe("new");
+  expect(calls).toBe(2);
+  nextLease.release();
+  expect(releases).toBe(2);
+});
+
+test("a canceled queued load does not reserve capacity", async () => {
+  const { HistoryLoadBudget } = await import("../../history-load.js");
+  const budget = new HistoryLoadBudget(10);
+  const release = await budget.acquire(10);
+  const controller = new AbortController();
+  const canceled = budget.acquire(10, controller.signal);
+  controller.abort(new Error("closed load"));
+  await expect(canceled).rejects.toThrow("closed load");
+  release();
+  (await budget.acquire(10))();
+});
+
+test("Mac memory admission uses page counts and refuses unknown capacity", async () => {
+  const { parseMacMemory } = await import("../../../test-utils/mac-memory.js");
+  const input =
+    "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free: 100.\nPages inactive: 200.\nPages speculative: 999999.\nSystem-wide memory free percentage: 99%";
+  expect(parseMacMemory(input).availableBytes).toBe(300 * 16384);
+  expect(parseMacMemory(input.replace("16384", "4096")).availableBytes).toBe(300 * 4096);
+  expect(() => parseMacMemory("System-wide memory free percentage: 99%")).toThrow(
+    "Cannot read available Mac memory",
+  );
 });

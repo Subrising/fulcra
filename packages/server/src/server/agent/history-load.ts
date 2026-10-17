@@ -3,11 +3,12 @@ import { getHeapStatistics } from "node:v8";
 import type { Logger } from "pino";
 
 const HISTORY_LOAD_BYTES = 128 * 1024 * 1024;
-const JOURNAL_CACHE_BYTES = 64 * 1024 * 1024;
+const JOURNAL_CACHE_BYTES = 128 * 1024 * 1024;
 
 interface LoadWaiter {
   bytes: number;
   resolve: (release: () => void) => void;
+  cancel: () => void;
 }
 
 /** Large inputs run alone. Small inputs can share the same byte allowance. */
@@ -16,9 +17,24 @@ export class HistoryLoadBudget {
   private readonly waiting: LoadWaiter[] = [];
   constructor(private readonly maximum = HISTORY_LOAD_BYTES) {}
 
-  acquire(bytes: number): Promise<() => void> {
-    return new Promise((resolve) => {
-      this.waiting.push({ bytes: Math.min(this.maximum, Math.max(1, bytes)), resolve });
+  acquire(bytes: number, signal?: AbortSignal): Promise<() => void> {
+    signal?.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      const waiter: LoadWaiter = {
+        bytes: Math.min(this.maximum, Math.max(1, bytes)),
+        resolve,
+        cancel: () => signal?.removeEventListener("abort", abort),
+      };
+      const abort = () => {
+        const index = this.waiting.indexOf(waiter);
+        if (index < 0) return;
+        this.waiting.splice(index, 1);
+        waiter.cancel();
+        reject(signal?.reason);
+        this.drain();
+      };
+      signal?.addEventListener("abort", abort, { once: true });
+      this.waiting.push(waiter);
       this.drain();
     });
   }
@@ -28,6 +44,7 @@ export class HistoryLoadBudget {
       const waiter = this.waiting[0]!;
       if (this.activeBytes + waiter.bytes > this.maximum) return;
       this.waiting.shift();
+      waiter.cancel();
       this.activeBytes += waiter.bytes;
       let released = false;
       waiter.resolve(() => {
@@ -41,6 +58,7 @@ export class HistoryLoadBudget {
 }
 
 export const historyLoadBudget = new HistoryLoadBudget();
+export const interactiveHistoryBudget = new HistoryLoadBudget(16 * 1024 * 1024);
 
 interface CacheEntry {
   bytes: number;
@@ -48,7 +66,7 @@ interface CacheEntry {
   evict: () => void;
 }
 
-/** One allowance includes live, unloaded, and retained journal metadata across all stores. */
+/** One allowance bounds unused journal metadata across live and retained stores. */
 export class JournalHistoryCache {
   private readonly entries = new Map<object, CacheEntry>();
   bytes = 0;
@@ -76,10 +94,13 @@ export class JournalHistoryCache {
   }
 
   trim(): void {
+    let unusedBytes = 0;
+    for (const entry of this.entries.values()) if (!entry.busy()) unusedBytes += entry.bytes;
     for (const [key, entry] of this.entries) {
-      if (this.bytes <= this.maximum) return;
+      if (unusedBytes <= this.maximum) return;
       if (entry.busy()) continue;
       this.delete(key);
+      unusedBytes -= entry.bytes;
       entry.evict();
     }
   }
@@ -94,10 +115,12 @@ export function changePluginCacheBytes(delta: number): void {
 export function logHistoryLoad(
   logger: Logger,
   boundary: "start" | "end" | "error",
-  source: "claude" | "journal",
+  source: "claude" | "claude_catalog" | "journal",
   replayBytes: number,
+  level: "info" | "debug" = "info",
 ): void {
-  logger.info(
+  if (!logger.isLevelEnabled(level)) return;
+  logger[level](
     {
       boundary,
       source,
@@ -121,8 +144,9 @@ export interface HistoryLine {
 export async function* readHistoryLines(
   file: FileHandle,
   allowPartialLastLine = false,
+  signal?: AbortSignal,
 ): AsyncGenerator<HistoryLine> {
-  const stream = file.createReadStream({ autoClose: false, highWaterMark: 64 * 1024 });
+  const stream = file.createReadStream({ autoClose: false, highWaterMark: 64 * 1024, signal });
   let pieces: Buffer[] = [];
   let bytes = 0;
   let offset = 0;
@@ -149,10 +173,89 @@ export async function* readHistoryLines(
     }
     if (bytes) {
       if (!allowPartialLastLine)
-        throw new Error("Incomplete timeline journal; retain for recovery");
+        throw new SyntaxError("Incomplete timeline journal; retain for recovery");
       yield { text: Buffer.concat(pieces, bytes).toString("utf8"), offset, bytes };
     }
   } finally {
     stream.destroy();
+  }
+}
+
+interface ReadyHistory<T> {
+  value: T;
+  release: () => void;
+}
+interface SharedHistory<T> {
+  promise: Promise<T>;
+  readers: number;
+  controller: AbortController;
+  ready: ReadyHistory<T> | null;
+}
+export interface HistoryLease<T> {
+  value: T;
+  release: () => void;
+}
+
+/** Shares parsed data until every consumer finishes. Each consumer owns its mutable session. */
+export class CoalescedHistoryLoads<T> {
+  private readonly loads = new Map<string, SharedHistory<T>>();
+
+  async acquire(
+    key: string,
+    signal: AbortSignal,
+    start: (signal: AbortSignal) => Promise<ReadyHistory<T>>,
+  ): Promise<HistoryLease<T>> {
+    signal.throwIfAborted();
+    const entry = this.loads.get(key) ?? this.create(key, start);
+    entry.readers++;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      signal.removeEventListener("abort", abort);
+      entry.readers--;
+      if (entry.readers !== 0) return;
+      if (this.loads.get(key) === entry) this.loads.delete(key);
+      entry.controller.abort();
+      entry.ready?.release();
+      entry.ready = null;
+    };
+    let abort!: () => void;
+    const canceled = new Promise<never>((_resolve, reject) => {
+      abort = () => {
+        release();
+        reject(signal.reason);
+      };
+      signal.addEventListener("abort", abort, { once: true });
+    });
+    try {
+      const value = await Promise.race([entry.promise, canceled]);
+      signal.throwIfAborted();
+      return { value, release };
+    } catch (error) {
+      release();
+      throw error;
+    }
+  }
+
+  private create(
+    key: string,
+    start: (signal: AbortSignal) => Promise<ReadyHistory<T>>,
+  ): SharedHistory<T> {
+    const controller = new AbortController();
+    const entry: SharedHistory<T> = {
+      readers: 0,
+      controller,
+      ready: null,
+      promise: Promise.resolve()
+        .then(() => start(controller.signal))
+        .then((ready) => {
+          if (entry.readers === 0) ready.release();
+          else entry.ready = ready;
+          return ready.value;
+        }),
+    };
+    this.loads.set(key, entry);
+    return entry;
   }
 }

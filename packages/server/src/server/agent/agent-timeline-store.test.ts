@@ -1111,3 +1111,203 @@ describe("journal pages without retained payloads", () => {
     }
   });
 });
+
+describe("live journal residency and read scheduling", () => {
+  it("keeps an oversized live entry resident for 50 appends and five page reads", async () => {
+    const { JournalHistoryCache } = await import("./history-load.js");
+    const directory = mkdtempSync(join(tmpdir(), "timeline-resident-"));
+    const cache = new JournalHistoryCache(1);
+    let reads = 0;
+    const disk = new FileAgentTimelineStore(directory, {
+      historyCache: cache,
+      onStep: (step) => {
+        if (step === "history-segment-opened") reads++;
+      },
+    });
+    const release = disk.pinAgent("live");
+    try {
+      for (let seq = 0; seq < 50; seq++)
+        await disk.appendCommitted("live", { type: "user_message", text: `row ${seq}` });
+      await disk.flushIndex("live");
+      expect(reads).toBe(1);
+      for (let page = 0; page < 5; page++)
+        expect((await disk.fetchCommitted("live", { limit: 5 })).rows).toHaveLength(5);
+      // Each page opens one segment, not one file per source row. The index never reloads.
+      expect(reads).toBe(6);
+      expect(cache.bytes).toBeGreaterThan(1);
+      release();
+      await Promise.resolve();
+      expect(cache.bytes).toBeLessThanOrEqual(1);
+    } finally {
+      release();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("streams a full journal once and retries a transient read failure", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "timeline-read-retry-"));
+    try {
+      const writer = new FileAgentTimelineStore(directory);
+      for (let seq = 0; seq < 20; seq++)
+        await writer.appendCommitted("agent", { type: "user_message", text: String(seq) });
+      await writer.flushIndex("agent");
+      let reads = 0;
+      let fail = true;
+      const reader = new FileAgentTimelineStore(directory, {
+        onStep: (step) => {
+          if (step !== "history-segment-opened") return;
+          reads++;
+          if (fail) {
+            fail = false;
+            throw Object.assign(new Error("temporary read failure"), { code: "EIO" });
+          }
+        },
+      });
+      await expect(reader.getCommittedRows("agent")).rejects.toThrow("temporary read failure");
+      expect(await reader.getCommittedRows("agent")).toHaveLength(20);
+      expect(reads).toBe(3); // One failed open, one index replay, one full streaming read.
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("serves live appends and small pages while a large replay owns its allowance", async () => {
+    const { historyLoadBudget } = await import("./history-load.js");
+    const directory = mkdtempSync(join(tmpdir(), "timeline-interactive-"));
+    const store = new FileAgentTimelineStore(directory);
+    let release: (() => void) | undefined;
+    try {
+      await store.appendCommitted("live", { type: "user_message", text: "before" });
+      release = await historyLoadBudget.acquire(Number.MAX_SAFE_INTEGER);
+      await store.appendCommitted("live", { type: "assistant_message", text: "during replay" });
+      expect((await store.fetchCommitted("live", { limit: 1 })).rows[0].item).toMatchObject({
+        text: "during replay",
+      });
+      expect(await store.getLastAssistantMessage("live")).toBe("during replay");
+      await store.flushIndex("live");
+    } finally {
+      release?.();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+test("discarding a retained store releases its metadata charge", async () => {
+  const { JournalHistoryCache } = await import("./history-load.js");
+  const directory = mkdtempSync(join(tmpdir(), "timeline-retained-charge-"));
+  const cache = new JournalHistoryCache(1024 * 1024);
+  const store = new FileAgentTimelineStore(directory, { historyCache: cache });
+  try {
+    await store.appendCommitted("agent", { type: "user_message", text: "retained" });
+    await store.retainAgent("agent");
+    await store.commitRetention("agent");
+    expect((await store.fetchRetained("agent"))?.rows[0].item).toMatchObject({ text: "retained" });
+    expect(cache.bytes).toBeGreaterThan(0);
+    expect(await store.purgeAgent("agent")).toEqual({ purged: true });
+    expect(cache.bytes).toBe(0);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an unloaded journal does not retain decoded payloads in its metadata cache", () => {
+  const directory = mkdtempSync(join(tmpdir(), "timeline-payload-memory-"));
+  const agentId = "payload-memory";
+  const file = join(directory, createHash("sha256").update(agentId).digest("hex") + ".jsonl");
+  try {
+    writeFileSync(file, JSON.stringify({ version: 1, agentId, epoch: randomUUID() }) + "\n");
+    const payload = "x".repeat(256 * 1024);
+    for (let seq = 1; seq <= 500; seq++)
+      appendFileSync(
+        file,
+        JSON.stringify({
+          op: "append",
+          rows: [
+            {
+              seq,
+              timestamp: "2026-10-17T00:00:00.000Z",
+              item: { type: "user_message", text: `${seq}${payload}` },
+            },
+          ],
+        }) + "\n",
+      );
+    const source = new URL("./file-agent-timeline-store.ts", import.meta.url).href;
+    const child = spawnSync(
+      process.execPath,
+      [
+        "--expose-gc",
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "-e",
+        `
+      import {FileAgentTimelineStore} from ${JSON.stringify(source)};
+      const store = new FileAgentTimelineStore(${JSON.stringify(directory)});
+      await new Promise(setImmediate); global.gc(); global.gc();
+      const before = process.memoryUsage();
+      const seq = await store.getLatestCommittedSeq(${JSON.stringify(agentId)});
+      await new Promise(setImmediate); global.gc(); global.gc();
+      const after = process.memoryUsage();
+      console.log(JSON.stringify({seq, retained: after.heapUsed - before.heapUsed + Math.max(0, after.external - before.external)}));
+    `,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(child.status, child.stderr).toBe(0);
+    const result = z
+      .object({ seq: z.number(), retained: z.number() })
+      .parse(JSON.parse(child.stdout));
+    expect(result.seq).toBe(500);
+    // The input exceeds 125 MiB. Metadata must not keep its message strings alive.
+    expect(result.retained).toBeLessThan(16 * 1024 * 1024);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("commits and replays a large projected seed without repeated rebuilds", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "timeline-projected-seed-"));
+  const count = 30_000;
+  try {
+    const rows = Array.from({ length: count }, (_, index) => ({
+      seq: index + 1,
+      timestamp: "2026-10-17T00:00:00.000Z",
+      item: { type: "user_message" as const, text: `row ${index + 1}` },
+      seqStart: index + 1,
+      seqEnd: index + 1,
+      sourceSeqRanges: [{ startSeq: index + 1, endSeq: index + 1 }],
+      collapsed: [],
+    }));
+    const writer = new FileAgentTimelineStore(directory);
+    await writer.bulkInsert("agent", rows);
+    await writer.flushIndex("agent");
+    const reopened = new FileAgentTimelineStore(directory);
+    expect(await reopened.getLatestCommittedSeq("agent")).toBe(count);
+    expect(
+      (await reopened.fetchCommitted("agent", { limit: 3 })).rows.map((row) => row.item),
+    ).toEqual(rows.slice(-3).map((row) => row.item));
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a page integrity failure fences later writes to that journal", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "timeline-read-fence-"));
+  const store = new FileAgentTimelineStore(directory);
+  try {
+    await store.appendCommitted("agent", { type: "user_message", text: "seed" });
+    await store.flushIndex("agent");
+    const file = join(directory, readdirSync(directory).find((name) => name.endsWith(".jsonl"))!);
+    const original = readFileSync(file, "utf8");
+    const corrupted = original.replace('"op":"append"', '"op":"broken"');
+    expect(corrupted.length).toBe(original.length);
+    writeFileSync(file, corrupted);
+    await expect(store.fetchCommitted("agent")).rejects.toThrow();
+    await expect(
+      store.appendCommitted("agent", { type: "user_message", text: "must not append" }),
+    ).rejects.toThrow();
+    expect(readFileSync(file, "utf8")).toBe(corrupted);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

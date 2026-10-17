@@ -4,11 +4,12 @@ import { mkdir, open, readFile, writeFile, stat } from "node:fs/promises";
 import path from "node:path";
 import v8 from "node:v8";
 import os from "node:os";
-import { execFileSync } from "node:child_process";
+import { readMacMemory } from "./mac-memory.js";
 import { statfs, realpath } from "node:fs/promises";
 import { strict as assert } from "node:assert";
 import pino from "pino";
 import { claudeProjectDirSync } from "../agent/providers/claude/project-dir.js";
+import { journalHistoryCache } from "../agent/history-load.js";
 import { ClaudeAgentClient } from "../agent/providers/claude/agent.js";
 import { createTestPaseoDaemon } from "./paseo-daemon.js";
 import { DaemonClient } from "./daemon-client.js";
@@ -48,18 +49,31 @@ async function checkResources(): Promise<void> {
   const userVolumeRoot = path.join(path.parse(os.homedir()).root, "Users") + path.sep;
   if (!(await realpath(root!)).startsWith(userVolumeRoot))
     throw new Error("Use the internal user volume for scratch history");
-  const pressure = execFileSync("memory_pressure", { encoding: "utf8" });
-  const percent = Number(/System-wide memory free percentage: (\d+)%/.exec(pressure)?.[1]);
-  const freeBytes = Math.floor((os.totalmem() * percent) / 100);
-  if (!Number.isFinite(freeBytes) || freeBytes < 6 * 1024 ** 3)
+  const memory = readMacMemory();
+  if (memory.availableBytes < 6 * 1024 ** 3)
     throw new Error("History stress needs at least 6 GiB available memory");
   const disk = await statfs(root!);
   if (disk.bavail * disk.bsize < 8 * 1024 ** 3)
     throw new Error("History stress needs at least 8 GiB free disk space");
-  process.stdout.write(JSON.stringify({ phase: "admission", freeBytes }) + "\n");
+  process.stdout.write(JSON.stringify({ phase: "admission", ...memory }) + "\n");
 }
 
 await checkResources();
+
+function stressParentContent(index: number, payload: string): unknown[] {
+  if (index === 0)
+    return Array.from({ length: 11 }, (_, child) => ({
+      type: "tool_use",
+      id: `task-child-${child}`,
+      name: "Task",
+      input: { subagent_type: "general-purpose", description: `Check child ${child}` },
+    }));
+  if (index % 2 === 0)
+    return [
+      { type: "tool_use", id: `call-${index}`, name: "Bash", input: { command: "synthetic" } },
+    ];
+  return [{ type: "tool_result", tool_use_id: `call-${index - 1}`, content: payload }];
+}
 
 if (mode === "generate") {
   await mkdir(cwd, { recursive: true });
@@ -70,40 +84,45 @@ if (mode === "generate") {
     const id = randomUUID();
     const sessionId = `stress-${sessionIndex}`;
     const parent = path.join(project, `${sessionId}.jsonl`);
-    const payload = "synthetic history output ".repeat(10_923);
+    const payload = "synthetic history output ".repeat(750);
     const measured = await sizedJsonl(parent, size, (index) => ({
       type: index % 2 === 0 ? "assistant" : "user",
+      sessionId,
+      cwd,
       uuid: `${sessionId}-${index}`,
       timestamp,
       message: {
         role: index % 2 === 0 ? "assistant" : "user",
-        content:
-          index % 2 === 0
-            ? [
-                {
-                  type: "tool_use",
-                  id: `call-${index}`,
-                  name: "Bash",
-                  input: { command: "synthetic" },
-                },
-              ]
-            : [{ type: "tool_result", tool_use_id: `call-${index - 1}`, content: payload }],
+        content: stressParentContent(index, payload),
       },
     }));
+
+    let sidechainRecords = 0;
     for (let child = 0; child < 11; child++) {
-      await sizedJsonl(
+      const generatedChild = await sizedJsonl(
         path.join(project, sessionId, "subagents", `agent-child-${child}.jsonl`),
         1_008_174,
         (index) => ({
           type: "assistant",
           isSidechain: true,
+          sessionId,
+          cwd,
           agentId: `child-${child}`,
           timestamp,
           message: {
             role: "assistant",
             content: [{ type: "text", text: `child ${index} ` + "x".repeat(8192) }],
+            stop_reason: "end_turn",
           },
         }),
+      );
+      sidechainRecords += generatedChild.records;
+    }
+    for (let child = 0; child < 11; child++) {
+      await writeFile(
+        path.join(project, sessionId, "subagents", `agent-child-${child}.meta.json`),
+        JSON.stringify({ toolUseId: `task-child-${child}`, agentType: "general-purpose" }),
+        { flag: "wx" },
       );
     }
     const directory = path.join(paseoHome, "native-timeline-journal");
@@ -120,7 +139,7 @@ if (mode === "generate") {
           ? { type: "user_message", text: `prompt ${seq}` }
           : {
               type: "assistant_message",
-              text: `reply ${seq} ` + "y".repeat(65536),
+              text: `reply ${seq} ` + "y".repeat(2300),
               messageId: `reply-${seq}`,
             };
       const line = JSON.stringify({ op: "append", rows: [{ seq, timestamp, item }] }) + "\n";
@@ -145,16 +164,21 @@ if (mode === "generate") {
       }),
       { flag: "wx" },
     );
-    agents.push({ id, sessionId, parent, journal, ...measured, journalBytes });
+    agents.push({ id, sessionId, parent, journal, ...measured, journalBytes, sidechainRecords });
   }
-  await writeFile(fixtureFile, JSON.stringify({ agents }, null, 2), { flag: "wx" });
+  await writeFile(fixtureFile, JSON.stringify({ formatVersion: 2, agents }, null, 2), {
+    flag: "wx",
+  });
   process.stdout.write(JSON.stringify({ phase: "generated", agents }) + "\n");
 } else if (mode === "run") {
   assert.equal(process.env.CLAUDE_CONFIG_DIR, configDir);
   assert.equal(process.env.HOME, path.join(root, "user"));
   assert.equal(process.env.PASEO_HOME, paseoHome);
   const fixture = JSON.parse(await readFile(fixtureFile, "utf8")) as {
+    formatVersion: number;
     agents: {
+      records: number;
+      sidechainRecords: number;
       id: string;
       sessionId: string;
       parent: string;
@@ -163,6 +187,7 @@ if (mode === "generate") {
       journalBytes: number;
     }[];
   };
+  assert.equal(fixture.formatVersion, 2);
   for (const agent of fixture.agents) {
     assert.equal((await stat(agent.parent)).size, agent.bytes);
     assert.equal((await stat(agent.journal)).size, agent.journalBytes);
@@ -175,6 +200,7 @@ if (mode === "generate") {
   };
   const timer = setInterval(sample, 100);
   const heapLimit = v8.getHeapStatistics().heap_size_limit;
+  assert.equal(heapLimit, 4_395_630_592, "Use the measured production heap limit");
   process.stdout.write(JSON.stringify({ phase: "start", heapLimit, pid: process.pid }) + "\n");
   const logger = pino(
     { level: "info" },
@@ -210,11 +236,22 @@ if (mode === "generate") {
     const connected = client;
     const manager = daemon.daemon.agentManager;
     await Promise.all(
-      fixture.agents.map(async ({ id, sessionId }) => {
+      fixture.agents.map(async ({ id, sessionId, records, sidechainRecords }) => {
         await connected.resumeAgent({ provider: "claude", sessionId, metadata: { cwd } }, { cwd });
         const agent = manager.getAgent(id);
         assert(agent && "session" in agent && agent.session);
-        for await (const event of agent.session.streamHistory()) void event;
+        let parentItems = 0,
+          childItems = 0;
+        for await (const event of agent.session.streamHistory()) {
+          if (event.type === "timeline") parentItems++;
+          if (event.type === "provider_subagent" && event.event.type === "timeline") childItems++;
+        }
+        assert.equal(
+          parentItems,
+          records + 10,
+          "Replay every parent item, including eleven initial Task cards",
+        );
+        assert.equal(childItems, sidechainRecords, "Replay every linked sidechain item");
         const page = await connected.fetchAgentTimeline(id, {
           direction: "tail",
           limit: 20,
@@ -225,7 +262,13 @@ if (mode === "generate") {
         assert(page.hasOlder); // A tail page must retain access to older history.
         sample();
         process.stdout.write(
-          JSON.stringify({ phase: "resumed", id, count: page.entries.length }) + "\n",
+          JSON.stringify({
+            phase: "resumed",
+            id,
+            count: page.entries.length,
+            parentItems,
+            childItems,
+          }) + "\n",
         );
       }),
     );
@@ -235,6 +278,24 @@ if (mode === "generate") {
     clearInterval(timer);
     await client?.close();
     await daemon?.close();
+    assert.equal(
+      daemon?.daemon.agentManager.getMetricsSnapshot().total ?? 0,
+      0,
+      "Close every scratch runtime",
+    );
+    assert(
+      journalHistoryCache.bytes <= 128 * 1024 * 1024,
+      "Bound unused journal metadata after closing",
+    );
+    sample();
+    process.stdout.write(
+      JSON.stringify({
+        phase: "closed",
+        journalCacheBytes: journalHistoryCache.bytes,
+        peakHeap,
+        heapLimit,
+      }) + "\n",
+    );
   }
 } else {
   throw new Error("Use generate or run");

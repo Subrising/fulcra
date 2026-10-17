@@ -1,5 +1,36 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`ClaudeAgentSession persisted subagent replay > a parent conversion failure preserves child replay without publishing a partial parent 1`] = `
+[
+  {
+    "event": {
+      "description": "Summarize the docs",
+      "id": "toolu_01DgLoPMW9",
+      "status": "running",
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "title": "general-purpose",
+      "toolCallId": "toolu_01DgLoPMW9",
+      "type": "upsert",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+  {
+    "event": {
+      "id": "toolu_01DgLoPMW9",
+      "item": {
+        "text": "summary of the docs",
+        "type": "assistant_message",
+      },
+      "timestamp": "2026-07-26T06:27:50.000Z",
+      "type": "timeline",
+    },
+    "provider": "claude",
+    "type": "provider_subagent",
+  },
+]
+`;
+
 exports[`ClaudeAgentSession persisted subagent replay > carries a failed outcome through to the descriptor 1`] = `
 [
   {

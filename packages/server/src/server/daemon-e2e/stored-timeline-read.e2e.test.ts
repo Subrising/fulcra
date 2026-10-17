@@ -41,6 +41,8 @@ test.each([false, true])(
         });
       }
       if (archived) await manager.archiveAgent(agent.id);
+      else await manager.closeAgent(agent.id);
+      expect(manager.getAgent(agent.id)).toBeNull();
       client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws` });
       await client.connect();
       const before = await client.fetchAgentTimeline(agent.id, { direction: "tail", limit: 3 });
