@@ -1,7 +1,7 @@
 import { cp, mkdir, mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { AgentSession } from "../agent/agent-sdk-types.js";
 import { DaemonClient } from "../test-utils/daemon-client.js";
 import { createTestPaseoDaemon } from "../test-utils/paseo-daemon.js";
@@ -24,21 +24,20 @@ async function fixture() {
       credentialKind: "api-key",
     });
   let account = a.id;
-  let kind: "api-key" | "subscription" = "api-key";
   let started = 0;
   const ids: string[] = [];
   const costs: number[] = [];
   const provider = createTestAgentClient("claude", {});
   const instrument = (session: AgentSession) => {
-    const launch = account,
-      launchKind = kind;
+    const launch = account;
     session.usageCredential = () => null;
     session.limitResumeAccountBinding = () => `pool:${launch}`;
-    session.billingAccountKind = () => launchKind;
     const subscribe = session.subscribe.bind(session);
     session.subscribe = (callback) =>
       subscribe((event) => {
         if (event.type === "turn_started") started++;
+        if (event.type === "turn_failed")
+          return callback({ ...event, error: "HTTP 402 billing_error: credit balance is too low" });
         if (event.type !== "turn_completed") return callback(event);
         ids.push(event.turnId!);
         const amount = costs.shift() ?? 1;
@@ -62,15 +61,15 @@ async function fixture() {
     path.join(plugin, "index.server.ts"),
     `
 import fs from "node:fs";
-import { assertApiSpendAllowed, readSessionBilling, recordAccountCost } from "./server/account-billing.mjs";
+import { readSessionBilling, recordAccountCost, recordAccountTurnEnd } from "./server/account-billing.mjs";
 export default function(server) {
  server.before("agent.cost_commit", async ({ request }) => {
    if (fs.existsSync(${JSON.stringify(path.join(root, "fail"))})) throw new Error("Fixture billing write failed");
    if (request.accountId) await recordAccountCost(${JSON.stringify(pool)}, { id: "turn:" + request.agentId + ":" + request.turnId, accountId: request.accountId, sessionId: request.agentId, costUsd: request.costUsd, at: request.at, cursorCheckpoint: request.cursors, costRevision: request.revision });
    return { ...request, costCommitted: true };
  });
+ server.on("agent.turn_ended", (event) => recordAccountTurnEnd(${JSON.stringify(pool)}, event));
  server.before("agent.cost_read", ({ request }) => readSessionBilling(${JSON.stringify(pool)}, request));
- server.before("agent.turn_start", ({ request }) => { assertApiSpendAllowed(${JSON.stringify(pool)}, request); return { ...request, apiGuardChecked: true }; });
  return () => {};
 }
 `,
@@ -114,9 +113,6 @@ export default function(server) {
     },
     switchAccount() {
       account = b.id;
-    },
-    subscription() {
-      kind = "subscription";
     },
     async restart() {
       await client.close();
@@ -178,7 +174,7 @@ test("restart, reload and account switch count new turns with reused provider ID
   }
 }, 60_000);
 
-test("failed billing finishes with a durable warning, refuses recovery failure, then recovers after restart", async () => {
+test("failed billing retains a warning, allows more turns, and recovers after restart", async () => {
   const f = await fixture();
   try {
     const agent = await f.create();
@@ -189,40 +185,37 @@ test("failed billing finishes with a durable warning, refuses recovery failure, 
       warning: expect.stringContaining("Billing write failed"),
     });
     expect(Object.keys(readBilling(f.pool).calls)).toHaveLength(0);
-    await expect(f.client.sendMessage(agent.id, "Refused retry")).rejects.toThrow(
-      /cost recovery failed/,
-    );
-    expect(f.started).toBe(1);
+    expect((await f.turn(agent.id, 3)).sessionCost?.totalUsd).toBe(7);
+    expect(f.started).toBe(2);
     const pending = JSON.parse(
       await readFile(path.join(f.root, ".paseo/usage/pending-costs.json"), "utf8"),
     );
-    expect(Object.values(pending)).toHaveLength(1);
+    expect(Object.values(pending)).toHaveLength(2);
     await f.restart();
     expect((await f.client.fetchAgent(agent.id))?.agent.sessionCost).toMatchObject({
-      totalUsd: 4,
+      totalUsd: 7,
       warning: expect.stringContaining("Billing write failed"),
     });
     await rm(path.join(f.root, "fail"));
     const recovered = await f.turn(agent.id, 5);
-    expect(recovered.sessionCost).toMatchObject({ totalUsd: 9, recordedTurns: 2 });
+    expect(recovered.sessionCost).toMatchObject({ totalUsd: 12, recordedTurns: 3 });
     expect(recovered.sessionCost?.warning).toBeUndefined();
-    expect(Object.values(readBilling(f.pool).calls).map((row) => row.costUsd)).toEqual([4, 5]);
+    expect(Object.values(readBilling(f.pool).calls).map((row) => row.costUsd)).toEqual([4, 3, 5]);
   } finally {
     await f.close();
   }
 }, 60_000);
 
-test("disabled guard refuses API turns while subscription turns still run", async () => {
+test("no API turn is ever refused for spend, even when accounting is unavailable", async () => {
   const f = await fixture();
   try {
     const api = await f.create();
     await f.turn(api.id, 1);
     await f.client.patchDaemonConfig({ pluginsEnabled: false });
-    await expect(f.client.sendMessage(api.id, "No guard")).rejects.toThrow(/guard is unavailable/);
-    f.subscription();
+    expect((await f.turn(api.id, 10000)).sessionCost?.totalUsd).toBe(10001);
     const sub = await f.create();
     expect((await f.turn(sub.id, 1)).status).toBe("idle");
-    expect(f.started).toBe(2);
+    expect(f.started).toBe(3);
   } finally {
     await f.close();
   }
@@ -246,6 +239,31 @@ test("worker finish data retains total spend including the last turn across daem
     });
     await f.restart();
     expect((await f.storage.getFinishNotice(child.id))?.sessionCost).toEqual(notice?.sessionCost);
+  } finally {
+    await f.close();
+  }
+}, 60_000);
+
+test("durable API billing incidents clear after a successful native turn", async () => {
+  const f = await fixture();
+  async function fail(id: string) {
+    await f.client.sendMessage(id, "emit a turn failure");
+    await f.client.waitForAgentUpsert(id, (state) => state.status === "error");
+  }
+  try {
+    const agent = await f.create();
+    await fail(agent.id);
+    await vi.waitFor(() => expect(readBilling(f.pool).events).toHaveLength(1));
+    const eventId = readBilling(f.pool).events[0].id;
+    await fail(agent.id);
+    await vi.waitFor(() => expect(f.started).toBe(2));
+    expect(readBilling(f.pool).events).toHaveLength(1);
+    await f.turn(agent.id, 2);
+    await vi.waitFor(() => expect(readBilling(f.pool).events[0].clearedAt).toBeDefined());
+    await f.restart();
+    await fail(agent.id);
+    await vi.waitFor(() => expect(readBilling(f.pool).events).toHaveLength(2));
+    expect(readBilling(f.pool).events[1].id).not.toBe(eventId);
   } finally {
     await f.close();
   }

@@ -1,11 +1,10 @@
 export const PROVIDERS: readonly ["claude", "codex"];
 export const POLICIES: readonly ["priority", "spread"];
 export interface Account {
-  dailyLimitUsd?: number | null;
+  topUpAt?: string | null;
   keyEpoch?: string;
   localRevoked?: boolean;
   credentialKind?: "api-key" | "subscription";
-  budget?: { limitUsd: number | null; startAt: string };
   id: string;
   provider: "claude" | "codex";
   name: string;
@@ -203,7 +202,6 @@ export function switchSession(
 
 export function isApiAccount(a: Account): boolean;
 export function credentialKind(token: string): "api-key" | "subscription";
-export function accountBudget(a: Account): { limitUsd: number | null; startAt: string } | null;
 export function confirmAccountLimit(input: {
   root: string;
   accountId: string;

@@ -22,28 +22,30 @@ The preflight uses the SDK settings resolver for managed files, MDM, registry, a
 It refuses a managed policy helper because the resolver cannot inspect its future output.
 Pooled API settings cannot replace the helper or inject authentication through settings `env`.
 
-## API cost caps
+## API spend and billing warnings
 
-API accounts have no spend cap by default, including accounts with legacy Personal or Work names.
-The owner can set `dailyLimitUsd` through `organization.accounts.update`. The daily period resets at UTC midnight.
-The `budget` setting controls the account's full budget period.
-Set `dailyLimitUsd` or `budget.limitUsd` to `null` to turn that cap off.
-Warnings at 50% and 80% apply only to caps that the owner sets.
-They go to Main and the leads of affected sessions.
-At an explicit cap, Fulcra refuses new API turns and one-shot calls with a cost-cap error.
-Subscription accounts keep their existing limits.
+Fulcra has no daily, account, session, or worker spend caps. It never refuses an API turn because of spend.
+Accounting recovery records a warning if storage fails. It does not stop the next turn.
+Native background and scheduled API work have no spend gate.
 
-Workers have no session spend cap. Earlier cap labels have no effect.
-An active provider turn can finish above an account or daily cap.
-Provider estimates and delayed result records cannot give an exact limit during a running turn.
+The first durable billing error for an API account creates one warning for its owning lead and the Main assistant.
+Repeated errors stay in the same incident. A later successful turn clears it. A new billing error starts another incident.
+The warning uses the provider's billing error signal. Fulcra does not read a cash balance or invent one.
+It has no dollar or percentage threshold.
+Each recipient has a durable receipt. A missing lead or Main binding remains pending.
+A one-shot call uses its authenticated caller session when the host supplies one.
+Without that session, only Main can receive its warning. Fulcra does not guess an owner from other account users.
+Successful observations have durable timestamps and source IDs. Older errors cannot reopen a recovered incident.
+Distinct observations at the same timestamp follow their saved observation order.
+One-shot accounting faults keep a secret-free retry record. Recovery does not change the returned provider result.
 
-`paseo inspect <id> --json` returns `SessionCost` with total USD, last-turn USD, and totals by account ID.
-The session usage RPCs return the same `sessionCost` field.
-Worker finish records retain `sessionCost`, including the final turn. Native inbox events expose `totalSpendUsd`.
-Finish notices include the session total spend.
-These amounts come from provider result records and existing host billing records. They are API estimates, not invoices.
-A missing cost field means no recorded cost is available.
-Older records can cover only the billing history that this host retained.
+`organization.accounts.update` accepts the owner-only `topUpAt` reporting date as an ISO timestamp.
+Set it to `null` to report all recorded spend since account creation. The date never controls admission or warnings.
+
+`paseo inspect <id> --json` and session usage RPCs expose cumulative `sessionCost`.
+Worker finish records retain the final turn's cost. Native inbox events expose `totalSpendUsd`.
+Finish notices include the session total. Account usage reports show recorded spend since the reporting date.
+These figures come from provider result records on this host. Missing cost data remains unavailable.
 
 ## Revoke a key locally
 

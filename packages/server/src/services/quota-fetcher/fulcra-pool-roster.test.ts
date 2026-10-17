@@ -398,8 +398,8 @@ it("native pool usage crosses the plugin subprocess and WebSocket with one bound
   }
 }, 60000);
 
-it("API usage reports retain spend without default limits, and show explicit limits", async () => {
-  const createdAt = new Date().toISOString();
+it("API usage reports show recorded spend and a reporting date, never a cap", async () => {
+  const createdAt = "2026-10-01T00:00:00.000Z";
   const root = home([
     acct(WORK, "claude", "personal-workspace-api", { credentialKind: "api-key", createdAt }),
   ]);
@@ -407,36 +407,26 @@ it("API usage reports retain spend without default limits, and show explicit lim
     await import("../../../../../control/orca-organization/server/account-billing.mjs");
   const { setAccount } =
     await import("../../../../../control/orca-organization/server/accounts.mjs");
-  await recordAccountCost(root, { id: "fixture", accountId: WORK, costUsd: 1000 });
-  const source = createPoolUsage(() => root);
-  const report = await source.fetch({ accountId: WORK, provider: "claude" });
-  expect(report.status).toBe("available");
-  if (report.status !== "available") throw Error("Expected available API costs");
-  expect(report.balances).toEqual([
-    expect.objectContaining({
-      id: "api-daily-budget",
-      used: 1000,
-      limit: null,
-      remaining: null,
-      tone: "default",
-    }),
-    expect.objectContaining({
-      id: "api-budget",
-      used: 1000,
-      limit: null,
-      remaining: null,
-      tone: "default",
-    }),
-  ]);
-  await setAccount(root, WORK, {
-    dailyLimitUsd: 2000,
-    budget: { limitUsd: 2000, startAt: createdAt },
+  await recordAccountCost(root, {
+    id: "old",
+    accountId: WORK,
+    costUsd: 1000,
+    at: "2026-10-02T00:00:00Z",
   });
-  const capped = await source.fetch({ accountId: WORK, provider: "claude" });
-  expect(capped.status).toBe("available");
-  if (capped.status !== "available") throw Error("Expected available API costs");
-  expect(capped.balances).toEqual([
-    expect.objectContaining({ used: 1000, limit: 2000, remaining: 1000 }),
-    expect.objectContaining({ used: 1000, limit: 2000, remaining: 1000 }),
-  ]);
+  await recordAccountCost(root, {
+    id: "new",
+    accountId: WORK,
+    costUsd: 17.52,
+    at: "2026-10-12T00:00:00Z",
+  });
+  const source = createPoolUsage(() => root);
+  expect(await source.fetch({ accountId: WORK, provider: "claude" })).toMatchObject({
+    status: "available",
+    balances: [{ id: "api-spend", used: 1017.52, limit: null, remaining: null, tone: "default" }],
+  });
+  await setAccount(root, WORK, { topUpAt: "2026-10-10T00:00:00Z" });
+  expect(await source.fetch({ accountId: WORK, provider: "claude" })).toMatchObject({
+    status: "available",
+    balances: [{ id: "api-spend", used: 17.52, limit: null, remaining: null }],
+  });
 });

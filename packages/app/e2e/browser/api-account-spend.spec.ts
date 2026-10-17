@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { build } from "esbuild";
 import { expect, test } from "../support/fixtures";
+import { buildSettingsHostSectionRoute } from "@/utils/host-routes";
+import { getServerId } from "../support/helpers/server-id";
 import { gotoAppShell } from "../support/helpers/app";
 import { connectNewWorkspaceDaemonClient } from "../support/helpers/new-workspace";
 import { pluginRequirements } from "../support/helpers/plugin-fixture";
@@ -13,11 +15,15 @@ import {
   openCompactSidebar,
   scrollUsage,
 } from "../support/helpers/usage-sidebar-item";
-import { addAccount, setAccount } from "../../../../control/orca-organization/server/accounts.mjs";
+import {
+  addAccount,
+  setAccount,
+  readAccounts,
+} from "../../../../control/orca-organization/server/accounts.mjs";
 import { recordAccountCost } from "../../../../control/orca-organization/server/account-billing.mjs";
 
 // The actual app and daemon run against a private, secret-free usage plugin and account store.
-const emptyHome = path.join(tmpdir(), "fulcra-api-budget-empty-home");
+const emptyHome = path.join(tmpdir(), "fulcra-api-spend-empty-home");
 test.use({
   e2eDaemonEnvironment: {
     HOME: emptyHome,
@@ -28,9 +34,11 @@ test.use({
     CLAUDE_CODE_OAUTH_TOKEN: "",
   },
 });
-test("API dollars from the durable account ledger fit all required viewports", async ({ page }) => {
+test("API dollars from the durable account ledger fit all required viewports", async ({
+  page,
+}, testInfo) => {
   test.setTimeout(180_000);
-  const directory = await mkdtemp(path.join(tmpdir(), "fulcra-api-budget-ui-"));
+  const directory = await mkdtemp(path.join(tmpdir(), "fulcra-api-spend-ui-"));
   const root = path.join(directory, "store");
   const client = await connectNewWorkspaceDaemonClient({ ownProjects: false });
   const previous = await client.getDaemonConfig();
@@ -44,33 +52,60 @@ test("API dollars from the durable account ledger fit all required viewports", a
       const a = await addAccount(root, { provider: "claude", name });
       await setAccount(root, a.id, {
         credentialKind: "api-key",
-        budget: {
-          limitUsd: name.startsWith("Personal") ? 200 : 500,
-          startAt: "2026-10-01T00:00:00Z",
-        },
+        topUpAt: "2026-10-01T00:00:00Z",
       });
       await recordAccountCost(root, { id: name, accountId: a.id, costUsd });
     }
     await writeFile(
       path.join(directory, "paseo-plugin.json"),
-      JSON.stringify({ id: "api-budget-test", requirements: pluginRequirements }),
+      JSON.stringify({ id: "api-spend-test", requirements: pluginRequirements }),
     );
-    await mkdir(path.join(directory, "server"));
+    const organization = path.resolve(__dirname, "../../../../control/orca-organization");
     await build({
-      entryPoints: [
-        path.resolve(__dirname, "../../../../control/orca-organization/server/pool-usage.ts"),
-      ],
-      outfile: path.join(directory, "server/pool-usage.mjs"),
+      stdin: {
+        contents: `import { registerPoolUsage } from './server/pool-usage';
+import { createAccountHandlers } from './server/accounts-rpc';
+import { withManagementInvocation } from './server/management-context.mjs';
+import { accountsRpc, accountUpdateRpc } from './shared/accounts';
+export default function(server) {
+  const root = () => ${JSON.stringify(root)};
+  registerPoolUsage(server, root);
+  const handlers = createAccountHandlers({ root, configRoles: () => null });
+  // The fixture supplies an owner context. Production authority is checked in accounts-rpc.test.ts.
+  const owner = { management: { principal: { id: 'fixture-owner', authentication: 'daemon-password', deviceId: null, permissions: ['accounts.manage'] }, accountsManage: true, invoke: async () => ({}), recordAccountAction: async () => ({ recorded: false }) } };
+  server.handle(accountsRpc, (_input, ctx) => withManagementInvocation(owner, false, () => handlers.read(ctx.paseo)));
+  server.handle(accountUpdateRpc, (input) => withManagementInvocation(owner, false, () => handlers.update(input)));
+  return () => {};
+}`,
+        resolveDir: organization,
+        loader: "ts",
+      },
+      outfile: path.join(directory, "index.server.ts"),
       bundle: true,
       platform: "node",
       format: "esm",
-      external: ["@getpaseo/plugin/server/usage"],
+      external: ["@getpaseo/plugin", "@getpaseo/plugin/*"],
     });
-    await writeFile(
-      path.join(directory, "index.server.ts"),
-      `import { registerPoolUsage } from './server/pool-usage.mjs';
-export default function(server) { registerPoolUsage(server, () => ${JSON.stringify(root)}); return () => {}; }`,
-    );
+    await build({
+      stdin: {
+        contents: `import { AccountsSurface } from './client/accounts';
+export default function(client) { client.addSettingsScreen({ id: 'accounts', title: 'API accounts', icon: 'Settings', Component: AccountsSurface }); return () => {}; }`,
+        resolveDir: organization,
+        loader: "tsx",
+      },
+      outfile: path.join(directory, "index.client.tsx"),
+      bundle: true,
+      platform: "browser",
+      format: "esm",
+      external: [
+        "react",
+        "react/*",
+        "react-native",
+        "@tanstack/react-query",
+        "@getpaseo/plugin",
+        "@getpaseo/plugin/*",
+      ],
+    });
     await client.patchDaemonConfig({ pluginsEnabled: true });
     await client.installPluginSource({ source: directory });
     await seedSidebarFooterPreferences(page, [{ key: "usage", visible: true }]);
@@ -97,7 +132,7 @@ export default function(server) { registerPoolUsage(server, () => ${JSON.stringi
       await waitForSettledPosition(
         page.locator('[data-testid="usage-modal-body"]:visible').first(),
       );
-      await expect(page.getByText(/\$37\.20 of \$200/)).toBeInViewport();
+      await expect(page.getByText(/\$37\.20/)).toBeInViewport();
       const measurements = await modal.evaluate((element) => {
         const bounds = element.getBoundingClientRect();
         function measureElements() {
@@ -170,16 +205,98 @@ export default function(server) { registerPoolUsage(server, () => ${JSON.stringi
         JSON.stringify(measurements, null, 2),
       );
       await page.screenshot({ path: path.join(out, `usage-${width}x${height}.png`) });
+      await testInfo.attach(`usage-${width}x${height}`, {
+        path: path.join(out, `usage-${width}x${height}.png`),
+        contentType: "image/png",
+      });
       expect(measurements).toEqual([]);
       if (height < 900) {
         await scrollUsage(page, 700);
-        await expect(page.getByText(/\$125\.00 of \$500/)).toBeInViewport();
+        await expect(page.getByText(/\$125\.00/)).toBeInViewport();
         await page.screenshot({ path: path.join(out, `usage-${width}x${height}-scrolled.png`) });
       }
     }
+    // Open the real account surface through the app's plugin settings route.
+    for (const [width, height] of [
+      [375, 812],
+      [768, 1024],
+      [1440, 1000],
+      [812, 375],
+    ]) {
+      await page.setViewportSize({ width, height });
+      await page.goto(buildSettingsHostSectionRoute(getServerId(), "plugins"));
+      await page.getByRole("button", { name: "Actions for api-spend-test", exact: true }).click();
+      await page
+        .getByRole("menuitem", { name: "API accounts", exact: true })
+        .click({ timeout: 15000 });
+      const field = page.getByRole("textbox", {
+        name: "Top-up date for Personal API",
+        exact: true,
+      });
+      await expect(field).toBeVisible();
+      await field.fill("2026-10-02");
+      await page
+        .getByRole("button", { name: "Save top-up date for Personal API", exact: true })
+        .click();
+      await expect
+        .poll(() => readAccounts(root).accounts.find((a) => a.name === "Personal API")?.topUpAt)
+        .toBe("2026-10-02T00:00:00.000Z");
+      await expect(field).toHaveValue("2026-10-02");
+      await page
+        .getByRole("button", { name: "Clear top-up date for Personal API", exact: true })
+        .click();
+      await expect
+        .poll(() => readAccounts(root).accounts.find((a) => a.name === "Personal API")?.topUpAt)
+        .toBeNull();
+      await expect(field).toHaveValue("");
+      await expect(page.getByText("API budget (USD)", { exact: true })).toHaveCount(0);
+      const formFailures = await page.evaluate(() => {
+        const failures: string[] = [];
+        const input = document.querySelector('[aria-label="Top-up date for Personal API"]')!;
+        const form = input.parentElement!;
+        for (const node of form.querySelectorAll<HTMLElement>("*")) {
+          const r = node.getBoundingClientRect();
+          if (r.left < -1 || r.right > innerWidth + 1) failures.push("form overflow");
+          if (node.matches('input,[role="button"]') && (r.width < 48 || r.height < 48))
+            failures.push("small control");
+          if (node.scrollWidth > node.clientWidth + 1) failures.push("clipped form text");
+        }
+        const lines: DOMRect[] = [];
+        const walker = document.createTreeWalker(form, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          if (!node.textContent?.trim()) continue;
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          for (const rect of range.getClientRects())
+            if (rect.width && rect.height) lines.push(rect);
+        }
+        for (let a = 0; a < lines.length; a++)
+          for (let b = a + 1; b < lines.length; b++) {
+            const x =
+              Math.min(lines[a].right, lines[b].right) - Math.max(lines[a].left, lines[b].left);
+            const y =
+              Math.min(lines[a].bottom, lines[b].bottom) - Math.max(lines[a].top, lines[b].top);
+            if (x > 1 && y > 1) failures.push("form text overlaps");
+          }
+        if (document.documentElement.scrollWidth > innerWidth)
+          failures.push("page scrolls sideways");
+        return failures;
+      });
+      await writeFile(
+        path.join(out, `accounts-${width}x${height}.json`),
+        JSON.stringify(formFailures),
+      );
+      await field.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(out, `accounts-${width}x${height}.png`) });
+      await testInfo.attach(`accounts-${width}x${height}`, {
+        path: path.join(out, `accounts-${width}x${height}.png`),
+        contentType: "image/png",
+      });
+      expect(formFailures).toEqual([]);
+    }
     expect(errors).toEqual([]);
   } finally {
-    await client.removePlugin("api-budget-test").catch(() => {});
+    await client.removePlugin("api-spend-test").catch(() => {});
     await client.patchDaemonConfig({ pluginsEnabled: previous.config.pluginsEnabled ?? false });
     await client.close();
     await rm(directory, { recursive: true, force: true });

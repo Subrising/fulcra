@@ -79,6 +79,11 @@ export class Wakes {
       CREATE TABLE IF NOT EXISTS wake_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL,note TEXT NOT NULL,at TEXT NOT NULL);`);
     assertColumns(this.db, "role_wakes", COLUMNS);
     assertColumns(this.db, "wake_settings", "key,value,note,at");
+    this.db
+      .prepare(
+        "UPDATE role_wakes SET state='dropped' WHERE kind='account-budget' AND state IN ('queued','sending','pending')",
+      )
+      .run();
   }
   iso(t = this.now()) {
     return new Date(t).toISOString();
@@ -213,42 +218,83 @@ export class Wakes {
     if (n) this.pump();
     return n;
   }
-  // FU-112: an account's token was revoked or is invalid. The session's lead (and its manager) and the main assistant
-  // hear it once per account: the identity holds the holder and the account, not the session.
-  accountBudget(key, payload) {
-    const holders = !this.has("role_bindings")
-      ? []
-      : this.db
+  // Each role gets one durable warning per billing incident. Saved recipients survive role changes.
+  apiCreditLow(key, payload, saved = {}) {
+    const receipts = { ...saved };
+    // Recover receipts after a crash between the queue write and the billing-state write.
+    const rows = this.db
+      .prepare("SELECT holder,payload FROM role_wakes WHERE kind='api-credit-low'")
+      .all();
+    for (const row of rows) {
+      const notice = JSON.parse(row.payload);
+      if (notice.incidentId === key)
+        for (const role of notice.creditRoles ?? []) receipts[role] ??= row.holder;
+    }
+    const targets = new Map();
+    const add = (role, holder) => {
+      if (receipts[role] || !uuid(holder)) return;
+      const roles = targets.get(holder) ?? [];
+      roles.push(role);
+      targets.set(holder, roles);
+    };
+    if (this.has("role_bindings"))
+      add(
+        "main",
+        this.db
           .prepare(
-            "SELECT DISTINCT session FROM role_bindings WHERE role='prime' AND seat='main' AND state='assigned' AND session IS NOT NULL",
+            "SELECT session FROM role_bindings WHERE role='prime' AND seat='main' AND state='assigned' AND session IS NOT NULL LIMIT 1",
           )
-          .all()
-          .filter((b) => uuid(b.session));
+          .get()?.session,
+      );
     for (const session of payload.sessions ?? []) {
       if (!uuid(session)) continue;
-      for (const owner of this.owned({ session })) holders.push({ session: owner.holder });
-      if (this.has("manager_workers"))
-        for (const row of this.db
-          .prepare("SELECT DISTINCT supervisor FROM manager_workers WHERE worker=?")
-          .all(session))
-          if (uuid(row.supervisor)) holders.push({ session: row.supervisor });
+      const lead = this.has("role_bindings")
+        ? this.db
+            .prepare(
+              "SELECT session FROM role_bindings WHERE role='project-orchestrator' AND state='assigned' AND session=? LIMIT 1",
+            )
+            .get(session)?.session
+        : null;
+      const owner = lead ?? this.owned({ session })[0]?.holder;
+      add(
+        "owner",
+        owner ??
+          (this.has("manager_workers")
+            ? this.db
+                .prepare("SELECT supervisor FROM manager_workers WHERE worker=? LIMIT 1")
+                .get(session)?.supervisor
+            : null),
+      );
     }
-    const unique = [...new Set(holders.map((h) => h.session))].filter(uuid);
-    let n = 0;
-    for (const session of unique) {
-      if (
-        this.enqueue(
-          { holder: session, seat: null, session: null },
-          "account-budget",
-          ["account-budget", key],
-          payload,
-          { pendingOnCapacity: true },
-        )
-      )
-        n++;
+    let inserted = false;
+    for (const [holder, roles] of targets) {
+      const added = this.enqueue(
+        { holder, seat: null, session: null },
+        "api-credit-low",
+        ["api-credit-low", key],
+        { ...payload, incidentId: key, creditRoles: roles },
+        { pendingOnCapacity: true },
+      );
+      inserted ||= added;
+      if (!added) {
+        const previous = rows.find(
+          (row) => row.holder === holder && JSON.parse(row.payload).incidentId === key,
+        );
+        if (previous) {
+          const notice = JSON.parse(previous.payload);
+          notice.creditRoles = [...new Set([...(notice.creditRoles ?? []), ...roles])];
+          this.db
+            .prepare(
+              "UPDATE role_wakes SET payload=? WHERE kind='api-credit-low' AND holder=? AND json_extract(payload,'$.incidentId')=?",
+            )
+            .run(JSON.stringify(notice), holder, key);
+        }
+      }
+      // enqueue either inserts a durable row or finds the same durable identity.
+      for (const role of roles) receipts[role] = holder;
     }
-    if (n) this.pump();
-    return unique.length;
+    if (inserted) this.pump();
+    return receipts;
   }
   accountDown(session, r) {
     if (!r?.from) return 0;
@@ -412,8 +458,8 @@ export class Wakes {
           : `- [needs input] ${who} is waiting on "${p.requestTitle || p.name}" (${p.requestKind ?? "permission"}). Inspect it with role_inspect_session; an operator decides permissions.`;
       if (w.kind === "error")
         return `- [error] ${who} stopped with an error: "${p.error}". The controller recovers provider auth and usage-limit stops itself where it can; inspect it with role_inspect_session.`;
-      if (w.kind === "account-budget")
-        return `- [API budget] Account "${p.account}" ${p.scope ?? "account"} has spent $${Number(p.usedUsd).toFixed(2)} of $${p.limitUsd ?? "unset"}. ${p.moved ? `Delegated sessions on this API account switch to "${p.moved}" as active turns finish.` : "Check this account's budget and credit balance."} ${p.held ? `${p.held} owner-controlled session(s) stay on their account.` : ""} ${p.failed ? `${p.failed} session(s) could not switch. Inspect the recorded refusal before another attempt.` : ""}`;
+      if (w.kind === "api-credit-low")
+        return `- [API credit] Account "${p.account}" reported a billing error. Credit may be low. Fulcra has not blocked API turns.`;
       if (w.kind === "account-down")
         return `- [account down] The token of account "${p.account}" was revoked or is invalid, so its sessions cannot run. ${p.moved ? `Fulcra moved the first stopped session to "${p.moved}"; others move as they stop.` : "No other account was ready."} The owner must sign the account in again (account screen); until then the pool does not use it.`;
       if (w.kind === "account-rotated" && p.revoked)
@@ -529,7 +575,7 @@ export class Wakes {
     if (room)
       this.db
         .prepare(
-          "UPDATE role_wakes SET state='queued',at=? WHERE id IN (SELECT id FROM role_wakes WHERE state='pending' AND kind='account-budget' ORDER BY rowid LIMIT ?)",
+          "UPDATE role_wakes SET state='queued',at=? WHERE id IN (SELECT id FROM role_wakes WHERE state='pending' AND kind='api-credit-low' ORDER BY rowid LIMIT ?)",
         )
         .run(this.iso(), room);
   }

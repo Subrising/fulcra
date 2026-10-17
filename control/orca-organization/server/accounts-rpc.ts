@@ -252,8 +252,7 @@ export function createAccountHandlers(d: Deps) {
         enabled?: boolean;
         priority?: number;
         clearLimit?: true;
-        budget?: { limitUsd: number | null; startAt: string };
-        dailyLimitUsd?: number | null;
+        topUpAt?: string | null;
         token?: string;
         signIn?: true;
         remove?: true;
@@ -334,14 +333,7 @@ export function createAccountHandlers(d: Deps) {
             signIn(a.id);
           }
           const patch: Record<string, unknown> = {};
-          for (const k of [
-            "name",
-            "enabled",
-            "priority",
-            "clearLimit",
-            "budget",
-            "dailyLimitUsd",
-          ] as const)
+          for (const k of ["name", "enabled", "priority", "clearLimit", "topUpAt"] as const)
             if (input[k] !== undefined) patch[k] = input[k];
           if (Object.keys(patch).length) await setAccount(d.root(), a.id, patch);
           return ok(

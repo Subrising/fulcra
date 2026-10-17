@@ -136,21 +136,6 @@ test("cost readers cannot replace saved turns, and turn guards cannot change acc
       paseo,
     ),
   ).rejects.toThrow("Cost readers cannot change recorded turns");
-  hooks.before("agent.turn_start", ({ request }) => ({ ...request, accountId: "another" }));
-  await expect(
-    hooks.invoke(
-      "turn",
-      "before",
-      "agent.turn_start",
-      {
-        agentId: "fixture",
-        provider: "claude",
-        accountId: "original",
-        labels: {},
-      },
-      paseo,
-    ),
-  ).rejects.toThrow("agent.turn_start hooks cannot change the request");
 });
 
 test("billing receipts can confirm a write but cannot change its cost", async () => {

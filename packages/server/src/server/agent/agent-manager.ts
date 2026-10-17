@@ -5733,13 +5733,8 @@ export class AgentManager {
     return agent.session.usageCredential?.()?.accountId ?? null;
   }
 
-  private apiCostGuardRequired(agent: ActiveManagedAgent): boolean {
-    if (agent.provider !== "claude" || !this.sessionCostAccount(agent)) return false;
-    return agent.session.billingAccountKind?.() !== "subscription";
-  }
-
   private async recoverPendingCost(entry: PendingSessionCost): Promise<void> {
-    if (!this.pluginLifecycle) throw new Error("API spend guard is unavailable. No turn started.");
+    if (!this.pluginLifecycle) throw new Error("Cost billing is unavailable");
     const committed = await this.pluginLifecycle.before("agent.cost_commit", entry);
     if (committed.costCommitted !== true) throw new Error("API cost billing is unavailable");
     const live = this.agents.get(entry.agentId);
@@ -5794,34 +5789,17 @@ export class AgentManager {
     return entries.filter((entry) => entry.accountId === accountId);
   }
 
-  private async checkTurnBudget(agent: ActiveManagedAgent): Promise<void> {
-    const required = this.apiCostGuardRequired(agent);
-    if (!this.pluginLifecycle) {
-      if (required) throw new Error("API spend guard is unavailable. No turn started.");
-      return;
-    }
-    if (agent.session.billingAccountKind?.() === "subscription") return;
-    if (required) {
-      try {
-        for (const entry of await this.pendingApiCosts(this.sessionCostAccount(agent)!))
+  private async recoverCostAccounting(agent: ActiveManagedAgent): Promise<void> {
+    try {
+      const accountId = this.sessionCostAccount(agent);
+      if (accountId && this.pluginLifecycle)
+        for (const entry of await this.pendingApiCosts(accountId))
           await this.recoverPendingCost(entry);
-      } catch {
-        throw new Error(
-          "API cost recovery failed. No turn started. Repair billing storage and retry.",
-        );
-      }
+      await this.refreshSessionCost(agent.id);
+    } catch {
+      this.setCostWarning(agent, "Cost reporting is incomplete. Recovery will retry.");
+      this.logger.warn({ agentId: agent.id }, "Cost accounting recovery remains pending");
     }
-    await this.refreshSessionCost(agent.id);
-    const admitted = await this.pluginLifecycle.before("agent.turn_start", {
-      agentId: agent.id,
-      provider: agent.provider,
-      accountId: this.sessionCostAccount(agent),
-      accountKind: agent.session.billingAccountKind?.() ?? undefined,
-      labels: { ...agent.labels },
-      sessionCost: sessionCost(agent.costRecords),
-    });
-    if (required && admitted.apiGuardChecked !== true)
-      throw new Error("API spend guard is unavailable. No turn started.");
   }
 
   private async startPendingForegroundTurn(params: {
@@ -5902,7 +5880,7 @@ export class AgentManager {
         }
         turnOptions = { ...options, [CODEX_TURN_ADMISSION]: admission };
       }
-      await this.checkTurnBudget(agent);
+      await this.recoverCostAccounting(agent);
       validate();
       const result = await this.withInput(
         agentId,
@@ -6392,7 +6370,7 @@ export class AgentManager {
       this.agentStreamCoalescer.flushFor(agent.id);
       await this.drainTimelineWrites(agent.id);
       this.assertTimelineHealthy(agent.id);
-      await this.checkTurnBudget(agent);
+      await this.recoverCostAccounting(agent);
       this.assertSteerAdmissionOwnsTurn(agent, expectedTurnId);
       const barrier: SteerEventBarrier = { events: [] };
       this.steerEventBarriers.set(agent.id, barrier);
@@ -8336,7 +8314,7 @@ export class AgentManager {
       await this.persistSnapshot(agent);
       return true;
     } catch {
-      this.setCostWarning(agent, "Cost storage failed. API turns require recovery.");
+      this.setCostWarning(agent, "Cost storage failed. Accounting recovery is pending.");
       this.logger.warn({ agentId: agent.id }, "Session cost snapshot write failed");
       return false;
     }
@@ -8385,7 +8363,7 @@ export class AgentManager {
       try {
         await this.costOutbox.put(entry);
       } catch {
-        this.setCostWarning(agent, "Cost recovery storage failed. API turns require recovery.");
+        this.setCostWarning(agent, "Cost recovery storage failed. Accounting recovery is pending.");
       }
     }
     if (row.accountId) {
@@ -8398,7 +8376,7 @@ export class AgentManager {
       } catch {
         this.setCostWarning(
           agent,
-          "Billing write failed. Cost is saved; API turns require recovery.",
+          "Billing write failed. Cost is saved; Accounting recovery is pending.",
         );
         this.logger.warn(
           { agentId: agent.id },
@@ -8411,7 +8389,7 @@ export class AgentManager {
       try {
         await this.costOutbox.remove(entry);
       } catch {
-        this.setCostWarning(agent, "Cost recovery cleanup failed. API turns require recovery.");
+        this.setCostWarning(agent, "Cost recovery cleanup failed. Accounting recovery is pending.");
       }
     }
   }
@@ -9588,6 +9566,12 @@ export class AgentManager {
         }),
         event,
         this.timelineStore.getItems(agentId),
+        metadata?.epoch && metadata.seq !== undefined
+          ? {
+              id: `${metadata.epoch}:${metadata.seq}`,
+              at: metadata.timestamp ?? new Date().toISOString(),
+            }
+          : undefined,
       );
     }
   }

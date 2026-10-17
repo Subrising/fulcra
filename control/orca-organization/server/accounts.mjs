@@ -230,15 +230,6 @@ export function isApiAccount(a) {
 export function credentialKind(token) {
   return /^sk-ant-api/i.test(String(token)) ? "api-key" : "subscription";
 }
-export function accountBudget(a) {
-  if (!isApiAccount(a)) return null;
-  return (
-    a.budget ?? {
-      limitUsd: null,
-      startAt: a.createdAt,
-    }
-  );
-}
 export function accountLimit(a, now = Date.now()) {
   if (isApiAccount(a)) return null;
   const localTime = Math.max(
@@ -316,17 +307,9 @@ export async function readUsageAsync(root, now = Date.now()) {
 // holds back accounts at or above WEEKLY_LAUNCH_CAP_PCT while another is below it; when all are, the one with the most
 // left is used. Returns null when none is available.
 export function choose(s, provider, now = Date.now(), except = [], usage = {}) {
-  const budgetHeld = (a) => {
-    const budget = accountBudget(a);
-    const action = budget && s.budgetActions?.[`${a.id}:${budget.startAt}`];
-    return (budget?.limitUsd !== null || action?.cause === "billing-error") && action?.targetId;
-  };
   const ready = s.accounts.filter(
     (a) =>
-      a.provider === provider &&
-      !except.includes(a.id) &&
-      accountStatus(a, now).state === "ok" &&
-      !budgetHeld(a),
+      a.provider === provider && !except.includes(a.id) && accountStatus(a, now).state === "ok",
   );
   if (!ready.length) return null;
   const used = (a) => (isApiAccount(a) ? 0 : (usage[a.id] ?? 0));
@@ -434,24 +417,13 @@ export async function setAccount(root, id, patch, expectedEpoch) {
         a.limitNote = null;
       }
     }
-    if (patch.dailyLimitUsd !== undefined) {
+    if (patch.topUpAt !== undefined) {
       if (
         !isApiAccount(a) ||
-        (patch.dailyLimitUsd !== null &&
-          (!Number.isFinite(patch.dailyLimitUsd) || patch.dailyLimitUsd <= 0))
+        (patch.topUpAt !== null && !Number.isFinite(Date.parse(patch.topUpAt)))
       )
-        throw Error("Invalid daily API cost cap");
-      a.dailyLimitUsd = patch.dailyLimitUsd;
-    }
-    if (patch.budget !== undefined) {
-      const b = patch.budget;
-      if (
-        !isApiAccount(a) ||
-        (b?.limitUsd !== null && (!Number.isFinite(b?.limitUsd) || b.limitUsd <= 0)) ||
-        !Number.isFinite(Date.parse(b?.startAt))
-      )
-        throw Error("Invalid API budget");
-      a.budget = { limitUsd: b.limitUsd, startAt: new Date(b.startAt).toISOString() };
+        throw Error("Invalid API top-up date");
+      a.topUpAt = patch.topUpAt === null ? null : new Date(patch.topUpAt).toISOString();
     }
     if (patch.enabled !== undefined) a.enabled = patch.enabled === true;
     if (patch.priority !== undefined) {
@@ -973,8 +945,7 @@ export function publicView(s, now = Date.now()) {
       priority: a.priority,
       status: accountStatus(a, now),
       credentialKind: isApiAccount(a) ? "api-key" : "subscription",
-      budget: accountBudget(a),
-      ...(isApiAccount(a) ? { dailyLimitUsd: a.dailyLimitUsd ?? null } : {}),
+      ...(isApiAccount(a) ? { topUpAt: a.topUpAt ?? null } : {}),
       limitNote: isApiAccount(a) ? null : a.limitNote,
       limitKind: accountLimit(a, now)?.kind ?? null,
       sessions: Object.entries(s.assignments)
