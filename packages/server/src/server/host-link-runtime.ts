@@ -1,5 +1,6 @@
 import { sessionCost } from "./agent/session-cost.js";
 import { loadAgentPolicy } from "./limit-resume/policy.js";
+import { noticePaused, NoticePausedError } from "./notice-pause.js";
 import { queuedAgentMessagesFor } from "./queued-agent-messages.js";
 import { startHostLimitSharing } from "./host-limit-sharing.js";
 import { realpathSync } from "node:fs";
@@ -130,8 +131,16 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
   );
   const deliver = async (delivery: HostLinkDelivery, notice: boolean) => {
     const run = async () => {
-      const final = createFinalInputCheck(delivery.check, delivery.beforeSend);
-      delivery.check();
+      const check = () => {
+        delivery.check();
+        if (
+          !notice &&
+          noticePaused(agentStorage.noticePausePath, agentManager.getAgent(delivery.agentId))
+        )
+          throw new NoticePausedError();
+      };
+      const final = createFinalInputCheck(check, delivery.beforeSend);
+      check();
       await sendPromptToAgent({
         agentManager,
         agentStorage,
@@ -365,7 +374,8 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
           await deliver(request, false);
           return;
         } catch (error) {
-          if (!(error instanceof SteerUnavailableError)) throw error;
+          if (!(error instanceof SteerUnavailableError) && !(error instanceof NoticePausedError))
+            throw error;
         }
       }
       if (!request.parent)

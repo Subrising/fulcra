@@ -442,8 +442,11 @@ test("two isolated daemons create one remote worker and deliver a role notice th
       const priorTurns = turns.filter((id) => id === receipt.agentId).length;
       const priorNotices = parentInputs.length;
       await writeFile(pauseFile, JSON.stringify({ pausedProviders: ["codex"] }));
-      for (const text of ["paused remote one", "paused remote two"])
-        await sourceClient.sendAgentMessage(destination, text, { sender: { agentId: lead.id } });
+      for (const [index, text] of ["paused remote one", "paused remote two"].entries())
+        await sourceClient.sendAgentMessage(destination, text, {
+          sender: { agentId: lead.id },
+          ...(index === 1 ? { activeTurnBehavior: "steer" as const } : {}),
+        });
       expect(armRemote).not.toHaveBeenCalled();
       expect(turns.filter((id) => id === receipt.agentId)).toHaveLength(priorTurns);
       expect(parentInputs).toHaveLength(priorNotices);
