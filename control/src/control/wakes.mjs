@@ -105,7 +105,7 @@ export class Wakes {
     return Boolean(
       this.db
         .prepare(
-          "SELECT 1 FROM role_wakes WHERE holder=? AND state IN ('queued','sending') LIMIT 1",
+          "SELECT 1 FROM role_wakes WHERE holder=? AND state IN ('pending','queued','sending') LIMIT 1",
         )
         .get(id),
     );
@@ -154,18 +154,22 @@ export class Wakes {
       .run("heartbeatMinutes", JSON.stringify(a.minutes), a.note.trim(), this.iso());
     return { heartbeatMinutes: a.minutes, note: a.note.trim() };
   }
-  enqueue(r, kind, identity, payload) {
+  enqueue(r, kind, identity, payload, { pendingOnCapacity = false } = {}) {
     const key = digest(JSON.stringify([r.holder, r.session ?? null, ...identity]));
     if (this.db.prepare("SELECT 1 FROM role_wakes WHERE identity=?").get(key)) return false;
+    let state = "queued";
     if (
       this.db.prepare("SELECT count(*) n FROM role_wakes WHERE state IN ('queued','sending')").get()
         .n >= MAX_QUEUED
     ) {
-      this.lastError = { message: "Wake queue capacity reached", at: this.iso() };
-      return false;
+      if (!pendingOnCapacity) {
+        this.lastError = { message: "Wake queue capacity reached", at: this.iso() };
+        return false;
+      }
+      state = "pending";
     }
     this.db
-      .prepare("INSERT INTO role_wakes VALUES (?,?,?,?,?,?,?,'queued',0,NULL,?,NULL)")
+      .prepare("INSERT INTO role_wakes VALUES (?,?,?,?,?,?,?,?,0,NULL,?,NULL)")
       .run(
         derived(key, "role-wake"),
         r.holder,
@@ -174,6 +178,7 @@ export class Wakes {
         kind,
         key,
         JSON.stringify({ ...payload, ...(r.title ? { sessionTitle: clip(r.title, 120) } : {}) }),
+        state,
         this.iso(),
       );
     return true;
@@ -237,6 +242,7 @@ export class Wakes {
           "account-budget",
           ["account-budget", key],
           payload,
+          { pendingOnCapacity: true },
         )
       )
         n++;
@@ -515,6 +521,18 @@ export class Wakes {
       }
     }
   }
+  promoteBudgetWakes() {
+    const count = this.db
+      .prepare("SELECT count(*) n FROM role_wakes WHERE state IN ('queued','sending')")
+      .get().n;
+    const room = Math.max(0, MAX_QUEUED - count);
+    if (room)
+      this.db
+        .prepare(
+          "UPDATE role_wakes SET state='queued',at=? WHERE id IN (SELECT id FROM role_wakes WHERE state='pending' AND kind='account-budget' ORDER BY rowid LIMIT ?)",
+        )
+        .run(this.iso(), room);
+  }
   pump() {
     if (this.control.closing) return Promise.resolve();
     if (!this.pumping)
@@ -529,7 +547,9 @@ export class Wakes {
               this.lastError = { session: id, message: e.message, at: this.iso() };
             }
           }
+        this.promoteBudgetWakes();
         await this.dispatch();
+        this.promoteBudgetWakes();
       })()
         .catch((e) => {
           this.lastError = { message: e.message, at: this.iso() };
@@ -560,12 +580,12 @@ export class Wakes {
   status() {
     const rows = this.db
       .prepare(
-        "SELECT id,holder,seat,session,kind,state,attempts,batch,at,deliveredAt FROM role_wakes ORDER BY (state IN ('queued','sending')) DESC, rowid DESC LIMIT 64",
+        "SELECT id,holder,seat,session,kind,state,attempts,batch,at,deliveredAt FROM role_wakes ORDER BY (state IN ('pending','queued','sending')) DESC, rowid DESC LIMIT 64",
       )
       .all();
     return {
       heartbeatMinutes: this.heartbeatMinutes(),
-      queued: rows.filter((r) => ["queued", "sending"].includes(r.state)).length,
+      queued: rows.filter((r) => ["pending", "queued", "sending"].includes(r.state)).length,
       wakes: rows,
       error: this.lastError,
     };

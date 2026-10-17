@@ -33,10 +33,21 @@ export const beforeHookNames = [
   "agent.session_open",
   "agent.turn_start",
   "agent.cost_read",
+  "agent.cost_commit",
   "workspace.create",
 ] as const;
 
 const beforeSchemas = {
+  "agent.cost_commit": z
+    .object({
+      agentId: z.string(),
+      provider: z.string(),
+      accountId: z.string().nullable(),
+      turnId: z.string(),
+      costUsd: z.number().finite().nonnegative(),
+      at: z.string(),
+    })
+    .strict(),
   "agent.cost_read": z
     .object({
       agentId: z.string(),
@@ -214,7 +225,10 @@ export function validateBeforeResult<Name extends keyof PluginBeforeRequests>(
 ): PluginBeforeRequests[Name] {
   const result = validateBeforeRequest(name, output);
   if (name === "agent.cost_read") validateCostReadResult(input, result);
-  if (name === "agent.turn_start" && JSON.stringify(input) !== JSON.stringify(result))
+  if (
+    (name === "agent.turn_start" || name === "agent.cost_commit") &&
+    JSON.stringify(input) !== JSON.stringify(result)
+  )
     throw new Error("agent.turn_start hooks cannot change the request");
   if (name === "agent.session_open") {
     const previous = beforeSchemas["agent.session_open"].parse(input);

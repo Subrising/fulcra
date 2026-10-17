@@ -8094,8 +8094,20 @@ export class AgentManager {
         at: new Date().toISOString(),
       });
       if (next !== agent.costRecords) {
+        const row = next?.turns[eventTurnId];
+        if (row) {
+          // Account billing commits first, including internal helpers. A published completion cannot lose spend.
+          await this.pluginLifecycle?.before("agent.cost_commit", {
+            agentId: agent.id,
+            provider: agent.provider,
+            accountId: row.accountId,
+            turnId: eventTurnId,
+            costUsd: row.amountUsd,
+            at: row.at,
+          });
+          event.usage.turnCostUsd = row.amountUsd;
+        }
         agent.costRecords = next;
-        if (next?.turns[eventTurnId]) event.usage.turnCostUsd = next.turns[eventTurnId].amountUsd;
         await this.persistSnapshot(agent);
       }
     }

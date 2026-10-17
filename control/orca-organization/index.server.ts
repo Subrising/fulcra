@@ -581,23 +581,20 @@ export default function contribute(
       ? server.on("agent.turn_ended", async (event) => {
           const accountId = event.agent.accountId;
           if (event.agent.provider !== "claude" || !accountId) return;
-          if (event.turnId && event.usage?.totalCostUsd !== undefined)
-            await recordAccountCost(poolRoot(), {
-              id: `turn:${event.agent.id}:${event.turnId}`,
-              accountId,
-              sessionId: event.agent.id,
-              costUsd: event.usage.turnCostUsd ?? event.usage.totalCostUsd,
-              ...(event.usage.turnCostUsd === undefined
-                ? {
-                    runtimeSessionId: event.usage.recorded?.runtimeSessionId,
-                    cumulativeUsd: event.usage.totalCostUsd,
-                  }
-                : {}),
-            });
           if (event.outcome.kind === "failed" && isBillingError(event.outcome.error.message))
             await recordBillingError(poolRoot(), accountId, undefined, "session.billing_error");
         })
       : undefined;
+  const stopCostCommit = server.before("agent.cost_commit", async ({ request }) => {
+    if (request.provider !== "claude" || !request.accountId) return;
+    await recordAccountCost(poolRoot(), {
+      id: `turn:${request.agentId}:${request.turnId}`,
+      accountId: request.accountId,
+      sessionId: request.agentId,
+      costUsd: request.costUsd,
+      at: request.at,
+    });
+  });
   const stopCostRead = server.before("agent.cost_read", ({ request }) =>
     readSessionBilling(poolRoot(), request),
   );
@@ -1017,6 +1014,7 @@ export default function contribute(
     stopBilling?.();
     stopSpendGuard();
     stopCostRead();
+    stopCostCommit();
     usage = undefined;
     fleet = undefined;
     projects = undefined;

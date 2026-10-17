@@ -77,9 +77,9 @@ export class AccountUsageSession {
     );
   }
 
-  private emitObservedUsage(
+  private async emitObservedUsage(
     msg: Extract<SessionInboundMessage, { type: "provider.usage.list.request" }>,
-  ): void {
+  ): Promise<void> {
     if (msg.refresh === true) {
       this.host.emit({
         type: "rpc_error",
@@ -114,7 +114,7 @@ export class AccountUsageSession {
     this.host.emit({
       type: "provider.usage.list.response",
       payload: {
-        ...(msg.agentId ? { sessionCost: this.sessionCost?.(msg.agentId) } : {}),
+        sessionCost: await this.readSessionCost(msg.agentId),
         requestId: msg.requestId,
         fetchedAt: usage.fetchedAt,
         providers,
@@ -167,7 +167,7 @@ export class AccountUsageSession {
   ): Promise<void> {
     try {
       if (msg.observationOnly === true) {
-        this.emitObservedUsage(msg);
+        await this.emitObservedUsage(msg);
         return;
       }
       await this.emitProviderUsage(msg);

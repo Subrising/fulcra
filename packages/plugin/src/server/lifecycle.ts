@@ -70,6 +70,15 @@ export interface PluginLifecycleEvents {
 }
 
 export interface PluginBeforeRequests {
+  "agent.cost_commit": {
+    agentId: string;
+    provider: string;
+    accountId: string | null;
+    turnId: string;
+    costUsd: number;
+    at: string;
+  };
+
   "agent.cost_read": {
     agentId: string;
     provider: string;

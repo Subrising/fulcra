@@ -169,3 +169,43 @@ test("observation-only entry bypasses all generating paths and binds only reside
   for (const port of [probe, fetchUsage, roster, sessionUsage]) expect(port).not.toHaveBeenCalled();
   expect(JSON.stringify(emitted)).not.toContain("fixture-credential");
 });
+
+test("observation imports retained local costs without provider requests", async () => {
+  const emitted: SessionOutboundMessage[] = [];
+  let imports = 0,
+    providerRequests = 0;
+  const cost = {
+    totalUsd: 9.65,
+    lastTurnUsd: 0,
+    recordedTurns: 2,
+    accounts: [{ accountId: "fixture", totalUsd: 9.65 }],
+  };
+  const logger = pino({ level: "silent" });
+  const catalog = new ProviderCatalogSession({
+    logger,
+    providerUsageService: {
+      observeUsage: () => ({ fetchedAt: "now", providers: [] }),
+      listUsage: async () => {
+        providerRequests++;
+        throw Error("Provider read forbidden");
+      },
+    },
+    refreshSessionCost: async () => {
+      imports++;
+      return cost;
+    },
+    host: { emit: (m) => emitted.push(m), isProviderVisibleToClient: () => true },
+  });
+  await catalog.handleProviderUsageListRequest({
+    type: "provider.usage.list.request",
+    requestId: "cost-observation",
+    agentId: "fixture",
+    observationOnly: true,
+  });
+  expect(emitted.at(-1)).toMatchObject({
+    type: "provider.usage.list.response",
+    payload: { sessionCost: cost, observationOnly: true },
+  });
+  expect(imports).toBe(1);
+  expect(providerRequests).toBe(0);
+});

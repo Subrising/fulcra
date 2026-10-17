@@ -608,3 +608,48 @@ test("API thresholds route to Main, the project lead, and the worker manager onc
   assert.deepEqual(new Set(targets), new Set([main, lead, manager]));
   assert.equal(targets.length, 3);
 });
+
+test("full wake queues retain every budget recipient across restart and promote when capacity returns", async (t) => {
+  const f = fixture(t);
+  const worker = f.started("Budget fixture");
+  for (let i = 0; i < 500; i++)
+    assert.equal(f.w.enqueue({ holder: f.holder }, "filler", ["fill", i], {}), true);
+  assert.equal(
+    f.w.accountBudget("daily-half", {
+      account: "Fixture API",
+      usedUsd: 20,
+      limitUsd: 40,
+      sessions: [worker],
+    }),
+    1,
+  );
+  await f.w.pump();
+  assert.equal(
+    f.db
+      .prepare("SELECT count(*) n FROM role_wakes WHERE state='pending' AND kind='account-budget'")
+      .get().n,
+    1,
+  );
+  f.db.prepare("UPDATE role_wakes SET state='delivered' WHERE kind='filler'").run();
+  const restored = new Wakes(f.control, { now: () => f.clock.now });
+  f.control.wakes = restored;
+  await restored.pump();
+  assert.equal(
+    f.db.prepare("SELECT state FROM role_wakes WHERE kind='account-budget'").get().state,
+    "queued",
+  );
+  restored.accountBudget("daily-half", {
+    account: "Fixture API",
+    usedUsd: 20,
+    limitUsd: 40,
+    sessions: [worker],
+  });
+  assert.equal(
+    f.db.prepare("SELECT count(*) n FROM role_wakes WHERE kind='account-budget'").get().n,
+    1,
+  );
+  await f.delegate(f.holder);
+  await restored.pump();
+  assert.equal(f.sent.length, 1);
+  assert.match(f.sent[0].text, /API budget/);
+});
