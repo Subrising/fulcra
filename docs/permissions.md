@@ -99,6 +99,47 @@ first. A refresh resumes the same provider session and asserts the resumed ident
 the timeline and native session id survive; a provider that resumes anything else fails
 the refresh.
 
+## Computer-use app consent for a job
+
+A lead can name apps when it creates a Codex worker:
+
+```json
+{
+  "provider": "codex",
+  "title": "App task",
+  "initialPrompt": "Complete the app task.",
+  "settings": { "modeId": "full-access" },
+  "labels": { "computerUse.allowApps": "[\"VRoid Studio\",\"Simulator\"]" }
+}
+```
+
+The label is a JSON array of exact app names. It is fixed when the job starts.
+It applies only to built-in Codex sessions in full-access mode.
+The approval policy must be `never`. The sandbox mode must be `danger-full-access`.
+The native turn must also use full-access policy. Selecting this mode does not grant an older restricted turn.
+A listed name binds to the first approved app bundle for that name. Another bundle with the same name asks separately.
+The request must carry the computer-use connector ID and app bundle ID.
+
+The host checks each automatic answer against its current session and trusted automatic-permission hooks.
+The controller accepts this explicit app grant for delegated jobs. Other host hooks keep their veto.
+A host with only manual permission guards asks for approval.
+
+A listed app needs no lead approval when host policy permits it.
+An unlisted app asks once. The job remembers explicit accepts and declines, including after reload, MCP refresh, and context rotation.
+Each automatic accept records the app name, bundle ID, server name, and UTC time in the session timeline.
+A reused decline also records a timeline message. The question tells the lead that its answer will be remembered.
+Start a new job to change that answer or the app list.
+
+Concurrent requests for the same app identity share an answer.
+Canceling one action does not cancel the others. A remaining action can ask again if no answer was given.
+A malformed stored app list grants no apps and writes a warning. It does not prevent the session from loading.
+
+Codex native approval policy does not answer every MCP elicitation. MCP consent has a separate protocol path.
+The app grant covers only empty app-consent forms from `cua_repl` and `computer-use` on the job's root native thread.
+Other MCP forms, audio consent, renamed servers, derived providers, and native sub-agent threads keep their existing behavior.
+Restricted sessions and Claude also keep their existing behavior.
+This grant does not change operating-system access or operating-system prompts.
+
 ## Hub
 
 The Hub authenticates as a service principal. Its locally selected grants decide whether it may execute agents, manage the daemon, manage tunnels, or manage access.

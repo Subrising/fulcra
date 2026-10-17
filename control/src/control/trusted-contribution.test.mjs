@@ -1465,6 +1465,51 @@ test("FIX-8 Z: automaticDecision allows ordinary tool calls in automatic modes a
     metadata: { toolUseId: "tu-" + randomUUID() },
   });
   const decide = (a, r) => automaticDecision(store.db, a, r);
+  const appAgent = {
+    ...agent(delegated, "codex", "full-access"),
+    labels: { "computerUse.allowApps": '["Simulator"]' },
+  };
+  const appRequest = {
+    provider: "codex",
+    kind: "tool",
+    name: "CodexMcpElicitation",
+    metadata: {
+      serverName: "cua_repl",
+      computerUseGrant: { app: "Simulator", bundleId: "test.simulator", source: "listed" },
+    },
+  };
+  assert.equal(
+    decide(appAgent, appRequest),
+    "allow",
+    "an explicit job app grant also applies to delegated jobs",
+  );
+  assert.equal(
+    decide({ ...appAgent, labels: {} }, appRequest),
+    "ask",
+    "a listed grant needs that job's app list",
+  );
+  assert.equal(
+    decide({ ...appAgent, runtime: { status: "known", modeId: "auto" } }, appRequest),
+    "ask",
+    "restricted jobs keep their policy",
+  );
+  assert.equal(
+    decide(appAgent, { ...appRequest, name: "OtherMcpConsent" }),
+    "ask",
+    "other MCP requests keep their policy",
+  );
+  assert.equal(
+    decide(appAgent, {
+      ...appRequest,
+      metadata: {
+        ...appRequest.metadata,
+        computerUseGrant: { ...appRequest.metadata.computerUseGrant, source: "remembered" },
+      },
+    }),
+    "allow",
+    "the host can reuse an explicit app answer",
+  );
+
   assert.equal(
     decide(
       agent(human, "claude", "auto"),

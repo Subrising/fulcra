@@ -1114,7 +1114,12 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     provider: ProviderOrProviderModelInputSchema.describe(
       "Provider, or provider/model to choose the model (for example claude or codex/gpt-6.1-sol). A bare provider uses the role default model.",
     ),
-    labels: z.record(z.string(), z.string()).optional().describe("Labels to set on the agent"),
+    labels: z
+      .record(z.string(), z.string())
+      .optional()
+      .describe(
+        'Labels to set on the agent. For full-access Codex jobs, computerUse.allowApps accepts a JSON array of exact app names, for example ["VRoid Studio","Simulator"]. The app list is fixed at job creation.',
+      ),
     settings: CreateAgentSettingsInputSchema.optional().describe(
       "Initial runtime settings for the new agent.",
     ),

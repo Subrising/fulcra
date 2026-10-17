@@ -3123,8 +3123,9 @@ async function quietMcpFixture(
   managerOptions: Pick<
     AgentManagerOptions,
     "mcpRefreshAdmission" | "pluginLifecycle" | "trustedPlugins" | "reportRegistryFile"
-  > = {},
+  > & { creationLabels?: Record<string, string> } = {},
 ) {
+  const { creationLabels, ...fixtureOptions } = managerOptions;
   const workdir = mkdtempSync(join(tmpdir(), "agent-quiet-mcp-"));
   const storage = new AgentStorage(join(workdir, "agents"), logger);
   const timeline = new FileAgentTimelineStore(join(workdir, "timeline"));
@@ -3166,10 +3167,13 @@ async function quietMcpFixture(
       supportsSessionPersistence: true,
     };
     sessions: QuietSession[] = [];
+    launchContexts: Array<AgentLaunchContext | undefined> = [];
     failResume = false;
     wrongIdentity = false;
     failReplacementClose = false;
-    override async createSession(config: AgentSessionConfig) {
+    override async createSession(config: AgentSessionConfig, launchContext?: AgentLaunchContext) {
+      this.launchContexts.push(launchContext);
+      this.createdConfigs.push(config);
       const session = new QuietSession(config);
       this.sessions.push(session);
       return session;
@@ -3177,11 +3181,15 @@ async function quietMcpFixture(
     override async resumeSession(
       handle: AgentPersistenceHandle,
       config?: Partial<AgentSessionConfig>,
+      launchContext?: AgentLaunchContext,
     ) {
       expect(this.sessions[0].closeCount).toBe(1);
       this.resumeOverrides.push(config);
       if (this.failResume) throw new Error("secret resume diagnostic");
-      const session = await this.createSession({ provider: "codex", cwd: workdir, ...config });
+      const session = await this.createSession(
+        { provider: "codex", cwd: workdir, ...config },
+        launchContext,
+      );
       session.describePersistence = () => ({
         ...handle,
         sessionId: this.wrongIdentity ? "wrong-native-id" : handle.sessionId,
@@ -3192,7 +3200,7 @@ async function quietMcpFixture(
   }
   const client = new QuietClient();
   const manager = new AgentManager({
-    ...managerOptions,
+    ...fixtureOptions,
     clients: { codex: client },
     registry: storage,
     logger,
@@ -3221,7 +3229,7 @@ async function quietMcpFixture(
     undefined,
     {
       workspaceId: "workspace-preserved",
-      labels: { keep: "yes" },
+      labels: { keep: "yes", ...creationLabels },
       owner: { kind: "daemon", daemonId: "test-daemon", executionId: "test-execution" },
     },
   );
@@ -4386,6 +4394,7 @@ test("createAgent passes daemon launch env through the provider launch context",
   });
   expect(client.lastLaunchContext).toEqual({
     agentId: snapshot.id,
+    computerUsePolicy: { approve: expect.any(Function), changed: expect.any(Function) },
     env: {
       PASEO_AGENT_ID: snapshot.id,
       PASEO_AGENT_CWD: workdir,
@@ -5716,6 +5725,7 @@ test("resumeAgentFromPersistence keeps metadata config, applies overrides, and p
   expect(client.lastResumeOverrides).not.toHaveProperty("modeId");
   expect(client.lastResumeLaunchContext).toEqual({
     agentId: resumed.id,
+    computerUsePolicy: { approve: expect.any(Function), changed: expect.any(Function) },
     env: {
       PASEO_AGENT_ID: resumed.id,
       PASEO_AGENT_CWD: workdir,
@@ -5824,6 +5834,7 @@ test("importProviderSession imports the selected session without listing and pub
   expect(client.importInput).toEqual({ providerHandleId: "thread-selected", cwd: workdir });
   expect(client.importLaunchContext).toEqual({
     agentId: imported.id,
+    computerUsePolicy: { approve: expect.any(Function), changed: expect.any(Function) },
     env: {
       PASEO_AGENT_ID: imported.id,
       PASEO_AGENT_CWD: workdir,
@@ -5927,6 +5938,7 @@ test("reloadAgentSession passes daemon launch env through the provider launch co
 
   expect(client.lastCreateLaunchContext).toEqual({
     agentId: snapshot.id,
+    computerUsePolicy: { approve: expect.any(Function), changed: expect.any(Function) },
     env: {
       PASEO_AGENT_ID: snapshot.id,
       PASEO_AGENT_CWD: workdir,
@@ -5939,6 +5951,7 @@ test("reloadAgentSession passes daemon launch env through the provider launch co
 
   expect(client.lastResumeLaunchContext).toEqual({
     agentId: snapshot.id,
+    computerUsePolicy: { approve: expect.any(Function), changed: expect.any(Function) },
     env: {
       PASEO_AGENT_ID: snapshot.id,
       PASEO_AGENT_CWD: workdir,
@@ -15487,6 +15500,138 @@ test("dormant quiet reconnect refuses stale state and revoked authority before l
     });
     expect(f.client.sessions).toHaveLength(1);
   } finally {
+    await f.cleanup();
+  }
+});
+
+test.each(["refresh", "rotation"] as const)(
+  "computer-use grants survive quiet MCP %s",
+  async (kind) => {
+    const f = await quietMcpFixture({
+      creationLabels: { "computerUse.allowApps": '["Simulator"]' },
+      mcpRefreshAdmission: () => ({
+        revision: "app-job",
+        allowed: true,
+        contextRotationAllowed: true,
+      }),
+    });
+    try {
+      const key = JSON.stringify(["Simulator", "test.simulator"]);
+      const active = f.manager.getAgent(f.created.id)!;
+      const persistence = active.persistence!;
+      const updated = {
+        ...persistence,
+        metadata: { ...persistence.metadata, computerUseDecisions: { [key]: "accept" } },
+      };
+      // The provider owns this opaque state. The manager must carry it through replacement.
+      f.client.sessions[0].describePersistence = () => updated;
+      f.client.launchContexts[0]!.computerUsePolicy!.changed(f.client.sessions[0]);
+      await f.manager.flush();
+      expect(
+        (await f.storage.get(f.created.id))?.persistence?.metadata?.computerUseDecisions,
+      ).toEqual({ [key]: "accept" });
+      const state = await f.manager.getAgentMcpRefreshState(f.created.id);
+      const expected = {
+        provider: state!.provider,
+        sessionId: state!.sessionId!,
+        configRevision: state!.configRevision,
+      };
+      const result =
+        kind === "refresh"
+          ? await f.manager.refreshAgentMcp({ ...f.input, expected })
+          : await f.manager.rotateAgentContext(
+              { agentId: f.created.id, rotationId: randomUUID(), expected },
+              () => {},
+            );
+      expect(result.outcome).toBe(kind === "refresh" ? "refreshed" : "rotated");
+      expect(f.client.createdConfigs.at(-1)?.computerUse).toEqual({
+        allowApps: ["Simulator"],
+        decisions: { [key]: "accept" },
+      });
+      expect(f.client.sessions.map((session) => session.startCount)).toEqual([0, 0]);
+    } finally {
+      await f.cleanup();
+    }
+  },
+);
+
+test("computer-use answers and app labels survive a cold registry resume", async () => {
+  const f = await quietMcpFixture({ creationLabels: { "computerUse.allowApps": '["Simulator"]' } });
+  const cold = new AgentManager({
+    clients: { codex: f.client },
+    registry: f.storage,
+    logger,
+    providerDefinitions: {
+      codex: {
+        enabled: true,
+        validateOptions: (value) => value,
+        applyToolPolicy: (value) => value,
+      },
+    },
+  });
+  try {
+    const key = JSON.stringify(["Simulator", "test.simulator"]);
+    const handle = f.created.persistence!;
+    const saved = {
+      ...handle,
+      metadata: { ...handle.metadata, computerUseDecisions: { [key]: "accept" } },
+    };
+    f.client.sessions[0].describePersistence = () => saved;
+    f.client.launchContexts[0]!.computerUsePolicy!.changed(f.client.sessions[0]);
+    await f.manager.flush();
+    await f.manager.closeAgent(f.created.id);
+    const resumed = await ensureAgentLoaded(f.created.id, {
+      agentManager: cold,
+      agentStorage: f.storage,
+      logger,
+    });
+    expect(resumed.persistence?.metadata?.computerUseDecisions).toEqual({ [key]: "accept" });
+    expect(f.client.resumeOverrides.at(-1)?.computerUse?.allowApps).toEqual(["Simulator"]);
+    await cold.closeAgent(f.created.id);
+    await expect(
+      cold.updateAgentMetadata(f.created.id, { labels: { "computerUse.allowApps": '["Notes"]' } }),
+    ).rejects.toThrow("fixed at job creation");
+    await cold.archiveSnapshot(f.created.id);
+    await expect(
+      cold.unarchiveSnapshot(f.created.id, { labels: { "computerUse.allowApps": '["Notes"]' } }),
+    ).rejects.toThrow("fixed at job creation");
+    expect((await f.storage.get(f.created.id))?.archivedAt).toEqual(expect.any(String));
+  } finally {
+    await cold.closeAgent(f.created.id);
+    await f.cleanup();
+  }
+});
+
+test("computer-use malformed stored labels fail closed without blocking cold load", async () => {
+  const f = await quietMcpFixture();
+  const cold = new AgentManager({
+    clients: { codex: f.client },
+    registry: f.storage,
+    logger,
+    providerDefinitions: {
+      codex: {
+        enabled: true,
+        validateOptions: (value) => value,
+        applyToolPolicy: (value) => value,
+      },
+    },
+  });
+  try {
+    await f.manager.closeAgent(f.created.id);
+    const record = (await f.storage.get(f.created.id))!;
+    await f.storage.upsert({
+      ...record,
+      labels: { ...record.labels, "computerUse.allowApps": "legacy invalid value" },
+    });
+    const resumed = await ensureAgentLoaded(f.created.id, {
+      agentManager: cold,
+      agentStorage: f.storage,
+      logger,
+    });
+    expect(resumed.id).toBe(f.created.id);
+    expect(f.client.resumeOverrides.at(-1)?.computerUse).toBeUndefined();
+  } finally {
+    await cold.closeAgent(f.created.id);
     await f.cleanup();
   }
 });

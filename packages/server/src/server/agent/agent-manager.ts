@@ -1,3 +1,8 @@
+import {
+  assertComputerUseLabels,
+  computerUseFromLabels,
+  restoreComputerUseDecisions,
+} from "./providers/codex/computer-use.js";
 import { SessionCostOutbox, type PendingSessionCost } from "./session-cost-outbox.js";
 import { recordSessionCost, sessionCost, type SessionCostRecords } from "./session-cost.js";
 import { queuedAgentMessagesFor } from "../queued-agent-messages.js";
@@ -829,7 +834,9 @@ function validateAgentId(agentId: string, source: string): string {
 function applyLabelPatch(
   labels: Record<string, string>,
   patch: AgentLabelPatch,
+  provider: AgentProvider,
 ): Record<string, string> {
+  assertComputerUseLabels({ stored: { provider, labels }, updates: { labels: patch } });
   const nextLabels = { ...labels };
   for (const [key, value] of Object.entries(patch)) {
     if (value === null) {
@@ -2961,6 +2968,7 @@ export class AgentManager {
     this.assertAcceptingAgentRegistrations();
     const resolvedAgentId = validateAgentId(agentId ?? this.idFactory(), "createAgent");
     this.assertInjectionLabelWrite(options.labels);
+    this.validateComputerUseCreate(config, options);
     options = withoutSeatLabel(options);
     if (this.pluginLifecycle && !config.internal) {
       // Update-7 W3 (R1 P-3 seam): a create with a caller shows the hook the caller's provider, mode and mode class,
@@ -3145,6 +3153,7 @@ export class AgentManager {
     const record = this.registry ? await this.registry.get(resolvedAgentId) : null;
     requireRecord?.(record);
     this.assertChangedInjectionLabels(options?.labels, record?.labels);
+    assertComputerUseLabels({ stored: record, updates: options, replace: true });
     const labels = options?.labels ?? record?.labels;
     const currentResumeOptions = record
       ? { purpose: record.archivedAt ? ("history" as const) : ("interactive" as const) }
@@ -3780,6 +3789,9 @@ export class AgentManager {
             : null,
       }),
     );
+    if (storedConfig.provider === "codex") {
+      launchConfig.computerUse = this.computerUseForLaunch(existing.labels, handle);
+    }
     const context = await this.buildLaunchContext(
       agentId,
       client,
@@ -4864,7 +4876,7 @@ export class AgentManager {
     const liveAgent = this.agents.get(agentId);
     if (liveAgent) {
       this.assertArchiveLeadLabelWrite(patch, liveAgent.labels);
-      liveAgent.labels = applyLabelPatch(liveAgent.labels, patch);
+      liveAgent.labels = applyLabelPatch(liveAgent.labels, patch, liveAgent.provider);
       this.touchUpdatedAt(liveAgent);
       await this.persistSnapshot(liveAgent);
       this.emitState(liveAgent, { persist: false });
@@ -4891,7 +4903,9 @@ export class AgentManager {
     const nextRecord = {
       ...record,
       ...(patch.title ? { title: patch.title } : {}),
-      ...(patch.labels ? { labels: applyLabelPatch(record.labels, patch.labels) } : {}),
+      ...(patch.labels
+        ? { labels: applyLabelPatch(record.labels, patch.labels, record.provider) }
+        : {}),
       updatedAt: this.nextStoredUpdatedAt(record),
     };
     await registry.upsert(nextRecord);
@@ -5206,7 +5220,9 @@ export class AgentManager {
     const restored: StoredAgentRecord = {
       ...record,
       ...(updates?.workspaceId ? { workspaceId: updates.workspaceId } : {}),
-      ...(updates?.labels ? { labels: applyLabelPatch(record.labels, updates.labels) } : {}),
+      ...(updates?.labels
+        ? { labels: applyLabelPatch(record.labels, updates.labels, record.provider) }
+        : {}),
       archivedAt: null,
       updatedAt: this.nextStoredUpdatedAt(record),
     };
@@ -9692,6 +9708,12 @@ export class AgentManager {
         nativeReportWitness: reportLaunch?.witness,
       }),
     );
+    if (storedConfig.provider === "codex") {
+      launchConfig.computerUse = this.computerUseForLaunch(
+        options.labels ?? this.agents.get(agentId)?.labels,
+        this.agents.get(agentId)?.persistence,
+      );
+    }
     return { storedConfig, launchConfig, paseoToolPolicy };
   }
 
@@ -9706,6 +9728,49 @@ export class AgentManager {
           daemonAppendSystemPrompt,
         }
       : next;
+  }
+
+  private validateComputerUseCreate(config: AgentSessionConfig, options: CreateAgentOptions): void {
+    if (config.provider === "codex" && !options.fromStoredRecord)
+      computerUseFromLabels(options.labels);
+  }
+
+  private computerUseForLaunch(
+    labels: Record<string, string> | undefined,
+    handle?: AgentPersistenceHandle | null,
+  ): AgentSessionConfig["computerUse"] {
+    let allowed: { allowApps: string[] } | undefined;
+    try {
+      allowed = computerUseFromLabels(labels);
+    } catch {
+      this.logger.warn("Invalid stored computerUse.allowApps; no apps were granted");
+    }
+    const decisions = restoreComputerUseDecisions(handle?.metadata?.computerUseDecisions);
+    if (!allowed && decisions.size === 0) return undefined;
+    return {
+      allowApps: allowed?.allowApps ?? [],
+      decisions: Object.fromEntries(
+        [...decisions].map(([key, decision]) => [key, decision.action]),
+      ),
+    };
+  }
+
+  private currentComputerUseSession(
+    agentId: string,
+    session: AgentSession,
+  ): ActiveManagedAgent | undefined {
+    const agent = this.agents.get(agentId);
+    if (
+      !agent ||
+      agent.session !== session ||
+      agent.provider !== "codex" ||
+      agent.internal ||
+      agent.archivedAt ||
+      this.inFlightAgentCloses.has(agentId) ||
+      this.mcpRefreshes.has(agentId)
+    )
+      return undefined;
+    return agent;
   }
 
   private async buildLaunchContext(
@@ -9737,6 +9802,20 @@ export class AgentManager {
     }
     const context: AgentLaunchContext = {
       agentId,
+      computerUsePolicy: {
+        approve: (session, request) => {
+          const agent = this.currentComputerUseSession(agentId, session);
+          if (!agent || request.metadata?.threadId !== session.id) return false;
+          const allowed = this.trustedPlugins.automaticPermission(agent, request, true);
+          return allowed && this.currentComputerUseSession(agentId, session) === agent;
+        },
+        changed: (session) => {
+          const agent = this.currentComputerUseSession(agentId, session);
+          if (!agent) return;
+          this.refreshSessionPersistence(agent);
+          this.emitState(agent);
+        },
+      },
       env: {
         ...env,
         PASEO_AGENT_ID: agentId,

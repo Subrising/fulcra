@@ -1,3 +1,9 @@
+import { CodexAppServerAgentSession } from "./providers/codex-app-server-agent.js";
+import {
+  createFakeCodexAppServer,
+  computerUseConsent,
+  waitForNextPermission,
+} from "./providers/codex/test-utils/fake-app-server.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -1573,3 +1579,157 @@ describe("agent MCP end-to-end (offline)", () => {
     }
   }, 60_000);
 });
+
+test("computer-use job label works through the scratch MCP endpoint with one lead notice per unlisted app", async () => {
+  const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-cua-home-"));
+  const staticDir = await mkdtemp(path.join(os.tmpdir(), "paseo-cua-static-"));
+  const recorder: LaunchRecorder = { recordedLaunches: new Map() };
+  const prompts: AgentPromptInput[] = [];
+  const appServer = createFakeCodexAppServer({ "turn/start": () => ({ turn: { id: "turn-1" } }) });
+  let codexSession: CodexAppServerAgentSession | undefined;
+  const codex = createTestAgentClient("codex", { supportsMcpServers: true });
+  vi.spyOn(codex, "createSession").mockImplementation(async (config, launchContext) => {
+    codexSession = new CodexAppServerAgentSession(
+      config,
+      null,
+      pino({ level: "silent" }),
+      async () => appServer.child,
+      { computerUsePolicy: launchContext?.computerUsePolicy },
+    );
+    await codexSession.connect();
+    return codexSession;
+  });
+  const daemon = await createPaseoDaemon(
+    {
+      listen: "127.0.0.1:0",
+      paseoHome,
+      staticDir,
+      corsAllowedOrigins: [],
+      hostnames: true,
+      mcpEnabled: true,
+      mcpDebug: false,
+      mcpInjectIntoAgents: true,
+      nativeFinishNotices: false,
+      reportUpOnTurnEnd: true,
+      relayEnabled: false,
+      agentStoragePath: path.join(paseoHome, "agents"),
+      agentClients: {
+        codex,
+        claude: new RecordingAgentClient(
+          createTestAgentClient("claude", {
+            supportsMcpServers: true,
+            onStartTurn: (prompt) => prompts.push(prompt),
+          }),
+          recorder,
+        ),
+      },
+    },
+    pino({ level: "silent" }),
+    { credentialBackend: createMemoryCredentialBackend() },
+  );
+  const leadMcp = new Client({ name: "cua-fixture-lead", version: "1" });
+  let rootMcp: McpClient | undefined;
+  try {
+    await daemon.start();
+    const target = daemon.getListenTarget();
+    if (target?.type !== "tcp") throw new Error("Scratch TCP daemon required");
+    rootMcp = await createMcpClient(`http://127.0.0.1:${target.port}/mcp/agents`);
+    const workspace = await createLocalWorkspace(rootMcp, paseoHome);
+    if (!("workspaceId" in workspace) || typeof workspace.workspaceId !== "string")
+      throw new Error("Fixture workspace required");
+    const lead = await daemon.agentManager.createAgent(
+      { provider: "claude", cwd: paseoHome, modeId: "auto" },
+      undefined,
+      { workspaceId: workspace.workspaceId },
+    );
+    const server = recorder.recordedLaunches.get(lead.id)?.mcpServers?.paseo;
+    if (server?.type !== "http") throw new Error("Lead HTTP MCP required");
+    await leadMcp.connect(
+      new StreamableHTTPClientTransport(new URL(server.url), {
+        requestInit: { headers: server.headers },
+      }),
+    );
+    const result = await leadMcp.callTool({
+      name: "create_agent",
+      arguments: {
+        title: "Computer-use fixture",
+        provider: "codex/gpt-5.4",
+        initialPrompt: "Synthetic app consent check",
+        settings: { modeId: "full-access" },
+        labels: { "computerUse.allowApps": '["VRoid Studio"]' },
+        notifyOnFinish: true,
+      },
+    });
+    expect(result.isError, JSON.stringify(result)).not.toBe(true);
+    const workerId = (result.structuredContent as { agentId: string }).agentId;
+    if (!codexSession) throw new Error("Real Codex adapter session required");
+    const request = (app: string) => appServer.requestMcpElicitation(computerUseConsent(app));
+    for (let i = 0; i < 3; i++) {
+      request("VRoid Studio");
+      await expect(appServer.waitForMcpElicitationDecision()).resolves.toEqual({
+        action: "accept",
+        content: {},
+        _meta: null,
+      });
+    }
+    await daemon.agentManager.flush();
+    expect(prompts).toEqual([]);
+    expect(daemon.agentManager.getAgent(workerId)?.pendingPermissions.size).toBe(0);
+    await expect(
+      daemon.agentManager.setLabels(workerId, { "computerUse.allowApps": '["Simulator"]' }),
+    ).rejects.toThrow("fixed at job creation");
+    expect((await daemon.agentStorage.get(workerId))?.labels?.["computerUse.allowApps"]).toBe(
+      '["VRoid Studio"]',
+    );
+    const first = waitForNextPermission(codexSession);
+    request("Simulator");
+    const permission = await first;
+    await vi.waitFor(() => expect(prompts).toHaveLength(1), { timeout: 5000 });
+    expect(JSON.stringify(prompts[0])).toContain("waiting for permission");
+    expect(JSON.stringify(prompts[0])).toContain("Simulator");
+    await daemon.agentManager.respondToPermission(workerId, permission.request.id, {
+      behavior: "allow",
+    });
+    await appServer.waitForMcpElicitationDecision();
+    request("Simulator");
+    await expect(appServer.waitForMcpElicitationDecision()).resolves.toEqual({
+      action: "accept",
+      content: {},
+      _meta: null,
+    });
+    await daemon.agentManager.flush();
+    await new Promise((resolve) => setTimeout(resolve, 2200));
+    expect(prompts).toHaveLength(1);
+    const next = waitForNextPermission(codexSession);
+    request("Notes");
+    const nextPermission = await next;
+    await vi.waitFor(() => expect(prompts).toHaveLength(2), { timeout: 5000 });
+    expect(JSON.stringify(prompts[1])).toContain("Notes");
+    await daemon.agentManager.respondToPermission(workerId, nextPermission.request.id, {
+      behavior: "deny",
+    });
+    await appServer.waitForMcpElicitationDecision();
+    request("Notes");
+    await expect(appServer.waitForMcpElicitationDecision()).resolves.toEqual({
+      action: "decline",
+      content: null,
+      _meta: null,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 2200));
+    expect(prompts).toHaveLength(2);
+    await daemon.agentManager.flush();
+    const persisted = await daemon.agentStorage.get(workerId);
+    expect(persisted?.persistence?.metadata?.computerUseDecisions).toMatchObject({
+      [JSON.stringify(["VRoid Studio", "test.vroidstudio"])]: "accept",
+      [JSON.stringify(["Simulator", "test.simulator"])]: "accept",
+      [JSON.stringify(["Notes", "test.notes"])]: "decline",
+    });
+    appServer.assertNoErrors();
+  } finally {
+    await leadMcp.close();
+    await rootMcp?.close();
+    await daemon.stop();
+    await rm(paseoHome, { recursive: true, force: true });
+    await rm(staticDir, { recursive: true, force: true });
+  }
+}, 30_000);

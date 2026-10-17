@@ -30,15 +30,42 @@ const timed = (site, call) => {
 const fail = (reason) => {
   throw Error("Orca native admission refused: " + reason);
 };
+function computerUseJobGrant(agent, request) {
+  const grant = request.metadata?.computerUseGrant;
+  if (
+    agent.provider !== "codex" ||
+    permissionMode(agent) !== "full-access" ||
+    request.name !== "CodexMcpElicitation" ||
+    request.kind !== "tool" ||
+    !["cua_repl", "computer-use"].includes(request.metadata?.serverName) ||
+    !grant ||
+    typeof grant.app !== "string" ||
+    typeof grant.bundleId !== "string"
+  )
+    return false;
+  if (grant.source === "remembered") return true;
+  if (grant.source !== "listed") return false;
+  try {
+    const apps = JSON.parse(agent.labels?.["computerUse.allowApps"] ?? "null");
+    return Array.isArray(apps) && apps.includes(grant.app);
+  } catch {
+    return false;
+  }
+}
+
 export function automaticDecision(db, agent, request) {
   try {
     if (
       agent.runtime?.status !== "known" ||
       request.provider !== agent.provider ||
       typeof agent.cwd !== "string" ||
-      !agent.cwd ||
-      db.prepare("SELECT mode FROM sessions WHERE id=?").get(agent.id)?.mode === "delegated"
+      !agent.cwd
     )
+      return "ask";
+    // FU-134: a job's exact app grant is an explicit permission, including delegated jobs.
+    // The native provider creates this marker after checking the app consent form and policy pins.
+    if (computerUseJobGrant(agent, request)) return "allow";
+    if (db.prepare("SELECT mode FROM sessions WHERE id=?").get(agent.id)?.mode === "delegated")
       return "ask";
     automaticPermissionProof(request, agent.cwd, permissionMode(agent), "-");
     return "allow";

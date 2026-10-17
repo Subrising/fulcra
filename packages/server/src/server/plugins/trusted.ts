@@ -1062,11 +1062,19 @@ export class TrustedPlugins {
    * FIX-8 W3: whether a trusted plugin answers this permission request itself, before it is surfaced. Fail-closed:
    * true only when some handler returns "allow" and none returns anything else or throws.
    */
-  automaticPermission(agent: Agent, request: AgentPermissionRequest): boolean {
+  automaticPermission(
+    agent: Agent,
+    request: AgentPermissionRequest,
+    explicitAppGrant = false,
+  ): boolean {
     try {
       this.assertHealthy();
-      let allowed = false;
+      // A job's explicit app grant supplies the default. Every installed hook keeps its veto.
+      let allowed = explicitAppGrant;
+      if (explicitAppGrant && [...this.plugins.values()].some((hooks) => hooks.permission))
+        return false;
       for (const hooks of this.v11.values()) {
+        if (explicitAppGrant && hooks.permission && !hooks.automatic) return false;
         if (!hooks.automatic) continue;
         const decision = hooks.automatic(this.agentV11(agent), structuredClone(request));
         observeThenable(decision);
