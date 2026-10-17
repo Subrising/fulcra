@@ -396,15 +396,17 @@ async function budgetWorld(t) {
   await setAccount(w.root, w.a.id, { name: "personal-workspace-api", credentialKind: "api-key" });
   await setAccount(w.root, w.b.id, { name: "work-workspace-api", credentialKind: "api-key" });
   w.control.promptIdentityChanged = () => false;
-  const notices = [];
+  const notices = [],
+    thresholdNotices = [];
   w.control.wakes = {
     accountBudget: (key, value) => {
-      notices.push({ key, ...value });
+      // Spend thresholds and failover routing have separate notice contracts.
+      (value.scope ? thresholdNotices : notices).push({ key, ...value });
       return 1;
     },
   };
   await recordAccountCost(w.root, { id: "budget-trigger", accountId: w.a.id, costUsd: 190 });
-  return { ...w, notices };
+  return { ...w, notices, thresholdNotices };
 }
 for (const enrolled of [true, false])
   test(`M1: budget takeover refuses ${enrolled ? "human-mode" : "owner's unregistered"} chats`, async (t) => {
@@ -435,6 +437,11 @@ test("M1: the budget notice counts human and unregistered chats without moving t
   assert.equal(w.calls(), 0);
   assert.equal(w.notices.length, 1);
   assert.equal(w.notices[0].held, 2);
+  assert.ok(w.thresholdNotices.length > 0);
+  assert.equal(
+    new Set(w.thresholdNotices.map((notice) => notice.key)).size,
+    w.thresholdNotices.length,
+  );
   assert.equal(readAccounts(w.root).assignments[own].accountId, w.a.id);
 });
 test("M2: the real budget takeover moves only active delegated sessions on the source API account", async (t) => {
