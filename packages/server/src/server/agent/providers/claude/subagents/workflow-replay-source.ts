@@ -47,11 +47,12 @@ export function parseClaudeWorkflowRun(contents: string): ClaudeWorkflowRun | nu
  */
 export function observeReplayWorkflows(input: {
   workflows: readonly ClaudeWorkflowRun[];
-  parentEntries: readonly ClaudeWorkflowParentEntry[];
+  parentEntries?: readonly ClaudeWorkflowParentEntry[];
+  parentLinks?: ReadonlyMap<string, string>;
   entriesByRunId?: ReadonlyMap<string, readonly ClaudeReplayEntry[]>;
   convertEntry?: (entry: ClaudeReplayEntry) => AgentTimelineItem[];
 }): SubagentObservation[] {
-  const toolCallIdByRunId = readWorkflowLinks(input.parentEntries);
+  const toolCallIdByRunId = input.parentLinks ?? readWorkflowLinks(input.parentEntries ?? []);
   const observations: SubagentObservation[] = [];
 
   for (const workflow of input.workflows) {
@@ -159,7 +160,9 @@ function compareReplayTimestamps(a: ClaudeReplayEntry, b: ClaudeReplayEntry): nu
   return Date.parse(aTimestamp) - Date.parse(bTimestamp);
 }
 
-function readWorkflowLinks(entries: readonly ClaudeWorkflowParentEntry[]): Map<string, string> {
+export function readWorkflowLinks(
+  entries: readonly ClaudeWorkflowParentEntry[],
+): Map<string, string> {
   const workflowToolCallIds = new Set<string>();
   const toolCallIdByRunId = new Map<string, string>();
 

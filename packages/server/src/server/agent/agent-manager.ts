@@ -2141,6 +2141,7 @@ export class AgentManager {
     { current: () => boolean; completed: boolean }
   >();
   private readonly timelineStore = new InMemoryAgentTimelineStore();
+  private readonly timelineJournalPins = new Map<string, () => void>();
   private readonly providerSubagents = new ProviderSubagentStore();
   private readonly agentsAwaitingInitialSnapshotPersist = new Set<string>();
   private readonly sessionEventTails = new Map<string, Promise<void>>();
@@ -4349,6 +4350,8 @@ export class AgentManager {
       persistError = error;
     }
     this.emitClosedAgent(closedAgent, { persist: false });
+    // Closed history reads use the journal. Keep child facts, but release duplicate parent payloads.
+    if (this.durableTimelineStore) this.timelineStore.delete(agentId);
     this.logger.trace(
       {
         agentId,
@@ -7358,6 +7361,7 @@ export class AgentManager {
     },
   ): Promise<ManagedAgent> {
     let registered = false;
+    let releaseJournal: () => void = () => undefined;
     try {
       this.assertAcceptingAgentRegistrations();
       const resolvedAgentId = validateAgentId(agentId, "registerSession");
@@ -7371,6 +7375,7 @@ export class AgentManager {
       );
 
       const now = new Date();
+      releaseJournal = this.pinTimelineJournal(resolvedAgentId);
       await this.durableTimelineStore?.setIndexCwd?.(resolvedAgentId, config.cwd);
       const { durableTimelineHasRows } = await this.initializeAgentTimelineForRegister({
         agentId: resolvedAgentId,
@@ -7396,6 +7401,7 @@ export class AgentManager {
 
       this.assertAcceptingAgentRegistrations();
       this.agents.set(resolvedAgentId, managed);
+      this.timelineJournalPins.set(resolvedAgentId, releaseJournal);
       registered = true;
       // Initialize previousStatus to track transitions
       this.previousStatuses.set(resolvedAgentId, managed.lifecycle);
@@ -7430,11 +7436,28 @@ export class AgentManager {
       }
       return { ...managed };
     } catch (error) {
-      if (!registered && !options?.deferFailureCleanup) {
-        await this.closeUnregisteredSession(session);
-      }
+      await this.cleanupSessionRegistration({
+        registered,
+        releaseJournal,
+        session,
+        deferFailureCleanup: options?.deferFailureCleanup,
+      });
       throw error;
     }
+  }
+
+  private pinTimelineJournal(agentId: string): () => void {
+    return this.durableTimelineStore?.pinAgent?.(agentId) ?? (() => undefined);
+  }
+  private async cleanupSessionRegistration(params: {
+    registered: boolean;
+    releaseJournal: () => void;
+    session: AgentSession;
+    deferFailureCleanup?: boolean;
+  }): Promise<void> {
+    if (params.registered) return;
+    params.releaseJournal();
+    if (!params.deferFailureCleanup) await this.closeUnregisteredSession(params.session);
   }
 
   private assertAcceptingAgentRegistrations(): void {
@@ -7631,6 +7654,8 @@ export class AgentManager {
     this.agentStreamCoalescer.flushAndDiscard(agent.id);
     await this.drainTimelineWrites(agent.id);
     this.agents.delete(agent.id);
+    this.timelineJournalPins.get(agent.id)?.();
+    this.timelineJournalPins.delete(agent.id);
     this.previousStatuses.delete(agent.id);
     if (agent.unsubscribeSession) {
       agent.unsubscribeSession();

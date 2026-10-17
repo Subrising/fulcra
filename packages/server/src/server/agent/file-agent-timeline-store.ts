@@ -3,6 +3,17 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
+import pino, { type Logger } from "pino";
+import {
+  historyLoadBudget,
+  interactiveHistoryBudget,
+  journalHistoryCache,
+  JournalHistoryCache,
+  logHistoryLoad,
+  readHistoryLines,
+  type HistoryLine,
+} from "./history-load.js";
+import { TimelineProjection } from "./timeline-projection.js";
 import { AgentTimelineItemPayloadSchema } from "@getpaseo/protocol/messages";
 import { InMemoryAgentTimelineStore } from "./agent-timeline-store.js";
 import type { AgentTimelineItem } from "./agent-sdk-types.js";
@@ -85,9 +96,26 @@ interface Segment {
   size: number;
   inode: number;
 }
+interface RowLocation {
+  segment: number;
+  offset: number;
+  bytes: number;
+  index: number;
+}
+class TimelineJournalIntegrityError extends Error {}
+
+interface JournalRow {
+  order: number;
+  row: AgentTimelineRow;
+  location: RowLocation;
+  cacheBytes: number;
+}
 interface Journal {
+  owner: FileAgentTimelineStore;
+  directory: string;
   epoch: string;
-  rows: Map<number, AgentTimelineRow>;
+  rows: Map<number, JournalRow>;
+  cacheBytes: number;
   memory: InMemoryAgentTimelineStore;
   /** In order; appends go to the last one. */
   segments: Segment[];
@@ -104,6 +132,7 @@ const INDEX_WRITE_DELAY_MS = 500;
  * crash there; production passes no hook.
  */
 export type FileAgentTimelineStep =
+  | "history-segment-opened"
   | "segment-temp-created"
   | "segment-header-written"
   | "segment-synced"
@@ -120,6 +149,8 @@ export type FileAgentTimelineStep =
 export interface FileAgentTimelineStoreOptions {
   /** A segment that would grow past this rolls over to `<hash>.<n>.jsonl`. */
   segmentMaxBytes?: number;
+  logger?: Logger;
+  historyCache?: JournalHistoryCache;
   /** Retained history is read, never created. */
   createIfMissing?: boolean;
   /** Test seam: called after each step; throwing models a crash at that point. */
@@ -174,6 +205,7 @@ async function writeFileDurably(file: string, content: string): Promise<void> {
 /** One daemon owns a home. Writes commit before the manager publishes a timeline row. */
 export class FileAgentTimelineStore implements AgentTimelineStore {
   private readonly journals = new Map<string, Journal>();
+  private readonly pins = new Map<string, number>();
   private readonly faults = new Map<string, unknown>();
   private readonly pending = new Map<string, Promise<unknown>>();
   private readonly cwds = new Map<string, string>();
@@ -182,12 +214,16 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
   /** Agents whose retention state has been checked since the last retention attempt. */
   private readonly reconciled = new Set<string>();
   private readonly segmentMaxBytes: number;
+  private readonly logger: Logger;
+  private readonly historyCache: JournalHistoryCache;
   private readonly createIfMissing: boolean;
   private readonly onStep?: FileAgentTimelineStoreOptions["onStep"];
   constructor(
     private readonly directory: string,
     options?: FileAgentTimelineStoreOptions,
   ) {
+    this.historyCache = options?.historyCache ?? journalHistoryCache;
+    this.logger = options?.logger ?? pino({ level: "silent" });
     this.segmentMaxBytes = options?.segmentMaxBytes ?? DEFAULT_SEGMENT_MAX_BYTES;
     this.createIfMissing = options?.createIfMissing ?? true;
     this.onStep = options?.onStep;
@@ -232,7 +268,8 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
     await this.reconcileRetention(id);
     if (!(await this.pendingDelete(id))) return this.load(id);
     const store = await this.openRetainedStore(id);
-    if (!store) throw new Error("Timeline retention lost its retained copy");
+    if (!store)
+      throw new TimelineJournalIntegrityError("Timeline retention lost its retained copy");
     return store.load(id);
   }
   private intentFile(id: string): string {
@@ -271,6 +308,7 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
     this.pending.set(id, settled);
     void settled.then(() => {
       if (this.pending.get(id) === settled) this.pending.delete(id);
+      this.historyCache.trim();
       return undefined;
     });
     return task;
@@ -311,32 +349,67 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
     await syncDirectory(this.directory);
     return fsp.lstat(final);
   }
-  private async readSegment(id: string, number: number): Promise<{ text: string; stat: fs.Stats }> {
-    const fileHandle = await fsp.open(
-      this.file(id, number),
+  private async openSegment(
+    id: string,
+    number: number,
+    directory = this.directory,
+  ): Promise<{ handle: fsp.FileHandle; stat: fs.Stats }> {
+    const handle = await fsp.open(
+      path.join(directory, this.segmentName(id, number)),
       fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
     );
     try {
-      const stat = await fileHandle.stat();
+      const stat = await handle.stat();
       if (
         !stat.isFile() ||
         stat.nlink !== 1 ||
         stat.size > Math.max(this.segmentMaxBytes, DEFAULT_SEGMENT_MAX_BYTES)
       )
-        throw new Error("Invalid timeline journal");
-      return { text: await fileHandle.readFile("utf8"), stat };
-    } finally {
-      await fileHandle.close();
+        throw new TimelineJournalIntegrityError("Invalid timeline journal");
+      await this.step("history-segment-opened");
+      return { handle, stat };
+    } catch (error) {
+      await handle.close();
+      throw error;
     }
   }
-  private async load(id: string): Promise<Journal> {
+  private remember(id: string, journal: Journal): void {
+    this.journals.set(id, journal);
+    this.historyCache.set(journal, {
+      bytes: journal.cacheBytes,
+      busy: () => this.pending.has(id) || this.indexTimers.has(id) || this.pins.has(id),
+      evict: () => {
+        if (this.journals.get(id) === journal) this.journals.delete(id);
+      },
+    });
+  }
+  private forget(id: string): void {
+    const journal = this.journals.get(id);
+    if (journal) this.historyCache.delete(journal);
+    this.journals.delete(id);
+  }
+  private async load(id: string, interactive = false): Promise<Journal> {
     if (this.faults.has(id)) throw this.faults.get(id);
     const cached = this.journals.get(id);
-    if (cached) return cached;
+    if (cached) {
+      this.historyCache.touch(cached);
+      return cached;
+    }
     // Never mint a new epoch over a pending delete: that is how an empty journal replaced the history.
     await this.reconcileRetention(id);
     if (await this.pendingDelete(id)) throw new Error(PENDING_DELETE_MESSAGE);
+    const replayBytes = (
+      await Promise.all(
+        (
+          await this.segmentNumbers(id)
+        ).map(async (number) => (await fsp.lstat(this.file(id, number))).size),
+      )
+    ).reduce((sum, bytes) => sum + bytes, 0);
+    const budget =
+      interactive || replayBytes <= 1024 * 1024 ? interactiveHistoryBudget : historyLoadBudget;
+    const release = await budget.acquire(replayBytes);
     try {
+      logHistoryLoad(this.logger, "start", "journal", replayBytes);
       await this.removeUnpublishedSegments(id);
       if (this.createIfMissing) {
         await fsp.mkdir(this.directory, { recursive: true, mode: 0o700 });
@@ -348,36 +421,63 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
       if (numbers[0] === 0 && numbers.length > 1 && (await this.setAsideReseededTail(id, numbers)))
         numbers.splice(1);
       numbers.forEach((number, position) => {
-        if (number !== position) throw new Error("Timeline journal segment missing");
+        if (number !== position)
+          throw new TimelineJournalIntegrityError("Timeline journal segment missing");
       });
       let journal: Journal | undefined;
-      for (const number of numbers) {
-        const { text, stat } = await this.readSegment(id, number);
-        if (!text.endsWith("\n"))
-          throw new Error("Incomplete timeline journal; retain for recovery");
-        const lines = text.trimEnd().split("\n"),
-          header = Header.parse(JSON.parse(lines.shift()!));
-        if (header.agentId !== id || (journal && header.epoch !== journal.epoch))
-          throw new Error("Timeline journal identity changed");
-        if (!journal) {
-          journal = {
-            epoch: header.epoch,
-            rows: new Map(),
-            memory: new InMemoryAgentTimelineStore(),
-            segments: [],
-            index: new TimelineIndexBuilder(this.cwds.get(id) ?? null),
-          };
-          journal.memory.initialize(id, { epoch: header.epoch });
-        }
-        journal.segments.push({ number, size: stat.size, inode: stat.ino });
-        for (const line of lines) this.apply(id, journal, Record.parse(JSON.parse(line)));
-      }
-      if (!journal) throw new Error("Timeline journal segment missing");
-      this.journals.set(id, journal);
+      for (const number of numbers) journal = await this.replaySegment(id, number, journal);
+      if (!journal) throw new TimelineJournalIntegrityError("Timeline journal segment missing");
+      this.remember(id, journal);
+      logHistoryLoad(this.logger, "end", "journal", replayBytes);
       return journal;
     } catch (error) {
-      this.faults.set(id, error);
+      logHistoryLoad(this.logger, "error", "journal", replayBytes);
+      if (isJournalIntegrityError(error)) this.faults.set(id, error);
       throw error;
+    } finally {
+      release();
+    }
+  }
+  private async replaySegment(id: string, number: number, journal?: Journal): Promise<Journal> {
+    const { handle, stat } = await this.openSegment(id, number);
+    try {
+      let first = true;
+      let trailingWhitespace = false;
+      for await (const line of readHistoryLines(handle)) {
+        if (first) {
+          first = false;
+          const header = Header.parse(JSON.parse(line.text));
+          if (header.agentId !== id || (journal && header.epoch !== journal.epoch))
+            throw new TimelineJournalIntegrityError("Timeline journal identity changed");
+          if (!journal) {
+            journal = {
+              owner: this,
+              directory: this.directory,
+              epoch: header.epoch,
+              rows: new Map(),
+              cacheBytes: 4096,
+              memory: new InMemoryAgentTimelineStore(),
+              segments: [],
+              index: new TimelineIndexBuilder(this.cwds.get(id) ?? null),
+            };
+            journal.memory.initialize(id, { epoch: header.epoch });
+          }
+          journal.segments.push({ number, size: stat.size, inode: stat.ino });
+        } else {
+          if (!line.text.trim()) {
+            trailingWhitespace = true;
+            continue;
+          }
+          if (trailingWhitespace)
+            throw new TimelineJournalIntegrityError("Invalid timeline journal");
+          this.apply(id, journal!, Record.parse(JSON.parse(line.text)), number, line);
+        }
+      }
+      if (first)
+        throw new TimelineJournalIntegrityError("Incomplete timeline journal; retain for recovery");
+      return journal!;
+    } finally {
+      await handle.close();
     }
   }
   /**
@@ -416,30 +516,223 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
     await syncDirectory(this.directory);
     return true;
   }
-  private apply(id: string, journal: Journal, record: z.infer<typeof Record>): void {
+  private apply(
+    id: string,
+    journal: Journal,
+    record: z.infer<typeof Record>,
+    segment: number,
+    line: Pick<HistoryLine, "offset" | "bytes">,
+  ): void {
     this.validate(id, journal, record);
-    if (record.op === "append") {
-      for (const row of record.rows) {
-        journal.rows.set(row.seq, row);
-        if (!("seqStart" in row) && row.seq === journal.memory.getNextSeq(id))
+    const rows = record.op === "append" ? record.rows : [record.row];
+    let rebuildProjection = false;
+    for (const [index, source] of rows.entries()) {
+      const previous = journal.rows.get(source.seq);
+      const row = compactJournalRow(source);
+      const location = { segment, offset: line.offset, bytes: line.bytes, index };
+      const order = previous?.order ?? journal.rows.size;
+      // Calibrated against retained heap for 50,000 small rows, including projection and turn indexes.
+      const cacheBytes = 6 * Buffer.byteLength(JSON.stringify({ row, location, order })) + 256;
+      journal.cacheBytes += cacheBytes - (previous?.cacheBytes ?? 0);
+      journal.rows.set(row.seq, { row, location, order, cacheBytes });
+      if (record.op === "append") {
+        if (!rebuildProjection && !("seqStart" in row) && row.seq === journal.memory.getNextSeq(id))
           journal.memory.append(id, row.item, row);
-        else
-          journal.memory.initialize(id, { epoch: journal.epoch, rows: [...journal.rows.values()] });
-        journal.index.add(row);
+        else rebuildProjection = true;
+        journal.index.add(source);
+      } else {
+        journal.memory.initialize(id, {
+          epoch: journal.epoch,
+          rows: [...journal.rows.values()].map((entry) => entry.row),
+        });
+        if (
+          previous?.row.turnId !== row.turnId ||
+          previous?.row.timestamp !== row.timestamp ||
+          previous?.row.item.type !== row.item.type ||
+          row.item.type === "tool_call"
+        )
+          journal.index = TimelineIndexBuilder.fromRows(
+            [...journal.rows.values()].map((entry) => entry.row),
+            journal.index.cwd,
+          );
       }
-    } else {
-      const previous = journal.rows.get(record.row.seq);
-      journal.rows.set(record.row.seq, record.row);
-      journal.memory.initialize(id, { epoch: journal.epoch, rows: [...journal.rows.values()] });
-      // Prompt enrichment is the common update and leaves the index alone.
-      if (
-        previous?.turnId !== record.row.turnId ||
-        previous?.timestamp !== record.row.timestamp ||
-        previous?.item.type !== record.row.item.type ||
-        record.row.item.type === "tool_call"
-      )
-        journal.index = TimelineIndexBuilder.fromRows(journal.rows.values(), journal.index.cwd);
     }
+    if (rebuildProjection)
+      journal.memory.initialize(id, {
+        epoch: journal.epoch,
+        rows: [...journal.rows.values()].map((entry) => entry.row),
+      });
+  }
+  /** Reads only records that contribute to the requested projected page. */
+  private async materialize(
+    id: string,
+    journal: Journal,
+    selected: JournalRow[],
+    purpose: "page" | "full" = "page",
+  ): Promise<AgentTimelineRow[]> {
+    if (selected.length === 0) return [];
+    const groups = new Map<string, JournalRow[]>();
+    for (const entry of selected) {
+      const key = `${entry.location.segment}:${entry.location.offset}`;
+      const group = groups.get(key) ?? [];
+      group.push(entry);
+      groups.set(key, group);
+    }
+    const records = [...groups.values()].sort(
+      (left, right) =>
+        left[0]!.location.segment - right[0]!.location.segment ||
+        left[0]!.location.offset - right[0]!.location.offset,
+    );
+    const replayBytes = records.reduce((sum, entries) => sum + entries[0]!.location.bytes, 0);
+    const interactivePage = purpose === "page" && replayBytes <= 16 * 1024 * 1024;
+    const budget = interactivePage ? interactiveHistoryBudget : historyLoadBudget;
+    const release = await budget.acquire(replayBytes);
+    const level = replayBytes <= 1024 * 1024 ? "debug" : "info";
+    const handles = new Map<number, fsp.FileHandle>();
+    try {
+      logHistoryLoad(this.logger, "start", "journal", replayBytes, level);
+      const output = new Map<number, AgentTimelineRow>();
+      if (selected.length === journal.rows.size) {
+        await this.streamRows(id, journal, groups, output);
+      } else {
+        await this.readPageRecords(id, journal, records, handles, output);
+      }
+      logHistoryLoad(this.logger, "end", "journal", replayBytes, level);
+      return selected.map((entry) => {
+        const row = output.get(entry.row.seq);
+        if (!row) throw new TimelineJournalIntegrityError("Timeline journal changed");
+        return row;
+      });
+    } catch (error) {
+      if (isJournalIntegrityError(error)) journal.owner.faults.set(id, error);
+      logHistoryLoad(this.logger, "error", "journal", replayBytes, level);
+      throw error;
+    } finally {
+      try {
+        await Promise.all([...handles.values()].map((handle) => handle.close()));
+      } finally {
+        release();
+      }
+    }
+  }
+  private async checkedHandle(
+    id: string,
+    journal: Journal,
+    number: number,
+  ): Promise<fsp.FileHandle> {
+    const { handle, stat } = await this.openSegment(id, number, journal.directory);
+    const segment = journal.segments[number]!;
+    if (stat.ino === segment.inode && stat.size === segment.size) return handle;
+    await handle.close();
+    throw new TimelineJournalIntegrityError("Timeline journal changed");
+  }
+  private async streamRows(
+    id: string,
+    journal: Journal,
+    groups: Map<string, JournalRow[]>,
+    output: Map<number, AgentTimelineRow>,
+  ): Promise<void> {
+    for (const segment of journal.segments) {
+      const handle = await this.checkedHandle(id, journal, segment.number);
+      try {
+        for await (const line of readHistoryLines(handle)) {
+          const entries = groups.get(`${segment.number}:${line.offset}`);
+          if (entries) this.collectRecord(line.text, entries, output);
+        }
+      } finally {
+        await handle.close();
+      }
+    }
+  }
+  private async readPageRecords(
+    id: string,
+    journal: Journal,
+    records: JournalRow[][],
+    handles: Map<number, fsp.FileHandle>,
+    output: Map<number, AgentTimelineRow>,
+  ): Promise<void> {
+    for (let index = 0; index < records.length; ) {
+      const first = records[index]![0]!.location;
+      let end = first.offset + first.bytes;
+      let next = index + 1;
+      while (next < records.length) {
+        const location = records[next]![0]!.location;
+        if (
+          location.segment !== first.segment ||
+          location.offset !== end ||
+          end + location.bytes - first.offset > 1024 * 1024
+        )
+          break;
+        end += location.bytes;
+        next++;
+      }
+      let handle = handles.get(first.segment);
+      if (!handle) {
+        handle = await this.checkedHandle(id, journal, first.segment);
+        handles.set(first.segment, handle);
+      }
+      const buffer = await readJournalRange(handle, first.offset, end - first.offset);
+      for (; index < next; index++) {
+        const entries = records[index]!;
+        const location = entries[0]!.location;
+        this.collectRecord(
+          buffer.toString(
+            "utf8",
+            location.offset - first.offset,
+            location.offset - first.offset + location.bytes,
+          ),
+          entries,
+          output,
+        );
+      }
+    }
+  }
+  private collectRecord(
+    text: string,
+    entries: JournalRow[],
+    output: Map<number, AgentTimelineRow>,
+  ): void {
+    const record = Record.parse(JSON.parse(text));
+    for (const entry of entries) {
+      const row = record.op === "append" ? record.rows[entry.location.index] : record.row;
+      if (!row || row.seq !== entry.row.seq)
+        throw new TimelineJournalIntegrityError("Timeline journal changed");
+      output.set(row.seq, row);
+    }
+  }
+  private rowsForRanges(
+    journal: Journal,
+    ranges: Array<{ startSeq: number; endSeq: number }>,
+  ): JournalRow[] {
+    const merged: Array<{ startSeq: number; endSeq: number }> = [];
+    for (const range of [...ranges].sort((a, b) => a.startSeq - b.startSeq)) {
+      const last = merged.at(-1);
+      if (last && range.startSeq <= last.endSeq + 1)
+        last.endSeq = Math.max(last.endSeq, range.endSeq);
+      else merged.push({ ...range });
+    }
+    const span = merged.reduce((sum, range) => sum + range.endSeq - range.startSeq + 1, 0);
+    if (span > journal.rows.size * 2)
+      return [...journal.rows.values()].filter(({ row }) => containsJournalSeq(merged, row.seq));
+    const selected: JournalRow[] = [];
+    for (const range of merged)
+      for (let seq = range.startSeq; seq <= range.endSeq; seq++) {
+        const entry = journal.rows.get(seq);
+        if (entry) selected.push(entry);
+      }
+    return selected.sort((left, right) => left.order - right.order);
+  }
+  private async fetchPage(
+    id: string,
+    journal: Journal,
+    options?: AgentTimelineFetchOptions,
+  ): Promise<AgentTimelineFetchResult> {
+    const page = journal.memory.fetch(id, options);
+    const ranges = page.rows.flatMap((row) => row.sourceSeqRanges);
+    const selected = this.rowsForRanges(journal, ranges);
+    const projection = new TimelineProjection();
+    for (const row of await this.materialize(id, journal, selected)) projection.append(row);
+    return { ...page, rows: projection.getRows() };
   }
   private validate(id: string, journal: Journal, record: z.infer<typeof Record>): void {
     const maximum = journal.memory.getNextSeq(id) - 1;
@@ -447,11 +740,11 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
       const seen = new Set<number>();
       for (const row of record.rows) {
         if (row.seq <= maximum || seen.has(row.seq))
-          throw new Error("Timeline sequence must advance");
+          throw new TimelineJournalIntegrityError("Timeline sequence must advance");
         seen.add(row.seq);
       }
     } else if (!journal.rows.has(record.row.seq))
-      throw new Error("Timeline update has no original row");
+      throw new TimelineJournalIntegrityError("Timeline update has no original row");
   }
   /**
    * Flips the first segment's header from version 1 to 2 in place (same length, one byte) before
@@ -462,12 +755,12 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
     try {
       const stat = await handle.stat();
       if (stat.ino !== segment.inode || stat.size !== segment.size)
-        throw new Error("Timeline journal changed");
+        throw new TimelineJournalIntegrityError("Timeline journal changed");
       const prefix = Buffer.alloc(12);
       await handle.read(prefix, 0, prefix.length, 0);
       if (prefix.toString("utf8") === `{"version":${ROLLED_HEADER_VERSION}`) return;
       if (prefix.toString("utf8") !== '{"version":1')
-        throw new Error("Unexpected timeline journal header");
+        throw new TimelineJournalIntegrityError("Unexpected timeline journal header");
       await handle.write(Buffer.from(String(ROLLED_HEADER_VERSION)), 0, 1, 11);
       await handle.sync();
     } finally {
@@ -479,13 +772,13 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
     if (previous.number === 0) await this.markRolled(id, previous);
     const number = previous.number + 1;
     const stat = await this.createSegment(id, number, journal.epoch, ROLLED_HEADER_VERSION);
-    if (!stat) throw new Error("Timeline journal changed");
+    if (!stat) throw new TimelineJournalIntegrityError("Timeline journal changed");
     const segment = { number, size: stat.size, inode: stat.ino };
     journal.segments.push(segment);
     return segment;
   }
   private async commit(id: string, value: unknown): Promise<void> {
-    const journal = await this.load(id),
+    const journal = await this.load(id, true),
       record = Record.parse(value);
     this.validate(id, journal, record);
     const bytes = Buffer.from(JSON.stringify(record) + "\n");
@@ -495,7 +788,7 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
     );
     // Refused before any write, so the journal stays usable.
     if (headerBytes + bytes.length > this.segmentMaxBytes)
-      throw new Error("Timeline record exceeds the segment size limit");
+      throw new TimelineJournalIntegrityError("Timeline record exceeds the segment size limit");
     try {
       if (segment.size + bytes.length > this.segmentMaxBytes)
         segment = await this.rotate(id, journal, segment);
@@ -514,14 +807,16 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
           stat.ino !== segment.inode ||
           stat.size !== segment.size
         )
-          throw new Error("Timeline journal changed");
+          throw new TimelineJournalIntegrityError("Timeline journal changed");
         await fd.writeFile(bytes);
         await fd.sync();
       } finally {
         await fd.close();
       }
+      const offset = segment.size;
       segment.size += bytes.length;
-      this.apply(id, journal, record);
+      this.apply(id, journal, record, segment.number, { offset, bytes: bytes.length });
+      this.remember(id, journal);
       this.scheduleIndexWrite(id);
     } catch (error) {
       this.faults.set(id, error);
@@ -607,7 +902,8 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
       return;
     }
     const intent = RetentionIntent.parse(JSON.parse(text));
-    if (intent.agentId !== id) throw new Error("Timeline retention intent identity changed");
+    if (intent.agentId !== id)
+      throw new TimelineJournalIntegrityError("Timeline retention intent identity changed");
     await this.completeRetention(id, intent);
     this.reconciled.add(id);
   }
@@ -633,7 +929,8 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
       const staged = path.join(staging, this.segmentName(id, number));
       if (await exists(staged)) continue;
       const live = this.file(id, number);
-      if (!(await exists(live))) throw new Error("Timeline retention lost a journal segment");
+      if (!(await exists(live)))
+        throw new TimelineJournalIntegrityError("Timeline retention lost a journal segment");
       await fsp.rename(live, staged);
       await this.step(`retention-segment-staged-${number}`);
     }
@@ -692,13 +989,38 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
     const store = new FileAgentTimelineStore(this.retainedDirectory(id), {
       segmentMaxBytes: this.segmentMaxBytes,
       createIfMissing: false,
+      logger: this.logger,
+      historyCache: this.historyCache,
     });
     if (!(await store.hasJournal(id))) return null;
     // Placement comes from durable metadata; the index sidecar is only a cache of it.
     const cwd = (await this.readRetainedMetadata(id))?.placement.cwd;
     if (cwd) await store.setIndexCwd(id, cwd);
     this.retainedStores.set(id, store);
+    for (const [previousId, previous] of this.retainedStores) {
+      if (this.retainedStores.size <= 64) break;
+      if (previous.pending.size || previous.indexTimers.size) continue;
+      for (const journalId of previous.journals.keys()) previous.forget(journalId);
+      this.retainedStores.delete(previousId);
+    }
     return store;
+  }
+  pinAgent(id: string): () => void {
+    this.pins.set(id, (this.pins.get(id) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const count = this.pins.get(id)! - 1;
+      if (count) this.pins.set(id, count);
+      else this.pins.delete(id);
+      this.historyCache.trim();
+    };
+  }
+  private forgetRetainedStore(id: string): void {
+    const store = this.retainedStores.get(id);
+    if (store) for (const journalId of store.journals.keys()) store.forget(journalId);
+    this.retainedStores.delete(id);
   }
   appendCommitted(
     id: string,
@@ -708,7 +1030,7 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
     const input = structuredClone({ item, options });
     return this.serialize(id, async () => {
       const row = {
-        seq: (await this.load(id)).memory.getNextSeq(id),
+        seq: (await this.load(id, true)).memory.getNextSeq(id),
         timestamp: input.options?.timestamp ?? new Date().toISOString(),
         item: input.item,
         ...(input.options?.turnId ? { turnId: input.options.turnId } : {}),
@@ -718,7 +1040,7 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
     });
   }
   fetchCommitted(id: string, options?: AgentTimelineFetchOptions) {
-    return this.serialize(id, async () => (await this.readable(id)).memory.fetch(id, options));
+    return this.serialize(id, async () => this.fetchPage(id, await this.readable(id), options));
   }
   fetchExistingCommitted(id: string, options?: AgentTimelineFetchOptions) {
     return this.serialize(id, async () => {
@@ -726,7 +1048,7 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
       // A failed delete keeps the registry record while its history is retained.
       // Read that copy without creating a new live journal or releasing the write fence.
       if (!(await this.pendingDelete(id)) && !(await this.hasJournal(id))) return null;
-      return (await this.readable(id)).memory.fetch(id, options);
+      return this.fetchPage(id, await this.readable(id), options);
     });
   }
   getLatestCommittedSeq(id: string) {
@@ -734,16 +1056,31 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
   }
   getCommittedRows(id: string) {
     return this.serialize(id, async () =>
-      structuredClone([...(await this.readable(id)).rows.values()]),
+      this.readable(id).then((journal) =>
+        this.materialize(id, journal, [...journal.rows.values()], "full"),
+      ),
     );
   }
   getLastItem(id: string) {
-    return this.serialize(id, async () => (await this.readable(id)).memory.getLastItem(id));
+    return this.serialize(id, async () => {
+      const journal = await this.readable(id);
+      const page = await this.fetchPage(id, journal, { limit: 1 });
+      return page.rows.find((row) => row.seqEnd === page.window.maxSeq)?.item ?? null;
+    });
   }
   getLastAssistantMessage(id: string) {
-    return this.serialize(id, async () =>
-      (await this.readable(id)).memory.getLastAssistantMessage(id),
-    );
+    return this.serialize(id, async () => {
+      const journal = await this.readable(id);
+      const last = journal.memory
+        .getRows(id)
+        .findLast((row) => row.item.type === "assistant_message");
+      if (!last) return null;
+      const selected = this.rowsForRanges(journal, last.sourceSeqRanges);
+      const projection = new TimelineProjection();
+      for (const row of await this.materialize(id, journal, selected)) projection.append(row);
+      const item = projection.getRows().at(-1)?.item;
+      return item?.type === "assistant_message" ? item.text : null;
+    });
   }
   /** Removes the live journal and its index. Retained history is untouched; see `purgeAgent`. */
   deleteAgent(id: string): Promise<void> {
@@ -754,7 +1091,7 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
       for (const number of (await this.segmentNumbers(id)).toReversed())
         await fsp.rm(this.file(id, number), { force: true });
       await fsp.rm(this.indexFile(id), { force: true });
-      this.journals.delete(id);
+      this.forget(id);
       this.faults.delete(id);
     });
   }
@@ -777,9 +1114,9 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
         this.reconciled.add(id);
         return;
       }
-      this.journals.delete(id);
+      this.forget(id);
       this.faults.delete(id);
-      this.retainedStores.delete(id);
+      this.forgetRetainedStore(id);
       if (numbers.length > 0) {
         await fsp.mkdir(this.retainedRoot(), { recursive: true, mode: 0o700 });
         await syncDirectory(this.directory);
@@ -846,9 +1183,9 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
       for (const number of numbers.toReversed())
         await fsp.rm(this.file(id, number), { force: true });
       await fsp.rm(this.indexFile(id), { force: true });
-      this.journals.delete(id);
+      this.forget(id);
       this.faults.delete(id);
-      this.retainedStores.delete(id);
+      this.forgetRetainedStore(id);
       await fsp.rm(this.pendingFile(id), { force: true });
       const hash = this.hash(id);
       const retained = (await this.listDirectory(this.retainedRoot())).filter(
@@ -866,7 +1203,10 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
       this.cwds.set(id, cwd);
       const journal = this.journals.get(id);
       if (journal && journal.index.cwd !== cwd) {
-        journal.index = TimelineIndexBuilder.fromRows(journal.rows.values(), cwd);
+        journal.index = TimelineIndexBuilder.fromRows(
+          [...journal.rows.values()].map((entry) => entry.row),
+          cwd,
+        );
         this.scheduleIndexWrite(id);
       }
     });
@@ -926,4 +1266,128 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
     const input = structuredClone(row);
     return this.serialize(id, () => this.commit(id, { op: "update", row: input }));
   }
+}
+
+/** Payloads stay on disk. These fields alone determine projection grouping and turn/file indexes. */
+function compactJournalRow(row: AgentTimelineRow): AgentTimelineRow {
+  const item = row.item;
+  let compact: AgentTimelineItem;
+  switch (item.type) {
+    case "assistant_message":
+      compact = {
+        type: item.type,
+        text: "",
+        ...(item.messageId !== undefined ? { messageId: item.messageId } : {}),
+      };
+      break;
+    case "reasoning":
+      compact = { type: item.type, text: "" };
+      break;
+    case "user_message":
+      compact = { type: item.type, text: "" };
+      break;
+    case "tool_call": {
+      let detail: Extract<AgentTimelineItem, { type: "tool_call" }>["detail"] = {
+        type: "unknown",
+        input: null,
+        output: null,
+      };
+      switch (item.detail.type) {
+        case "shell":
+          detail = { type: "shell", command: "" };
+          break;
+        case "read":
+          detail = { type: "read", filePath: item.detail.filePath };
+          break;
+        case "write":
+          detail = { type: "write", filePath: item.detail.filePath };
+          break;
+        case "edit":
+          detail = {
+            type: "edit",
+            filePath: item.detail.filePath,
+            files: item.detail.files?.map(({ path: filePath, kind }) => ({ path: filePath, kind })),
+          };
+          break;
+        case "unknown":
+          detail = {
+            type: "unknown",
+            input: null,
+            output: null,
+            files: item.detail.files?.map(({ path: filePath, kind }) => ({ path: filePath, kind })),
+          };
+          break;
+      }
+      compact = {
+        type: item.type,
+        callId: item.callId,
+        name: "",
+        status: "running",
+        error: null,
+        detail,
+      };
+      break;
+    }
+    case "plugin":
+      compact = {
+        type: item.type,
+        pluginId: item.pluginId,
+        id: item.id,
+        kind: item.kind,
+        version: item.version,
+        data: null,
+      };
+      break;
+    case "todo":
+      compact = { type: item.type, items: [] };
+      break;
+    case "error":
+      compact = { type: item.type, message: "" };
+      break;
+    case "notification":
+      compact = { type: item.type, level: item.level, message: "" };
+      break;
+    case "compaction":
+      compact = { type: item.type, status: item.status };
+      break;
+  }
+  return { ...row, item: compact };
+}
+
+async function readJournalRange(
+  handle: fsp.FileHandle,
+  offset: number,
+  bytes: number,
+): Promise<Buffer> {
+  const buffer = Buffer.alloc(bytes);
+  let position = 0;
+  while (position < bytes) {
+    const result = await handle.read(buffer, position, bytes - position, offset + position);
+    if (result.bytesRead === 0) throw new TimelineJournalIntegrityError("Timeline journal changed");
+    position += result.bytesRead;
+  }
+  return buffer;
+}
+function containsJournalSeq(
+  ranges: Array<{ startSeq: number; endSeq: number }>,
+  seq: number,
+): boolean {
+  let low = 0,
+    high = ranges.length - 1;
+  while (low <= high) {
+    const middle = (low + high) >>> 1;
+    const range = ranges[middle]!;
+    if (seq < range.startSeq) high = middle - 1;
+    else if (seq > range.endSeq) low = middle + 1;
+    else return true;
+  }
+  return false;
+}
+
+function isJournalIntegrityError(error: unknown): boolean {
+  return (
+    error instanceof TimelineJournalIntegrityError ||
+    error instanceof SyntaxError ||
+    error instanceof z.ZodError
+  );
 }

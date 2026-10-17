@@ -206,6 +206,16 @@ describe("ClaudeAgentSession persisted subagent replay", () => {
     }
   }
 
+  test("a parent conversion failure preserves child replay without publishing a partial parent", async () => {
+    writeSession({
+      parentLines: [taskToolUse(), JSON.stringify({ type: "assistant", message: 3 })],
+      meta: JSON.stringify({ toolUseId: TOOL_USE_ID }),
+    });
+    const events = await replayEvents();
+    expect(events.filter((event) => event.type === "timeline")).toEqual([]);
+    expect(events.some((event) => event.type === "provider_subagent")).toBe(true);
+  });
+
   function workflowNotificationContent(): string {
     return [
       "<task-notification>",
@@ -233,6 +243,7 @@ describe("ClaudeAgentSession persisted subagent replay", () => {
       events.push(event);
     }
     await session.close();
+    expect(events).toMatchSnapshot();
     return events;
   }
 

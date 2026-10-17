@@ -558,11 +558,12 @@ export interface PaseoDaemonDependencies {
 function createTimelineStore(
   config: PaseoDaemonConfig,
   dependencies: PaseoDaemonDependencies,
+  logger: Logger,
 ): FileAgentTimelineStore {
-  return new FileAgentTimelineStore(
-    path.join(config.paseoHome, "native-timeline-journal"),
-    dependencies.timelineStoreStep ? { onStep: dependencies.timelineStoreStep } : {},
-  );
+  return new FileAgentTimelineStore(path.join(config.paseoHome, "native-timeline-journal"), {
+    logger,
+    ...(dependencies.timelineStoreStep ? { onStep: dependencies.timelineStoreStep } : {}),
+  });
 }
 
 /**
@@ -1143,7 +1144,7 @@ export async function createPaseoDaemon(
     if (git) configureGitProcessPolicy(git);
   });
   const initialAgentManagerState = providerSnapshotManager.getAgentManagerProviderState();
-  const durableTimelineStore = createTimelineStore(config, dependencies);
+  const durableTimelineStore = createTimelineStore(config, dependencies, logger);
   // A retention interrupted by a crash is finished before any agent reads its history.
   await finishTimelineRetention(durableTimelineStore, agentStorage, logger);
   const agentManager = new AgentManager({

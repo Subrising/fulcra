@@ -33,6 +33,27 @@ working directory, and rebuilds from the journal whenever they differ, so deleti
 nothing. The working directory itself comes from the agent record, or from `retained.json` once the
 agent is deleted, never from the cache.
 
+History loading reads JSONL one record at a time. The journal cache keeps byte locations and
+compact projection and file-index facts. Page reads load only contributing records from disk.
+The original journal remains authoritative. Active sessions can still keep their displayed timeline.
+
+The process shares a 128 MiB input allowance across full transcript and journal replays.
+A separate 16 MiB allowance serves commits and page reads up to 16 MiB. Large inputs use one lane alone.
+These allowances bound concurrent parsing work. Converted provider history remains until its session consumes it.
+Concurrent identical Claude resumes share parsed data. Each caller keeps its own mutable session.
+Closing a caller abandons its load. Closing the last caller also cancels a queued or active read.
+
+Live agents pin journal metadata until their runtime closes. Pending operations and index writes also pin it.
+Unused journal metadata has a shared 128 MiB cache allowance. Eviction removes memory, never a history file.
+Closing a durable runtime also releases its duplicate parent timeline. Closed pages read the journal.
+An unused index larger than that allowance is rebuilt on its next access. Active timeline payloads still need memory.
+The cache charge includes projection and turn-index overhead. A small-row calibration checks it against retained heap.
+
+Each full load logs `history.load` at info level with its source, boundary, input bytes, heap use, and heap limit.
+Small page materialisations use debug level. `journalCacheBytes` includes live pins and unused metadata charges.
+`pluginCacheBytes` counts retained client bundles, catalog snapshots, and log-tail payloads.
+These charges are separate from measured heap use.
+
 ## Segments
 
 A journal file that would grow past 256 MiB rolls over to the next segment: `<hash>.jsonl`, then
@@ -53,7 +74,7 @@ but unreadable on the older daemon. To roll back:
 
 1. Stop the daemon and copy `$PASEO_HOME/native-timeline-journal/` somewhere safe.
 2. Install the older version. Agents whose journals never rolled over work as before.
-3. To see rolled history again, reinstall this version or later; the journal is read in full.
+3. To see rolled history again, reinstall this version or later; all segments become available.
 
 Do not edit the header back to version 1 by hand. The older daemon would read only the first
 segment and could append sequence numbers the later segments already use.
@@ -65,8 +86,8 @@ leftover segments belong to the history that was replaced, so they are renamed t
 `<hash>.<n>.jsonl.orphaned-<time>` and kept, never read and never deleted. Remove them by hand once you no
 longer need them.
 
-Reads still load an agent's whole journal into memory the first time it is opened. Rotation removes
-the hard stop at 256 MiB; it does not make very large sessions cheap to open.
+Opening a journal streams its records to build compact indexes. Page reads then load the needed
+records. Rotation removes the hard stop at 256 MiB. An individual large record can still need substantial memory.
 
 ## Retention
 
