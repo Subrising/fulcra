@@ -1195,7 +1195,7 @@ test("send_agent_message leaves an archived agent archived when its directory is
   }
 }, 30000);
 
-test("refresh_agent auto-unarchives archived agents", async () => {
+test("refresh_agent refuses archived agents without changing archive state", async () => {
   const cwd = tmpCwd();
   try {
     const created = await ctx.client.createAgent({
@@ -1204,12 +1204,12 @@ test("refresh_agent auto-unarchives archived agents", async () => {
         cwd,
       },
     });
-    await ctx.client.archiveAgent(created.id);
-    await ctx.client.refreshAgent(created.id);
+    const archived = await ctx.client.archiveAgent(created.id);
+    await expect(ctx.client.refreshAgent(created.id)).rejects.toThrow(/archived/i);
 
     const refreshed = await ctx.client.fetchAgent({ agentId: created.id });
     expect(refreshed).not.toBeNull();
-    expect(refreshed?.agent.archivedAt).toBeNull();
+    expect(refreshed?.agent.archivedAt).toBe(archived.archivedAt);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
@@ -1263,7 +1263,7 @@ test("refresh_agent rejects when persisted session resume fails", async () => {
         cwd,
       },
     });
-    await localCtx.client.archiveAgent(created.id);
+    await localCtx.daemon.daemon.agentManager.closeAgent(created.id);
 
     await expect(localCtx.client.refreshAgent(created.id)).rejects.toMatchObject({
       name: "DaemonRpcError",

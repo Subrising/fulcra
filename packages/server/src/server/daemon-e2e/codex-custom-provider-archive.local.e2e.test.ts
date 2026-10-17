@@ -129,7 +129,7 @@ describe("Codex custom provider archive", () => {
     await client.archiveAgent(agent.id);
     expect(await importable()).toEqual([]);
 
-    await client.refreshAgent(agent.id);
+    await client.refreshAgent(agent.id, undefined, { restore: true });
     expect(await importable()).toHaveLength(1);
   }, 120_000);
 });

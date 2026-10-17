@@ -1,0 +1,338 @@
+--- a/ops/fu225-r4/candidate/fixture.mjs
++++ b/ops/fu225-r4/candidate/fixture.mjs
+@@ -80,7 +80,7 @@
+ const temp=fs.mkdtempSync(path.join(os.tmpdir(),'fu225-fixture-'));
+ try{
+  const scripts=path.join(temp,'scripts');fs.mkdirSync(scripts);
+- for(const name of ['errors.mjs','policy.mjs','host.mjs','monitor.mjs','monitor-worker.mjs'])fs.copyFileSync(path.join(src,name),path.join(scripts,name));
++ for(const name of ['archive-guard.mjs','errors.mjs','policy.mjs','host.mjs','monitor.mjs','monitor-worker.mjs'])fs.copyFileSync(path.join(src,name),path.join(scripts,name));
+  const fake=path.join(temp,'data');fs.mkdirSync(fake);
+  const mock=`
+ import fs from 'node:fs';import path from 'node:path';
+@@ -102,7 +102,7 @@
+  if(m==='organization.accounts.settings'){p.defaults.claude=i.defaultAccount.id;save(path.join(home,'pool.json'),p);return {ok:true};}
+  if(m==='organization.role-directory'){const c=read(path.join(home,'controls.json'),{});if(c.planFailOnce){c.planFailOnce=false;save(path.join(home,'controls.json'),c);return {available:false};}return {available:true};}
+  if(m==='organization.accounts.session')return {current:p.assignments[i.agentId]?.accountId,accounts:p.accounts};
+- if(m==='native:fetch_agent_request')return {agent:{id:i.agentId,provider:'claude',status:read(path.join(home,'controls.json'),{}).nativeBusy?'running':'idle',pendingPermissions:[],archivedAt:read(path.join(home,'controls.json'),{}).archivedDuringLoad?'2026-10-17T02:00:00Z':null,persistence:{sessionId:'saved-history-'+i.agentId}}};
++ if(m==='native:fetch_agent_request')return {agent:{id:i.agentId,provider:'claude',status:read(path.join(home,'controls.json'),{}).nativeBusy?'running':'idle',pendingPermissions:[],archivedAt:(read(path.join(home,'controls.json'),{}).archivedDuringLoad||read(path.join(home,'controls.json'),{}).nativeArchived)?'2026-10-17T02:00:00Z':null,persistence:{sessionId:'saved-history-'+i.agentId}}};
+  if(m==='native:agent.mcp.get_refresh_state.request')return {state:{provider:'claude',sessionId:'saved-history-'+i.agentId,configRevision:'fixture-cfg',lifecycle:read(path.join(home,'controls.json'),{}).dormant?'closed':'idle',supported:!read(path.join(home,'controls.json'),{}).dormant}};
+  if(m==='native:agent.mcp.refresh.request'){
+   const c=read(path.join(home,'controls.json'),{});
+@@ -337,5 +337,23 @@
+  check('new Work failure invalidates success across a no-ask tick',()=>{
+   setup(null);run('live-check','2026-10-17T05:00:10Z');write(path.join(fake,'ask.json'),{error:'NO_CREDENTIAL'});run('live-check','2026-10-17T05:01:00Z');run('','2026-10-17T05:01:30Z');const s=JSON.parse(fs.readFileSync(path.join(state,'monitor-state.json')));assert.equal(s.confirmation,null);assert(!s.workProof);
+  });
++ for(const nativeArchived of [false,true])check('archive filter before all session operations '+nativeArchived,()=>{
++  setup('ACCOUNT_LIMITED; Account Work is at its session limit until 2026-10-17T05:00:00Z');
++  const id='11111111-1111-4111-8111-111111111111';
++  const p=JSON.parse(fs.readFileSync(path.join(fake,'pool.json')));p.assignments[id]={accountId:'w'};write(path.join(fake,'pool.json'),p);
++  write(path.join(fake,'controls.json'),{nativeArchived,sessions:[{id,status:'idle',provider:'claude/haiku',...nativeArchived?{}:{archivedAt:'2026-01-01T00:00:00Z'}}]});
++  run();
++  let trace=JSON.parse(fs.readFileSync(path.join(fake,'trace.json')));
++  assert(!trace.some(a=>['organization.accounts.switch','organization.accounts.session','native:fetch_agent_timeline_request','native:agent.timeline.search.request','native:agent.mcp.refresh.request'].includes(a[0])));
++  assert.equal(JSON.parse(fs.readFileSync(path.join(fake,'pool.json'))).assignments[id].accountId,'w');
++  // A retained wait worker must stop before its wait and confirmation ask.
++  write(path.join(fake,'trace.json'),[]);
++  write(path.join(fake,'controls.json'),{nativeArchived:true});
++  fs.mkdirSync(path.join(state,'wait-'+id));
++  const r=spawnSync(process.execPath,[path.join(scripts,'monitor-worker.mjs'),process.argv[2]??'Fixture',id,'work-workspace-api'],{encoding:'utf8',timeout:10000,windowsHide:true});assert.equal(r.status,0,redact(r.stderr));
++  trace=JSON.parse(fs.readFileSync(path.join(fake,'trace.json')));
++  assert(!trace.some(a=>['wait','ask','organization.accounts.switch'].includes(a[0])));
++ });
++ check('monitor no adverse signal',()=>{setup(null);const r=run();assert.equal(r.signal,'no adverse signal');assert.equal(r.target,null);assert.equal(r.confirmation,null);const t=JSON.parse(fs.readFileSync(path.join(fake,'trace.json')));assert(!t.some(a=>a[0]==='ask'));});
+ }finally{fs.rmSync(temp,{recursive:true,force:true});}
+ console.log(JSON.stringify({host:process.argv[2]??'Fixture',fixture:true,classes:['billing','limit','authentication','overload','network','session_busy_or_dormant','no_credential','unknown'],tests:count,passed:count,liveCalls:0,switches:0}));
+--- a/ops/fu225-r4/candidate/host.mjs
++++ b/ops/fu225-r4/candidate/host.mjs
+@@ -1,3 +1,4 @@
++import {isArchived,activeAgent} from './archive-guard.mjs';
+ import {confirmation,classify,redact} from './errors.mjs';
+ import fs from 'node:fs';
+ import crypto from 'node:crypto';
+@@ -13,7 +14,8 @@
+  if(!roles?.available)throw Error('Human seat directory is unavailable');
+  const humans=new Set([...(roles.primes??[]),...(roles.projectSeats??[])].filter(x=>x.session?.mode==='human').map(x=>x.sessionId));
+  const p=pool(),names=new Map(p.accounts.map(a=>[a.id,a.name]));const sessions=[];
+- for(const a of list.filter(a=>a.provider.split('/')[0]==='claude')){
++ for(const a of list.filter(a=>!isArchived(a)&&a.provider.split('/')[0]==='claude')){
++  if(!await activeAgent(rpc,a.id))continue;
+   const v=await rpc('organization.accounts.session',{agentId:a.id});
+   const current=v.accounts.find(x=>x.id===v.current)?.name??names.get(p.assignments?.[a.id]?.accountId)??null;
+   sessions.push({id:a.id,name:a.name,status:a.status,current,skip:personalSkip(a,current,humans),action:current==='Work'?'already Work':'switch'});
+@@ -79,11 +81,12 @@
+ export function heldOnWork(id){const h=read(path.join(dir,'owner-work-hold.json'),{});return Array.isArray(h.agentIds)&&h.agentIds.includes(id)&&Date.parse(h.until)>Date.now();}
+ export async function reloadQuietSession(id,history){
+  const n=(await rpc('native:fetch_agent_request',{agentId:id})).agent;
+- if(!n||n.archivedAt)return {skipped:'archived or absent'};
++ if(!n||isArchived(n))return {skipped:'archived or absent'};
+  if(n.id!==id||n.provider!=='claude'||n.persistence?.sessionId!==history)throw Error('Reload identity differs');
+  if(!['idle','closed','error'].includes(n.status)||n.pendingPermissions?.length)return {pending:true,wait:true,fault:'session_busy_or_dormant',reason:'busy turn'};
+  const state=(await rpc('native:agent.mcp.get_refresh_state.request',{agentId:id})).state;
+  if(!state||state.provider!=='claude'||state.sessionId!==history||!state.configRevision)return {pending:true,fault:'session_busy_or_dormant',reason:'dormant session is not ready'};
++ if(!await activeAgent(rpc,id))return {skipped:'archived or absent'};
+  // The daemon fences this reload against new turns, pending input, and changed history.
+  const r=await rpc('native:agent.mcp.refresh.request',{agentId:id,expected:{provider:state.provider,sessionId:state.sessionId,configRevision:state.configRevision},changes:{},reconnect:true});
+  if(r.outcome!=='refreshed')return {pending:true,wait:r.reason==='busy',fault:'session_busy_or_dormant',reason:'guarded reload '+String(r.reason??r.outcome)};
+@@ -95,7 +98,7 @@
+ export async function switchOne(a,target){
+  if(!['Work','work-workspace-api'].includes(target))throw targetError({name:target,status:{state:'invalid'}});
+  if(target==='work-workspace-api'&&heldOnWork(a.id))return {id:a.id,skipped:'Owner kept this closed chat on Work until reset'};
+- const fresh=(await call(['ls','-g'])).find(x=>x.id===a.id);if(!fresh)return {id:a.id,skipped:'archived or absent'};
++ const fresh=(await call(['ls','-g'])).find(x=>x.id===a.id);if(!fresh||isArchived(fresh)||!await activeAgent(rpc,a.id))return {id:a.id,skipped:'archived or absent'};
+  const now=await rpc('organization.accounts.session',{agentId:a.id});const current=now.accounts.find(x=>x.id===now.current)?.name;
+  const role=await rpc('organization.role-directory',{});if(!role?.available)throw Error('Human seat read failed');
+  const humans=new Set([...(role.primes??[]),...(role.projectSeats??[])].filter(x=>x.session?.mode==='human').map(x=>x.sessionId));
+@@ -103,7 +106,8 @@
+  if(current===target)return {id:a.id,already:true,confirmed:true};
+  if(current!==(target==='Work'?'work-workspace-api':'Work'))return {id:a.id,skipped:'Account changed outside the Work pool'};
+  if(['running','busy','starting'].includes(fresh.status))return {id:a.id,pending:true,wait:true,fault:'session_busy_or_dormant',reason:'busy turn'};
+- const before=await rpc('native:fetch_agent_request',{agentId:a.id});const history=before.agent?.persistence?.sessionId??null;
++ const native=await activeAgent(rpc,a.id);if(!native)return {id:a.id,skipped:'archived or absent'};
++ const before={agent:native};const history=native.persistence?.sessionId??null;
+  const refresh=(await rpc('native:agent.mcp.get_refresh_state.request',{agentId:a.id})).state;
+  if(refresh?.lifecycle==='closed'&&!refresh.supported){
+   const n=before.agent;
+@@ -121,6 +125,7 @@
+  for(let attempt=0;attempt<2;attempt++){
+   const available=target==='work-workspace-api'?(await prepareApi()).account:(await accounts()).find(x=>x.name===target);
+   if(!available?.enabled||available.status?.state!=='ok')throw targetError(available);
++  if(!await activeAgent(rpc,a.id))return {id:a.id,skipped:'archived or absent'};
+   // The daemon repeats its busy and account checks inside the session fence.
+   const r=await rpc('organization.accounts.switch',{agentId:a.id,account:target});
+   if(r?.ok){
+--- a/ops/fu225-r4/candidate/monitor-worker.mjs
++++ b/ops/fu225-r4/candidate/monitor-worker.mjs
+@@ -1,14 +1,17 @@
++import {activeAgent} from './archive-guard.mjs';
+ import {switchFault,classify} from './errors.mjs';
+ import fs from 'node:fs';
+ import path from 'node:path';
+-import {host,dir,read,save,call,safe} from './common.mjs';
++import {host,dir,read,save,call,rpc,safe} from './common.mjs';
+ import {accounts,plan,confirm,switchOne} from './host.mjs';
+ const id=process.argv[3],target=process.argv[4],lock=path.join(dir,'wait-'+id);
+ const apiProof=()=>target==='work-workspace-api'?read(path.join(dir,'api-target-proof.json'),null):null;
+ let confirmationResult=null;
+ try{
+  if(!/^[0-9a-f-]{36}$/.test(id)||!['Work','work-workspace-api'].includes(target))throw Error('Invalid switch request');
++ if(!await activeAgent(rpc,id))throw Error('Session is archived or absent');
+  await call(['wait',id,'--timeout','10800'],10810000);
++ if(!await activeAgent(rpc,id))throw Error('Session is archived or absent');
+  const s=read(path.join(dir,'monitor-state.json'),{});if(s.phase!==target)throw Error('Target changed while waiting');
+  const work=(await accounts()).find(x=>x.name==='Work');const c=await confirm(work);confirmationResult=c;
+  if(target==='Work'&&!c.ok||target==='work-workspace-api'&&(!c.liveAsk||!switchFault(c.fault)))throw Error('Fresh live ask does not support this target');
+--- a/ops/fu225-r4/candidate/monitor.mjs
++++ b/ops/fu225-r4/candidate/monitor.mjs
+@@ -1,3 +1,4 @@
++import {isArchived,activeAgent} from './archive-guard.mjs';
+ import {classify,recordCredentialRecovery,alertFault,recordUnknown,redact,reclassifyOperationalNotices} from './errors.mjs';
+ import fs from 'node:fs';
+ import {fileURLToPath} from 'node:url';
+@@ -54,11 +55,13 @@
+  const since=s.errorCursor??new Date(Date.now()-300000).toISOString();const scanAt=new Date().toISOString();
+  // Read native errors without retaining transcript or credential text.
+  try{const fd=fs.openSync(path.join(home,'daemon.log'),'r');try{const size=fs.fstatSync(fd).size,b=Buffer.alloc(Math.min(size,2*1024*1024));fs.readSync(fd,b,0,b.length,Math.max(0,size-b.length));for(const line of b.toString('utf8').split('\n')){let d;try{d=JSON.parse(line)}catch{continue}const at=typeof d.time==='number'?d.time:Date.parse(d.time??d.timestamp??'');if(!Number.isFinite(at)||at<Date.parse(since)||!(Number(d.level)>=40||d.error||d.err))continue;for(const account of [work,api].filter(a=>d.accountId===a.id||d.account===a.name||d.accountName===a.name)){observe(d,account,'daemon');if(account.id===work.id)signal='native Work error';}}}finally{fs.closeSync(fd)}}catch{}
+- for(const a of agents.filter(x=>x.provider.split('/')[0]==='claude'&&[work.id,api.id].includes(assignments[x.id]?.accountId))){
++ for(const a of agents.filter(x=>!isArchived(x)&&x.provider.split('/')[0]==='claude'&&[work.id,api.id].includes(assignments[x.id]?.accountId))){
+   try{
++   if(!await activeAgent(rpc,a.id))continue;
+    const account=assignments[a.id].accountId===work.id?work:api;
+    const tail=await rpc('native:fetch_agent_timeline_request',{agentId:a.id,direction:'tail',limit:1,projection:'canonical'});const old=s.timelineCursors[a.id];let seq=old?.epoch===tail.epoch?old.seq:0;
+    for(let batch=0;batch<16;batch++){
++    if(!await activeAgent(rpc,a.id))break;
+     const page=await rpc('native:fetch_agent_timeline_request',{agentId:a.id,direction:'after',cursor:{epoch:tail.epoch,seq},limit:128,projection:'canonical'});
+     if(page.reset||page.staleCursor){s.timelineCursors[a.id]={epoch:page.epoch,seq:0};break;}
+     const entries=page.entries??[];
+--- a/ops/work-switch/check.py
++++ b/ops/work-switch/check.py
+@@ -13,10 +13,11 @@
+ function trace(t){const m=get();m.trace??=[];m.trace.push(t);put(m)}
+ export async function call(args,timeout,json=true){
+  trace(args);const m=get();const p=pool();const cmd=args[0];
+- if(cmd==='ls')return args.includes('-a')?m.sessions:m.sessions.filter(x=>!x.archived);
++ if(cmd==='ls')return args.includes('-a')||m.leakArchived?m.sessions:m.sessions.filter(x=>!x.archived);
+  if(cmd==='account'&&args[1]==='ls')return p.accounts.map(a=>({...a,status:{state:a.enabled?(a.limitedUntil?'limited':'ok'):'disabled',until:a.limitedUntil}}));
+  if(cmd==='ask'){if(m.askError)throw Error(m.askError);return {output:m.askReply??'OK'}}
+  if(cmd==='account'&&args[1]==='use'){
++  if(m.archiveOnUse){m.nativeArchived=true;put(m);throw Error('Session is busy');}
+   if(m.failUse)throw Error('Injected switch failure');
+   if(m.busyOnce&&!m.reloaded)throw Error('Session is busy');
+   const a=p.accounts.find(x=>x.name===args[2]);if(!a.enabled)throw Error('disabled');
+@@ -42,15 +43,16 @@
+   if(input.defaultAccount)p.defaults.claude=input.defaultAccount.id;
+   if(input.policy)p.policy=input.policy;if(input.rotateOnLimit!==undefined)p.rotateOnLimit=input.rotateOnLimit;pp(p);return {ok:true};
+  }
++ if(method==='native:fetch_agent_request')return {agent:m.sessions.some(a=>a.id===input.agentId)?{...m.sessions.find(a=>a.id===input.agentId),...(m.nativeArchived?{archivedAt:'2026-01-01T00:00:00Z'}:{})}:null};
+  if(method==='native:fetch_agent_timeline_request')return {epoch:'e',entries:m.entries??[],hasNewer:false};
+  throw Error('Unexpected mock RPC '+method);
+ }
+ '''
+ with tempfile.TemporaryDirectory(prefix='work-switch-check-')as tmp:
+  root=pathlib.Path(tmp);home=root/'home';home.mkdir();scripts=root/'scripts';scripts.mkdir()
+- for name in ['host.mjs','policy.mjs','monitor.mjs','monitor-worker.mjs']:shutil.copy2(SRC/name,scripts/name)
++ for name in ['archive-guard.mjs','host.mjs','policy.mjs','monitor.mjs','monitor-worker.mjs']:shutil.copy2(SRC/name,scripts/name)
+  (scripts/'common.mjs').write_text(MOCK)
+- (scripts/'clock.mjs').write_text("const D=Date;globalThis.Date=class extends D{constructor(...a){super(...(a.length?a:['2026-10-17T00:06:00Z']))}static now(){return new D('2026-10-17T00:06:00Z').getTime()}}")
++ (scripts/'clock.mjs').write_text("const D=Date,t=process.env.FIXTURE_PRE_RESET?'2026-10-16T23:59:00Z':'2026-10-17T00:06:00Z';globalThis.Date=class extends D{constructor(...a){super(...(a.length?a:[t]))}static now(){return new D(t).getTime()}}")
+  import os
+  env={**os.environ,'FIXTURE':str(home)}
+  d=home/'command-centre/work-switch-20261017';p=home/'command-centre/accounts/accounts.json';p.parent.mkdir(parents=True)
+@@ -63,8 +65,8 @@
+   write(p,{'accounts':acc,'policy':'spread','rotateOnLimit':False,'defaults':{'claude':'work-workspace-api'},'assignments':{a['id']:{'accountId':n,'at':'2026-10-17T00:05:00Z'}for a,n in zip(sessions,['work-workspace-api','Personal','Work','Personal'])}})
+   write(home/'mock.json',{'sessions':sessions,**kw})
+  def run(script,mode,ok=0,clock=True):
+-  argv=['node',*(['--import',str(scripts/'clock.mjs')]if clock else[]),str(scripts/script),'Mini',mode]
+-  r=subprocess.run(argv,capture_output=True,text=True,env=env,timeout=15)
++  argv=['node','--import',str(scripts/'clock.mjs'),str(scripts/script),'Mini',mode]
++  r=subprocess.run(argv,capture_output=True,text=True,env={**env,'FIXTURE_PRE_RESET':''if clock else'1'},timeout=15)
+   assert r.returncode==ok,(argv,r.returncode,r.stdout,r.stderr)
+   return json.loads(r.stdout)
+  def mock():return json.loads((home/'mock.json').read_text())
+@@ -87,4 +89,13 @@
+  reset(askReply='Credit balance is too low');write(d/'monitor-enabled.json',{});x=json.loads(p.read_text());x['accounts'][1]['limitedUntil']='2026-10-18T00:00:00Z';x['accounts'][2]['enabled']=False;write(p,x);v=run('monitor.mjs','');assert v['target']is None and len(asks())==1
+  reset();write(d/'monitor-enabled.json',{});v=run('monitor.mjs','',clock=False);assert v['deferred']and not mock().get('trace')
+  reset(rolesUnavailable=True);run('host.mjs','dry-run',ok=1);assert not d.exists()
+- print('PASS: 14 isolated process cases. Read-only dry run; reset guard; cached limit clear; live limit gate; defaults and priority readback; idle reload; Personal and archive guards; unpinned test/archive; confirmed failover; live-gated return; disabled fallback; retained idle and wait-worker repairs; network refusal; pre-reset monitor guard; unavailable role directory.')
++ # Archive metadata and native reads both exclude stale archived records.
++ reset(leakArchived=True);dry=run('host.mjs','dry-run');assert len(dry['sessions'])==3
++ archived_id='44444444-4444-4444-8444-444444444444'
++ assert not any(a[0]=='organization.accounts.session'and a[1]['agentId']==archived_id for a in mock()['trace'])
++ reset(nativeArchived=True);dry=run('host.mjs','dry-run');assert dry['sessions']==[]
++ assert not any(a[0]=='organization.accounts.session' for a in mock()['trace'])
++ reset(archiveOnUse=True);run('host.mjs','gate');result=run('host.mjs','apply');assert result['failed']==0
++ assert any(a.get('skipped')=='archived or absent' for a in result['sessions'])
++ assert not any(a[0]=='agent'and a[1]=='reload' for a in mock()['trace'])
++ print('PASS: 17 isolated process cases. Read-only dry run; reset guard; cached limit clear; live limit gate; defaults and priority readback; idle reload; Personal and archive guards; unpinned test/archive; confirmed failover; live-gated return; disabled fallback; retained idle and wait-worker repairs; network refusal; pre-reset monitor guard; unavailable role directory.')
+--- a/ops/work-switch/host.mjs
++++ b/ops/work-switch/host.mjs
+@@ -1,3 +1,4 @@
++import {isArchived,activeAgent} from './archive-guard.mjs';
+ import fs from 'node:fs';
+ import {spawnSync} from 'node:child_process';
+ import {fileURLToPath} from 'node:url';
+@@ -11,7 +12,8 @@
+  if(!roles?.available)throw Error('Human seat directory is unavailable');
+  const humans=new Set([...(roles.primes??[]),...(roles.projectSeats??[])].filter(x=>x.session?.mode==='human').map(x=>x.sessionId));
+  const p=pool(),names=new Map(p.accounts.map(a=>[a.id,a.name]));const sessions=[];
+- for(const a of list.filter(a=>a.provider.split('/')[0]==='claude')){
++ for(const a of list.filter(a=>!isArchived(a)&&a.provider.split('/')[0]==='claude')){
++  if(!await activeAgent(rpc,a.id))continue;
+   const v=await rpc('organization.accounts.session',{agentId:a.id});
+   const current=v.accounts.find(x=>x.id===v.current)?.name??names.get(p.assignments?.[a.id]?.accountId)??null;
+   sessions.push({id:a.id,name:a.name,status:a.status,current,skip:personalSkip(a,current,humans),action:current==='Work'?'already Work':'switch'});
+@@ -34,7 +36,7 @@
+  const r=await rpc('organization.accounts.settings',{defaultAccount:{provider:'claude',id:a.id}});if(!r?.ok||pool().defaults?.claude!==a.id)throw Error('Default readback failed');return name;
+ }
+ export async function switchOne(a,target){
+- const fresh=(await call(['ls','-g'])).find(x=>x.id===a.id);if(!fresh)return {id:a.id,skipped:'archived or absent'};
++ const fresh=(await call(['ls','-g'])).find(x=>x.id===a.id);if(!fresh||isArchived(fresh)||!await activeAgent(rpc,a.id))return {id:a.id,skipped:'archived or absent'};
+  const now=await rpc('organization.accounts.session',{agentId:a.id});const current=now.accounts.find(x=>x.id===now.current)?.name;
+  // Repeat the human guard after any wait. A human can take the seat during a running turn.
+  const role=await rpc('organization.role-directory',{});if(!role?.available)throw Error('Human seat read failed');
+@@ -46,11 +48,17 @@
+   const waited=await call(['wait',a.id,'--timeout','10800'],10810000);if(waited.status&&waited.status!=='idle'&&waited.status!=='closed')throw Error('Session wait did not finish');
+   return await switchAfterRecovery(a,target);
+  }
++ if(!await activeAgent(rpc,a.id))return {id:a.id,skipped:'archived or absent'};
+  try{await call(['account','use',target,'--agent',a.id]);}
+  catch(e){if(!/busy|finish|unavailable|closed|not.loaded/i.test(e.message))throw e;
+-  const latest=(await call(['ls','-g'])).find(x=>x.id===a.id);if(['running','busy','starting'].includes(latest?.status)){
++  const latest=(await call(['ls','-g'])).find(x=>x.id===a.id);
++  if(!latest||isArchived(latest)||!await activeAgent(rpc,a.id))return {id:a.id,skipped:'archived or absent'};
++  if(['running','busy','starting'].includes(latest.status)){
+    await call(['wait',a.id,'--timeout','10800'],10810000);
+-  }else await call(['agent','reload',a.id]);
++  }else {
++   if(!latest||isArchived(latest)||!await activeAgent(rpc,a.id))return {id:a.id,skipped:'archived or absent'};
++   await call(['agent','reload',a.id]);
++  }
+   // Re-check the seat and target after a reload or event wait.
+   return await switchAfterRecovery(a,target);
+  }
+@@ -60,6 +68,7 @@
+ async function switchAfterRecovery(a,target){
+  const p=await plan(),fresh=p.sessions.find(x=>x.id===a.id);if(!fresh)return {id:a.id,skipped:'archived or absent'};if(fresh.skip)return {id:a.id,skipped:fresh.skip};
+  const available=(await accounts()).find(x=>x.name===target);if(!available?.enabled||available.status.state!=='ok')throw Error('Recovery target unavailable');
++ if(!await activeAgent(rpc,a.id))return {id:a.id,skipped:'archived or absent'};
+  await call(['account','use',target,'--agent',a.id]);const after=await rpc('organization.accounts.session',{agentId:a.id});if(after.accounts.find(x=>x.id===after.current)?.name!==target)throw Error('Recovery readback differs');return {id:a.id,confirmed:true,recovered:true,to:target};
+ }
+ async function test(){
+--- a/ops/work-switch/monitor-worker.mjs
++++ b/ops/work-switch/monitor-worker.mjs
+@@ -1,11 +1,14 @@
++import {activeAgent} from './archive-guard.mjs';
+ import fs from 'node:fs';
+ import path from 'node:path';
+-import {host,dir,read,save,call,safe} from './common.mjs';
++import {host,dir,read,save,call,rpc,safe} from './common.mjs';
+ import {accounts,plan,confirm,switchOne} from './host.mjs';
+ const id=process.argv[3],target=process.argv[4],lock=path.join(dir,'wait-'+id);
+ try{
+  if(!/^[0-9a-f-]{36}$/.test(id)||!['Work','work-workspace-api'].includes(target))throw Error('Invalid switch request');
++ if(!await activeAgent(rpc,id))throw Error('Session is archived or absent');
+  await call(['wait',id,'--timeout','10800'],10810000);
++ if(!await activeAgent(rpc,id))throw Error('Session is archived or absent');
+  const s=read(path.join(dir,'monitor-state.json'),{});if(s.phase!==target)throw Error('Target changed while waiting');
+  const work=(await accounts()).find(x=>x.name==='Work');const c=await confirm(work);
+  if(target==='Work'&&!c.ok||target==='work-workspace-api'&&!c.fault)throw Error('Fresh live ask does not support this target');
+--- a/ops/work-switch/monitor.mjs
++++ b/ops/work-switch/monitor.mjs
+@@ -1,3 +1,4 @@
++import {isArchived,activeAgent} from './archive-guard.mjs';
+ import fs from 'node:fs';
+ import {fileURLToPath} from 'node:url';
+ import path from 'node:path';
+@@ -30,10 +31,12 @@
+  const since=s.errorCursor??new Date(Date.now()-300000).toISOString();const scanAt=new Date().toISOString();
+  // Read native errors without retaining transcript or credential text.
+  try{const fd=fs.openSync(path.join(home,'daemon.log'),'r');try{const size=fs.fstatSync(fd).size,b=Buffer.alloc(Math.min(size,2*1024*1024));fs.readSync(fd,b,0,b.length,Math.max(0,size-b.length));for(const line of b.toString('utf8').split('\n')){let d;try{d=JSON.parse(line)}catch{continue}const at=typeof d.time==='number'?d.time:Date.parse(d.time??d.timestamp??'');if(!Number.isFinite(at)||at<Date.parse(since)||!(Number(d.level)>=40||d.error||d.err))continue;if((d.accountId===work.id||d.account===work.name||d.accountName===work.name)&&fault(JSON.stringify(d)))signal='native Work error';}}finally{fs.closeSync(fd)}}catch{}
+- for(const a of agents.filter(x=>x.provider.split('/')[0]==='claude'&&assignments[x.id]?.accountId===work.id)){
++ for(const a of agents.filter(x=>!isArchived(x)&&x.provider.split('/')[0]==='claude'&&assignments[x.id]?.accountId===work.id)){
+   try{
++   if(!await activeAgent(rpc,a.id))continue;
+    const tail=await rpc('native:fetch_agent_timeline_request',{agentId:a.id,direction:'tail',limit:1,projection:'canonical'});const old=s.timelineCursors[a.id];let seq=old?.epoch===tail.epoch?old.seq:0;
+    for(let batch=0;batch<16;batch++){
++    if(!await activeAgent(rpc,a.id))break;
+     const page=await rpc('native:fetch_agent_timeline_request',{agentId:a.id,direction:'after',cursor:{epoch:tail.epoch,seq},limit:128,projection:'canonical'});
+     if(page.reset||page.staleCursor){s.timelineCursors[a.id]={epoch:page.epoch,seq:0};break;}
+     const entries=page.entries??[];
+--- a/ops/fu225-r4/candidate/install.mjs
++++ b/ops/fu225-r4/candidate/install.mjs
+@@ -3,7 +3,7 @@
+ const host=process.argv[2];if(!['Mini','MacBook','PC'].includes(host))throw Error('Host is required');
+ const src=path.dirname(fileURLToPath(import.meta.url)),win=process.platform==='win32';
+ const base=path.join(os.homedir(),win?'fulcra-api-failover':'.config/fulcra/api-failover');
+-const names=['common.mjs','errors.mjs','fixture.mjs','host.mjs','monitor.mjs','monitor-worker.mjs','policy.mjs'];
++const names=['archive-guard.mjs','common.mjs','errors.mjs','fixture.mjs','host.mjs','monitor.mjs','monitor-worker.mjs','policy.mjs'];
+ const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
+ const hashes=Object.fromEntries(names.map(n=>[n,hash(fs.readFileSync(path.join(src,n)))]));
+ const version='fu225-'+hash(JSON.stringify(hashes)).slice(0,12);
+@@ -11,7 +11,7 @@
+ const wrapper=path.join(base,'failover.mjs'),entry=`import './releases/${version}/monitor.mjs';\n`;
+ const before=fs.readFileSync(wrapper,'utf8');
+ const original=win?"import './work-switch-20261017/monitor.mjs';":"import '../work-switch-20261017/monitor.mjs';";
+-const predecessors=['fu225-c75871c6c175','fu225-7ec6f8dce869','fu225-4ed2a1db137f','fu225-aec8800798a8','fu225-a2d073960cb8','fu225-9420dce6c91f','fu225-caa18747a79d','fu225-a23124ab473d','fu225-2dfe14401f85'];
++const predecessors=['fu225-7c67e6ddfc53','fu225-c75871c6c175','fu225-7ec6f8dce869','fu225-4ed2a1db137f','fu225-aec8800798a8','fu225-a2d073960cb8','fu225-9420dce6c91f','fu225-caa18747a79d','fu225-a23124ab473d','fu225-2dfe14401f85'];
+ const priorEntries=predecessors.map(v=>`import './releases/${v}/monitor.mjs';`);
+ const prior=priorEntries[0]+'\n';
+ if(![original,...priorEntries,entry.trim()].includes(before.trim()))throw Error('Active wrapper changed. Inspect it before installation.');
+@@ -25,7 +25,7 @@
+ const previousVersion=predecessors.find((v,i)=>priorEntries[i]===savedEntry.trim());
+ const old=previousVersion?path.join(base,'releases',previousVersion):path.join(win?base:path.dirname(base),'work-switch-20261017');
+ const backupHashes={};
+-for(const n of names.filter(n=>previousVersion||!['errors.mjs','fixture.mjs'].includes(n))){
++for(const n of names.filter(n=>n!=='archive-guard.mjs'&&(previousVersion||!['errors.mjs','fixture.mjs'].includes(n)))){
+  const saved=path.join(backup,n),expected=hash(fs.readFileSync(path.join(old,n)));
+  if(!fs.existsSync(saved)){fs.copyFileSync(path.join(old,n),saved);fs.chmodSync(saved,0o600);}
+  if(hash(fs.readFileSync(saved))!==expected)throw Error('Rollback module check failed');
+--- a/ops/fu225-r4/test_install.py
++++ b/ops/fu225-r4/test_install.py
+@@ -11,6 +11,8 @@
+         assert (p.returncode==0)==ok,(p.returncode,p.stdout,p.stderr)
+         return json.loads(p.stdout)if ok else p
+     proof=run();release=base/'releases'/proof['version'];backup=base/'backups'/proof['version']
++    assert (release/'archive-guard.mjs').read_bytes()==(SOURCE/'archive-guard.mjs').read_bytes()
++    assert 'archive-guard.mjs' in proof['files'] and 'archive-guard.mjs' not in proof['backupHashes']
+     assert (backup/'failover.mjs').read_text()==entry and (backup/'relay.py').read_text()=='# old relay\n'
+     times={p.name:p.stat().st_mtime_ns for p in release.iterdir()};run();assert times=={p.name:p.stat().st_mtime_ns for p in release.iterdir()}
+     (backup/'host.mjs').unlink();run();assert (backup/'host.mjs').read_bytes()==(old/'host.mjs').read_bytes()

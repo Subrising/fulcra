@@ -3295,6 +3295,15 @@ export class AgentManager {
     return this.runLifecycleMutation(agentId, () => this.readAgentMcpRefreshState(agentId));
   }
 
+  private async isAgentArchived(agentId: string): Promise<boolean> {
+    if (this.agents.get(agentId)?.archivedAt) return true;
+    return Boolean((await this.registry?.get(agentId))?.archivedAt);
+  }
+
+  private async assertAgentUnarchived(agentId: string): Promise<void> {
+    if (await this.isAgentArchived(agentId)) throw new Error(`Agent is archived: ${agentId}`);
+  }
+
   private mcpConfigRevision(value: unknown): string {
     return createHmac("sha256", this.mcpRevisionKey).update(JSON.stringify(value)).digest("hex");
   }
@@ -3483,6 +3492,8 @@ export class AgentManager {
           state,
         });
         const existing = this.agents.get(agentId);
+        // A history runtime can be resident for an archived record.
+        if (await this.isAgentArchived(agentId)) return refused("not_resident");
         if (!existing?.session) return this.reconnectDormantAgent(request, state, quietGuard);
         if (!state?.supported) return refused("unsupported");
         const stale = () =>
@@ -3955,6 +3966,7 @@ export class AgentManager {
   ): Promise<ManagedAgent> {
     this.assertAcceptingAgentRegistrations();
     let existing = this.requireSessionAgent(agentId);
+    await this.assertAgentUnarchived(agentId);
     if (this.hasInFlightRun(agentId)) {
       await this.cancelAgentRunBefore(agentId, "reload", operationHandle);
       existing = this.requireSessionAgent(agentId);
@@ -4418,10 +4430,14 @@ export class AgentManager {
   }
 
   private async assertRestoreSafe(agentId: string): Promise<void> {
-    const protection = await this.getArchiveProtection(agentId);
-    if (!protection.confirmationRequired) return;
     const caller = this.agentCallers.getStore();
     caller?.validate?.();
+    if (caller?.agentId || this.trustedPlugins.currentInputSource() !== "human")
+      throw new Error(
+        "Restore refused. Only the owner can restore this session. Confirm in the app.",
+      );
+    const protection = await this.getArchiveProtection(agentId);
+    if (!protection.confirmationRequired) return;
     if (
       caller?.agentId ||
       this.restoreConfirmations.getStore() !== agentId ||

@@ -100,7 +100,10 @@ describe("restore command", () => {
       expect(client.close).toHaveBeenCalledOnce();
       if (kind === "active" || kind === "missing" || kind === "unsupported")
         expect(client.refreshAgent).not.toHaveBeenCalled();
-      else expect(client.refreshAgent).toHaveBeenCalledWith("fixture-original");
+      else
+        expect(client.refreshAgent).toHaveBeenCalledWith("fixture-original", undefined, {
+          restore: true,
+        });
     },
   );
 });

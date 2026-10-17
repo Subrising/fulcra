@@ -239,8 +239,11 @@ test("FU-153 websocket archive requires confirmation and resume restores one ori
     expect(archived.archivedAt).toBeTruthy();
     expect(archived.persistence).toBeTruthy();
     await expect(client.resumeAgent(archived.persistence!)).rejects.toThrow("Confirm in the app");
-    await expect(client.refreshAgent(agent.id)).rejects.toThrow("Confirm in the app");
-    await client.refreshAgent(agent.id, undefined, { confirmed: true });
+    await expect(client.refreshAgent(agent.id)).rejects.toThrow(/archived/i);
+    await expect(client.refreshAgent(agent.id, undefined, { restore: true })).rejects.toThrow(
+      "Confirm in the app",
+    );
+    await client.refreshAgent(agent.id, undefined, { confirmed: true, restore: true });
     const [resumed, second] = await Promise.all([
       client.resumeAgent(archived.persistence!),
       client.resumeAgent(archived.persistence!),
@@ -286,7 +289,7 @@ test("FU-153 websocket archive requires confirmation and resume restores one ori
       ),
     ).rejects.toThrow("Confirm in the app");
     expect((await context.daemon.agentStorage.get(agent.id))?.archivedAt).toBeTruthy();
-    await client.refreshAgent(agent.id, undefined, { confirmed: true });
+    await client.refreshAgent(agent.id, undefined, { confirmed: true, restore: true });
     expect((await context.daemon.agentStorage.get(agent.id))?.archivedAt).toBeNull();
     const worker = await client.createAgent({
       config: { provider: "codex", cwd: context.paseoHome },
@@ -322,7 +325,8 @@ test("FU-153 websocket archive requires confirmation and resume restores one ori
     await client.close();
     await context.close();
   }
-}, 30000);
+  // This check starts the source CLI twice, in addition to its WebSocket checks.
+}, 60000);
 
 test("agent sockets cannot relabel a lead to bypass archive confirmation", async () => {
   const { createTestPaseoDaemon } = await import("../test-utils/paseo-daemon.js");
@@ -396,10 +400,13 @@ test("agent sockets cannot relabel a lead to bypass archive confirmation", async
       await user.archiveAgent(lead.id, { confirmed: true });
       const archived = (await context.daemon.agentStorage.get(lead.id))!;
       expect(archived.archivedAt).toEqual(expect.any(String));
-      await expect(worker.refreshAgent(lead.id)).rejects.toThrow("Confirm in the app");
-      await expect(worker.refreshAgent(lead.id, undefined, { confirmed: true })).rejects.toThrow(
-        "confirmation from the app",
+      await expect(worker.refreshAgent(lead.id)).rejects.toThrow(/archived/i);
+      await expect(worker.refreshAgent(lead.id, undefined, { restore: true })).rejects.toThrow(
+        "Confirm in the app",
       );
+      await expect(
+        worker.refreshAgent(lead.id, undefined, { confirmed: true, restore: true }),
+      ).rejects.toThrow("confirmation from the app");
       await expect(worker.resumeAgent(archived.persistence!)).rejects.toThrow("Confirm in the app");
       await expect(
         worker.resumeAgent(archived.persistence!, undefined, { confirmed: true }),
@@ -420,6 +427,27 @@ test("agent sockets cannot relabel a lead to bypass archive confirmation", async
         archived.archivedAt,
       );
     }
+    // An ordinary archived session has the same owner boundary as a protected lead.
+    const ordinary = await user.createAgent({
+      config: { provider: "codex", cwd: context.paseoHome },
+    });
+    await user.archiveAgent(ordinary.id);
+    const before = (await context.daemon.agentStorage.get(ordinary.id))!;
+    for (const restore of [
+      () => worker!.refreshAgent(ordinary.id, undefined, { restore: true }),
+      () => worker!.resumeAgent(before.persistence!),
+    ]) {
+      await expect(restore()).rejects.toThrow("Only the owner");
+      const after = (await context.daemon.agentStorage.get(ordinary.id))!;
+      expect(after.archivedAt).toBe(before.archivedAt);
+      expect(after.updatedAt).toBe(before.updatedAt);
+      expect(after.persistence).toEqual(before.persistence);
+      expect((await user.fetchAgents()).entries.map((entry) => entry.agent.id)).not.toContain(
+        ordinary.id,
+      );
+    }
+    await user.refreshAgent(ordinary.id, undefined, { restore: true });
+    expect((await context.daemon.agentStorage.get(ordinary.id))?.archivedAt).toBeNull();
     const editable = await user.createAgent({
       config: { provider: "codex", cwd: context.paseoHome },
       labels: { "fulcra.role": "lead" },

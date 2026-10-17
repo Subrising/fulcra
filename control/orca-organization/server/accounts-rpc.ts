@@ -47,7 +47,7 @@ type Paseo =
       agents?: {
         ref?: (id: string) => {
           refresh?: () => Promise<unknown>;
-          current?: () => { provider?: string } | null;
+          current?: () => { provider?: string; archivedAt?: string | null } | null;
         };
       };
     }
@@ -392,6 +392,13 @@ export function createAccountHandlers(d: Deps) {
           return refused(ask());
         if ((operation === "takeover" || accountSessionScope()) && !d.takeOver)
           return refused("Account continuation is unavailable on this host");
+        const session = paseo?.agents?.ref?.(input.agentId);
+        await session?.refresh?.();
+        const snapshot = session?.current?.();
+        if (!snapshot)
+          return refused("Session state is unavailable. Refresh before switching accounts");
+        if (snapshot.archivedAt)
+          return refused("This session is archived. Restore it before switching accounts");
         const r = await switchSession(
           d.root(),
           { sessionId: input.agentId, provider, account: input.account },
