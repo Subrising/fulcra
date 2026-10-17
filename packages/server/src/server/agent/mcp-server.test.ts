@@ -11,6 +11,7 @@ import { z } from "zod";
 
 import { queuedAgentMessagesFor } from "../queued-agent-messages.js";
 import { createTestLogger } from "../../test-utils/test-logger.js";
+import { sessionPaseoToolPolicy } from "./paseo-tool-policy.js";
 import { createAgentMcpServer } from "./mcp-server.js";
 import { AgentManager, type ManagedAgent } from "./agent-manager.js";
 import { AgentStorage, type StoredAgentRecord } from "./agent-storage.js";
@@ -1099,6 +1100,53 @@ describe("browser MCP tools", () => {
         content: [{ type: "text", text: "MCP error -32602: Tool browser_list_tabs not found" }],
         isError: true,
       });
+      expect(broker.calls).toEqual([]);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("filters tools outside the lead allow list from MCP listing and calls", async () => {
+    const agentManager = withTrustedSurface(new BoundaryAgentManagerFake());
+    const agentStorage = new BoundaryAgentStorageFake();
+    const broker = new FakeBrowserToolsBroker({
+      requestId: "req-browser-policy-call",
+      ok: true,
+      result: { command: "list_tabs", tabs: [] },
+    });
+    const server = await createAgentMcpServer({
+      agentManager: agentManager as AgentManager,
+      agentStorage: agentStorage as AgentStorage,
+      providerSnapshotManager:
+        new BoundaryProviderSnapshotManagerFake() as unknown as ProviderSnapshotManager,
+      browserToolsEnabled: true,
+      browserToolsBroker: broker as BrowserToolsBroker,
+      callerAgentId: "agent-1",
+      paseoToolPolicy: sessionPaseoToolPolicy(undefined, { "fulcra.mcp": "lead" }),
+      logger,
+    });
+    const client = await connectInMemoryMcpClient(server);
+
+    try {
+      const listedTools = await client.listTools();
+      const toolNames = listedTools.tools.map((tool) => tool.name);
+
+      expect(toolNames).toContain("list_agents");
+      expect(toolNames).not.toContain("browser_list_tabs");
+      expect(toolNames).toEqual(
+        expect.arrayContaining(["create_agent", "archive_agent", "respond_to_permission"]),
+      );
+      await expect(client.callTool({ name: "create_terminal", arguments: {} })).resolves.toEqual({
+        content: [{ type: "text", text: "MCP error -32602: Tool create_terminal not found" }],
+        isError: true,
+      });
+      await expect(client.callTool({ name: "browser_list_tabs", arguments: {} })).resolves.toEqual({
+        content: [{ type: "text", text: "MCP error -32602: Tool browser_list_tabs not found" }],
+        isError: true,
+      });
+      expect(toolNames).not.toContain("browser_snapshot");
+      expect(toolNames).toHaveLength(10); // The host did not supply a native report origin.
       expect(broker.calls).toEqual([]);
     } finally {
       await client.close();

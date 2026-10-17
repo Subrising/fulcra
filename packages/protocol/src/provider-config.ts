@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PASEO_TOOL_NAMES } from "./paseo-tool-names.js";
 import type { AgentProvider } from "./agent-types.js";
 import { AgentProviderSchema } from "./provider-manifest.js";
 
@@ -31,6 +32,7 @@ export const ProviderRuntimeSettingsSchema = z.object({
 export const ProviderPaseoToolsPolicySchema = z.object({
   enabled: z.boolean().optional(),
   disabledTools: z.array(z.string()).optional(),
+  allowedTools: z.array(z.enum(PASEO_TOOL_NAMES)).optional(),
 });
 
 const ProviderProfileThinkingOptionSchema = z.object({

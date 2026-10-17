@@ -108,12 +108,68 @@ describe("reserved MCP injection labels", () => {
       assertPaseoInjectionLabelWrite({ labels: required, required, agentInput: true }),
     ).toThrow("MCP token filter labels are reserved");
   });
-  test("an empty filter and ordinary labels preserve their previous behavior", () => {
+  test("an empty filter still protects MCP selection; ordinary labels keep their behavior", () => {
     expect(() =>
       assertPaseoInjectionLabelWrite({ labels: required, required: {}, agentInput: true }),
-    ).not.toThrow();
+    ).toThrow("reserved");
     expect(() =>
       assertPaseoInjectionLabelWrite({ labels: { phase: "test" }, required, agentInput: true }),
     ).not.toThrow();
   });
+});
+
+test("lead matches the old on gate while other injection requirements stay exact", () => {
+  const required = { "fulcra.mcp": "on", team: "lead" };
+  expect(matchesPaseoInjectLabels({ "fulcra.mcp": "lead", team: "lead" }, required)).toBe(true);
+  for (const labels of [
+    { "fulcra.mcp": "off", team: "lead" },
+    { "fulcra.mcp": "lead" },
+    { team: "lead" },
+  ])
+    expect(matchesPaseoInjectLabels(labels, required)).toBe(false);
+  expect(matchesPaseoInjectLabels({ "fulcra.mcp": "on" }, { "fulcra.mcp": "lead" })).toBe(false);
+});
+
+test("preset and group writes are reserved even without a configured filter", () => {
+  for (const labels of [{ "fulcra.mcp": "lead" }, { "fulcra.mcp.groups": "browser" }]) {
+    expect(() =>
+      assertPaseoInjectionLabelWrite({
+        labels,
+        required: {},
+        agentInput: true,
+        callerAgentId: "worker",
+        callerLabels: {},
+      }),
+    ).toThrow("reserved");
+    expect(() =>
+      assertPaseoInjectionLabelWrite({ labels, required: {}, agentInput: false }),
+    ).not.toThrow();
+    expect(() =>
+      assertPaseoInjectionLabelWrite({
+        labels,
+        required: {},
+        agentInput: true,
+        callerAgentId: "lead",
+        callerLabels: { "fulcra.mcp": "lead" },
+      }),
+    ).not.toThrow();
+  }
+});
+
+test("workers cannot acquire lead authority through on with an empty injection filter", () => {
+  for (const labels of [
+    { "fulcra.mcp": "on" },
+    { "fulcra.mcp": "lead" },
+    { "fulcra.mcp.groups": "browser" },
+    { "fulcra.mcp": null },
+  ])
+    expect(() =>
+      assertPaseoInjectionLabelWrite({
+        labels,
+        required: {},
+        agentInput: true,
+        callerAgentId: "worker",
+        callerLabels: {},
+      }),
+    ).toThrow("reserved");
 });
