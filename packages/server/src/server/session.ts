@@ -1,3 +1,9 @@
+import {
+  createFinalInputCheck,
+  assertFinalInputCheck as assertNoticeFinalCheck,
+} from "./agent/final-input-check.js";
+import { sendPromptToAgentAndWaitForStart } from "./agent/agent-prompt.js";
+import { noticePaused, NoticePausedError } from "./notice-pause.js";
 import { sessionCost } from "./agent/session-cost.js";
 import { noteDeliveredReport } from "./lead-events.js";
 import { archiveReportCount } from "./archive-observation.js";
@@ -130,7 +136,6 @@ import { ensureAgentLoaded, ensureUnarchivedAgentLoaded } from "./agent/agent-lo
 import {
   sendPromptToAgent,
   SteerUnavailableError,
-  waitForAgentRunStartWithTimeout,
   unarchiveAgentState,
 } from "./agent/agent-prompt.js";
 import {
@@ -9862,21 +9867,49 @@ export class Session {
       signal?: AbortSignal,
       finalCheck?: object,
     ) => {
-      const result = await sendPromptToAgent({
-        agentManager: this.agentManager,
-        agentStorage: this.agentStorage,
-        agentId,
-        prompt,
-        messageId: msg.messageId,
-        activeTurnBehavior: behavior,
-        steerOnly: behavior === "steer",
-        clearPendingPermissions: true,
-        unarchive: !finalCheck,
-        ...(finalCheck ? { runOptions: { [FINAL_INPUT_CHECK]: finalCheck } } : {}),
-        logger: this.sessionLogger,
-      });
-      if (result.disposition === "turn_started") {
-        await waitForAgentRunStartWithTimeout(this.agentManager, agentId, signal);
+      signal?.throwIfAborted();
+      const provider =
+        this.agentManager.getAgent(agentId)?.provider ??
+        (await this.agentStorage.get(agentId))?.provider;
+      const check = createFinalInputCheck(
+        () => {
+          assertNoticeFinalCheck(finalCheck);
+          if (noticePaused(this.agentStorage.noticePausePath, this.agentManager.getAgent(agentId)))
+            throw new NoticePausedError();
+        },
+        undefined,
+        !["claude", "codex"].includes(provider ?? ""),
+      );
+      try {
+        await sendPromptToAgentAndWaitForStart({
+          agentManager: this.agentManager,
+          agentStorage: this.agentStorage,
+          agentId,
+          prompt,
+          messageId: msg.messageId,
+          activeTurnBehavior: behavior,
+          steerOnly: behavior === "steer",
+          clearPendingPermissions: true,
+          unarchive: !finalCheck,
+          runOptions: { [FINAL_INPUT_CHECK]: check },
+          logger: this.sessionLogger,
+        });
+      } catch (error) {
+        if (!(error instanceof NoticePausedError)) throw error;
+        if (msg.inputProvenance !== undefined) throw new ProvenanceRefusedError({ cause: error });
+        if (msg.sender) throw new SteerUnavailableError(agentId);
+        await queuedAgentMessagesFor({
+          agentManager: this.agentManager,
+          agentStorage: this.agentStorage,
+          logger: this.sessionLogger,
+        }).enqueue(agentId, {
+          text: msg.text,
+          images: msg.images,
+          attachments: msg.attachments,
+          messageId: msg.messageId,
+          pauseNotice: true,
+        });
+        deliveryNote("Provider paused. Notice saved. No turn was started.");
       }
     };
     const held = heldSendsFor(this.agentManager, this.sessionLogger);
@@ -10034,6 +10067,72 @@ export class Session {
     });
   }
 
+  private async sendAgentMessageWithReceipt(
+    msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
+    agentId: string,
+    prompt: ReturnType<typeof buildAgentPrompt>,
+    send: () => Promise<void>,
+    prepare: () => Promise<void>,
+  ): Promise<void> {
+    if (msg.messageId) {
+      await this.messageReceipts.send({
+        agentId,
+        messageId: msg.messageId,
+        request: this.agentMessageReceiptRequest(msg, prompt),
+        prepare,
+        send,
+      });
+    } else await send();
+  }
+
+  private async holdPausedAgentMessage(
+    msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
+    agentId: string,
+  ): Promise<boolean> {
+    const pauseTarget =
+      this.agentManager.getAgent(agentId) ?? (await this.agentStorage.get(agentId));
+    if (noticePaused(this.agentStorage.noticePausePath, pauseTarget)) {
+      if (msg.inputProvenance !== undefined || msg.nativeQueue) throw new ProvenanceRefusedError();
+      const hold = async () => {
+        await queuedAgentMessagesFor({
+          agentManager: this.agentManager,
+          agentStorage: this.agentStorage,
+          logger: this.sessionLogger,
+        }).enqueue(
+          agentId,
+          {
+            text: msg.text,
+            images: msg.images,
+            attachments: msg.attachments,
+            messageId: msg.messageId,
+            sender: msg.sender,
+            pauseNotice: true,
+          },
+          this.localServerId,
+        );
+      };
+      if (msg.messageId) {
+        await this.messageReceipts.send({
+          agentId,
+          messageId: msg.messageId,
+          request: this.agentMessageReceiptRequest(
+            msg,
+            buildAgentPrompt(msg.text, msg.images, msg.attachments),
+          ),
+          prepare: async () => {},
+          send: hold,
+        });
+      } else await hold();
+      this.emitAgentMessageAccepted(
+        msg.requestId,
+        agentId,
+        "Provider paused. Notice saved. No turn was started.",
+      );
+      return true;
+    }
+    return false;
+  }
+
   private async handleSendAgentMessageRequest(
     msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
   ): Promise<void> {
@@ -10067,6 +10166,7 @@ export class Session {
         return;
       }
 
+      if (await this.holdPausedAgentMessage(msg, agentId)) return;
       const prompt = buildAgentPrompt(msg.text, msg.images, msg.attachments);
       if (msg.nativeQueue) {
         if (!msg.messageId || msg.messageId.length > 256)
@@ -10118,19 +10218,9 @@ export class Session {
       const send = this.agentMessageSender(msg, agentId, prompt, (note) => {
         deliveryNote = note;
       });
-      if (msg.messageId) {
-        await this.messageReceipts.send({
-          agentId,
-          messageId: msg.messageId,
-          request: this.agentMessageReceiptRequest(msg, prompt),
-          prepare: async () => {
-            await this.prepareAgentMessage(agentId, msg.text, queuedSessionId);
-          },
-          send,
-        });
-      } else {
-        await send();
-      }
+      await this.sendAgentMessageWithReceipt(msg, agentId, prompt, send, async () => {
+        await this.prepareAgentMessage(agentId, msg.text, queuedSessionId);
+      });
 
       this.emitAgentMessageAccepted(msg.requestId, agentId, deliveryNote);
     } catch (error) {
