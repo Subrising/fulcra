@@ -6,8 +6,9 @@ A notice marked `delivered` covers its earlier turn only.
 When cost is available, each finish notice includes cumulative session spend, including earlier turns.
 
 After a restart, queued delivery starts when saved open sessions are available.
-An idle receiver can start its queued turn while other sessions recover their providers.
+An idle, unpaused receiver can start its queued turn while other sessions recover their providers.
 The parent notice is armed before the receiver starts.
+Paused input stays held. Its finish notice stays unarmed until resume. See [provider pauses](notice-pause.md).
 
 Use `fulcra send <child> --prompt-file task.txt --no-wait` on the parent host.
 Use `--steer` to join the current turn when the provider supports steering.
