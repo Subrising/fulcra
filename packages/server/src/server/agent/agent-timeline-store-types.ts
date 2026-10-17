@@ -64,6 +64,8 @@ export interface AgentTimelineFetchResult {
 }
 
 export interface AgentTimelineStore {
+  /** Keeps a live agent's journal metadata resident until its runtime closes. */
+  pinAgent?(agentId: string): () => void;
   appendCommitted(
     agentId: string,
     item: AgentTimelineItem,

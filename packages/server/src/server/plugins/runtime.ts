@@ -1,3 +1,4 @@
+import { changePluginCacheBytes } from "../agent/history-load.js";
 import { PluginCatalogPaging, type CatalogReadState } from "./catalog-paging.js";
 import { managementFailure, managementMethod, managementReason } from "./management-error.js";
 import { readPackagedBundles } from "./packaged-bundles.js";
@@ -376,6 +377,7 @@ export class PluginRuntime {
         isCurrent: () => this.plugins.get(pluginId) === loaded,
       });
     this.plugins.set(pluginId, loaded);
+    changePluginCacheBytes(Buffer.byteLength(loaded.clientBundle));
     this.catalogChanged();
     this.appendLog(pluginId, "stdout", "[paseo] Plugin ready");
   }
@@ -400,6 +402,7 @@ export class PluginRuntime {
       clientBundle: bundles.clientBundle ?? "",
     });
     this.plugins.set(input.id, loaded);
+    changePluginCacheBytes(Buffer.byteLength(loaded.clientBundle));
     this.appendLog(input.id, "stdout", "[paseo] Plugin ready");
   }
 
@@ -415,6 +418,7 @@ export class PluginRuntime {
     const loaded = this.plugins.get(pluginId);
     if (!loaded) return false;
     this.plugins.delete(pluginId);
+    changePluginCacheBytes(-Buffer.byteLength(loaded.clientBundle));
     this.catalogChanged();
     this.rejectPending(loaded, `Plugin stopped: ${pluginId}`);
     await this.stopPlugin(loaded);
@@ -545,6 +549,7 @@ export class PluginRuntime {
   }
 
   clearLogs(pluginId: string): void {
+    changePluginCacheBytes(-(this.logTails.get(pluginId)?.bytes ?? 0));
     this.logTails.delete(pluginId);
   }
 
@@ -723,6 +728,7 @@ export class PluginRuntime {
   async stopAll(): Promise<void> {
     const loaded = [...this.plugins.values()];
     this.plugins.clear();
+    for (const plugin of loaded) changePluginCacheBytes(-Buffer.byteLength(plugin.clientBundle));
     this.catalogChanged();
     for (const plugin of loaded) {
       this.rejectPending(plugin, `Plugin stopped: ${plugin.id}`);
@@ -1397,6 +1403,7 @@ export class PluginRuntime {
     const wasPublished = this.plugins.get(loaded.id) === loaded;
     if (wasPublished) {
       this.plugins.delete(loaded.id);
+      changePluginCacheBytes(-Buffer.byteLength(loaded.clientBundle));
       this.catalogChanged();
     }
     this.rejectPending(loaded, `Plugin process exited: ${loaded.id}`);
@@ -1474,6 +1481,7 @@ export class PluginRuntime {
       stream,
       message: boundedMessage,
     };
+    const previousBytes = tail.bytes;
     tail.entries.push(entry);
     tail.bytes += Buffer.byteLength(boundedMessage);
     while (tail.entries.length > MAX_LOG_ENTRIES || tail.bytes > MAX_LOG_BYTES) {
@@ -1481,6 +1489,7 @@ export class PluginRuntime {
       if (!removed) break;
       tail.bytes -= Buffer.byteLength(removed.message);
     }
+    changePluginCacheBytes(tail.bytes - previousBytes);
     this.logger.info({ pluginId, ...entry }, "Plugin output");
   }
 

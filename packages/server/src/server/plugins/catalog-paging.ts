@@ -1,3 +1,4 @@
+import { changePluginCacheBytes } from "../agent/history-load.js";
 import { createHash, randomUUID } from "node:crypto";
 import { canonicalJson } from "@getpaseo/protocol/trusted-input";
 import { CONTROLLER_SERVICE_MAX_BYTES } from "@getpaseo/protocol/controller-service";
@@ -109,6 +110,7 @@ export class PluginCatalogPaging {
   private drop(snapshot: Snapshot): void {
     if (!this.snapshots.delete(snapshot.id)) return;
     this.retainedBytes -= snapshot.retainedBytes;
+    changePluginCacheBytes(-snapshot.retainedBytes);
     if (snapshot.timer) clearTimeout(snapshot.timer);
     try {
       snapshot.close();
@@ -265,6 +267,7 @@ export class PluginCatalogPaging {
     check(requestGuard);
     this.snapshots.set(id, snapshot);
     this.retainedBytes += snapshot.retainedBytes;
+    changePluginCacheBytes(snapshot.retainedBytes);
     snapshot.timer = setTimeout(() => this.drop(snapshot), Math.max(0, expiresAt - this.clock()));
     snapshot.timer.unref?.();
     return payload;
