@@ -43,6 +43,7 @@ async function fixture(input: {
   enabled?: boolean;
   /** Sessions whose limit state cannot be read (FU-25). */
   limitUnreadable?: string[];
+  onSessionsReady?: () => void;
 }) {
   const home = await mkdtemp(path.join(tmpdir(), "revive-on-restart-"));
   cleanup.push(home);
@@ -109,6 +110,7 @@ async function fixture(input: {
         now: () => new Date("2026-10-11T09:49:00Z"),
         settleMs: 0,
         gapMs: 0,
+        onSessionsReady: input.onSessionsReady,
         sessions,
         deliver: async (leadId, prompt) => {
           notices.push({ leadId, prompt });
@@ -121,6 +123,41 @@ async function fixture(input: {
 }
 
 describe("revive on restart", () => {
+  test("delivery readiness follows saved state restoration and precedes provider recovery", async () => {
+    let ready = false;
+    const f = await fixture({
+      records: [{ id: IDLE }, { id: RUNNING }],
+      onSessionsReady: () => {
+        expect([f.status(IDLE), f.status(RUNNING)]).toEqual(["idle", "idle"]);
+        expect(f.loads).toEqual([]);
+        expect(f.prompts).toEqual([]);
+        ready = true;
+      },
+    });
+    await recordOpenSessions({
+      paseoHome: f.home,
+      agents: [
+        { id: IDLE, lifecycle: "idle" },
+        { id: RUNNING, lifecycle: "running" },
+      ],
+    });
+    expect((await f.run()).continued).toEqual([RUNNING]);
+    expect(ready).toBe(true);
+  });
+
+  test("disabled revival still signals delivery readiness once", async () => {
+    let ready = 0;
+    const f = await fixture({
+      records: [{ id: IDLE }],
+      enabled: false,
+      onSessionsReady: () => ready++,
+    });
+    await f.run();
+    expect(ready).toBe(1);
+    expect(f.loads).toEqual([]);
+    expect(f.status(IDLE)).toBe("closed");
+  });
+
   test("after a clean stop, open sessions read idle without loading; only the cut-off turn is loaded and continued", async () => {
     const f = await fixture({
       records: [

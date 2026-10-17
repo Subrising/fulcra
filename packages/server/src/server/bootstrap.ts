@@ -2176,6 +2176,8 @@ export async function createPaseoDaemon(
       // model loading doesn't block the server from accepting connections.
       speechService.start();
       scriptHealthMonitor.start();
+      let queuedMessagesStart: Promise<void> | undefined;
+      const startQueuedMessages = () => (queuedMessagesStart ??= queuedAgentMessages.start());
       // FULCRA(orchestration): sessions open before this restart read open again; cut-off turns continue; leads hear
       // which did not. Runs after listening, so providers, plugins and clients are ready (revive-on-restart.ts).
       void reviveAfterRestart(
@@ -2186,14 +2188,20 @@ export async function createPaseoDaemon(
           localServerId: serverId,
           logger,
           isEnabled: () => daemonConfigStore.get().reviveOnRestart !== false,
+          onSessionsReady: () => {
+            // The final recovery chain below owns error reporting.
+            void startQueuedMessages().catch(() => undefined);
+          },
         },
         { records: persistedRecords, crashInterrupted: interrupted },
       )
         .catch((err) => logger.warn({ err }, "Revive on restart failed"))
-        .then(() => queuedAgentMessages.start())
+        // A storage failure before readiness keeps the previous recovery fallback.
+        .then(startQueuedMessages)
         .then(() => stopReportUp.recover())
         .catch((err) => logger.warn({ err }, "Queued messages could not resume"))
-        .then(() => hostLinkRuntime.start());
+        .then(() => hostLinkRuntime.start())
+        .catch((err) => logger.warn({ err }, "Host-link messages could not resume"));
     } catch (error) {
       localCredential = null;
       await deleteLocalCredential(config.paseoHome);
