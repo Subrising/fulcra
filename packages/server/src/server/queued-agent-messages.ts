@@ -1,6 +1,6 @@
 import { watch, type FSWatcher } from "node:fs";
 import { dirname, basename } from "node:path";
-import { noticePaused, noticePauseVersion } from "./notice-pause.js";
+import { noticePaused, noticePauseVersion, NoticePausedError } from "./notice-pause.js";
 import { leadEventsFor, withLeadEvent } from "./lead-events.js";
 import { randomUUID } from "node:crypto";
 import { DIRECT_LINK_LABEL, MAIN_ASSISTANT_ROLE } from "@getpaseo/protocol/agent-labels";
@@ -158,7 +158,7 @@ export class QueuedAgentMessages {
     this.pauseWatcher ??= watch(dirname(this.deps.agentStorage.noticePausePath), (_event, file) => {
       if (file && file.toString() !== basename(this.deps.agentStorage.noticePausePath)) return;
       const version = noticePauseVersion(this.deps.agentStorage.noticePausePath);
-      if (version === this.pauseVersion) return;
+      if (!file && version === this.pauseVersion) return;
       this.pauseVersion = version;
       for (const record of this.records)
         if (["queued", "dispatching"].includes(record.state)) this.kick(record.agentId);
@@ -481,7 +481,8 @@ export class QueuedAgentMessages {
   }
 
   private async holdPausedDelivery(agentId: string): Promise<boolean> {
-    const target = agentManager.getAgent(agentId) ?? (await this.deps.agentStorage.get(agentId));
+    const target =
+      this.deps.agentManager.getAgent(agentId) ?? (await this.deps.agentStorage.get(agentId));
     if (noticePaused(this.deps.agentStorage.noticePausePath, target)) {
       const held = this.records.filter(
         (record) => record.agentId === agentId && record.state === "queued",
@@ -562,7 +563,7 @@ export class QueuedAgentMessages {
             if (
               noticePaused(this.deps.agentStorage.noticePausePath, agentManager.getAgent(agentId))
             )
-              throw new SteerUnavailableError(agentId);
+              throw new NoticePausedError();
             const refused = eligible.flatMap((record) => {
               const reason = lineChecks.get(record)!();
               return reason ? [{ record, reason }] : [];
@@ -632,6 +633,7 @@ export class QueuedAgentMessages {
   private batchFailed(agentId: string, eligible: Record[], error: unknown): void {
     const { agentManager } = this.deps;
     const limit = recipientLimit(error);
+    if (error instanceof NoticePausedError) this.rekick.add(agentId);
     for (const record of eligible) {
       if (record.request.notifyOnFinish && record.request.sender)
         disarmFinishNotification(agentManager, agentId, record.request.sender.agentId);
@@ -640,7 +642,7 @@ export class QueuedAgentMessages {
       if (limit) record.resumeAt = limit.resumeAt;
     }
     if (limit) this.schedule(agentId, limit.resumeAt);
-    else if (!(error instanceof SteerUnavailableError))
+    else if (!(error instanceof SteerUnavailableError) && !(error instanceof NoticePausedError))
       for (const record of eligible) this.tell(record, record.reason!);
   }
 }
@@ -667,7 +669,8 @@ function selectQueuedBatch(waiting: Record[]): Record[] {
 }
 
 function failureState(error: unknown, limit: { resumeAt: number } | null): Record["state"] {
-  if (error instanceof SteerUnavailableError || limit) return "queued";
+  if (error instanceof SteerUnavailableError || error instanceof NoticePausedError || limit)
+    return "queued";
   const code = (error as { code?: unknown } | null)?.code;
   if (code === "QUEUED_RECEIVER_CLOSED" || code === "QUEUED_RECEIVER_CHANGED") return "refused";
   return "uncertain";

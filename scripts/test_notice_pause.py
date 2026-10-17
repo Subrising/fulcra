@@ -23,10 +23,10 @@ class NoticePauseTests(unittest.TestCase):
         self.calls = []
         self.rows = [{'id': 'claude-owner', 'provider': 'claude/model', 'status': 'idle'},
                      {'id': 'codex-owner', 'provider': 'codex/model', 'status': 'idle'}]
-        self.fail = False
+        self.transport_fail = False
         self.gate = m.Gate(self.root, self.run_native)
         self.policy(['claude'])
-        self.env = patch.dict(os.environ, {}, clear=True)
+        self.env = patch.dict(os.environ, {'PASEO_HOME': '', 'PASEO_AGENT_ID': ''})
         self.env.start()
         self.addCleanup(self.env.stop)
 
@@ -34,7 +34,7 @@ class NoticePauseTests(unittest.TestCase):
         self.calls.append((cli, args, kwargs))
         if 'ls' in args:
             return subprocess.CompletedProcess(args, 0, json.dumps(self.rows), '')
-        return subprocess.CompletedProcess(args, int(self.fail), 'receipt', '')
+        return subprocess.CompletedProcess(args, int(self.transport_fail), 'receipt', '')
 
     def policy(self, providers, **extra):
         m.atomic(self.root / 'pause.json', {'pausedProviders': providers, **extra})
@@ -101,7 +101,7 @@ class NoticePauseTests(unittest.TestCase):
     def test_transport_failure_is_retained_without_replay(self):
         self.send()
         self.policy([])
-        self.fail = True
+        self.transport_fail = True
         with self.assertRaises(RuntimeError):
             self.gate.drain()
         self.gate.drain()
@@ -141,6 +141,39 @@ class NoticePauseTests(unittest.TestCase):
         self.gate.drain()
         self.assertEqual([item[2]['env']['PASEO_AGENT_ID'] for item in self.sends()], ['source-a', 'source-b'])
 
+    def test_codex_image_notices_keep_native_options(self):
+        args = ['send', 'codex-owner', '--prompt', 'image receipt', '--image', 'fixture.png']
+        self.gate.send('/native/cli', args)
+        self.assertEqual(self.sends()[0][1], args)
+
+    def test_codex_native_queue_keeps_its_native_admission(self):
+        args = ['send', 'codex-owner', '--prompt', 'receipt', '--native-queue', '--message-id', 'native-id']
+        self.gate.send('/native/cli', args)
+        self.assertEqual(self.sends()[0][1], args)
+
+    def test_paused_capabilities_are_not_converted_to_plain_input(self):
+        with self.assertRaises(ValueError):
+            self.gate.send('/native/cli', ['send', 'claude-owner', '--prompt', 'receipt', '--native-queue', '--message-id', 'native-id'])
+        self.assertEqual(self.records(), [])
+        self.assertEqual(self.sends(), [])
+
+    def test_resume_uses_the_current_stable_cli(self):
+        self.send()
+        self.policy([], deliveryCli='/current/cli')
+        self.gate.drain()
+        self.assertEqual(self.sends()[0][0], '/current/cli')
+
+    def test_an_archived_owner_does_not_block_another_owner(self):
+        self.rows.append({'id': 'second-owner', 'provider': 'claude/model', 'status': 'idle'})
+        self.send()
+        self.send('second-owner')
+        self.rows = [row for row in self.rows if row['id'] != 'claude-owner']
+        self.policy([])
+        self.gate.drain()
+        self.assertEqual(len(self.sends()), 1)
+        self.assertEqual(self.sends()[0][1][1], 'second-owner')
+        self.assertEqual(sorted(batch['state'] for batch in self.records()), ['delivered', 'refused'])
+
     def test_native_cli_output_stays_live(self):
         child_code = "import sys; print('ready', flush=True); sys.stdin.readline(); print('done', flush=True)"
         flags = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
@@ -164,6 +197,11 @@ class NoticePauseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.send('missing')
         self.assertEqual(self.sends(), [])
+
+    def test_target_binding_preserves_an_identical_endpoint_value(self):
+        self.gate.send('/native/cli', ['--home', 'codex', 'send', 'codex', '--prompt', 'receipt'])
+        self.assertEqual(self.sends()[0][1][1], 'codex')
+        self.assertEqual(self.sends()[0][1][3], 'codex-owner')
 
     def test_role_delivery_is_bound_to_checked_id(self):
         self.policy([], roles={'main-assistant': 'claude-owner'})

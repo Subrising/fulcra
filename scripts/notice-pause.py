@@ -135,18 +135,25 @@ def parse_send(args):
             index += 1
         else:
             return None
+    offset = index
     rest = rest[index:]
     if rest[:2] == ['agent', 'send']:
         rest = rest[1:]
+        offset += 1
     if not rest or rest[0] != 'send':
         return None
-    positional, text, source, message_id = [], [], None, None
+    positional, positions, text, source, message_id = [], [], [], None, None
+    requires_plain = False
     index = 1
     while index < len(rest):
         token = rest[index]
         if token in ['--home', '--host']:
             if index + 1 >= len(rest): raise ValueError('Missing endpoint value')
             endpoint.extend(rest[index:index + 2])
+            index += 2
+        elif token in ['--image', '--format', '-o']:
+            if index + 1 >= len(rest): raise ValueError('Missing send option value')
+            if token == '--image': requires_plain = True
             index += 2
         elif token in ['--prompt', '--prompt-file', '--from', '--message-id']:
             if index + 1 >= len(rest):
@@ -161,18 +168,24 @@ def parse_send(args):
             else:
                 message_id = value
             index += 2
-        elif token in ['--no-wait', '--queue', '--steer', '--json', '--no-color']:
+        elif token in ['--no-wait', '--wait', '--queue', '--steer', '--json', '--no-color', '--no-headers', '--quiet', '-q', '--native-queue']:
+            if token == '--native-queue': requires_plain = True
             index += 1
         elif token.startswith('-'):
             raise ValueError('Unsupported notice option. No notice was sent.')
         else:
             positional.append(token)
+            positions.append(offset + index)
             index += 1
     if len(positional) == 2:
         text.append(positional.pop())
     if len(positional) != 1 or len(text) != 1:
         raise ValueError('A notice needs one target and one text source')
-    return endpoint, positional[0], text[0], source, message_id
+    return endpoint, positional[0], text[0], source, message_id, positions[0], requires_plain
+
+
+class TargetUnavailableError(ValueError):
+    pass
 
 
 class Gate:
@@ -195,7 +208,7 @@ class Gate:
         else:
             matches = [row for row in rows if row['id'].startswith(identifier)]
         if len(matches) != 1:
-            raise ValueError('The notice target must resolve to one session')
+            raise TargetUnavailableError('The notice target must resolve to one active session')
         row = matches[0]
         if not isinstance(row.get('provider'), str):
             raise ValueError('Unknown notice provider')
@@ -206,7 +219,7 @@ class Gate:
         parsed = parse_send(args)
         if parsed is None:
             return self.run(cli, args).returncode
-        endpoint, identifier, text, source, message_id = parsed
+        endpoint, identifier, text, source, message_id, target_index, requires_plain = parsed
         supplied_endpoint = bool(endpoint)
         if not endpoint:
             home = os.environ.get('PASEO_HOME') or read_policy(self.policy).get('defaultHome')
@@ -215,11 +228,13 @@ class Gate:
         target = self.target(cli, endpoint, identifier)
         with locked(self.store):
             if paused(read_policy(self.policy), target):
+                if requires_plain or text.lstrip().startswith('/'):
+                    raise ValueError('Paused notices require plain text. The original command was not sent or stored.')
                 if require_delivery:
                     raise ValueError('Provider paused. The required notice was not delivered.')
                 return self.hold(cli, endpoint, target, text, source, message_id)
         bound = list(args)
-        bound[bound.index(identifier)] = target['id']
+        bound[target_index] = target['id']
         if not supplied_endpoint: bound = [*endpoint, *bound]
         return self.run(cli, bound).returncode
 
@@ -255,6 +270,7 @@ class Gate:
         return 0
 
     def drain(self):
+        errors = []
         # Transport never holds the storage lock. A completion can always save its notice.
         with locked(self.store):
             paths = sorted(self.store.glob('*.json'))
@@ -263,13 +279,28 @@ class Gate:
                 snapshot = json.loads(path.read_text())
                 batch_ids = [batch['batchId'] for batch in snapshot['batches'] if batch['state'] == 'held']
             for batch_id in batch_ids:
-                target = self.target(snapshot['cli'], snapshot['endpoint'], snapshot['agentId'])
+                cli = read_policy(self.policy).get('deliveryCli') or snapshot['cli']
+                try:
+                    target = self.target(cli, snapshot['endpoint'], snapshot['agentId'])
+                except TargetUnavailableError as error:
+                    with locked(self.store):
+                        record = json.loads(path.read_text())
+                        batch = next(batch for batch in record['batches'] if batch['batchId'] == batch_id)
+                        if batch['state'] == 'held':
+                            batch.update(state='refused', reason=str(error))
+                            atomic(path, record)
+                    continue
+                except Exception:
+                    errors.append(batch_id)
+                    continue
                 with locked(self.store):
                     record = json.loads(path.read_text())
                     batch = next(batch for batch in record['batches'] if batch['batchId'] == batch_id)
                     if batch['state'] != 'held' or paused(read_policy(self.policy), target):
                         continue
                     if target.get('status') == 'closed' or target.get('archivedAt') or target.get('archived'):
+                        batch.update(state='refused', reason='Receiver closed or archived')
+                        atomic(path, record)
                         continue
                     text = 'Job notices held during the provider pause:\n\n' + '\n\n'.join(
                         item['text'] for item in batch['notices'])
@@ -283,15 +314,19 @@ class Gate:
                     env = dict(os.environ)
                     env.pop('PASEO_AGENT_ID', None)
                     if batch['sender']['agent']: env['PASEO_AGENT_ID'] = batch['sender']['agent']
-                result = self.run(record['cli'], args, env=env, capture_output=True, text=True, timeout=60)
+                try:
+                    result = self.run(cli, args, env=env, capture_output=True, text=True, timeout=60)
+                except (OSError, subprocess.SubprocessError) as error:
+                    result = subprocess.CompletedProcess(args, 1, '', type(error).__name__)
                 with locked(self.store):
                     record = json.loads(path.read_text())
                     batch = next(batch for batch in record['batches'] if batch['batchId'] == batch_id)
                     batch.update(state='delivered' if result.returncode == 0 else 'uncertain',
                                  receipt={'exitCode': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr})
                     atomic(path, record)
-                if result.returncode:
-                    raise RuntimeError('Notice delivery failed. Retained the record. No automatic retry.')
+                if result.returncode: errors.append(batch_id)
+        if errors:
+            raise RuntimeError('Notice delivery failed. Retained all receipts. No automatic retry.')
 
 
 def main():
@@ -323,6 +358,9 @@ def main():
 if __name__ == '__main__':
     try:
         sys.exit(main())
+    except (OSError, subprocess.SubprocessError):
+        print('Notice gate: File or transport operation failed. Check the saved receipts.', file=sys.stderr)
+        sys.exit(1)
     except Exception as error:
         print('Notice gate: ' + str(error), file=sys.stderr)
         sys.exit(1)
