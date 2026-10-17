@@ -64,7 +64,7 @@ async function fixture(t, realCodex = false, provider = "codex") {
       },
       "thread/loaded/list": () => ({ data: ["owned-thread"] }),
       "account/rateLimits/read": () => {
-        if (quotaFailure) throw Error("quota unavailable");
+        if (quotaFailure) return { __jsonRpcError: { code: -32000, message: "quota unavailable" } };
         return { accountId: "test-account", ordinaryUsageAllowed: true, rateLimits: {} };
       },
     });
@@ -746,7 +746,10 @@ test("public real Codex quota failure preserves the attempt-bound receipt", asyn
     connection = await wire(t, f);
   await queued(f);
   f.failQuota();
-  await assert.rejects(connection.inputs.send(f.id, f.text, f.message, f.attempt));
+  await assert.rejects(
+    connection.inputs.send(f.id, f.text, f.message, f.attempt),
+    /The Codex turn wasn't sent: the Codex account usage check failed/,
+  );
   assert.equal(f.calls(), 0);
   const receipt = JSON.parse(
     f.store.db.prepare("SELECT result FROM deliveries WHERE id=?").get(f.message).result,
