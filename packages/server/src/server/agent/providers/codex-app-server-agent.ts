@@ -8096,7 +8096,6 @@ export class CodexAppServerAgentSession implements AgentSession {
   }): void {
     const timestamp = new Date().toISOString();
     const action = input.action === "accept" ? "auto-accepted" : "remembered decline";
-    this.deps.computerUsePolicy?.changed(this);
     this.emitEvent({
       type: "timeline",
       provider: CODEX_PROVIDER,
@@ -8233,6 +8232,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     ) {
       const decision: ComputerUseDecision = { action: "accept", content: {}, _meta: null };
       this.computerUseDecisions.set(key, decision);
+      this.deps.computerUsePolicy?.changed(this);
       this.auditComputerUse({ ...consent, action: "accept" });
       return Promise.resolve(decision);
     }

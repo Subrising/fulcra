@@ -116,6 +116,7 @@ A lead can name apps when it creates a Codex worker:
 The label is a JSON array of exact app names. It is fixed when the job starts.
 It applies only to built-in Codex sessions in full-access mode.
 The approval policy must be `never`. The sandbox mode must be `danger-full-access`.
+The native turn must also use full-access policy. Selecting this mode does not grant an older restricted turn.
 A listed name binds to the first approved app bundle for that name. Another bundle with the same name asks separately.
 The request must carry the computer-use connector ID and app bundle ID.
 

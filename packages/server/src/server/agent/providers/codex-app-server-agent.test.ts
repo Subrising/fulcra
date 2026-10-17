@@ -1758,6 +1758,7 @@ describe("Codex app-server provider", () => {
 
   test("computer use accepts listed apps without a permission event and logs each accept", async () => {
     const appServer = createFakeCodexAppServer();
+    const changed = vi.fn();
     const session = new CodexAppServerAgentSession(
       createConfig({
         modeId: "full-access",
@@ -1766,6 +1767,7 @@ describe("Codex app-server provider", () => {
       { sessionId: "thread-1" },
       createTestLogger(),
       async () => appServer.child,
+      { computerUsePolicy: { approve: () => true, changed } },
     );
     await session.connect();
     const events: AgentStreamEvent[] = [];
@@ -1781,6 +1783,7 @@ describe("Codex app-server provider", () => {
       }
       expect(events.filter((event) => event.type === "permission_requested")).toEqual([]);
       expect(session.getPendingPermissions()).toEqual([]);
+      expect(changed).toHaveBeenCalledTimes(2);
       expect(events.filter((event) => event.type === "timeline")).toEqual(
         ["VRoid Studio", "VRoid Studio", "Simulator"].map((app) => ({
           type: "timeline",
