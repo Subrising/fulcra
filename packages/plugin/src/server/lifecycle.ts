@@ -1,3 +1,4 @@
+import type { SessionCost } from "@getpaseo/protocol/recorded-usage";
 import type {
   AgentPermissionRequest,
   AgentPermissionResponse,
@@ -69,6 +70,39 @@ export interface PluginLifecycleEvents {
 }
 
 export interface PluginBeforeRequests {
+  "agent.cost_commit": {
+    costCommitted?: boolean;
+    agentId: string;
+    provider: string;
+    accountId: string | null;
+    turnId: string;
+    costUsd: number;
+    at: string;
+    cursors: Record<string, number>;
+    revision?: number;
+  };
+
+  "agent.cost_read": {
+    agentId: string;
+    provider: string;
+    runtimeSessionId: string | null;
+    records?: {
+      cursors: Record<string, number>;
+      revision?: number;
+      billingWarning?: string;
+      turns: Record<string, { accountId: string | null; amountUsd: number; at: string }>;
+    };
+  };
+  "agent.turn_start": {
+    accountKind?: "api-key" | "subscription";
+    apiGuardChecked?: boolean;
+    agentId: string;
+    provider: string;
+    accountId: string | null;
+    labels: Record<string, string>;
+    sessionCost?: SessionCost;
+    costRecords?: Record<string, { accountId: string | null; amountUsd: number; at: string }>;
+  };
   "agent.create": {
     config: AgentSessionConfig;
     env?: Record<string, string>;

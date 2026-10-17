@@ -434,6 +434,11 @@ export async function setAccount(root, id, patch, expectedEpoch) {
         a.limitNote = null;
       }
     }
+    if (patch.dailyLimitUsd !== undefined) {
+      if (!isApiAccount(a) || !Number.isFinite(patch.dailyLimitUsd) || patch.dailyLimitUsd <= 0)
+        throw Error("Invalid daily API cost cap");
+      a.dailyLimitUsd = patch.dailyLimitUsd;
+    }
     if (patch.budget !== undefined) {
       const b = patch.budget;
       if (
@@ -966,6 +971,7 @@ export function publicView(s, now = Date.now()) {
       status: accountStatus(a, now),
       credentialKind: isApiAccount(a) ? "api-key" : "subscription",
       budget: accountBudget(a),
+      ...(isApiAccount(a) ? { dailyLimitUsd: a.dailyLimitUsd ?? 40 } : {}),
       limitNote: isApiAccount(a) ? null : a.limitNote,
       limitKind: accountLimit(a, now)?.kind ?? null,
       sessions: Object.entries(s.assignments)

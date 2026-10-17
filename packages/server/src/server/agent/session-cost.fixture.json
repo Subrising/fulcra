@@ -1,0 +1,30 @@
+[
+  {
+    "turnId": "turn-a",
+    "accountId": "account-a",
+    "type": "result",
+    "subtype": "success",
+    "session_id": "native-fixture",
+    "total_cost_usd": 9.65,
+    "usage": { "input_tokens": 100, "output_tokens": 40 },
+    "modelUsage": { "fixture-model": { "inputTokens": 100, "outputTokens": 40 } }
+  },
+  {
+    "turnId": "turn-b",
+    "accountId": "account-a",
+    "type": "result",
+    "subtype": "success",
+    "session_id": "native-fixture",
+    "total_cost_usd": 0,
+    "usage": { "input_tokens": 0, "output_tokens": 0 }
+  },
+  {
+    "turnId": "turn-c",
+    "accountId": "account-b",
+    "type": "result",
+    "subtype": "success",
+    "session_id": "native-fixture",
+    "total_cost_usd": 7.87,
+    "usage": { "input_tokens": 80, "output_tokens": 30 }
+  }
+]

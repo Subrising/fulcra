@@ -1446,11 +1446,25 @@ test("orders a concurrent replacement after a pending accepted steer", async () 
     logger,
   });
   let agentId: string | null = null;
+  let stopEcho = () => {};
   try {
     const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
       workspaceId: undefined,
     });
     agentId = agent.id;
+    const replacementEcho = deferred<void>();
+    stopEcho = manager.subscribe(
+      (event) => {
+        if (
+          event.type === "agent_stream" &&
+          event.event.type === "timeline" &&
+          event.event.item.type === "user_message" &&
+          event.event.item.clientMessageId === "replacement-client"
+        )
+          replacementEcho.resolve();
+      },
+      { agentId: agent.id, replayState: false },
+    );
     const initial = manager.streamAgent(agent.id, "initial");
     const consumeInitial = (async () => {
       for await (const _event of initial) {
@@ -1478,6 +1492,7 @@ test("orders a concurrent replacement after a pending accepted steer", async () 
     await consumeInitial;
     await vi.waitFor(() => expect(session.startCount).toBe(2));
 
+    await replacementEcho.promise;
     expect(session.interruptCount).toBe(1);
     expect(
       manager
@@ -1489,6 +1504,7 @@ test("orders a concurrent replacement after a pending accepted steer", async () 
       { text: "replacement", clientMessageId: "replacement-client" },
     ]);
   } finally {
+    stopEcho();
     release.resolve();
     if (agentId) await manager.closeAgent(agentId).catch(() => undefined);
     rmSync(workdir, { recursive: true, force: true });

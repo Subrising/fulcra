@@ -1,6 +1,7 @@
 export const PROVIDERS: readonly ["claude", "codex"];
 export const POLICIES: readonly ["priority", "spread"];
 export interface Account {
+  dailyLimitUsd?: number;
   keyEpoch?: string;
   localRevoked?: boolean;
   credentialKind?: "api-key" | "subscription";

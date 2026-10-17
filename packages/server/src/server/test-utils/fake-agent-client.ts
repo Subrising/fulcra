@@ -993,6 +993,10 @@ class FakeAgentSession implements AgentSession {
     };
   }
 
+  billingAccountKind(): "subscription" | null {
+    return this.testAccountLabel ? "subscription" : null;
+  }
+
   usageCredential(): ReturnType<NonNullable<AgentSession["usageCredential"]>> {
     return this.testAccountLabel
       ? { credential: { kind: "unavailable" }, label: this.testAccountLabel }

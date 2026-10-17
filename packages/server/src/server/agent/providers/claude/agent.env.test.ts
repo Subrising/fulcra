@@ -282,3 +282,52 @@ test("trusted denies survive manager import, reload and quiet MCP replacement", 
     authority.close();
   }
 });
+
+test.each(["api-key", "subscription"] as const)(
+  "%s launch controls native background and scheduled work",
+  async (kind) => {
+    let captured: Record<string, string | undefined> | undefined;
+    const client = new ClaudeAgentClient({
+      logger: createTestLogger(),
+      resolveBinary: async () => "/test/claude/bin",
+      queryFactory: ({ options }) => {
+        captured = options.env;
+        return createQueryMock([
+          {
+            type: "system",
+            subtype: "init",
+            session_id: "cost-env",
+            permissionMode: "default",
+            model: "opus",
+          },
+          { type: "assistant", message: { content: "done" } },
+          {
+            type: "result",
+            subtype: "success",
+            total_cost_usd: 0,
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+        ]);
+      },
+    });
+    const session = await client.createSession(
+      { provider: "claude", cwd: process.cwd() },
+      {
+        env:
+          kind === "api-key"
+            ? { FULCRA_API_KEY_HELPER: "fixture-helper" }
+            : { CLAUDE_CODE_OAUTH_TOKEN: "fixture-token" },
+      },
+    );
+    try {
+      expect(session.billingAccountKind?.()).toBe(kind);
+      await session.run("Fixture");
+      expect(captured?.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBe(
+        kind === "api-key" ? "1" : undefined,
+      );
+      expect(captured?.CLAUDE_CODE_DISABLE_CRON).toBe(kind === "api-key" ? "1" : undefined);
+    } finally {
+      await session.close();
+    }
+  },
+);

@@ -717,6 +717,7 @@ type RefreshProvidersSnapshotPayload = RefreshProvidersSnapshotResponseMessage["
 type ProviderDiagnosticPayload = ProviderDiagnosticResponseMessage["payload"];
 type ProviderUsageListPayload = ProviderUsageListResponseMessage["payload"];
 interface UsageListReportsPayload {
+  sessionCost?: import("@getpaseo/protocol/recorded-usage").SessionCost;
   requestId: string;
   reports: UsageReportEntry[];
 }
@@ -6332,7 +6333,11 @@ export class DaemonClient {
             : null,
       });
       if (response.error !== null) throw new Error(response.error);
-      return { requestId, reports };
+      return {
+        requestId,
+        reports,
+        ...(response.sessionCost ? { sessionCost: response.sessionCost } : {}),
+      };
     } finally {
       active = false;
       unsubscribe();

@@ -1,3 +1,4 @@
+import { SessionCostRecordsSchema } from "./session-cost.js";
 import { stripInternalPaseoMcpServer } from "./runtime-mcp-config.js";
 import { promises as fs, type Dirent } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -94,6 +95,7 @@ export function interruptedRecord(
 }
 
 const STORED_AGENT_SCHEMA = z.object({
+  costRecords: SessionCostRecordsSchema.optional(),
   id: z.string(),
   provider: z.string(),
   cwd: z.string(),

@@ -72,3 +72,61 @@ test("request failures terminate with an error response and no updates", async (
     },
   ]);
 });
+
+test("hidden provider cost is not read by report or legacy usage RPCs", async () => {
+  const { AccountUsageSession } = await import("./account-usage-session.js");
+  const emitted: SessionOutboundMessage[] = [];
+  let reads = 0;
+  const cost = () => {
+    reads++;
+    return { totalUsd: 4, lastTurnUsd: 4, recordedTurns: 1, accounts: [] };
+  };
+  const visible = (id: string) => id === "visible";
+  const runtime = {
+    async listUsageReports() {
+      return [];
+    },
+    async listLegacyUsage() {
+      return { fetchedAt: "2026-10-17T00:00:00Z", providers: [] };
+    },
+  };
+  const usage = new UsageSession({
+    emit: (m) => emitted.push(m),
+    logger: pino({ level: "silent" }),
+    runtime,
+    canReadSessionCost: visible,
+    sessionCost: cost,
+  });
+  const legacy = new AccountUsageSession({
+    host: { emit: (m) => emitted.push(m), isProviderVisibleToClient: () => false },
+    logger: pino({ level: "silent" }),
+    providerUsageService: {
+      listUsage: runtime.listLegacyUsage,
+      observeUsage: () => ({ fetchedAt: "2026-10-17T00:00:00Z", providers: [] }),
+    },
+    canReadSessionCost: visible,
+    refreshSessionCost: async () => cost(),
+    sessionCost: cost,
+  });
+  await usage.handleListReports({
+    type: "usage.list_reports.request",
+    requestId: "report",
+    agentId: "hidden",
+  });
+  for (const observationOnly of [false, true])
+    await legacy.handleProviderUsageListRequest({
+      type: "provider.usage.list.request",
+      requestId: "legacy",
+      agentId: "hidden",
+      observationOnly,
+    });
+  expect(reads).toBe(0);
+  for (const message of emitted)
+    expect(message.payload).not.toHaveProperty("sessionCost", expect.anything());
+  await usage.handleListReports({
+    type: "usage.list_reports.request",
+    requestId: "visible",
+    agentId: "visible",
+  });
+  expect(reads).toBe(1);
+});

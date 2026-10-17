@@ -105,7 +105,7 @@ export class Wakes {
     return Boolean(
       this.db
         .prepare(
-          "SELECT 1 FROM role_wakes WHERE holder=? AND state IN ('queued','sending') LIMIT 1",
+          "SELECT 1 FROM role_wakes WHERE holder=? AND state IN ('pending','queued','sending') LIMIT 1",
         )
         .get(id),
     );
@@ -154,18 +154,22 @@ export class Wakes {
       .run("heartbeatMinutes", JSON.stringify(a.minutes), a.note.trim(), this.iso());
     return { heartbeatMinutes: a.minutes, note: a.note.trim() };
   }
-  enqueue(r, kind, identity, payload) {
+  enqueue(r, kind, identity, payload, { pendingOnCapacity = false } = {}) {
     const key = digest(JSON.stringify([r.holder, r.session ?? null, ...identity]));
     if (this.db.prepare("SELECT 1 FROM role_wakes WHERE identity=?").get(key)) return false;
+    let state = "queued";
     if (
       this.db.prepare("SELECT count(*) n FROM role_wakes WHERE state IN ('queued','sending')").get()
         .n >= MAX_QUEUED
     ) {
-      this.lastError = { message: "Wake queue capacity reached", at: this.iso() };
-      return false;
+      if (!pendingOnCapacity) {
+        this.lastError = { message: "Wake queue capacity reached", at: this.iso() };
+        return false;
+      }
+      state = "pending";
     }
     this.db
-      .prepare("INSERT INTO role_wakes VALUES (?,?,?,?,?,?,?,'queued',0,NULL,?,NULL)")
+      .prepare("INSERT INTO role_wakes VALUES (?,?,?,?,?,?,?,?,0,NULL,?,NULL)")
       .run(
         derived(key, "role-wake"),
         r.holder,
@@ -174,6 +178,7 @@ export class Wakes {
         kind,
         key,
         JSON.stringify({ ...payload, ...(r.title ? { sessionTitle: clip(r.title, 120) } : {}) }),
+        state,
         this.iso(),
       );
     return true;
@@ -211,27 +216,39 @@ export class Wakes {
   // FU-112: an account's token was revoked or is invalid. The session's lead (and its manager) and the main assistant
   // hear it once per account: the identity holds the holder and the account, not the session.
   accountBudget(key, payload) {
-    if (!this.has("role_bindings")) return 0;
-    const holders = this.db
-      .prepare(
-        "SELECT DISTINCT session FROM role_bindings WHERE role='prime' AND seat='main' AND state='assigned' AND session IS NOT NULL",
-      )
-      .all()
-      .filter((b) => uuid(b.session));
+    const holders = !this.has("role_bindings")
+      ? []
+      : this.db
+          .prepare(
+            "SELECT DISTINCT session FROM role_bindings WHERE role='prime' AND seat='main' AND state='assigned' AND session IS NOT NULL",
+          )
+          .all()
+          .filter((b) => uuid(b.session));
+    for (const session of payload.sessions ?? []) {
+      if (!uuid(session)) continue;
+      for (const owner of this.owned({ session })) holders.push({ session: owner.holder });
+      if (this.has("manager_workers"))
+        for (const row of this.db
+          .prepare("SELECT DISTINCT supervisor FROM manager_workers WHERE worker=?")
+          .all(session))
+          if (uuid(row.supervisor)) holders.push({ session: row.supervisor });
+    }
+    const unique = [...new Set(holders.map((h) => h.session))].filter(uuid);
     let n = 0;
-    for (const b of holders) {
+    for (const session of unique) {
       if (
         this.enqueue(
-          { holder: b.session, seat: null, session: null },
+          { holder: session, seat: null, session: null },
           "account-budget",
           ["account-budget", key],
           payload,
+          { pendingOnCapacity: true },
         )
       )
         n++;
     }
     if (n) this.pump();
-    return holders.length;
+    return unique.length;
   }
   accountDown(session, r) {
     if (!r?.from) return 0;
@@ -396,7 +413,7 @@ export class Wakes {
       if (w.kind === "error")
         return `- [error] ${who} stopped with an error: "${p.error}". The controller recovers provider auth and usage-limit stops itself where it can; inspect it with role_inspect_session.`;
       if (w.kind === "account-budget")
-        return `- [API budget] Account "${p.account}" has spent $${Number(p.usedUsd).toFixed(2)} of $${p.limitUsd ?? "unset"}. ${p.moved ? `Delegated sessions on this API account switch to "${p.moved}" as active turns finish.` : "Check this account's budget and credit balance."} ${p.held ? `${p.held} owner-controlled session(s) stay on their account.` : ""} ${p.failed ? `${p.failed} session(s) could not switch. Inspect the recorded refusal before another attempt.` : ""}`;
+        return `- [API budget] Account "${p.account}" ${p.scope ?? "account"} has spent $${Number(p.usedUsd).toFixed(2)} of $${p.limitUsd ?? "unset"}. ${p.moved ? `Delegated sessions on this API account switch to "${p.moved}" as active turns finish.` : "Check this account's budget and credit balance."} ${p.held ? `${p.held} owner-controlled session(s) stay on their account.` : ""} ${p.failed ? `${p.failed} session(s) could not switch. Inspect the recorded refusal before another attempt.` : ""}`;
       if (w.kind === "account-down")
         return `- [account down] The token of account "${p.account}" was revoked or is invalid, so its sessions cannot run. ${p.moved ? `Fulcra moved the first stopped session to "${p.moved}"; others move as they stop.` : "No other account was ready."} The owner must sign the account in again (account screen); until then the pool does not use it.`;
       if (w.kind === "account-rotated" && p.revoked)
@@ -504,6 +521,18 @@ export class Wakes {
       }
     }
   }
+  promoteBudgetWakes() {
+    const count = this.db
+      .prepare("SELECT count(*) n FROM role_wakes WHERE state IN ('queued','sending')")
+      .get().n;
+    const room = Math.max(0, MAX_QUEUED - count);
+    if (room)
+      this.db
+        .prepare(
+          "UPDATE role_wakes SET state='queued',at=? WHERE id IN (SELECT id FROM role_wakes WHERE state='pending' AND kind='account-budget' ORDER BY rowid LIMIT ?)",
+        )
+        .run(this.iso(), room);
+  }
   pump() {
     if (this.control.closing) return Promise.resolve();
     if (!this.pumping)
@@ -518,7 +547,9 @@ export class Wakes {
               this.lastError = { session: id, message: e.message, at: this.iso() };
             }
           }
+        this.promoteBudgetWakes();
         await this.dispatch();
+        this.promoteBudgetWakes();
       })()
         .catch((e) => {
           this.lastError = { message: e.message, at: this.iso() };
@@ -549,12 +580,12 @@ export class Wakes {
   status() {
     const rows = this.db
       .prepare(
-        "SELECT id,holder,seat,session,kind,state,attempts,batch,at,deliveredAt FROM role_wakes ORDER BY (state IN ('queued','sending')) DESC, rowid DESC LIMIT 64",
+        "SELECT id,holder,seat,session,kind,state,attempts,batch,at,deliveredAt FROM role_wakes ORDER BY (state IN ('pending','queued','sending')) DESC, rowid DESC LIMIT 64",
       )
       .all();
     return {
       heartbeatMinutes: this.heartbeatMinutes(),
-      queued: rows.filter((r) => ["queued", "sending"].includes(r.state)).length,
+      queued: rows.filter((r) => ["pending", "queued", "sending"].includes(r.state)).length,
       wakes: rows,
       error: this.lastError,
     };

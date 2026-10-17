@@ -115,3 +115,71 @@ test("agent.create hooks receive the creation's labels and can fill an absent mo
     labels: { "fulcra.role": "implementation" },
   });
 });
+
+test("cost readers cannot replace saved turns, and turn guards cannot change account identity", async () => {
+  const hooks = new PluginHookHandlers(() => {});
+  hooks.before("agent.cost_read", ({ request }) => ({
+    ...request,
+    records: { cursors: {}, turns: { one: { accountId: null, amountUsd: 0, at: "now" } } },
+  }));
+  await expect(
+    hooks.invoke(
+      "cost",
+      "before",
+      "agent.cost_read",
+      {
+        agentId: "fixture",
+        provider: "claude",
+        runtimeSessionId: null,
+        records: { cursors: {}, turns: { one: { accountId: null, amountUsd: 9.65, at: "now" } } },
+      },
+      paseo,
+    ),
+  ).rejects.toThrow("Cost readers cannot change recorded turns");
+  hooks.before("agent.turn_start", ({ request }) => ({ ...request, accountId: "another" }));
+  await expect(
+    hooks.invoke(
+      "turn",
+      "before",
+      "agent.turn_start",
+      {
+        agentId: "fixture",
+        provider: "claude",
+        accountId: "original",
+        labels: {},
+      },
+      paseo,
+    ),
+  ).rejects.toThrow("agent.turn_start hooks cannot change the request");
+});
+
+test("billing receipts can confirm a write but cannot change its cost", async () => {
+  const hooks = new PluginHookHandlers(() => {});
+  const input = {
+    agentId: "agent",
+    provider: "claude",
+    accountId: "account",
+    turnId: "run:turn",
+    costUsd: 4,
+    at: "2026-10-17T00:00:00Z",
+    cursors: {},
+    revision: 1,
+  };
+  const stop = hooks.before("agent.cost_commit", ({ request }) => ({
+    ...request,
+    costCommitted: true,
+  }));
+  expect(await hooks.invoke("cost", "before", "agent.cost_commit", input, paseo)).toMatchObject({
+    ...input,
+    costCommitted: true,
+  });
+  stop();
+  hooks.before("agent.cost_commit", ({ request }) => ({
+    ...request,
+    costUsd: 0,
+    costCommitted: true,
+  }));
+  await expect(hooks.invoke("cost", "before", "agent.cost_commit", input, paseo)).rejects.toThrow(
+    /cannot change/,
+  );
+});
