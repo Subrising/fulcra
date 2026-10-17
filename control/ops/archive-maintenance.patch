@@ -158,18 +158,20 @@
    if(m.failUse)throw Error('Injected switch failure');
    if(m.busyOnce&&!m.reloaded)throw Error('Session is busy');
    const a=p.accounts.find(x=>x.name===args[2]);if(!a.enabled)throw Error('disabled');
-@@ -42,15 +43,16 @@
+@@ -42,15 +43,17 @@
    if(input.defaultAccount)p.defaults.claude=input.defaultAccount.id;
    if(input.policy)p.policy=input.policy;if(input.rotateOnLimit!==undefined)p.rotateOnLimit=input.rotateOnLimit;pp(p);return {ok:true};
   }
++ if(method==='native:refresh_agent_request'){if(input.restore)throw Error('Implicit restore intent');m.reloaded=true;put(m);return {ok:true}};
 + if(method==='native:fetch_agent_request')return {agent:m.sessions.some(a=>a.id===input.agentId)?{...m.sessions.find(a=>a.id===input.agentId),...(m.nativeArchived?{archivedAt:'2026-01-01T00:00:00Z'}:{})}:null};
   if(method==='native:fetch_agent_timeline_request')return {epoch:'e',entries:m.entries??[],hasNewer:false};
   throw Error('Unexpected mock RPC '+method);
  }
  '''
  with tempfile.TemporaryDirectory(prefix='work-switch-check-')as tmp:
-  root=pathlib.Path(tmp);home=root/'home';home.mkdir();scripts=root/'scripts';scripts.mkdir()
+- root=pathlib.Path(tmp);home=root/'home';home.mkdir();scripts=root/'scripts';scripts.mkdir()
 - for name in ['host.mjs','policy.mjs','monitor.mjs','monitor-worker.mjs']:shutil.copy2(SRC/name,scripts/name)
++ root=pathlib.Path(tmp).resolve();home=root/'home';home.mkdir();scripts=root/'scripts';scripts.mkdir()
 + for name in ['archive-guard.mjs','host.mjs','policy.mjs','monitor.mjs','monitor-worker.mjs']:shutil.copy2(SRC/name,scripts/name)
   (scripts/'common.mjs').write_text(MOCK)
 - (scripts/'clock.mjs').write_text("const D=Date;globalThis.Date=class extends D{constructor(...a){super(...(a.length?a:['2026-10-17T00:06:00Z']))}static now(){return new D('2026-10-17T00:06:00Z').getTime()}}")
@@ -177,7 +179,7 @@
   import os
   env={**os.environ,'FIXTURE':str(home)}
   d=home/'command-centre/work-switch-20261017';p=home/'command-centre/accounts/accounts.json';p.parent.mkdir(parents=True)
-@@ -63,8 +65,8 @@
+@@ -63,8 +66,8 @@
    write(p,{'accounts':acc,'policy':'spread','rotateOnLimit':False,'defaults':{'claude':'work-workspace-api'},'assignments':{a['id']:{'accountId':n,'at':'2026-10-17T00:05:00Z'}for a,n in zip(sessions,['work-workspace-api','Personal','Work','Personal'])}})
    write(home/'mock.json',{'sessions':sessions,**kw})
   def run(script,mode,ok=0,clock=True):
@@ -188,7 +190,16 @@
    assert r.returncode==ok,(argv,r.returncode,r.stdout,r.stderr)
    return json.loads(r.stdout)
   def mock():return json.loads((home/'mock.json').read_text())
-@@ -87,4 +89,13 @@
+@@ -74,7 +77,7 @@
+  reset();x=json.loads(p.read_text());x['accounts'][1]['limitedUntil']='2026-10-18T00:00:00Z';write(p,x)
+  gate=run('host.mjs','gate');assert gate['ok']and len(asks())==1 and any(a[0]=='organization.accounts.update'and a[1].get('clearLimit')for a in mock()['trace'])
+  reset(askReply="You've hit your weekly limit");gate=run('host.mjs','gate',ok=3);assert not gate['ok']and gate['fault']=='limit'and len(asks())==1
+- reset(busyOnce=True);run('host.mjs','gate');applied=run('host.mjs','apply');x=json.loads(p.read_text());assert applied['failed']==0 and applied['test']['archived']and applied['test']['account']=='Work'and applied['test']['reply']=='OK';assert x['defaults']['claude']=='Work'and x['policy']=='priority'and x['rotateOnLimit']==False;assert x['accounts'][0]['enabled'];assert applied['sessions'][1].get('skipped')or any(a.get('skipped')for a in applied['sessions']);assert mock()['reloaded']
++ reset(busyOnce=True);run('host.mjs','gate');applied=run('host.mjs','apply');x=json.loads(p.read_text());assert applied['failed']==0 and applied['test']['archived']and applied['test']['account']=='Work'and applied['test']['reply']=='OK';assert x['defaults']['claude']=='Work'and x['policy']=='priority'and x['rotateOnLimit']==False;assert x['accounts'][0]['enabled'];assert applied['sessions'][1].get('skipped')or any(a.get('skipped')for a in applied['sessions']);assert mock()['reloaded'];assert not any(a[0]=='agent' and a[1]=='reload' for a in mock()['trace'])
+  reset();write(d/'monitor-enabled.json',{});x=json.loads(p.read_text());x['accounts'][1]['limitedUntil']='2026-10-18T00:00:00Z';write(p,x);m=mock();m['askReply']="You've hit your weekly limit";write(home/'mock.json',m);v=run('monitor.mjs','');assert v['target']=='work-workspace-api'and len(asks())==1;assert not any(a[:3]==['account','use','Personal']for a in mock()['trace'])
+  # On the next pass the cached status is ready. Exactly one live ask gates return.
+  m=mock();m['askReply']='OK';write(home/'mock.json',m);v=run('monitor.mjs','');assert v['target']=='Work'and len(asks())==2
+@@ -87,4 +90,13 @@
   reset(askReply='Credit balance is too low');write(d/'monitor-enabled.json',{});x=json.loads(p.read_text());x['accounts'][1]['limitedUntil']='2026-10-18T00:00:00Z';x['accounts'][2]['enabled']=False;write(p,x);v=run('monitor.mjs','');assert v['target']is None and len(asks())==1
   reset();write(d/'monitor-enabled.json',{});v=run('monitor.mjs','',clock=False);assert v['deferred']and not mock().get('trace')
   reset(rolesUnavailable=True);run('host.mjs','dry-run',ok=1);assert not d.exists()
@@ -244,7 +255,7 @@
 -  }else await call(['agent','reload',a.id]);
 +  }else {
 +   if(!latest||isArchived(latest)||!await activeAgent(rpc,a.id))return {id:a.id,skipped:'archived or absent'};
-+   await call(['agent','reload',a.id]);
++   await rpc('native:refresh_agent_request',{agentId:a.id});
 +  }
    // Re-check the seat and target after a reload or event wait.
    return await switchAfterRecovery(a,target);
@@ -336,3 +347,15 @@
      assert (backup/'failover.mjs').read_text()==entry and (backup/'relay.py').read_text()=='# old relay\n'
      times={p.name:p.stat().st_mtime_ns for p in release.iterdir()};run();assert times=={p.name:p.stat().st_mtime_ns for p in release.iterdir()}
      (backup/'host.mjs').unlink();run();assert (backup/'host.mjs').read_bytes()==(old/'host.mjs').read_bytes()
+--- a/ops/work-switch/repair-run.mjs
++++ b/ops/work-switch/repair-run.mjs
+@@ -36,8 +36,7 @@
+   try{await step('account use Work',async()=>{await freshGuard(id);return call(['account','use','Work','--agent',id]);});}
+   catch(first){
+    a=await native(id);if(['running','busy','starting'].includes(a.status)||a.activeTurn)throw Error('A new turn started. Preserved without interruption. '+safe(first));
+-   try{await step('CLI agent reload',async()=>{await freshGuard(id,true);return call(['agent','reload',id]);});}
+-   catch(e){if(!/Agent not found/i.test(e.message))throw e;await step('native refresh by full stored ID',async()=>{await freshGuard(id,true);return rpc('native:refresh_agent_request',{agentId:id});});}
++   await step('native maintenance reload',async()=>{await freshGuard(id,true);return rpc('native:refresh_agent_request',{agentId:id});});
+    await step('account use after reload',async()=>{await freshGuard(id);return call(['account','use','Work','--agent',id]);});
+   }
+   row.after=await current(id);const after=await native(id);row.persistencePreserved=persistenceId===after.persistence?.sessionId;row.confirmed=row.after==='Work'&&row.persistencePreserved;

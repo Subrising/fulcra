@@ -5790,30 +5790,24 @@ export class Session {
     try {
       const snapshot = await this.agentManager.withPersistenceRestore(handle, async () => {
         const matched = await this.findAgentByHandle(handle);
-        if (msg.confirmed && !this.supports(CLIENT_CAPS.archiveConfirmation))
-          throw new Error("Protected restore requires confirmation from the app.");
-        const restore = async () => {
-          const effectiveOverrides = matched
-            ? { ...buildConfigOverrides(matched.record), ...overrides }
-            : overrides;
-          const restoredSnapshot = matched
-            ? await this.agentManager.withUnarchivedSnapshot(matched.record.id, () =>
-                ensureAgentLoaded(matched.record.id, {
-                  agentManager: this.agentManager,
-                  agentStorage: this.agentStorage,
-                  logger: this.sessionLogger,
-                  configOverrides: effectiveOverrides,
-                }),
-              )
-            : await this.agentManager.resumeAgentFromPersistence(handle, effectiveOverrides);
-          await unarchiveAgentState(this.agentStorage, this.agentManager, restoredSnapshot.id);
-          await this.agentManager.hydrateTimelineFromProvider(restoredSnapshot.id);
-          await this.agentUpdates.forwardLiveAgent(restoredSnapshot);
-          return restoredSnapshot;
-        };
-        return matched && msg.confirmed
-          ? this.agentManager.withRestoreConfirmation(matched.record.id, restore)
-          : restore();
+        if (matched?.record.archivedAt)
+          throw new Error(
+            "Agent is archived. Use fulcra agent reload <id> for a worker or Unarchive in the app.",
+          );
+        const effectiveOverrides = matched
+          ? { ...buildConfigOverrides(matched.record), ...overrides }
+          : overrides;
+        const resumed = matched
+          ? await ensureUnarchivedAgentLoaded(matched.record.id, {
+              agentManager: this.agentManager,
+              agentStorage: this.agentStorage,
+              logger: this.sessionLogger,
+              configOverrides: effectiveOverrides,
+            })
+          : await this.agentManager.resumeAgentFromPersistence(handle, effectiveOverrides);
+        await this.agentManager.hydrateTimelineFromProvider(resumed.id);
+        await this.agentUpdates.forwardLiveAgent(resumed);
+        return resumed;
       });
       const timelineSize = this.agentManager.getTimeline(snapshot.id).length;
       if (requestId) {
@@ -5999,7 +5993,9 @@ export class Session {
         this.agentManager.getAgent(agentId) ?? { id: agentId };
       // Reload is maintenance. Restore needs explicit intent and the archive admission.
       if (!msg.restore && "archivedAt" in admissionAgent && admissionAgent.archivedAt)
-        throw new Error(`Agent is archived: ${agentId}`);
+        throw new Error(
+          "Agent is archived. Use fulcra agent reload <id> for a worker. Update the app to use Unarchive.",
+        );
       const operationHandle = this.agentManager.trustedPlugins.input(
         admissionAgent,
         "configure",
@@ -9875,7 +9871,7 @@ export class Session {
           activeTurnBehavior: behavior,
           steerOnly: behavior === "steer",
           clearPendingPermissions: true,
-          unarchive: !finalCheck,
+          unarchive: false,
           runOptions: { [FINAL_INPUT_CHECK]: check },
           logger: this.sessionLogger,
         });
@@ -10051,6 +10047,14 @@ export class Session {
         "Send through the parent host as <child>@<server> to receive finish notices.",
       );
     return true;
+  }
+
+  private async assertSendReceiverUnarchived(agentId: string): Promise<void> {
+    const target = await this.agentStorage.get(agentId);
+    if (target?.archivedAt)
+      throw Object.assign(new Error("The receiver is archived. Restore it first."), {
+        code: "QUEUED_RECEIVER_CLOSED",
+      });
   }
 
   private async queuedMessageSessionId(
@@ -10259,6 +10263,7 @@ export class Session {
 
     try {
       const agentId = resolved.agentId;
+      await this.assertSendReceiverUnarchived(agentId);
       if (await this.holdOrRefuseAgentMessage(msg, agentId)) return;
       const prompt = buildAgentPrompt(msg.text, msg.images, msg.attachments);
       if (msg.nativeQueue) {

@@ -1149,28 +1149,24 @@ test("interrupts a running agent before archiving", async () => {
   }
 }, 60000);
 
-test("send_agent_message auto-unarchives archived agents", async () => {
+test("send_agent_message refuses archived agents without a storage change", async () => {
   const cwd = tmpCwd();
   try {
     const created = await ctx.client.createAgent({
-      config: {
-        ...getFullAccessConfig("codex"),
-        cwd,
-      },
+      config: { ...getFullAccessConfig("codex"), cwd },
     });
-
     await ctx.client.archiveAgent(created.id);
-    await ctx.client.sendMessage(created.id, "Say hello and nothing else");
-    const finalState = await ctx.client.waitForFinish(created.id, 120000);
-    expect(finalState.status).toBe("idle");
-
-    const refreshed = await ctx.client.fetchAgent({ agentId: created.id });
-    expect(refreshed).not.toBeNull();
-    expect(refreshed?.agent.archivedAt).toBeNull();
+    const before = await ctx.client.fetchAgent({ agentId: created.id });
+    await expect(ctx.client.sendMessage(created.id, "Do not restore")).rejects.toThrow(
+      "The receiver is archived. Restore it first.",
+    );
+    const after = await ctx.client.fetchAgent({ agentId: created.id });
+    expect(after?.agent.archivedAt).toBe(before?.agent.archivedAt);
+    expect(after?.agent.updatedAt).toEqual(before?.agent.updatedAt);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
-}, 180000);
+});
 
 test("send_agent_message leaves an archived agent archived when its directory is gone", async () => {
   const cwd = tmpCwd();
@@ -1185,7 +1181,7 @@ test("send_agent_message leaves an archived agent archived when its directory is
     rmSync(cwd, { recursive: true, force: true });
 
     await expect(ctx.client.sendMessage(created.id, "hello")).rejects.toThrow(
-      "Working directory does not exist",
+      "The receiver is archived. Restore it first.",
     );
 
     const afterSend = await ctx.client.fetchAgent({ agentId: created.id });
@@ -1277,35 +1273,24 @@ test("refresh_agent rejects when persisted session resume fails", async () => {
   }
 });
 
-test("resume_agent auto-unarchives archived agents", async () => {
+test("resume_agent refuses an archived handle without clearing the archive", async () => {
   const cwd = tmpCwd();
   try {
     const created = await ctx.client.createAgent({
-      config: {
-        ...getFullAccessConfig("codex"),
-        cwd,
-      },
+      config: { ...getFullAccessConfig("codex"), cwd },
     });
-    const agentBeforeArchive = await ctx.client.fetchAgent({ agentId: created.id });
-    expect(agentBeforeArchive?.agent.persistence).toBeTruthy();
-    await ctx.client.archiveAgent(created.id);
-
-    const handle = agentBeforeArchive?.agent.persistence;
-    if (!handle) {
-      throw new Error("Expected persistence handle for resume test");
-    }
-    const resumed = await ctx.client.resumeAgent(handle);
-    const resumedDetails = await ctx.client.fetchAgent({ agentId: resumed.id });
-    expect(resumedDetails).not.toBeNull();
-    expect(resumedDetails?.agent.archivedAt).toBeNull();
-
-    if (resumed.id !== created.id) {
-      await ctx.client.deleteAgent(resumed.id);
+    const handle = created.persistence!;
+    const archived = await ctx.client.archiveAgent(created.id);
+    for (const options of [{}, { confirmed: true }]) {
+      await expect(ctx.client.resumeAgent(handle, undefined, options)).rejects.toThrow(/archived/i);
+      expect((await ctx.client.fetchAgent({ agentId: created.id }))?.agent.archivedAt).toBe(
+        archived.archivedAt,
+      );
     }
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
-}, 180000);
+});
 
 test("resume_agent rehydrates the newest private MCP config from a redacted persistence handle", async () => {
   const cwd = tmpCwd();
@@ -1344,7 +1329,7 @@ test("resume_agent rehydrates the newest private MCP config from a redacted pers
     expect(projectedHandle.metadata).not.toHaveProperty("mcpServers");
     expect(JSON.stringify(projectedHandle)).not.toContain(bearerA);
 
-    await localCtx.client.archiveAgent(created.id);
+    await localCtx.daemon.daemon.agentManager.closeAgent(created.id);
     const resumedWithOverride = await localCtx.client.resumeAgent(projectedHandle, {
       mcpServers: externalMcpB,
     });
@@ -1356,7 +1341,7 @@ test("resume_agent rehydrates the newest private MCP config from a redacted pers
     expect(JSON.stringify(resumedWithOverride)).not.toContain(bearerA);
     expect(JSON.stringify(resumedWithOverride)).not.toContain(bearerB);
 
-    await localCtx.client.archiveAgent(resumedWithOverride.id);
+    await localCtx.daemon.daemon.agentManager.closeAgent(resumedWithOverride.id);
     const resumedNewest = await localCtx.client.resumeAgent(newestProjectedHandle);
 
     expect(provider.resumeOverrides).toHaveLength(2);
@@ -1371,7 +1356,7 @@ test("resume_agent rehydrates the newest private MCP config from a redacted pers
   }
 });
 
-test("resume_agent restores archive state when an MCP-capable provider returns an unsupported session", async () => {
+test("resume_agent refuses archive before it starts an MCP-capable provider", async () => {
   const cwd = tmpCwd();
   const provider = new RejectingMcpResumeClient();
   const localCtx = await createDaemonTestContext({
@@ -1409,15 +1394,15 @@ test("resume_agent restores archive state when an MCP-capable provider returns a
     });
     const original = archivedAgents.entries.find((entry) => entry.agent.id === created.id)?.agent;
     expect(original?.archivedAt).toBe(archived.archivedAt);
-    expect(provider.nativeArchiveCalls).toEqual(["archive", "unarchive", "archive"]);
-    expect(provider.replacement.closed).toBe(true);
+    expect(provider.nativeArchiveCalls).toEqual(["archive"]);
+    expect(provider.replacement.closed).toBe(false);
   } finally {
     await localCtx.cleanup();
     rmSync(cwd, { recursive: true, force: true });
   }
 });
 
-test("update_agent persists unloaded title and labels across auto-unarchive", async () => {
+test("update_agent persists unloaded title and labels across explicit restore", async () => {
   const cwd = tmpCwd();
   try {
     const created = await ctx.client.createAgent({
@@ -1439,6 +1424,7 @@ test("update_agent persists unloaded title and labels across auto-unarchive", as
     expect(archived?.agent.title).toBe("Pinned Title");
     expect(archived?.agent.labels).toMatchObject({ lane: "phase-1a" });
 
+    await ctx.client.refreshAgent(created.id, undefined, { restore: true });
     await ctx.client.sendMessage(created.id, "Say hello and nothing else");
     const finalState = await ctx.client.waitForFinish(created.id, 120000);
     expect(finalState.status).toBe("idle");

@@ -23,9 +23,11 @@ test.each(["0.1.104", "0.2.22"])(
       for (const historyLoaded of [false, true]) {
         if (historyLoaded)
           await client.searchAgentTimeline({ agentId: agent.id, query: "archive fixture" });
-        await expect(client.refreshAgent(agent.id)).rejects.toThrow(/archived/i);
+        await expect(client.refreshAgent(agent.id)).rejects.toThrow(
+          "Update the app to use Unarchive",
+        );
         await expect(client.refreshAgent(agent.id, undefined, { confirmed: true })).rejects.toThrow(
-          /archived/i,
+          "Update the app to use Unarchive",
         );
         const state = await client.getAgentMcpRefreshState(agent.id);
         expect(state).toBeTruthy();
