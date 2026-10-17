@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { realpathSync, watch } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -421,3 +421,58 @@ test("two isolated daemons create one remote worker and deliver a role notice th
     await source.close();
   }
 }, 60000);
+
+test("paused PC completion notices cross the socket without starting Claude", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "notice-pause-"));
+  const prompts: Array<{ provider: string; prompt: unknown }> = [];
+  let daemon: TestPaseoDaemon | undefined;
+  let client: DaemonClient | undefined;
+  try {
+    daemon = await createTestPaseoDaemon({
+      paseoHomeRoot: root,
+      cleanup: false,
+      agentClients: {
+        claude: createTestAgentClient("claude", {
+          onStartTurn: (prompt) => prompts.push({ provider: "claude", prompt }),
+        }),
+        codex: createTestAgentClient("codex", {
+          onStartTurn: (prompt) => prompts.push({ provider: "codex", prompt }),
+        }),
+      },
+    });
+    const manager = daemon.daemon.agentManager;
+    const owner = await manager.createAgent({ provider: "claude", cwd: root }, undefined, {
+      workspaceId: undefined,
+    });
+    const active = await manager.createAgent({ provider: "codex", cwd: root }, undefined, {
+      workspaceId: undefined,
+    });
+    const pause = path.join(daemon.paseoHome, "pause.json");
+    await writeFile(pause, JSON.stringify({ pausedProviders: ["claude"] }));
+    client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws` });
+    await client.connect();
+    await client.sendAgentMessage(owner.id, "PC receipt one");
+    await client.sendAgentMessage(owner.id, "PC receipt two");
+    expect(prompts).toEqual([]);
+    const held = JSON.parse(
+      await readFile(path.join(daemon.paseoHome, "held-messages.json"), "utf8"),
+    );
+    expect(held.filter((record: { state: string }) => record.state === "queued")).toHaveLength(2);
+    await client.sendAgentMessage(active.id, "Codex receipt");
+    await vi.waitFor(() => expect(prompts.filter((p) => p.provider === "codex")).toHaveLength(1));
+    expect(prompts.filter((p) => p.provider === "claude")).toHaveLength(0);
+    await writeFile(pause, JSON.stringify({ pausedProviders: [] }));
+    await vi.waitFor(() => expect(prompts.filter((p) => p.provider === "claude")).toHaveLength(1));
+    expect(String(prompts.find((p) => p.provider === "claude")!.prompt)).toContain(
+      "PC receipt one",
+    );
+    expect(String(prompts.find((p) => p.provider === "claude")!.prompt)).toContain(
+      "PC receipt two",
+    );
+  } finally {
+    await client?.close();
+    await daemon?.close();
+    if (daemon) await rm(daemon.staticDir, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
+  }
+}, 30_000);

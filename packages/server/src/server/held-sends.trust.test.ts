@@ -1,3 +1,4 @@
+import { writeFileSync } from "node:fs";
 import { afterEach, expect, test, vi } from "vitest";
 import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -156,6 +157,7 @@ async function fixture(
     busy,
     send,
     sendWithProvenance,
+    asPlugin: () => Object.assign(session, { pluginOriginId: "fixture" }),
     pending,
     endTurnIn,
     sourcesFor,
@@ -882,3 +884,155 @@ test.each([false, true])(
     });
   },
 );
+
+test("paused Claude owner notices persist and resume in one owner turn", async () => {
+  const f = await fixture("claude");
+  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+  await f.send("PC job one ended");
+  await f.send("PC job two ended");
+  expect(f.prompts).toEqual([]);
+  expect(f.pending()).toBe(2);
+  const records = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
+  expect(records.map((r: { state: string }) => r.state)).toEqual(["queued", "queued"]);
+  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: [] }));
+  await vi.waitFor(() => expect(f.prompts).toHaveLength(1));
+  expect(f.prompts[0]).toBe(
+    "Message 1 from owner:\nPC job one ended\n\nMessage 2 from owner:\nPC job two ended",
+  );
+  expect(new Set(f.sourcesFor())).toEqual(new Set(["human"]));
+});
+
+test("a Claude pause leaves Codex notices active", async () => {
+  const f = await fixture("codex");
+  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+  await f.send("PC job ended");
+  await vi.waitFor(() => expect(f.prompts).toEqual(["PC job ended"]));
+});
+
+test("the pause exception uses the complete session ID", async () => {
+  const f = await fixture("claude");
+  await writeFile(
+    f.storage.noticePausePath,
+    JSON.stringify({ pausedProviders: ["claude"], exceptSessions: [f.target.id] }),
+  );
+  await f.send("permitted notice");
+  await vi.waitFor(() => expect(f.prompts).toEqual(["permitted notice"]));
+});
+
+test("paused agent notices keep their sender and combine after resume", async () => {
+  const f = await fixture("claude");
+  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+  await f.send("one", f.sender.id);
+  await f.send("two", f.sender.id);
+  expect(f.prompts).toEqual([]);
+  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: [] }));
+  await vi.waitFor(() => expect(f.prompts).toHaveLength(1));
+  expect(new Set(f.sourcesFor())).toEqual(new Set(["agent"]));
+});
+
+test("malformed pause policy starts no turn", async () => {
+  const f = await fixture("claude");
+  await writeFile(f.storage.noticePausePath, "{");
+  await f.send("retained by sender");
+  expect(f.prompts).toEqual([]);
+  expect(f.messages).toContainEqual(
+    expect.objectContaining({
+      type: "send_agent_message_response",
+      payload: expect.objectContaining({ accepted: false }),
+    }),
+  );
+});
+
+test("paused owner notices survive a queue restart", async () => {
+  const f = await fixture("claude");
+  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+  await f.send("saved one");
+  await f.send("saved two");
+  await f.queue.close();
+  const restored = new QueuedAgentMessages({
+    agentManager: f.manager,
+    agentStorage: f.storage,
+    logger: f.logger,
+  });
+  cleanup.push(() => restored.close());
+  await restored.start();
+  expect(f.prompts).toEqual([]);
+  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: [] }));
+  await vi.waitFor(() => expect(f.prompts).toHaveLength(1));
+});
+
+test("an owner notice that reaches loading during pause activation is saved", async () => {
+  const f = await fixture("claude");
+  const get = f.storage.get.bind(f.storage);
+  vi.spyOn(f.storage, "get").mockImplementationOnce(async (id) => {
+    const record = await get(id);
+    await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+    return record;
+  });
+  await f.send("racing PC completion");
+  expect(f.prompts).toEqual([]);
+  expect(f.pending()).toBe(1);
+});
+
+test("a delivered message ID is not queued again during a pause", async () => {
+  const f = await fixture("claude");
+  await f.send("completed notice", undefined, false, "same-notice");
+  await vi.waitFor(() => expect(f.prompts).toHaveLength(1));
+  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+  await f.send("completed notice", undefined, false, "same-notice");
+  await f.send("new notice", undefined, false, "new-notice");
+  expect(f.pending()).toBe(1);
+});
+
+test("paused notices combine within each original sender", async () => {
+  const f = await fixture("claude");
+  const peer = await f.manager.createAgent(
+    { provider: "claude", model: "fixture-model", cwd: f.target.cwd },
+    undefined,
+    { workspaceId: undefined },
+  );
+  cleanup.push(async () => {
+    await f.host.daemon(() => f.manager.closeAgent(peer.id));
+  });
+  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+  await f.send("first A", f.sender.id);
+  await f.send("only B", peer.id);
+  await f.send("second A", f.sender.id);
+  expect(f.prompts).toEqual([]);
+  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: [] }));
+  await vi.waitFor(() => expect(f.prompts).toHaveLength(2));
+  expect(f.prompts[0]).toBe(
+    `Message 1 from ${f.sender.id}:\nfirst A\n\nMessage 2 from ${f.sender.id}:\nsecond A`,
+  );
+  expect(f.prompts[1]).toBe("only B");
+});
+
+test("paused plugin sessions cannot become owner notices without a wire token", async () => {
+  const f = await fixture("claude");
+  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+  f.asPlugin();
+  await f.send("retain the delegated operation");
+  expect(f.pending()).toBe(0);
+  expect(f.prompts).toEqual([]);
+  expect(f.messages).toContainEqual(
+    expect.objectContaining({
+      type: "send_agent_message_response",
+      payload: expect.objectContaining({ accepted: false }),
+    }),
+  );
+});
+
+test("a pause that clears at final handoff still resumes the ordinary notice", async () => {
+  const f = await fixture("claude");
+  const start = f.target.session!.startTurn.bind(f.target.session);
+  vi.spyOn(f.target.session!, "startTurn").mockImplementationOnce(async (...args) => {
+    writeFileSync(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+    try {
+      return await start(...args);
+    } finally {
+      writeFileSync(f.storage.noticePausePath, JSON.stringify({ pausedProviders: [] }));
+    }
+  });
+  await f.send("ordinary notice", f.sender.id);
+  await vi.waitFor(() => expect(f.prompts).toEqual(["ordinary notice"]));
+});
