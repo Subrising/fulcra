@@ -18,17 +18,36 @@ afterEach(async () => {
   vi.restoreAllMocks();
   for (const close of cleanups.splice(0).toReversed()) await close();
 });
-async function fixture(parentLabel = PARENT_AGENT_ID_LABEL, childTitle = "Child") {
+async function fixture(
+  parentLabel = PARENT_AGENT_ID_LABEL,
+  childTitle = "Child",
+  costs: number[] = [],
+) {
   const root = await mkdtemp(path.join(tmpdir(), "send-finish-"));
   const prompts: string[] = [];
+  const provider = createTestAgentClient("codex", {
+    onStartTurn: (prompt) =>
+      prompts.push(typeof prompt === "string" ? prompt : JSON.stringify(prompt)),
+  });
+  const create = provider.createSession.bind(provider);
+  provider.createSession = async (...args) => {
+    const session = await create(...args);
+    const amounts = [...costs];
+    const subscribe = session.subscribe.bind(session);
+    session.subscribe = (callback) =>
+      subscribe((event) => {
+        if (event.type !== "turn_completed" || !amounts.length) return callback(event);
+        const amount = amounts.shift()!;
+        callback({
+          ...event,
+          usage: { ...event.usage, totalCostUsd: amount, turnCostUsd: amount },
+        });
+      });
+    return session;
+  };
   const daemon = await createTestPaseoDaemon({
     paseoHomeRoot: root,
-    agentClients: {
-      codex: createTestAgentClient("codex", {
-        onStartTurn: (prompt) =>
-          prompts.push(typeof prompt === "string" ? prompt : JSON.stringify(prompt)),
-      }),
-    },
+    agentClients: { codex: provider },
   });
   let client: DaemonClient | undefined;
   cleanups.push(async () => {
@@ -265,4 +284,23 @@ test("a local child title containing @ keeps local send behavior", async () => {
   });
   await f.finish();
   expect(f.prompts).toContain("named local task");
+});
+
+test("parent follow-ups report cumulative spend in each finish notice", async () => {
+  const f = await fixture(PARENT_AGENT_ID_LABEL, "Child", [1.25, 2.75]);
+  for (const [index, total] of [1.25, 4].entries()) {
+    await f.catalog.executeTool("send_agent_prompt", {
+      agentId: f.child.id,
+      prompt: `Task ${index + 1}`,
+      background: false,
+    });
+    await vi.waitFor(() => expect(f.notices()).toHaveLength(index + 1));
+    await f.manager.waitForAgentEvent(f.parent.id);
+    await vi.waitFor(async () =>
+      expect((await f.storage.getFinishNotice(f.child.id))?.status).toBe("delivered"),
+    );
+    expect((await f.storage.getFinishNotice(f.child.id))?.sessionCost?.totalUsd).toBe(total);
+    expect(f.notices()[index]).toContain(`Session total spend: US$${total.toFixed(6)}.`);
+  }
+  expect((await f.client.fetchAgent(f.child.id))?.agent.sessionCost?.totalUsd).toBe(4);
 });

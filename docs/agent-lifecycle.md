@@ -234,7 +234,7 @@ The role mode must be Codex `auto`, or Claude `default` or `plan`. Full-access a
 The account defaults to `personal-workspace-api`. `personal-api-key` and `work-api-key` are refused.
 The native account pool pins the selected account. Missing, disabled, limited, or changed accounts cannot fall back before provider input.
 The first prompt uses a fixed template with the item encoded as untrusted ledger data.
-The task text cannot replace the daemon's instructions, permissions, account, or budgets.
+The task text cannot replace the daemon's instructions, permissions, or account.
 
 The claim CLI atomically records the dispatch ID, generation, creator, and reserved session in the ledger before creation.
 A process-held kernel lease permits only one dispatcher per authoritative ledger.

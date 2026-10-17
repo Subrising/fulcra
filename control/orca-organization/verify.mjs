@@ -110,7 +110,7 @@ files.push(
   "server/account-billing.test.mjs",
   "server/account-limit-confirmation.test.mjs",
   "server/claude-resume-cost.test.mjs",
-  "../src/control/account-budgets.mjs",
+  "../src/control/credit-warnings.mjs",
   "server/accounts.d.mts",
   "server/accounts.test.mjs",
   "server/role-defaults-store.mjs",

@@ -1,3 +1,4 @@
+import { sessionCost } from "./agent/session-cost.js";
 import { LedgerDirectoryWatch } from "./ledger-routing/watch.js";
 import { LedgerRoutingService, parseWorkerResult } from "./ledger-routing/service.js";
 import type { BoundCreateAgentCommand } from "./agent/create-agent/create.js";
@@ -91,6 +92,7 @@ const {
   formatCombinedNotice,
   titleOf,
   formatReportUpNotice,
+  formatSessionSpend,
   reportUpSwitches,
 } = loadAgentPolicy("report-notices");
 export {
@@ -117,7 +119,7 @@ export {
 interface PendingFinish {
   workerId: string;
   eventId?: string;
-  worker: LineAgent;
+  worker: LineAgent & { sessionCost?: ReturnType<typeof sessionCost> };
   lastMessage: string | null;
 }
 
@@ -565,7 +567,9 @@ export class ReportUpService {
         await this.toLead(
           input.agentId,
           lead.id,
-          formatSystemNotificationPrompt(routed.result.line),
+          formatSystemNotificationPrompt(
+            `${routed.result.line}\n${formatSessionSpend(this.workerWithSpend(worker).sessionCost)}`,
+          ),
           "owned-finish",
         );
     }
@@ -794,17 +798,30 @@ export class ReportUpService {
     return null;
   }
 
+  private workerWithSpend(worker: LineAgent) {
+    const record =
+      this.deps.agentManager.getAgent(worker.id) ?? this.deps.agentStorage.getCached(worker.id);
+    return { ...worker, sessionCost: sessionCost(record?.costRecords) };
+  }
+
   private async ownedFinishPrompt(
     worker: LineAgent,
     notice: FinishNotice,
     observedLast?: string | null,
   ): Promise<string> {
+    const reportedWorker = {
+      ...this.workerWithSpend(worker),
+      ...(notice.sessionCost ? { sessionCost: notice.sessionCost } : {}),
+    };
+    const spend = formatSessionSpend(reportedWorker.sessionCost);
     if (notice.reason === "stopped")
       return formatSystemNotificationPrompt(
-        `Agent ${worker.id} (${titleOf(worker)}): worker turn stopped.`,
+        `Agent ${worker.id} (${titleOf(worker)}): worker turn stopped.\n${spend}`,
       );
     if (notice.reason === "closed")
-      return formatSystemNotificationPrompt(`Agent ${worker.id} (${titleOf(worker)}) was closed.`);
+      return formatSystemNotificationPrompt(
+        `Agent ${worker.id} (${titleOf(worker)}) was closed.\n${spend}`,
+      );
     const lastMessage =
       observedLast === undefined
         ? await this.deps.agentManager.getLastAssistantMessage(worker.id).catch(() => null)
@@ -814,8 +831,13 @@ export class ReportUpService {
         ? parseWorkerResult(lastMessage)
         : null;
     return formatSystemNotificationPrompt(
-      result?.line ??
-        formatReportUpNotice({ worker, failed: notice.reason === "errored", lastMessage }),
+      result
+        ? `${result.line}\n${spend}`
+        : formatReportUpNotice({
+            worker: reportedWorker,
+            failed: notice.reason === "errored",
+            lastMessage,
+          }),
     );
   }
 
@@ -1575,14 +1597,14 @@ export class ReportUpService {
     // A failed turn is sent at once. A finished turn is combined with the lead's other finished workers (FU-115).
     if (failed) {
       const prompt = formatSystemNotificationPrompt(
-        formatReportUpNotice({ worker, failed, lastMessage }),
+        formatReportUpNotice({ worker: this.workerWithSpend(worker), failed, lastMessage }),
       );
       await this.toLead(workerId, lead.id, prompt, "finished-turn");
       return;
     }
     await this.queueFinished(lead.id, {
       workerId,
-      worker,
+      worker: this.workerWithSpend(worker),
       lastMessage,
       eventId: startedAt === undefined ? undefined : `${workerId}:${startedAt}`,
     });
@@ -1600,7 +1622,7 @@ export class ReportUpService {
         ? await this.deps.agentManager.getLastAssistantMessage(worker.id).catch(() => null)
         : observedLast;
     const prompt = formatSystemNotificationPrompt(
-      formatReportUpNotice({ worker, failed, lastMessage }),
+      formatReportUpNotice({ worker: this.workerWithSpend(worker), failed, lastMessage }),
     );
     return this.deps.remoteNotice(worker.id, prompt, failed ? "failed" : "finished");
   }

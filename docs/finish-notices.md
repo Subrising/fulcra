@@ -3,6 +3,7 @@
 Parent sends request one finish notice by default. This applies to CLI sends, native steering, and MCP prompts.
 Several messages in one turn share one notice. Queued messages form one combined turn and produce one notice.
 A notice marked `delivered` covers its earlier turn only.
+When cost is available, each finish notice includes cumulative session spend, including earlier turns.
 
 Use `fulcra send <child> --prompt-file task.txt --no-wait` on the parent host.
 Use `--steer` to join the current turn when the provider supports steering.

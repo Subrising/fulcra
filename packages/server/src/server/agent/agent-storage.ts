@@ -1,4 +1,5 @@
-import { SessionCostRecordsSchema } from "./session-cost.js";
+import { SessionCostSchema, type SessionCost } from "@getpaseo/protocol/recorded-usage";
+import { sessionCost, SessionCostRecordsSchema } from "./session-cost.js";
 import { stripInternalPaseoMcpServer } from "./runtime-mcp-config.js";
 import { promises as fs, type Dirent } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -36,6 +37,7 @@ const FinishNoticeSchema = z
     turnId: z.string().min(1).optional(),
     reason: z.enum(["finished", "errored", "closed", "stopped"]).optional(),
     endedAt: z.number().int().nonnegative().optional(),
+    sessionCost: SessionCostSchema.optional(),
   })
   .strict();
 export type FinishNotice = z.infer<typeof FinishNoticeSchema>;
@@ -278,6 +280,7 @@ export class AgentStorage {
     agentId: string,
     turnId: string,
     reason: "finished" | "errored" | "closed" | "stopped" | "cancelled",
+    cost?: SessionCost,
   ): Promise<FinishNotice | null> {
     await this.load();
     let result: FinishNotice | null = null;
@@ -302,7 +305,14 @@ export class AgentStorage {
         result = notice;
         return null;
       }
-      result = { ...notice, status: "pending", turnId, reason, endedAt: Date.now() };
+      result = {
+        ...notice,
+        status: "pending",
+        turnId,
+        reason,
+        endedAt: Date.now(),
+        sessionCost: cost ?? sessionCost(record.costRecords),
+      };
       return { ...record, finishNotice: result };
     });
     return result;

@@ -21,8 +21,7 @@ export async function takeOverSession(
   } = {},
 ) {
   const accountId = typeof targetAccount === "string" ? targetAccount : targetAccount?.id;
-  if (!["manual", "limit", "budget"].includes(reason))
-    return refused("Invalid account switch reason");
+  if (!["manual", "limit"].includes(reason)) return refused("Invalid account switch reason");
   if (
     !uuid(sessionId) ||
     !uuid(accountId) ||
@@ -81,8 +80,6 @@ export async function takeOverSession(
       const pool = readAccounts(root),
         previous = pool.assignments[sessionId];
       const from = pool.accounts.find((a) => a.id === previous?.accountId);
-      if (reason === "budget" && (previous?.ended || from?.id !== targetAccount?.fromAccountId))
-        return refused("The budget source account changed before switching");
       const unresolvedId = reconcile ? (switchId ?? previous?.takeover) : previous?.takeover;
       const unresolved = unresolvedId && control.store.delivery(unresolvedId);
       if (

@@ -3,13 +3,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import {
-  accountBudget,
-  accountsDir,
-  withStoreLock,
-  readAccountsAsync,
-  readAccounts,
-} from "./accounts.mjs";
+import { isApiAccount, accountsDir, withStoreLock, readAccountsAsync } from "./accounts.mjs";
 const uuid = (v) => typeof v === "string" && /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(v);
 export function readBilling(root) {
   try {
@@ -27,10 +21,7 @@ async function save(root, state) {
   await fsp.rename(tmp, path.join(dir, "billing.json"));
 }
 function compact(state, pool) {
-  const starts = pool.accounts
-    .map(accountBudget)
-    .filter(Boolean)
-    .map((b) => Date.parse(b.startAt));
+  const starts = pool.accounts.filter(isApiAccount).map((account) => Date.parse(account.createdAt));
   const oldest = Math.min(...starts, Date.parse(new Date().toISOString().slice(0, 10)));
   for (const [id, call] of Object.entries(state.calls))
     if (Date.parse(call.at) < oldest) {
@@ -43,17 +34,6 @@ function compact(state, pool) {
         state.checkpointRevisions?.[sessionId] === undefined;
       if (!liveLegacy) delete state.calls[id];
     }
-  // A billing error remains observable for its budget period. Repeated failures replace the same metadata row.
-  const latest = new Map();
-  for (const event of state.events) {
-    const key = `${event.accountId}:${event.type}`;
-    if (
-      Date.parse(event.at) >= oldest &&
-      Date.parse(event.at) >= Date.parse(latest.get(key)?.at ?? "1970-01-01")
-    )
-      latest.set(key, event);
-  }
-  state.events = [...latest.values()];
   const sessions = new Set(
     Object.values(state.calls)
       .map((call) => call.sessionId)
@@ -69,15 +49,15 @@ function compact(state, pool) {
   state.retainedFrom = new Date(oldest).toISOString();
 }
 export function accountSpend(root, account, billing = readBilling(root)) {
-  const budget = accountBudget(account);
-  if (!budget) return null;
-  const start = Date.parse(budget.startAt);
+  if (!isApiAccount(account)) return null;
+  const startAt = account.topUpAt ?? account.createdAt;
+  const start = Date.parse(startAt);
   const usedUsd = Object.values(billing.calls).reduce(
     (sum, call) =>
       call.accountId === account.id && Date.parse(call.at) >= start ? sum + call.costUsd : sum,
     0,
   );
-  return { ...budget, usedUsd };
+  return { startAt, usedUsd };
 }
 export async function recordAccountCost(
   root,
@@ -141,75 +121,189 @@ export async function recordAccountCost(
     return true;
   });
 }
+function billingEvents(state) {
+  const events = [];
+  for (const event of state.events) {
+    if (!event.id) {
+      if (events.some((row) => row.accountId === event.accountId && !row.clearedAt)) continue;
+      event.id = `${event.accountId}:${event.at}`;
+    }
+    events.push(event);
+  }
+  state.events = events;
+  return events;
+}
+// Equal timestamps use the host's monotonic observation order when both sources supply it.
+const after = (leftAt, leftOrder, rightAt, rightOrder) =>
+  Date.parse(leftAt) > Date.parse(rightAt) ||
+  (Date.parse(leftAt) === Date.parse(rightAt) &&
+    leftOrder &&
+    rightOrder &&
+    BigInt(leftOrder) > BigInt(rightOrder));
 export async function recordBillingError(
   root,
   accountId,
   at = new Date().toISOString(),
   type = "ask.billing_error",
+  sessionId = null,
+  sourceId = null,
+  sourceOrder = null,
 ) {
   if (!uuid(accountId) || !Number.isFinite(Date.parse(at))) return false;
   if (!["ask.billing_error", "session.billing_error"].includes(type)) return false;
   return withStoreLock(root, async () => {
-    const state = readBilling(root);
-    // Only these three fields cross this durable boundary. No provider error, prompt or credential.
-    state.events.push({ type, accountId, at });
-    compact(state, await readAccountsAsync(root));
+    const pool = await readAccountsAsync(root);
+    if (!isApiAccount(pool.accounts.find((a) => a.id === accountId))) return false;
+    const state = readBilling(root),
+      events = billingEvents(state);
+    const successAt = state.lastSuccess?.[accountId];
+    const successOrder = state.lastSuccessOrder?.[accountId];
+    if (
+      successAt &&
+      (Date.parse(at) < Date.parse(successAt) ||
+        (Date.parse(at) === Date.parse(successAt) &&
+          sourceOrder &&
+          successOrder &&
+          BigInt(sourceOrder) < BigInt(successOrder)))
+    )
+      return false;
+    if (sourceId && state.observations?.[sourceId]) return false;
+    if (sourceId) {
+      state.observations ??= {};
+      state.observations[sourceId] = at;
+    }
+    const previous = events.findLast((event) => event.accountId === accountId && !event.clearedAt);
+    const failure = {
+      at,
+      type,
+      ...(uuid(sessionId) ? { sessionId } : {}),
+      ...(sourceOrder ? { order: sourceOrder } : {}),
+    };
+    if (previous && !previous.clearedAt) {
+      previous.failures ??= [
+        {
+          at: previous.at,
+          type: previous.type,
+          ...(previous.sessionId ? { sessionId: previous.sessionId } : {}),
+        },
+      ];
+      previous.failures.push(failure);
+      if (Date.parse(at) < Date.parse(previous.at)) previous.at = at;
+      await save(root, state);
+      return false;
+    }
+    events.push({
+      id: randomUUID(),
+      type,
+      accountId,
+      at,
+      ...(uuid(sessionId) ? { sessionId } : {}),
+      failures: [failure],
+    });
     await save(root, state);
     return true;
   });
 }
-export const isBillingError = (value) =>
-  /credit balance (?:is )?too low|insufficient (?:credit|balance)|billing_error/i.test(
+export async function recordBillingSuccess(
+  root,
+  accountId,
+  at = new Date().toISOString(),
+  sourceId = null,
+  sourceOrder = null,
+) {
+  if (!uuid(accountId) || !Number.isFinite(Date.parse(at))) return false;
+  return withStoreLock(root, async () => {
+    const state = readBilling(root);
+    if (sourceId && state.observations?.[sourceId]) return false;
+    if (sourceId) {
+      state.observations ??= {};
+      state.observations[sourceId] = at;
+    }
+    state.lastSuccess ??= {};
+    let changed =
+      !state.lastSuccess[accountId] ||
+      after(at, sourceOrder, state.lastSuccess[accountId], state.lastSuccessOrder?.[accountId]);
+    if (changed) {
+      state.lastSuccess[accountId] = at;
+      state.lastSuccessOrder ??= {};
+      if (sourceOrder) state.lastSuccessOrder[accountId] = sourceOrder;
+      else delete state.lastSuccessOrder[accountId];
+    }
+    for (const event of [...billingEvents(state)])
+      if (
+        event.accountId === accountId &&
+        (!event.clearedAt || after(event.clearedAt, event.clearedOrder, at, sourceOrder)) &&
+        Date.parse(event.at) <= Date.parse(at)
+      ) {
+        const failures = event.failures ?? [
+          {
+            at: event.at,
+            type: event.type,
+            ...(event.sessionId ? { sessionId: event.sessionId } : {}),
+          },
+        ];
+        const later = failures.filter((failure) =>
+          after(failure.at, failure.order, at, sourceOrder),
+        );
+        if (later.length === failures.length) continue;
+        const laterClear = event.clearedAt;
+        const laterClearOrder = event.clearedOrder;
+        event.clearedAt = at;
+        if (sourceOrder) event.clearedOrder = sourceOrder;
+        else delete event.clearedOrder;
+        event.failures = failures.filter((failure) => !later.includes(failure));
+        if (later.length) {
+          later.sort((a, b) => (after(a.at, a.order, b.at, b.order) ? 1 : -1));
+          const first = later[0];
+          state.events.push({
+            id: randomUUID(),
+            accountId,
+            at: first.at,
+            type: first.type,
+            ...(first.sessionId ? { sessionId: first.sessionId } : {}),
+            failures: later,
+            ...(laterClear
+              ? {
+                  clearedAt: laterClear,
+                  ...(laterClearOrder ? { clearedOrder: laterClearOrder } : {}),
+                }
+              : {}),
+          });
+        }
+        changed = true;
+      }
+    if (changed || sourceId) await save(root, state);
+    return changed;
+  });
+}
+export async function markBillingWarningSent(root, eventId, notices) {
+  return withStoreLock(root, async () => {
+    const state = readBilling(root);
+    const event = billingEvents(state).find((row) => row.id === eventId);
+    if (!event || event.notified) return;
+    event.notices = { ...event.notices, ...notices };
+    event.notified = Boolean(event.notices.main && (!event.sessionId || event.notices.owner));
+    await save(root, state);
+  });
+}
+export function pendingBillingWarnings(root) {
+  return billingEvents(readBilling(root)).filter((event) => !event.notified);
+}
+export function isBillingError(value) {
+  if (value && typeof value === "object") {
+    if (
+      [value.api_error_status, value.status, value.statusCode, value.code].some(
+        (code) => String(code) === "402",
+      )
+    )
+      return true;
+    return [value.message, value.result, value.code, value.type, value.error].some(
+      (part) => part && part !== value && isBillingError(part),
+    );
+  }
+  return /credit balance (?:is )?too low|insufficient (?:credit|balance)|billing_error|payment required|(?:HTTP|status(?: code)?|API error)\s*[:=]?\s*402\b|^402\b|(?:HTTP|status(?: code)?)\s*[:=]?\s*(?:400|402)\b.*billing|billing.*(?:400|402)\b/i.test(
     String(value ?? ""),
   );
-
-export function dailySpend(root, account, billing = readBilling(root), now = Date.now()) {
-  if (!accountBudget(account)) return null;
-  const start = new Date(now).toISOString().slice(0, 10) + "T00:00:00.000Z";
-  const end = Date.parse(start) + 86400000;
-  const usedUsd = Object.values(billing.calls).reduce(
-    (sum, call) =>
-      call.accountId === account.id &&
-      Date.parse(call.at) >= Date.parse(start) &&
-      Date.parse(call.at) < end
-        ? sum + call.costUsd
-        : sum,
-    0,
-  );
-  return { startAt: start, limitUsd: account.dailyLimitUsd ?? 40, usedUsd };
-}
-
-/** The call site supplies the launch account, never a mutable current assignment. */
-export function assertApiSpendAllowed(root, input, now = Date.now()) {
-  if (input.provider !== "claude" || !input.accountId) return;
-  if (input.accountKind === "subscription") return;
-  const account = readAccounts(root).accounts.find((a) => a.id === input.accountId);
-  if (!account) throw Error("API account is unavailable. No turn started.");
-  if (!accountBudget(account)) {
-    if (input.accountKind === "api-key")
-      throw Error("API launch account changed. No turn started.");
-    return;
-  }
-  const billing = readBilling(root);
-  for (const [scope, spend] of [
-    ["account", accountSpend(root, account, billing)],
-    ["daily UTC", dailySpend(root, account, billing, now)],
-  ]) {
-    if (spend.limitUsd !== null && spend.usedUsd >= spend.limitUsd)
-      throw Error(
-        `API ${scope} cost cap reached ($${spend.usedUsd.toFixed(2)} / $${spend.limitUsd.toFixed(2)}). No turn started.`,
-      );
-  }
-  const raw = input.labels?.["fulcra.session-cost-cap-usd"];
-  if (raw !== undefined) {
-    const cap = Number(raw);
-    if (!Number.isFinite(cap) || cap <= 0)
-      throw Error("Invalid session cost cap. No turn started.");
-    if ((input.sessionCost?.totalUsd ?? 0) >= cap)
-      throw Error(
-        `API session cost cap reached ($${input.sessionCost.totalUsd.toFixed(2)} / $${cap.toFixed(2)}). No turn started.`,
-      );
-  }
 }
 
 export function readSessionBilling(root, request) {
@@ -243,4 +337,90 @@ export function readSessionBilling(root, request) {
     records.cursors[key] ??= billing.cursors[runtime].cumulativeUsd;
   }
   return { ...request, records };
+}
+
+export async function recordAccountTurnEnd(
+  root,
+  event,
+  at = event.observedAt ?? new Date().toISOString(),
+) {
+  const { accountId, provider, id } = event.agent;
+  if (provider !== "claude" || !accountId) return false;
+  const sourceId = event.observationId ? `turn:${id}:${event.observationId}` : null;
+  if (event.outcome.kind === "failed" && isBillingError(event.outcome.error))
+    return recordBillingError(
+      root,
+      accountId,
+      at,
+      "session.billing_error",
+      id,
+      sourceId,
+      event.observedOrder,
+    );
+  if (event.outcome.kind === "completed")
+    return recordBillingSuccess(root, accountId, at, sourceId, event.observedOrder);
+  return false;
+}
+
+// A one-shot result must survive accounting faults. Keep its secret-free observation for a later retry.
+export async function observeAccountCall(root, observation) {
+  const dir = path.join(accountsDir(root), "pending-observations");
+  try {
+    await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
+    await fsp.writeFile(
+      path.join(dir, `${observation.id}.json`),
+      JSON.stringify({ ...observation, order: process.hrtime.bigint().toString() }),
+      {
+        mode: 0o600,
+        flag: "wx",
+      },
+    );
+    await recoverAccountObservations(root);
+    return true;
+  } catch {
+    return false;
+  }
+}
+export async function recoverAccountObservations(root) {
+  const dir = path.join(accountsDir(root), "pending-observations");
+  let files;
+  try {
+    files = await fsp.readdir(dir);
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  const pending = [];
+  for (const file of files) {
+    if (!/^[a-f0-9-]{36}\.json$/.test(file)) continue;
+    try {
+      pending.push({
+        file,
+        observation: JSON.parse(await fsp.readFile(path.join(dir, file), "utf8")),
+      });
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+  pending.sort((a, b) =>
+    after(a.observation.at, a.observation.order, b.observation.at, b.observation.order) ? 1 : -1,
+  );
+  for (const { file, observation } of pending) {
+    const { id, accountId, at, costUsd, sessionId, failed } = observation;
+    if (Number.isFinite(costUsd) && costUsd >= 0)
+      await recordAccountCost(root, { id: `ask:${id}`, accountId, at, costUsd });
+    if (failed === true)
+      await recordBillingError(
+        root,
+        accountId,
+        at,
+        "ask.billing_error",
+        sessionId,
+        id,
+        observation.order,
+      );
+    else if (failed === false)
+      await recordBillingSuccess(root, accountId, at, id, observation.order);
+    await fsp.rm(path.join(dir, file), { force: true });
+  }
 }

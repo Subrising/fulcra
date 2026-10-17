@@ -84,7 +84,7 @@ export function statusText(s: AccountsView["accounts"][number]["status"]) {
       return "Turned off";
   }
 }
-function ApiBudgetForm({
+export function TopUpDateForm({
   account,
   theme,
   busy,
@@ -93,15 +93,13 @@ function ApiBudgetForm({
   account: AccountsView["accounts"][number];
   theme: Props["theme"];
   busy: boolean;
-  save: (budget: { limitUsd: number; startAt: string }) => void;
+  save: (topUpAt: string | null) => void;
 }) {
-  const [amount, setAmount] = useState(String(account.budget?.limitUsd ?? ""));
-  const [start, setStart] = useState(account.budget?.startAt.slice(0, 10) ?? "");
+  const [start, setStart] = useState(account.topUpAt?.slice(0, 10) ?? "");
   const valid =
-    Number(amount) > 0 &&
-    Number.isFinite(Number(amount)) &&
     /^\d{4}-\d{2}-\d{2}$/.test(start) &&
-    Number.isFinite(Date.parse(start));
+    Number.isFinite(Date.parse(start)) &&
+    new Date(start).toISOString().slice(0, 10) === start;
   const style = {
     minHeight: 48,
     padding: 12,
@@ -113,28 +111,31 @@ function ApiBudgetForm({
   };
   return (
     <View style={{ gap: 8 }}>
-      <Text style={{ color: theme.colors.foreground }}>API budget (USD)</Text>
+      <Text style={{ color: theme.colors.foreground }}>Top-up date (optional, YYYY-MM-DD)</Text>
+      <Text style={{ color: theme.colors.foregroundMuted }}>
+        Show recorded spend from this date. This does not limit API turns.
+      </Text>
       <TextInput
-        accessibilityLabel={`Budget for ${account.name} in USD`}
-        value={amount}
-        onChangeText={setAmount}
-        keyboardType="decimal-pad"
-        style={style}
-      />
-      <Text style={{ color: theme.colors.foreground }}>Count costs from (YYYY-MM-DD)</Text>
-      <TextInput
-        accessibilityLabel={`Budget start date for ${account.name}`}
+        accessibilityLabel={`Top-up date for ${account.name}`}
         value={start}
         onChangeText={setStart}
         style={style}
       />
       <WorkButton
         theme={theme}
-        label={`Save budget for ${account.name}`}
+        label={`Save top-up date for ${account.name}`}
         disabled={busy || !valid}
-        onPress={() => save({ limitUsd: Number(amount), startAt: new Date(start).toISOString() })}
+        onPress={() => save(new Date(start).toISOString())}
       >
-        Save budget
+        Save date
+      </WorkButton>
+      <WorkButton
+        theme={theme}
+        label={`Clear top-up date for ${account.name}`}
+        disabled={busy || !account.topUpAt}
+        onPress={() => save(null)}
+      >
+        Clear date
       </WorkButton>
     </View>
   );
@@ -277,12 +278,12 @@ export function AccountsSurface({ theme, layout, host }: Props) {
                     style={{ color: c.foregroundMuted }}
                   >{`${a.sessions.length} session${a.sessions.length === 1 ? "" : "s"} using it now${a.lastUsedAt ? ` · last used ${when(a.lastUsedAt)}` : ""}${a.limitNote ? ` · ${a.limitNote}` : ""}`}</Text>
                   {a.credentialKind === "api-key" && (
-                    <ApiBudgetForm
-                      key={`${a.id}:${a.budget?.startAt}:${a.budget?.limitUsd}`}
+                    <TopUpDateForm
+                      key={`${a.id}:${a.topUpAt}`}
                       account={a}
                       theme={theme}
                       busy={busy}
-                      save={(budget) => void act(() => update({ id: a.id, budget }))}
+                      save={(topUpAt) => void act(() => update({ id: a.id, topUpAt }))}
                     />
                   )}
                   <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>

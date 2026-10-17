@@ -545,88 +545,63 @@ test("accountDown tells each holder once per account, and the notice names the a
   assert.match(text, /must sign the account in again/);
 });
 
-test("API budget notices target Main once, using a durable account and period key", () => {
-  const MAIN = T(71),
-    queued = new Set();
-  let pumps = 0;
-  const fake = {
-    has: () => true,
-    db: {
-      prepare: (sql) => {
-        assert.match(sql, /seat='main'/);
-        return { all: () => [{ session: MAIN }] };
-      },
-    },
-    enqueue: (target, kind, identity) => {
-      assert.equal(target.holder, MAIN);
-      assert.equal(kind, "account-budget");
-      const key = JSON.stringify(identity);
-      if (queued.has(key)) return false;
-      queued.add(key);
-      return true;
-    },
-    pump: () => {
-      pumps++;
-    },
-  };
-  Wakes.prototype.accountBudget.call(fake, "account:period", {
-    account: "API",
-    usedUsd: 190,
-    limitUsd: 200,
-  });
-  Wakes.prototype.accountBudget.call(fake, "account:period", {
-    account: "API",
-    usedUsd: 191,
-    limitUsd: 200,
-  });
-  assert.equal(queued.size, 1);
-  assert.equal(pumps, 1);
+test("billing warnings retain Main-first and lead-first receipts across restart", async (t) => {
+  for (const mainFirst of [true, false]) {
+    const f = fixture(t),
+      worker = f.started("Credit fixture");
+    const bindMain = () =>
+      f.db
+        .prepare(
+          "INSERT INTO role_bindings VALUES ('prime','main',NULL,?,?,1,1,'assigned','Warning test',NULL,?)",
+        )
+        .run(T(1), T(90), new Date().toISOString());
+    if (mainFirst) {
+      bindMain();
+      f.db
+        .prepare("UPDATE role_bindings SET state='vacant' WHERE role='project-orchestrator'")
+        .run();
+    }
+    let receipts = f.w.apiCreditLow("incident", { sessions: [worker] });
+    assert.equal(Object.keys(receipts).length, 1);
+    if (mainFirst)
+      f.db
+        .prepare("UPDATE role_bindings SET state='assigned' WHERE role='project-orchestrator'")
+        .run();
+    else bindMain();
+    // No saved receipts simulates a crash after the durable wake insert.
+    receipts = new Wakes(f.control).apiCreditLow("incident", { sessions: [worker] });
+    assert.equal(Object.keys(receipts).length, 2);
+    assert.equal(
+      f.db.prepare("SELECT count(*) n FROM role_wakes WHERE kind='api-credit-low'").get().n,
+      2,
+    );
+    f.w.apiCreditLow("incident", { sessions: [worker] }, receipts);
+    assert.equal(
+      f.db.prepare("SELECT count(*) n FROM role_wakes WHERE kind='api-credit-low'").get().n,
+      2,
+    );
+  }
 });
 
-test("API thresholds route to Main, the project lead, and the worker manager once each", () => {
-  const lead = "11111111-1111-4111-8111-111111111111";
-  const manager = "22222222-2222-4222-8222-222222222222";
-  const worker = "33333333-3333-4333-8333-333333333333";
-  const main = "44444444-4444-4444-8444-444444444444";
-  const targets = [];
-  const fake = {
-    has: () => true,
-    db: {
-      prepare: (sql) => ({
-        all: () =>
-          sql.includes("role_bindings") ? [{ session: main }] : [{ supervisor: manager }],
-      }),
-    },
-    owned: () => [{ holder: lead }, { holder: main }],
-    enqueue: (target) => {
-      targets.push(target.holder);
-      return true;
-    },
-    pump: () => {},
-  };
-  Wakes.prototype.accountBudget.call(fake, "daily:50", { sessions: [worker] });
-  assert.deepEqual(new Set(targets), new Set([main, lead, manager]));
-  assert.equal(targets.length, 3);
-});
-
-test("full wake queues retain every budget recipient across restart and promote when capacity returns", async (t) => {
+test("full wake queues retain every credit warning recipient across restart and promote when capacity returns", async (t) => {
   const f = fixture(t);
-  const worker = f.started("Budget fixture");
+  const worker = f.started("Credit fixture");
   for (let i = 0; i < 500; i++)
     assert.equal(f.w.enqueue({ holder: f.holder }, "filler", ["fill", i], {}), true);
   assert.equal(
-    f.w.accountBudget("daily-half", {
-      account: "Fixture API",
-      usedUsd: 20,
-      limitUsd: 40,
-      sessions: [worker],
-    }),
+    Object.keys(
+      f.w.apiCreditLow("billing-incident", {
+        account: "Fixture API",
+
+        sessions: [worker],
+      }),
+    ).length,
     1,
   );
   await f.w.pump();
   assert.equal(
     f.db
-      .prepare("SELECT count(*) n FROM role_wakes WHERE state='pending' AND kind='account-budget'")
+      .prepare("SELECT count(*) n FROM role_wakes WHERE state='pending' AND kind='api-credit-low'")
       .get().n,
     1,
   );
@@ -635,21 +610,39 @@ test("full wake queues retain every budget recipient across restart and promote 
   f.control.wakes = restored;
   await restored.pump();
   assert.equal(
-    f.db.prepare("SELECT state FROM role_wakes WHERE kind='account-budget'").get().state,
+    f.db.prepare("SELECT state FROM role_wakes WHERE kind='api-credit-low'").get().state,
     "queued",
   );
-  restored.accountBudget("daily-half", {
+  restored.apiCreditLow("billing-incident", {
     account: "Fixture API",
-    usedUsd: 20,
-    limitUsd: 40,
+
     sessions: [worker],
   });
   assert.equal(
-    f.db.prepare("SELECT count(*) n FROM role_wakes WHERE kind='account-budget'").get().n,
+    f.db.prepare("SELECT count(*) n FROM role_wakes WHERE kind='api-credit-low'").get().n,
     1,
   );
   await f.delegate(f.holder);
   await restored.pump();
   assert.equal(f.sent.length, 1);
-  assert.match(f.sent[0].text, /API budget/);
+  assert.match(f.sent[0].text, /API credit/);
+});
+
+test("a lead's own billing event sends one wake when the lead is also Main", async (t) => {
+  const f = fixture(t);
+  f.db
+    .prepare(
+      "INSERT INTO role_bindings VALUES ('prime','main',NULL,?,?,1,1,'assigned','Warning test',NULL,?)",
+    )
+    .run(T(1), f.holder, new Date().toISOString());
+  const receipts = f.w.apiCreditLow("shared-holder", { sessions: [f.holder] });
+  assert.deepEqual(receipts, { main: f.holder, owner: f.holder });
+  assert.equal(
+    f.db.prepare("SELECT count(*) n FROM role_wakes WHERE kind='api-credit-low'").get().n,
+    1,
+  );
+  assert.deepEqual(
+    new Wakes(f.control).apiCreditLow("shared-holder", { sessions: [f.holder] }),
+    receipts,
+  );
 });

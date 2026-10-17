@@ -1,4 +1,3 @@
-import type { SessionCost } from "@getpaseo/protocol/recorded-usage";
 import type {
   AgentPermissionRequest,
   AgentPermissionResponse,
@@ -52,6 +51,12 @@ export interface PluginLifecycleEvents {
   "agent.turn_ended": {
     agent: PluginHookAgent;
     turnId: string | null;
+    /** Host observation time, captured before asynchronous plugin handlers. */
+    observedAt?: string;
+    /** Stable host stream identity. Provider turn IDs can repeat after resume. */
+    observationId?: string;
+    /** Host monotonic order for observations in the same millisecond. */
+    observedOrder?: string;
     outcome: PluginTurnOutcome;
     usage?: AgentUsage;
     timeline: readonly AgentTimelineItem[];
@@ -92,16 +97,6 @@ export interface PluginBeforeRequests {
       billingWarning?: string;
       turns: Record<string, { accountId: string | null; amountUsd: number; at: string }>;
     };
-  };
-  "agent.turn_start": {
-    accountKind?: "api-key" | "subscription";
-    apiGuardChecked?: boolean;
-    agentId: string;
-    provider: string;
-    accountId: string | null;
-    labels: Record<string, string>;
-    sessionCost?: SessionCost;
-    costRecords?: Record<string, { accountId: string | null; amountUsd: number; at: string }>;
   };
   "agent.create": {
     config: AgentSessionConfig;

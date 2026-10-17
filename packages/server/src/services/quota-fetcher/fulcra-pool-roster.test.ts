@@ -397,3 +397,36 @@ it("native pool usage crosses the plugin subprocess and WebSocket with one bound
     await rm(root, { recursive: true, force: true });
   }
 }, 60000);
+
+it("API usage reports show recorded spend and a reporting date, never a cap", async () => {
+  const createdAt = "2026-10-01T00:00:00.000Z";
+  const root = home([
+    acct(WORK, "claude", "personal-workspace-api", { credentialKind: "api-key", createdAt }),
+  ]);
+  const { recordAccountCost } =
+    await import("../../../../../control/orca-organization/server/account-billing.mjs");
+  const { setAccount } =
+    await import("../../../../../control/orca-organization/server/accounts.mjs");
+  await recordAccountCost(root, {
+    id: "old",
+    accountId: WORK,
+    costUsd: 1000,
+    at: "2026-10-02T00:00:00Z",
+  });
+  await recordAccountCost(root, {
+    id: "new",
+    accountId: WORK,
+    costUsd: 17.52,
+    at: "2026-10-12T00:00:00Z",
+  });
+  const source = createPoolUsage(() => root);
+  expect(await source.fetch({ accountId: WORK, provider: "claude" })).toMatchObject({
+    status: "available",
+    balances: [{ id: "api-spend", used: 1017.52, limit: null, remaining: null, tone: "default" }],
+  });
+  await setAccount(root, WORK, { topUpAt: "2026-10-10T00:00:00Z" });
+  expect(await source.fetch({ accountId: WORK, provider: "claude" })).toMatchObject({
+    status: "available",
+    balances: [{ id: "api-spend", used: 17.52, limit: null, remaining: null }],
+  });
+});

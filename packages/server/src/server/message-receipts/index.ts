@@ -20,7 +20,11 @@ import {
   type NativeEvidenceJournal,
 } from "@getpaseo/protocol/native-evidence";
 import { canonicalJson } from "@getpaseo/protocol/trusted-input";
-import { reportMembers, sameNativeReportEvent } from "../report-batch.js";
+import {
+  NativeReportBatchResourceLimitError,
+  reportMembers,
+  sameNativeReportEvent,
+} from "../report-batch.js";
 import { bindReportPublication } from "../report-publication.js";
 import { requireReportReader, type ReportReader } from "../report-reader.js";
 import {
@@ -691,22 +695,36 @@ export class MessageReceipts {
           await this.commit(oldKey, { ...oldReceipt, state: "cancelled" });
         }
       }
+      let mergedBatch!: NativeReportBatch;
       const entry = wakeMessageId
         ? undefined
-        : [...this.records].find(
-            ([, receipt]) =>
-              receipt.state === "queued" &&
-              (receipt.collectingUntil ?? 0) > now &&
-              receipt.report &&
-              reportMembers(receipt.report).length < 24 &&
-              receipt.report.parentEpoch === incoming.data.parentEpoch &&
-              digest(receipt.report.parent) === digest(incoming.data.parent),
-          );
+        : [...this.records].find(([key, receipt]) => {
+            if (
+              !(
+                receipt.state === "queued" &&
+                (receipt.collectingUntil ?? 0) > now &&
+                receipt.report &&
+                reportMembers(receipt.report).length < 24 &&
+                receipt.report.parentEpoch === incoming.data.parentEpoch &&
+                digest(receipt.report.parent) === digest(incoming.data.parent)
+              )
+            )
+              return false;
+            const priorBatch = this.admissions.get(key)?.reportBatch;
+            if (!priorBatch) throw new Error("Native report collection authority absent");
+            try {
+              mergedBatch = mergeNativeReportBatches(priorBatch, batch);
+            } catch (error) {
+              if (error instanceof NativeReportBatchResourceLimitError) return false;
+              throw error;
+            }
+            return true;
+          });
       if (entry) {
         const [key, receipt] = entry;
         const oldInput = this.admissions.get(key);
         if (!oldInput?.reportBatch) throw new Error("Native report collection authority absent");
-        const merged = mergeNativeReportBatches(oldInput.reportBatch, batch);
+        const merged = mergedBatch;
         const input = this.reportCollectionInput(merged, receipt.messageId, makeInput);
         const observe = input.observe;
         input.observe = oldInput.observe
@@ -1530,15 +1548,20 @@ export class MessageReceipts {
                 return false;
               }
             })
-            .map((member) => ({
-              eventId: member.id,
-              kind: member.kind,
-              scope: member.scope,
-              at: member.at,
-              resolution: "resolved-expired" as const,
-              consumed: false,
-              providerAccepted: receipt.state === "delivered",
-            })),
+            .map((member) =>
+              Object.assign(
+                {
+                  eventId: member.id,
+                  kind: member.kind,
+                  scope: member.scope,
+                  at: member.at,
+                  resolution: "resolved-expired" as const,
+                  consumed: false,
+                  providerAccepted: receipt.state === "delivered",
+                },
+                member.totalSpendUsd === undefined ? {} : { totalSpendUsd: member.totalSpendUsd },
+              ),
+            ),
         )
         .sort((a, b) => b.at - a.at)
         .slice(0, 24);
@@ -1562,6 +1585,9 @@ export class MessageReceipts {
                   kind: member.kind,
                   scope: member.scope,
                   at: member.at,
+                  ...(member.totalSpendUsd === undefined
+                    ? {}
+                    : { totalSpendUsd: member.totalSpendUsd }),
                   metadataCommitted: true,
                   wakeState:
                     receipt.state === "queued" && receipt.collectingUntil
@@ -1583,6 +1609,7 @@ export class MessageReceipts {
             {
               scope: import("@getpaseo/protocol/native-intercom").NativeReportScope;
               eventIds: string[];
+              totalSpendUsdByEvent: Record<string, number>;
               counts: Partial<Record<import("../report-batch.js").ReportMember["kind"], number>>;
             }
           >();
@@ -1598,7 +1625,14 @@ export class MessageReceipts {
             }
             publishedMembers.push(member);
             const key = digest(member.scope);
-            const group = grouped.get(key) ?? { scope: member.scope, eventIds: [], counts: {} };
+            const group = grouped.get(key) ?? {
+              scope: member.scope,
+              eventIds: [],
+              counts: {},
+              totalSpendUsdByEvent: {},
+            };
+            if (member.totalSpendUsd !== undefined)
+              group.totalSpendUsdByEvent[member.id] = member.totalSpendUsd;
             group.eventIds.push(member.id);
             group.counts[member.kind] = (group.counts[member.kind] ?? 0) + 1;
             grouped.set(key, group);
@@ -1607,6 +1641,7 @@ export class MessageReceipts {
             scope: group.scope,
             eventIds: group.eventIds,
             counts: group.counts,
+            totalSpendUsdByEvent: group.totalSpendUsdByEvent,
             count: group.eventIds.length,
             metadataCommitted: true,
             wakeState: receipt.collectingUntil ? "collecting" : receipt.state,
