@@ -1,10 +1,12 @@
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addAbortSignal, PassThrough, Readable } from "node:stream";
 import { finished } from "node:stream/promises";
 import { runInNewContext } from "node:vm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   agentHooksAreInstalled,
   installAgentHooks,
@@ -17,6 +19,8 @@ import { OPENCODE_PLUGIN_SOURCE } from "./opencode-plugin.js";
 const temporaryDirs: string[] = [];
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
   while (temporaryDirs.length > 0) {
     const dir = temporaryDirs.pop();
     if (dir) rmSync(dir, { recursive: true, force: true });
@@ -41,6 +45,24 @@ describe("OpenCode terminal agent hooks", () => {
     expect(secondInstall.changed).toBe(false);
     expect(readFileSync(firstInstall.configPath, "utf8")).toBe(OPENCODE_PLUGIN_SOURCE);
     expect(agentHooksAreInstalled(opencodeAgentHookProvider, { configDir })).toBe(true);
+  });
+
+  it("keeps a plugin edited during uninstall and retains its ownership record", () => {
+    const configDir = createTempDir("paseo-opencode-uninstall-race-");
+    const installed = installAgentHooks(opencodeAgentHookProvider, { configDir });
+    const record = join(configDir, "plugins", ".paseo-terminal-activity.js.paseo-installed.sha256");
+    const expectedRecord = readFileSync(record, "utf8");
+    const rename = fs.renameSync;
+    vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      rename(from, to);
+      if (String(from) === installed.configPath)
+        fs.writeFileSync(to, "// concurrent local plugin edit");
+    });
+    syncBuiltinESMExports();
+    const result = uninstallAgentHooks(opencodeAgentHookProvider, { configDir });
+    expect(result.changed).toBe(false);
+    expect(readFileSync(installed.configPath, "utf8")).toBe("// concurrent local plugin edit");
+    expect(readFileSync(record, "utf8")).toBe(expectedRecord);
   });
 
   it.each(["succeeded", "failed", "interrupted"])(
