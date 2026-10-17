@@ -1762,7 +1762,7 @@ describe("Codex app-server provider", () => {
         modeId: "full-access",
         computerUse: { allowApps: ["VRoid Studio", "Simulator"] },
       }),
-      null,
+      { sessionId: "thread-1" },
       createTestLogger(),
       async () => appServer.child,
     );
@@ -1809,7 +1809,7 @@ describe("Codex app-server provider", () => {
       const appServer = createFakeCodexAppServer();
       const session = new CodexAppServerAgentSession(
         createConfig({ modeId: "full-access" }),
-        null,
+        { sessionId: "thread-1" },
         createTestLogger(),
         async () => appServer.child,
       );
@@ -1861,7 +1861,7 @@ describe("Codex app-server provider", () => {
       const appServer = createFakeCodexAppServer();
       const session = new CodexAppServerAgentSession(
         createConfig({ ...config, computerUse: { allowApps: ["Simulator"] } }),
-        null,
+        { sessionId: "thread-1" },
         createTestLogger(),
         async () => appServer.child,
       );
@@ -1888,7 +1888,7 @@ describe("Codex app-server provider", () => {
     const appServer = createFakeCodexAppServer();
     const session = new CodexAppServerAgentSession(
       createConfig({ modeId: "full-access", computerUse: { allowApps: ["Simulator"] } }),
-      null,
+      { sessionId: "thread-1" },
       createTestLogger(),
       async () => appServer.child,
     );
@@ -1931,7 +1931,7 @@ describe("Codex app-server provider", () => {
     const appServer = createFakeCodexAppServer();
     const session = new CodexAppServerAgentSession(
       createConfig({ modeId: "full-access" }),
-      null,
+      { sessionId: "thread-1" },
       createTestLogger(),
       async () => appServer.child,
     );
@@ -1987,7 +1987,7 @@ describe("Codex app-server provider", () => {
     });
     const session = new CodexAppServerAgentSession(
       createConfig({ modeId: "auto", computerUse: { allowApps: ["Simulator"] } }),
-      null,
+      { sessionId: "thread-1" },
       createTestLogger(),
       async () => appServer.child,
     );
@@ -2055,7 +2055,7 @@ describe("Codex app-server provider", () => {
     const freshServer = createFakeCodexAppServer();
     const fresh = new CodexAppServerAgentSession(
       createConfig({ modeId: "full-access" }),
-      null,
+      { sessionId: "thread-1" },
       createTestLogger(),
       async () => freshServer.child,
     );

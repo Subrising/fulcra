@@ -1,4 +1,4 @@
-import { computerUseFromLabels } from "./providers/codex/computer-use.js";
+import { assertComputerUseLabels, computerUseFromLabels } from "./providers/codex/computer-use.js";
 import { SessionCostOutbox, type PendingSessionCost } from "./session-cost-outbox.js";
 import { recordSessionCost, sessionCost, type SessionCostRecords } from "./session-cost.js";
 import { queuedAgentMessagesFor } from "../queued-agent-messages.js";
@@ -832,15 +832,7 @@ function applyLabelPatch(
   patch: AgentLabelPatch,
   provider: AgentProvider,
 ): Record<string, string> {
-  if (
-    provider === "codex" &&
-    Object.hasOwn(patch, "computerUse.allowApps") &&
-    patch["computerUse.allowApps"] !== labels["computerUse.allowApps"]
-  ) {
-    throw new Error(
-      "computerUse.allowApps is fixed at job creation. Start a new job to change it.",
-    );
-  }
+  assertComputerUseLabels({ stored: { provider, labels }, updates: { labels: patch } });
   const nextLabels = { ...labels };
   for (const [key, value] of Object.entries(patch)) {
     if (value === null) {
@@ -3157,15 +3149,7 @@ export class AgentManager {
     const record = this.registry ? await this.registry.get(resolvedAgentId) : null;
     requireRecord?.(record);
     this.assertChangedInjectionLabels(options?.labels, record?.labels);
-    if (
-      record?.provider === "codex" &&
-      options?.labels &&
-      options.labels["computerUse.allowApps"] !== record.labels["computerUse.allowApps"]
-    ) {
-      throw new Error(
-        "computerUse.allowApps is fixed at job creation. Start a new job to change it.",
-      );
-    }
+    assertComputerUseLabels({ stored: record, updates: options, replace: true });
     const labels = options?.labels ?? record?.labels;
     const currentResumeOptions = record
       ? { purpose: record.archivedAt ? ("history" as const) : ("interactive" as const) }

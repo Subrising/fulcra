@@ -6,7 +6,7 @@ const AppNameSchema = z
   .trim()
   .min(1)
   .max(256)
-  .regex(/^[^\u0000-\u001f\u007f]+$/);
+  .regex(/^[^\p{Cc}]+$/u);
 const AllowAppsSchema = z.array(AppNameSchema).max(100);
 
 export function computerUseFromLabels(labels: Record<string, string> | undefined) {
@@ -41,8 +41,33 @@ export function computerUseApp(params: {
   return app.success ? app.data : null;
 }
 
-export type ComputerUseDecision = {
+export interface ComputerUseDecision {
   action: "accept" | "decline";
   content: Record<string, never> | null;
   _meta: null;
-};
+}
+
+export function restoreComputerUseDecisions(value: unknown): Map<string, ComputerUseDecision> {
+  const decisions = new Map<string, ComputerUseDecision>();
+  const parsed = z.record(z.string(), z.enum(["accept", "decline"])).safeParse(value);
+  if (!parsed.success) return decisions;
+  for (const [app, action] of Object.entries(parsed.data)) {
+    decisions.set(app, { action, content: action === "accept" ? {} : null, _meta: null });
+  }
+  return decisions;
+}
+
+export function assertComputerUseLabels(input: {
+  stored: { provider: string; labels: Record<string, string> } | null | undefined;
+  updates: { labels?: Record<string, string | null> } | undefined;
+  replace?: boolean;
+}): void {
+  if (input.stored?.provider !== "codex" || !input.updates?.labels) return;
+  const labels = input.updates.labels;
+  const key = COMPUTER_USE_ALLOW_APPS_LABEL;
+  if ((input.replace || Object.hasOwn(labels, key)) && labels[key] !== input.stored.labels[key]) {
+    throw new Error(
+      "computerUse.allowApps is fixed at job creation. Start a new job to change it.",
+    );
+  }
+}

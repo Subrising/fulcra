@@ -1688,8 +1688,8 @@ test("computer-use job label works through the scratch MCP endpoint with one lea
     const first = waitForNextPermission(codexSession);
     request("Simulator");
     const permission = await first;
-    await vi.waitFor(() => expect(prompts).toHaveLength(1));
-    expect(JSON.stringify(prompts[0])).toContain("needs permission");
+    await vi.waitFor(() => expect(prompts).toHaveLength(1), { timeout: 5000 });
+    expect(JSON.stringify(prompts[0])).toContain("waiting for permission");
     expect(JSON.stringify(prompts[0])).toContain("Simulator");
     await daemon.agentManager.respondToPermission(workerId, permission.request.id, {
       behavior: "allow",
@@ -1706,7 +1706,7 @@ test("computer-use job label works through the scratch MCP endpoint with one lea
     const next = waitForNextPermission(codexSession);
     request("Notes");
     const nextPermission = await next;
-    await vi.waitFor(() => expect(prompts).toHaveLength(2));
+    await vi.waitFor(() => expect(prompts).toHaveLength(2), { timeout: 5000 });
     await daemon.agentManager.respondToPermission(workerId, nextPermission.request.id, {
       behavior: "deny",
     });

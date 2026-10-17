@@ -1,4 +1,8 @@
-import { computerUseApp, type ComputerUseDecision } from "./codex/computer-use.js";
+import {
+  computerUseApp,
+  restoreComputerUseDecisions,
+  type ComputerUseDecision,
+} from "./codex/computer-use.js";
 import { validateProviderOptions } from "../provider-options.js";
 import {
   baselineForSession,
@@ -3715,18 +3719,9 @@ export class CodexAppServerAgentSession implements AgentSession {
     );
     this.harnessEnvironment = deps.environment ?? buildCodexAppServerEnv();
     this.asyncQuestions = new CodexAsyncQuestions(resumeHandle?.metadata?.asyncQuestions);
-    const decisions = z
-      .record(z.string(), z.enum(["accept", "decline"]))
-      .safeParse(resumeHandle?.metadata?.computerUseDecisions);
-    if (decisions.success) {
-      for (const [app, action] of Object.entries(decisions.data)) {
-        this.computerUseDecisions.set(app, {
-          action,
-          content: action === "accept" ? {} : null,
-          _meta: null,
-        });
-      }
-    }
+    this.computerUseDecisions = restoreComputerUseDecisions(
+      resumeHandle?.metadata?.computerUseDecisions,
+    );
     this.codexHome = deps.codexHome ?? resolveCodexHomeDir(process.env);
     this.config.thinkingOptionId = normalizeCodexThinkingOptionId(this.config.thinkingOptionId);
     this.serviceTier = readCodexServiceTier(this.config.featureValues);
@@ -5230,14 +5225,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       this.emitDeniedToolCallTimelineEvent({ requestId, response, pendingRequest });
     }
 
-    if (pending.computerUseApp && !(response.behavior === "deny" && response.interrupt)) {
-      const action = response.behavior === "allow" ? "accept" : "decline";
-      this.computerUseDecisions.set(pending.computerUseApp, {
-        action,
-        content: action === "accept" ? {} : null,
-        _meta: null,
-      });
-    }
+    this.rememberComputerUseAnswer(pending.computerUseApp, response);
     this.emitEvent({
       type: "permission_resolved",
       provider: CODEX_PROVIDER,
@@ -8028,6 +8016,19 @@ export class CodexAppServerAgentSession implements AgentSession {
     });
   }
 
+  private rememberComputerUseAnswer(
+    app: string | undefined,
+    response: AgentPermissionResponse,
+  ): void {
+    if (!app || (response.behavior === "deny" && response.interrupt)) return;
+    const action = response.behavior === "allow" ? "accept" : "decline";
+    this.computerUseDecisions.set(app, {
+      action,
+      content: action === "accept" ? {} : null,
+      _meta: null,
+    });
+  }
+
   private fullAccessComputerUse(): boolean {
     const preset = MODE_PRESETS[this.currentMode];
     return (
@@ -8089,9 +8090,10 @@ export class CodexAppServerAgentSession implements AgentSession {
         return new Promise((resolve) => {
           this.computerUseFollowers.set(serverRequestId, resolve);
           void pending.then((answer) => {
-            if (!this.computerUseFollowers.delete(serverRequestId)) return;
+            if (!this.computerUseFollowers.delete(serverRequestId)) return undefined;
             if (toObjectRecord(answer)?.action === "accept") this.auditComputerUse(app);
             resolve(answer);
+            return undefined;
           });
         });
       }
@@ -8108,7 +8110,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       provider: CODEX_PROVIDER,
       name: "CodexMcpElicitation",
       kind: "tool",
-      title: `MCP approval: ${parsed.serverName}`,
+      title: app ? `Computer Use approval: ${app}` : `MCP approval: ${parsed.serverName}`,
       description: parsed.message,
       input: {
         mode: parsed.mode,
@@ -8135,6 +8137,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       this.computerUsePending.set(app, response);
       void response.then(() => {
         this.computerUsePending.delete(app);
+        return undefined;
       });
     }
     this.emitEvent({ type: "permission_requested", provider: CODEX_PROVIDER, request });
