@@ -254,7 +254,7 @@ async function applySkills(
   // Status reads are read-only. Maintenance offers updates even when the only
   // differences are intentional local overrides and no replacement is planned.
   const shippedHashes = await readShippedSkillHashes(targets.sourceDir);
-  for (const name of status.installed.filter((name) => desired.has(name))) {
+  for (const name of status.installed.filter((installedName) => desired.has(installedName))) {
     const sourceDir = path.join(targets.sourceDir, name);
     const sourceFiles = await hashSkillDir(sourceDir);
     if (!sourceFiles) continue;

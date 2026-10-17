@@ -15,7 +15,13 @@ import path from "node:path";
 export const INSTRUCTION_FILE_POLICY =
   "Fulcra never overwrites, modifies or reinstalls a file that the user or an agent edited. If an upstream (Paseo) or Fulcra update brings a newer bundled version of an edited file, write it beside the file as <name>.new (or a dated copy), keep the user's file, and tell the owner once. Install a bundled file only if it is missing or byte-identical to an older bundled version.";
 
-/** Keep both user edits and earlier update offers. An existing offer is also the notice receipt. */
+function offerCandidate(primary: string, dated: string, index: number): string {
+  if (index === 0) return primary;
+  if (index === 1) return dated;
+  return `${dated}.${index}`;
+}
+
+/** Keep user edits, earlier update offers and persistent notice receipts. */
 export function offerInstructionUpdate(
   file: string,
   data: Buffer,
@@ -54,7 +60,7 @@ export function offerInstructionUpdate(
   const date = new Date().toISOString().slice(0, 10).replaceAll("-", "");
   const dated = `${file}.new.${date}.${hash(data).slice(0, 16)}`;
   for (let index = 0; ; index++) {
-    const candidate = index === 0 ? primary : index === 1 ? dated : `${dated}.${index}`;
+    const candidate = offerCandidate(primary, dated, index);
     if (info(candidate)) continue;
     if (!replaceInstructionFile(candidate, data, undefined)) {
       const placed = info(candidate);

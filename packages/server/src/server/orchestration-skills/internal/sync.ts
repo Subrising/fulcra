@@ -126,6 +126,10 @@ export async function readManagedFilesManifest(
   const raw = await fs
     .readFile(path.join(dstDir, MANAGED_FILES_MANIFEST), "utf-8")
     .catch(() => null);
+  return parseManagedFilesManifest(raw);
+}
+
+function parseManagedFilesManifest(raw: string | null): ManagedFilesManifest | null {
   if (!raw) return null;
   const parsed = safeParseJson(raw) as Partial<ManagedFilesManifest> | null;
   if (!parsed) return null;
@@ -158,7 +162,9 @@ async function writeManifestIfChanged(
 ): Promise<boolean> {
   // Another daemon may have committed ownership while this scan was in flight.
   // Retain its receipt only when the installed bytes still prove that ownership.
-  const concurrent = await readManagedFilesManifest(dstDir);
+  const manifestPath = path.join(dstDir, MANAGED_FILES_MANIFEST);
+  const current = await fs.readFile(manifestPath, "utf-8").catch(() => null);
+  const concurrent = parseManagedFilesManifest(current);
   await assertManagedPathsStayInsideSkill(dstDir, Object.keys(concurrent?.files ?? {}));
   for (const [rel, recordedHash] of Object.entries(concurrent?.files ?? {})) {
     if (files[rel] === recordedHash) continue;
@@ -167,8 +173,9 @@ async function writeManifestIfChanged(
   }
   const manifest: ManagedFilesManifest = { version: 1, files };
   const next = `${JSON.stringify(manifest, null, 2)}\n`;
-  const manifestPath = path.join(dstDir, MANAGED_FILES_MANIFEST);
-  const current = await fs.readFile(manifestPath, "utf-8").catch(() => null);
+  // A losing installer has no ownership to record. It must not win an empty
+  // receipt before the daemon that installed the bytes records their hash.
+  if (current === null && Object.keys(files).length === 0) return false;
   if (current === next) return false;
   await fs.mkdir(dstDir, { recursive: true });
   if (
