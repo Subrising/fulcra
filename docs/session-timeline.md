@@ -38,7 +38,7 @@ compact projection and file-index facts. Page reads load only contributing recor
 The original journal remains authoritative. Active sessions can still keep their displayed timeline.
 
 The process shares a 128 MiB input allowance across full transcript and journal replays.
-A separate 16 MiB allowance serves commits and small page reads. Large inputs use one lane alone.
+A separate 16 MiB allowance serves commits and page reads up to 16 MiB. Large inputs use one lane alone.
 These allowances bound concurrent parsing work. Converted provider history remains until its session consumes it.
 Concurrent identical Claude resumes share parsed data. Each caller keeps its own mutable session.
 Closing a caller abandons its load. Closing the last caller also cancels a queued or active read.

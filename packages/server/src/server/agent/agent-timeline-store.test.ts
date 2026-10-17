@@ -1311,3 +1311,30 @@ test("a page integrity failure fences later writes to that journal", async () =>
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("a page above one MiB completes while the replay lane is occupied", async () => {
+  const { historyLoadBudget } = await import("./history-load.js");
+  const directory = mkdtempSync(join(tmpdir(), "timeline-large-page-priority-"));
+  const store = new FileAgentTimelineStore(directory);
+  let release: (() => void) | undefined;
+  try {
+    const output = "x".repeat(64 * 1024);
+    for (let index = 0; index < 20; index++)
+      await store.appendCommitted("agent", {
+        type: "tool_call",
+        callId: `call-${index}`,
+        name: "Bash",
+        status: "completed",
+        error: null,
+        detail: { type: "shell", command: "synthetic", output },
+      });
+    await store.flushIndex("agent");
+    release = await historyLoadBudget.acquire(Number.MAX_SAFE_INTEGER);
+    const page = await store.fetchCommitted("agent", { limit: 20 });
+    expect(page.rows).toHaveLength(20);
+    expect(JSON.stringify(page.rows).length).toBeGreaterThan(1024 * 1024);
+  } finally {
+    release?.();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

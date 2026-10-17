@@ -568,7 +568,9 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
     id: string,
     journal: Journal,
     selected: JournalRow[],
+    purpose: "page" | "full" = "page",
   ): Promise<AgentTimelineRow[]> {
+    if (selected.length === 0) return [];
     const groups = new Map<string, JournalRow[]>();
     for (const entry of selected) {
       const key = `${entry.location.segment}:${entry.location.offset}`;
@@ -582,7 +584,8 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
         left[0]!.location.offset - right[0]!.location.offset,
     );
     const replayBytes = records.reduce((sum, entries) => sum + entries[0]!.location.bytes, 0);
-    const budget = replayBytes <= 1024 * 1024 ? interactiveHistoryBudget : historyLoadBudget;
+    const interactivePage = purpose === "page" && replayBytes <= 16 * 1024 * 1024;
+    const budget = interactivePage ? interactiveHistoryBudget : historyLoadBudget;
     const release = await budget.acquire(replayBytes);
     const level = replayBytes <= 1024 * 1024 ? "debug" : "info";
     const handles = new Map<number, fsp.FileHandle>();
@@ -1054,7 +1057,7 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
   getCommittedRows(id: string) {
     return this.serialize(id, async () =>
       this.readable(id).then((journal) =>
-        this.materialize(id, journal, [...journal.rows.values()]),
+        this.materialize(id, journal, [...journal.rows.values()], "full"),
       ),
     );
   }
