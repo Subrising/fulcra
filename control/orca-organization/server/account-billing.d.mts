@@ -3,6 +3,7 @@ export function readBilling(root: string): {
   v: number;
   calls: Record<string, { accountId: string; costUsd: number; at: string }>;
   cursors?: Record<string, { cumulativeUsd: number; at: string }>;
+  checkpoints?: Record<string, Record<string, number>>;
   events: { type: string; accountId: string; at: string }[];
 };
 export function accountSpend(
@@ -20,6 +21,7 @@ export function recordAccountCost(
     runtimeSessionId?: string | null;
     cumulativeUsd?: number | null;
     sessionId?: string | null;
+    cursorCheckpoint?: Record<string, number> | null;
   },
 ): Promise<boolean>;
 export function recordBillingError(

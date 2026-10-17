@@ -8104,6 +8104,7 @@ export class AgentManager {
             turnId: eventTurnId,
             costUsd: row.amountUsd,
             at: row.at,
+            cursors: next!.cursors,
           });
           event.usage.turnCostUsd = row.amountUsd;
         }

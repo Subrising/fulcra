@@ -70,6 +70,7 @@ export async function recordAccountCost(
     runtimeSessionId = null,
     cumulativeUsd = null,
     sessionId = null,
+    cursorCheckpoint = null,
   },
 ) {
   if (
@@ -97,6 +98,16 @@ export async function recordAccountCost(
       state.cursors[runtimeSessionId] = { cumulativeUsd, at };
     }
     state.calls[id] = { accountId, costUsd, at, ...(uuid(sessionId) ? { sessionId } : {}) };
+    if (uuid(sessionId) && cursorCheckpoint !== null) {
+      if (
+        typeof cursorCheckpoint !== "object" ||
+        Array.isArray(cursorCheckpoint) ||
+        !Object.values(cursorCheckpoint).every((value) => Number.isFinite(value) && value >= 0)
+      )
+        throw Error("Invalid session cost cursor checkpoint");
+      state.checkpoints ??= {};
+      state.checkpoints[sessionId] = { ...cursorCheckpoint };
+    }
     compact(state, await readAccountsAsync(root));
     await save(root, state);
     return true;
@@ -178,6 +189,8 @@ export function readSessionBilling(root, request) {
     const turnId = id.slice(prefix.length);
     records.turns[turnId] ??= { accountId: row.accountId, amountUsd: row.costUsd, at: row.at };
   }
+  // Billing and this cursor were committed together. Replace an older session snapshot, including query resets.
+  Object.assign(records.cursors, billing.checkpoints?.[request.agentId] ?? {});
   const runtime = request.runtimeSessionId;
   if (runtime && billing.cursors?.[runtime]) {
     const key = JSON.stringify([request.provider, runtime]);

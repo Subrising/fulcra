@@ -657,7 +657,7 @@ test("scratch daemon keeps recorded session costs across restart and refuses a c
 import { assertApiSpendAllowed, readSessionBilling, recordAccountCost } from "./server/account-billing.mjs";
 export default function(server) {
  server.before("agent.cost_commit", async ({ request }) => {
-   if (request.accountId) await recordAccountCost(${JSON.stringify(path.join(root, "pool"))}, { id: "turn:" + request.agentId + ":" + request.turnId, accountId: request.accountId, sessionId: request.agentId, costUsd: request.costUsd, at: request.at });
+   if (request.accountId) await recordAccountCost(${JSON.stringify(path.join(root, "pool"))}, { id: "turn:" + request.agentId + ":" + request.turnId, accountId: request.accountId, sessionId: request.agentId, costUsd: request.costUsd, at: request.at, cursorCheckpoint: request.cursors });
  });
  server.before("agent.cost_read", ({ request }) => readSessionBilling(${JSON.stringify(path.join(root, "pool"))}, request));
  server.before("agent.turn_start", ({ request }) => assertApiSpendAllowed(${JSON.stringify(path.join(root, "pool"))}, request));

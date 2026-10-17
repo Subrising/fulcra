@@ -77,6 +77,7 @@ export interface PluginBeforeRequests {
     turnId: string;
     costUsd: number;
     at: string;
+    cursors: Record<string, number>;
   };
 
   "agent.cost_read": {

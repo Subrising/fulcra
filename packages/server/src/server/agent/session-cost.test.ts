@@ -79,3 +79,48 @@ test("recorded SDK fixture results accumulate after a query counter reset and ac
   expect(sessionCost(records)?.totalUsd).toBeCloseTo(17.52);
   expect(sessionCost(records)?.lastTurnUsd).toBeCloseTo(7.87);
 });
+
+test("a crash after billing commit restores the cursor before the next cumulative result", async () => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { randomUUID } = await import("node:crypto");
+  const { addAccount } =
+    await import("../../../../../control/orca-organization/server/accounts.mjs");
+  const { recordAccountCost, readSessionBilling } =
+    await import("../../../../../control/orca-organization/server/account-billing.mjs");
+  const dir = await mkdtemp(join(tmpdir(), "cost-crash-checkpoint-"));
+  try {
+    const account = await addAccount(dir, { provider: "claude", name: "Fixture" });
+    const id = randomUUID();
+    const saved = fold(undefined, "one", 4, account.id, 4)!;
+    const finished = fold(saved, "two", 6, account.id)!;
+    await recordAccountCost(dir, {
+      id: `turn:${id}:two`,
+      accountId: account.id,
+      costUsd: 2,
+      sessionId: id,
+      cursorCheckpoint: finished.cursors,
+      at: "2026-10-17T00:00:01.000Z",
+    });
+    // The session snapshot still has the old $4 cursor when the daemon stops.
+    const restored = readSessionBilling(dir, {
+      agentId: id,
+      provider: "claude",
+      runtimeSessionId: "native-one",
+      records: JSON.parse(JSON.stringify(saved)),
+    })!.records;
+    expect(sessionCost(restored)?.totalUsd).toBe(6);
+    const next = recordSessionCost(restored, {
+      provider: "claude",
+      turnId: "three",
+      accountId: account.id,
+      usage: { recorded: recordedClaudeUsage({ session_id: "native-one", total_cost_usd: 9 }) },
+      at: "2026-10-17T00:00:02.000Z",
+    });
+    expect(sessionCost(next)?.lastTurnUsd).toBe(3);
+    expect(sessionCost(next)?.totalUsd).toBe(9);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

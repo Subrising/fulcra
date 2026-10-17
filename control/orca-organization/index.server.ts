@@ -593,6 +593,7 @@ export default function contribute(
       sessionId: request.agentId,
       costUsd: request.costUsd,
       at: request.at,
+      cursorCheckpoint: request.cursors,
     });
   });
   const stopCostRead = server.before("agent.cost_read", ({ request }) =>

@@ -46,6 +46,7 @@ const beforeSchemas = {
       turnId: z.string(),
       costUsd: z.number().finite().nonnegative(),
       at: z.string(),
+      cursors: z.record(z.string(), z.number().finite().nonnegative()),
     })
     .strict(),
   "agent.cost_read": z
