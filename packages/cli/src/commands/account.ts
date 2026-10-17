@@ -22,7 +22,9 @@ const reply = z.object({ ok: z.boolean(), message: z.string().nullable() });
 type Account = z.infer<typeof account>;
 export interface AccountClient {
   invokePluginRpc(pluginId: string, method: string, input: unknown): Promise<unknown>;
-  fetchAgent(options: { agentId: string }): Promise<{ agent: { id: string } } | null>;
+  fetchAgent(options: {
+    agentId: string;
+  }): Promise<{ agent: { id: string; archivedAt?: string | null } } | null>;
   getPluginCatalog?(): Promise<{
     trustedPlugins?: readonly { id: string; contract?: "1.1"; hooks: readonly string[] }[];
   }>;
@@ -68,7 +70,10 @@ export async function switchAccountSession(
   const accountName = name.trim();
   if (!accountName || accountName.length > 80)
     throw new Error("Name an account (1 to 80 characters).");
-  const id = await resolveAgent(client, agentId);
+  const session = await client.fetchAgent({ agentId });
+  if (!session) throw new Error(`Session not found: ${agentId}`);
+  if (session.agent.archivedAt) throw new Error(`Session is archived: ${agentId}`);
+  const id = session.agent.id;
   const result = reply.parse(
     await client.invokePluginRpc(await controllerId(client), "organization.accounts.switch", {
       agentId: id,

@@ -396,15 +396,17 @@ async function budgetWorld(t) {
   await setAccount(w.root, w.a.id, { name: "personal-workspace-api", credentialKind: "api-key" });
   await setAccount(w.root, w.b.id, { name: "work-workspace-api", credentialKind: "api-key" });
   w.control.promptIdentityChanged = () => false;
-  const notices = [];
+  const notices = [],
+    thresholdNotices = [];
   w.control.wakes = {
     accountBudget: (key, value) => {
-      notices.push({ key, ...value });
+      // Spend thresholds and failover routing have separate notice contracts.
+      (value.scope ? thresholdNotices : notices).push({ key, ...value });
       return 1;
     },
   };
   await recordAccountCost(w.root, { id: "budget-trigger", accountId: w.a.id, costUsd: 190 });
-  return { ...w, notices };
+  return { ...w, notices, thresholdNotices };
 }
 for (const enrolled of [true, false])
   test(`M1: budget takeover refuses ${enrolled ? "human-mode" : "owner's unregistered"} chats`, async (t) => {
@@ -435,6 +437,11 @@ test("M1: the budget notice counts human and unregistered chats without moving t
   assert.equal(w.calls(), 0);
   assert.equal(w.notices.length, 1);
   assert.equal(w.notices[0].held, 2);
+  assert.ok(w.thresholdNotices.length > 0);
+  assert.equal(
+    new Set(w.thresholdNotices.map((notice) => notice.key)).size,
+    w.thresholdNotices.length,
+  );
   assert.equal(readAccounts(w.root).assignments[own].accountId, w.a.id);
 });
 test("M2: the real budget takeover moves only active delegated sessions on the source API account", async (t) => {
@@ -582,4 +589,39 @@ test("phone switch keeps busy, limit, history and ownership guards", async (t) =
   assert.equal(result.ok, false);
   assert.match(result.message, /Another owner/);
   assert.equal(w.calls(), 1);
+});
+
+for (const enrolled of [false, true])
+  for (const surface of ["inspect", "snapshot"])
+    test(`archived ${enrolled ? "human" : "unenrolled"} session refuses before assignment (${surface})`, async (t) => {
+      const w = await world(t, "claude", { enrolled });
+      const before = readAccounts(w.root);
+      const inspect = w.control.native[surface];
+      w.control.native[surface] = async (...args) => ({
+        ...(await inspect(...args)),
+        archivedAt: "2026-01-01T00:00:00.000Z",
+      });
+      const result = await takeOverSession(w.id, w.b.id, { control: w.control });
+      assert.equal(result.outcome, "refused");
+      assert.match(result.message, /archived/i);
+      assert.deepEqual(readAccounts(w.root), before);
+      assert.equal(w.calls(), 0);
+    });
+
+test("an archived delegated session keeps its account and control record", async (t) => {
+  const w = await world(t);
+  w.store.transfer(w.id, "delegated", "Synthetic owner");
+  const record = w.store.get(w.id);
+  const pool = readAccounts(w.root);
+  w.control.native.inspect = async () => ({ archivedAt: "2026-01-01T00:00:00.000Z" });
+  const result = await takeOverSession(w.id, w.b.id, {
+    control: w.control,
+    generation: record.generation,
+    reason: "limit",
+  });
+  assert.equal(result.outcome, "refused");
+  assert.match(result.message, /archived/i);
+  assert.deepEqual(w.store.get(w.id), record);
+  assert.deepEqual(readAccounts(w.root), pool);
+  assert.equal(w.calls(), 0);
 });

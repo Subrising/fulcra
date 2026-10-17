@@ -33,7 +33,7 @@ export function ArchivedAgentCallout({ serverId, agentId }: ArchivedAgentCallout
         agentId,
         supported: client.getLastServerInfoMessage()?.features?.agentArchiveSafety === true,
       });
-      await client.refreshAgent(agentId, undefined, { confirmed });
+      await client.refreshAgent(agentId, undefined, { confirmed, restore: true });
     } catch (error) {
       setUnarchiveError(toErrorMessage(error));
       setIsUnarchiving(false);

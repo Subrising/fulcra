@@ -78,7 +78,7 @@ export function sendPayload(text) {
     type: "prompt",
     prompt: text,
     options: normalizeTrustedPromptOptions({
-      unarchive: true,
+      unarchive: false,
       replaceRunning: true,
       clearPendingPermissions: true,
       activeTurnBehavior: "interrupt",

@@ -182,7 +182,7 @@ test("ordinary Hub create and message retries do not duplicate agents or prompts
   ).toMatchObject({ payload: { accepted: false } });
 });
 
-test("ordinary Hub requests survive daemon restart and restore an archived workspace", async () => {
+test("ordinary Hub workspace recovery preserves its worker archive after daemon restart", async () => {
   const hub = await launchRelationship();
   const create = {
     type: "create_agent_request",
@@ -244,10 +244,20 @@ test("ordinary Hub requests survive daemon restart and restore an archived works
       ...message,
       text: "follow up",
       messageId: "after-restore",
-      requestId: "after-restore-send",
+      requestId: "send-before-worker-restore",
     }),
-  ).toMatchObject({ payload: { agentId, accepted: true } });
-  expect(hub.providerPromptTexts().filter((text) => text === "follow up")).toHaveLength(1);
+  ).toMatchObject({
+    payload: { agentId, accepted: false, error: "The receiver is archived. Restore it first." },
+  });
+  expect(
+    await hub.requestOrdinary({
+      type: "refresh_agent_request",
+      agentId,
+      restore: true,
+      requestId: "explicit-worker-restore",
+    }),
+  ).toMatchObject({ type: "rpc_error", payload: { code: "access_denied" } });
+  expect(hub.providerPromptTexts().filter((text) => text === "follow up")).toHaveLength(0);
 }, 20_000);
 
 test("Hub completes the standard hello before rejecting a second hello", async () => {

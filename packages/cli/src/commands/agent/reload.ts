@@ -1,5 +1,6 @@
 import { Command } from "commander";
-import { connectToDaemon, resolveAgentId } from "../../utils/client.js";
+import { connectToDaemon } from "../../utils/client.js";
+import { findAgentToArchive } from "./archive.js";
 import type {
   CommandOptions,
   SingleResult,
@@ -24,7 +25,7 @@ export const reloadSchema: OutputSchema<AgentReloadResult> = {
 
 export function addReloadOptions(cmd: Command): Command {
   return cmd
-    .description("Reload an agent (restarts the underlying process)")
+    .description("Reload an agent, or restore an archived worker")
     .argument("<id>", "Agent ID, prefix, or name");
 }
 
@@ -51,9 +52,8 @@ export async function runReloadCommand(
   const client = await connectToDaemon({ target: options.daemonTarget });
 
   try {
-    const agentsPayload = await client.fetchAgents({ filter: { includeArchived: true } });
-    const agents = agentsPayload.entries.map((entry) => entry.agent);
-    const agentId = resolveAgentId(agentIdArg, agents);
+    const agent = await findAgentToArchive(client, agentIdArg);
+    const agentId = agent?.id;
     if (!agentId) {
       const error: CommandError = {
         code: "AGENT_NOT_FOUND",
@@ -63,7 +63,9 @@ export async function runReloadCommand(
       throw error;
     }
 
-    const result = await client.refreshAgent(agentId);
+    // CLI reload is an explicit worker restore action.
+    // Account switching and recovery use maintenance requests without this intent.
+    const result = await client.refreshAgent(agentId, undefined, { restore: true });
 
     await client.close();
 
