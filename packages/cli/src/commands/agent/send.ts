@@ -46,6 +46,7 @@ export const agentSendSchema: OutputSchema<AgentSendResult> = {
 };
 
 export interface AgentSendOptions extends CommandOptions {
+  notifyOnFinish?: boolean;
   steer?: boolean;
   queue?: boolean;
   wait?: boolean;
@@ -65,6 +66,7 @@ export function addSendOptions(cmd: Command): Command {
     .option("--prompt <text>", "Provide the message inline as a flag")
     .option("--prompt-file <path>", "Read the message from a UTF-8 text file")
     .option("--image <path>", "Attach image(s) to the message", collectMultiple, [])
+    .option("--no-notify-on-finish", "Do not request a finish notice for this message")
     .option("--steer", "Inject into the running turn; queue if native steering is unavailable")
     .option("--queue", "Queue agent messages for one combined delivery (default for agent senders)")
     .option(
@@ -291,10 +293,23 @@ function sendOptions(
 ): PaseoAgentSendOptions {
   return {
     images,
+    ...(options.notifyOnFinish === false ? { notifyOnFinish: false } : {}),
     ...(sender ? { sender } : {}),
     ...(options.queue || (sender && !options.steer) ? { queue: true } : {}),
     ...(options.steer ? { activeTurnBehavior: "steer" as const } : {}),
     ...(sender || options.steer || options.queue ? { onDelivery } : {}),
+  };
+}
+
+function completionPolicy(
+  options: AgentSendOptions,
+  sender: ReturnType<typeof resolveSender>,
+  agentId: string,
+) {
+  const remote = Boolean(sender && agentId.includes("@"));
+  return {
+    background: options.wait === false || remote,
+    messageId: options.wait === false && !remote ? undefined : randomUUID(),
   };
 }
 
@@ -358,7 +373,8 @@ export async function runSendCommand(
 
     // Send the message
     let deliveryNote: string | undefined;
-    const completionMessageId = options.wait === false ? undefined : randomUUID();
+    const policy = completionPolicy(options, sender, agentIdArg);
+    const completionMessageId = policy.messageId;
     await client.sendAgentMessage(agentIdArg, promptInput, {
       ...sendOptions(options, sender, images, (note) => {
         deliveryNote = note;
@@ -367,7 +383,7 @@ export async function runSendCommand(
     });
 
     // If --no-wait, return immediately
-    if (options.wait === false) {
+    if (policy.background) {
       return {
         type: "single",
         data: {

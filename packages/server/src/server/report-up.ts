@@ -31,11 +31,14 @@ import {
   REPORTS_TO_OWNER,
   ROLE_REF_PREFIX,
   SEAT_LABEL,
-  getParentAgentIdFromLabels,
 } from "@getpaseo/protocol/agent-labels";
 import { FINAL_INPUT_CHECK } from "./agent/agent-sdk-types.js";
 import type { AgentManager, AgentManagerEvent } from "./agent/agent-manager.js";
-import type { AgentStorage, FinishNotice } from "./agent/agent-storage.js";
+import {
+  finishNoticeParentId,
+  type AgentStorage,
+  type FinishNotice,
+} from "./agent/agent-storage.js";
 import {
   FINISH_NOTIFICATION_MESSAGE_PREFIX,
   formatSystemNotificationPrompt,
@@ -432,7 +435,7 @@ export class ReportUpService {
       // Adoption can change the parent while a refused notice waits for an idle event.
       const child =
         this.deps.agentManager.getAgent(childId) ?? this.deps.agentStorage.getCached(childId);
-      const currentParentId = getParentAgentIdFromLabels(child?.labels);
+      const currentParentId = finishNoticeParentId(child?.labels);
       if (!currentParentId || child?.archivedAt) {
         this.finishRetriesOnIdle.delete(childId);
         continue;
@@ -683,7 +686,7 @@ export class ReportUpService {
       const child = agentManager.getAgent(childId) ?? agentStorage.getCached(childId);
       const parent =
         agentManager.getAgent(notice.parentId) ?? agentStorage.getCached(notice.parentId);
-      const currentParentId = getParentAgentIdFromLabels(child?.labels);
+      const currentParentId = finishNoticeParentId(child?.labels);
       if (!child || child.archivedAt) throw new OwnedFinishLineChanged(null, "child unavailable");
       if (currentParentId !== notice.parentId)
         throw new OwnedFinishLineChanged(currentParentId, "parent changed");
@@ -833,7 +836,7 @@ export class ReportUpService {
       if (this.stopped) return;
       const worker = await this.deps.agentStorage.get(childId);
       const parent = await this.deps.agentStorage.get(notice.parentId);
-      const currentParentId = getParentAgentIdFromLabels(worker?.labels);
+      const currentParentId = finishNoticeParentId(worker?.labels);
       if (currentParentId !== notice.parentId)
         throw new OwnedFinishLineChanged(currentParentId, "parent changed before delivery");
       if (

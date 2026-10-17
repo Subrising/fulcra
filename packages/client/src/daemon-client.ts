@@ -509,6 +509,8 @@ export interface DaemonClientTrace {
 }
 
 export interface SendMessageOptions {
+  /** Parent sends arm a finish notice by default. */
+  notifyOnFinish?: boolean;
   queue?: boolean;
   /** Reports queue admission or a steering fallback. This is not task completion. */
   onDelivery?: (note: string) => void;
@@ -3947,6 +3949,7 @@ export class DaemonClient {
       requestId,
       agentId,
       text,
+      ...(options?.notifyOnFinish !== undefined ? { notifyOnFinish: options.notifyOnFinish } : {}),
       ...(options?.queue ? { queue: true } : {}),
       ...(messageId ? { messageId } : {}),
       ...(options?.activeTurnBehavior ? { activeTurnBehavior: options.activeTurnBehavior } : {}),

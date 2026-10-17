@@ -1,4 +1,5 @@
-import type { HostLinks } from "../../host-links.js";
+import { hostLinksFor, type HostLinks } from "../../host-links.js";
+import { randomUUID } from "node:crypto";
 import { HostLinkSpawnSchema } from "../../host-link-contracts.js";
 import { noteDeliveredReport } from "../../lead-events.js";
 import { compactToolResult } from "./compact-result.js";
@@ -72,7 +73,7 @@ import {
   sendPromptToAgent,
   waitForAgentRunStartWithTimeout,
   disarmFinishNotification,
-  setupFinishNotification,
+  armPromptFinishNotification,
   SteerUnavailableError,
 } from "../agent-prompt.js";
 import { FINAL_INPUT_CHECK } from "../agent-sdk-types.js";
@@ -2104,6 +2105,37 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
   const HELD_PROMPT_GUIDANCE =
     "Your prompt is queued for combined delivery after the current turn or usage limit ends. A finish notice follows if requested. Do not poll.";
 
+  function localPromptIdentifier(requested: string): string {
+    const parts = requested.split("@");
+    return parts.length === 2 ? parts[0]! : requested;
+  }
+
+  async function remotePrompt(
+    requestedAgentId: string,
+    prompt: string,
+    notifyOnFinish: boolean,
+  ): Promise<PaseoToolResult | null> {
+    const remote = requestedAgentId.split("@");
+    if (remote.length !== 2 || remote[1] === options.serverId) return null;
+    if (!callerAgentId) throw new Error("Remote prompts require the parent chat identity.");
+    const links = hostLinksFor(agentManager);
+    if (!links) throw new Error("Remote sends require a configured host link.");
+    await links.promptForAgent(callerAgentId, remote[1]!, {
+      agentId: remote[0]!,
+      prompt,
+      messageId: randomUUID(),
+      notifyOnFinish,
+    });
+    return {
+      content: [],
+      structuredContent: {
+        success: true,
+        status: "running",
+        guidance: PROMPTED_AGENT_NOTIFICATION_GUIDANCE,
+      },
+    };
+  }
+
   registerTool(
     "send_agent_prompt",
     {
@@ -2128,22 +2160,19 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     }) => {
       // FULCRA(orchestration): reporting lines. The daemon knows the calling chat here, so the line check is the
       // same one a stamped CLI send gets, and "role:main-assistant" reaches the chat that holds the role now.
+      const remoteResult = await remotePrompt(requestedAgentId, prompt, notifyOnFinish);
+      if (remoteResult) return remoteResult;
       const agentId = await checkPromptLine(
         lineStoreOf({ agentManager, agentStorage }),
         callerAgentId,
-        requestedAgentId,
+        localPromptIdentifier(requestedAgentId),
       );
       let rearmedFinishMessageId: string | null = null;
       async function armFinishNotification(forNextTurn = false): Promise<boolean> {
         if (!callerAgentId || !notifyOnFinish) {
           return false;
         }
-        const rearmed = await agentStorage.rearmFinishNotice(agentId, callerAgentId);
-        if (rearmed) {
-          rearmedFinishMessageId = rearmed.messageId;
-          return true;
-        }
-        setupFinishNotification({
+        rearmedFinishMessageId = await armPromptFinishNotification({
           agentManager,
           agentStorage,
           childAgentId: agentId,
@@ -2151,6 +2180,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
           forNextTurn,
           logger: childLogger,
         });
+        if (rearmedFinishMessageId) return true;
         return !agentManager.nativeReportOwnsFinish(agentId, callerAgentId);
       }
 
@@ -2168,7 +2198,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         const check = callerAgentId
           ? queuedReceiverCheck(agentManager, agentId, receiver?.persistence?.sessionId ?? null)
           : undefined;
-        if (background && callerAgentId) backgroundNotify = await armFinishNotification(true);
+        if (callerAgentId && notifyOnFinish) backgroundNotify = await armFinishNotification(true);
         try {
           const send = callerAgentId ? sendPromptToAgentAndWaitForStart : sendPromptToAgent;
           const result = await send({

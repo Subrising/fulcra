@@ -230,6 +230,25 @@ describe("AgentStorage", () => {
     });
   });
 
+  test("parent prompt arming creates one saved notice and reuses it within a turn", async () => {
+    const parentId = "11111111-1111-4111-8111-111111111111";
+    const child = createManagedAgent({ id: "22222222-2222-4222-8222-222222222222" });
+    child.labels = { "paseo.parent-agent-id": parentId };
+    await storage.applySnapshot(child);
+    const [first, second] = await Promise.all([
+      storage.rearmFinishNotice(child.id, parentId, true),
+      storage.rearmFinishNotice(child.id, parentId, true),
+    ]);
+    expect(first).toMatchObject({ status: "armed", parentId });
+    expect(second?.messageId).toBe(first?.messageId);
+    await storage.recordFinishNotice(child.id, "turn-1", "finished");
+    await expect(storage.rearmFinishNotice(child.id, parentId, true)).rejects.toMatchObject({
+      code: "FINISH_NOTICE_PENDING",
+    });
+    expect((await storage.getFinishNotice(child.id))?.messageId).toBe(first?.messageId);
+    expect(await storage.rearmFinishNotice(child.id, child.id, true)).toBeNull();
+  });
+
   test("actual snapshot persistence omits live recorded usage across restart", async () => {
     await storage.applySnapshot(
       createManagedAgent({

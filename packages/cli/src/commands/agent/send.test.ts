@@ -314,3 +314,27 @@ describe("send reporting lines", () => {
     expect(connection).not.toHaveBeenCalled();
   });
 });
+
+test("explicit opt-out reaches the daemon for sends and steers", async () => {
+  senderStamp.mockReturnValue({ agentId: "sender" });
+  for (const flags of [[], ["--steer"]]) {
+    await parsedSend(["target", "quiet", "--no-wait", "--no-notify-on-finish", ...flags]);
+    expect(client.sendAgentMessage).toHaveBeenLastCalledWith(
+      "target",
+      "quiet",
+      expect.objectContaining({ notifyOnFinish: false }),
+    );
+  }
+});
+
+test("remote parent sends keep their message identity and return for the finish notice", async () => {
+  senderStamp.mockReturnValue({ agentId: "sender" });
+  const result = await parsedSend(["child@remote", "follow-up"]);
+  expect(result.data.status).toBe("sent");
+  expect(client.sendAgentMessage).toHaveBeenCalledWith(
+    "child@remote",
+    "follow-up",
+    expect.objectContaining({ messageId: expect.any(String) }),
+  );
+  expect(client.waitForFinish).not.toHaveBeenCalled();
+});

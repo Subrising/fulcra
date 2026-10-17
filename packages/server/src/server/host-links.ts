@@ -61,6 +61,9 @@ export interface HostLinkCreate {
   check: () => void;
 }
 export interface HostLinkDelivery {
+  beforeSend?: () => void;
+  steer?: boolean;
+  parent?: { agentId: string; serverId: string };
   agentId: string;
   text: string;
   messageId: string;
@@ -84,6 +87,7 @@ export interface HostLinkDependencies {
   create: (input: HostLinkCreate) => Promise<void>;
   notice: (input: HostLinkRoleNotice) => Promise<string>;
   prompt: (input: HostLinkDelivery) => Promise<void>;
+  promptState?: (agentId: string, messageId: string) => Promise<string | null>;
   inspect: (id: string) => Promise<unknown>;
   workerCurrent: (id: string, profile: HostLinkProfile, parent: string) => void;
   now?: () => number;
@@ -329,6 +333,143 @@ export class HostLinks {
     return receipt;
   }
 
+  /** Route a follow-up through the retained creation grant. Credentials never enter tool results. */
+  async promptForAgent(
+    parentId: string,
+    serverId: string,
+    input: {
+      agentId: string;
+      prompt: string;
+      messageId: string;
+      notifyOnFinish?: boolean;
+      steer?: boolean;
+    },
+  ): Promise<HostLinkReceipt> {
+    const matches = Object.entries(this.journal(this.outboxFile)).filter(
+      ([, entry]) =>
+        entry.sender === parentId &&
+        entry.receipt.serverId === serverId &&
+        entry.receipt.agentId === input.agentId &&
+        entry.receipt.state === "created",
+    );
+    if (matches.length !== 1)
+      throw new HostLinkError(
+        "refused",
+        "No unique retained remote worker grant. Use its parent host.",
+      );
+    const [key, captured] = matches[0]!;
+    const { link, chat } = await this.notificationSource(captured);
+    if (
+      captured.wire?.kind !== "spawn" ||
+      chat.provider !== captured.wire.sourceProvider ||
+      chat.modeId !== captured.wire.sourceMode
+    )
+      throw new HostLinkError("refused", "The parent provider or permission mode changed.");
+    if (input.notifyOnFinish !== false && (this.notificationsClosed || !this.deps.finish))
+      throw new HostLinkError(
+        "unavailable",
+        "Remote finish delivery is unavailable on the parent host.",
+      );
+    const notify = input.notifyOnFinish !== false;
+    const acknowledged = (captured.receivedNotices ?? [])
+      .filter((notice) => notice.state === "delivered" || notice.state === "suppressed")
+      .map((notice) => notice.id);
+    if (notify) {
+      const current = this.journal(this.outboxFile)[key]!;
+      const pending = [...new Set([...(current.pendingPromptIds ?? []), input.messageId])];
+      if (pending.length > 50)
+        throw new HostLinkError("unavailable", "The remote prompt return queue is full.");
+      this.save(this.outboxFile, key, {
+        ...current,
+        notifyOnFinish: true,
+        complete: false,
+        generation: (current.generation ?? 0) + 1,
+        pendingPromptIds: pending,
+        watch: { failures: 0, nextAt: 0 },
+      });
+      this.scheduleNotifications(0);
+    }
+    const response = await fetch(hostLinkUrl(link.url, "worker"), {
+      method: "POST",
+      redirect: "error",
+      signal: AbortSignal.timeout(15000),
+      headers: {
+        authorization: `Bearer ${captured.receipt.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        kind: "prompt",
+        ...input,
+        notifyOnFinish: notify,
+        acknowledgedNoticeIds: acknowledged,
+      }),
+    }).catch((cause) => {
+      throw new HostLinkError(
+        "uncertain",
+        `Remote prompt outcome is uncertain. Retain message ${input.messageId}.`,
+        { cause },
+      );
+    });
+    if (!response.ok) this.rejectPromptResponse(key, input.messageId, response);
+    const receipt = HostLinkReceiptSchema.parse(await response.json());
+    if (
+      receipt.serverId !== serverId ||
+      receipt.agentId !== input.agentId ||
+      receipt.messageId !== input.messageId
+    )
+      throw new HostLinkError("uncertain", "Remote prompt receipt does not match the request.");
+    return this.finishRemotePromptReply(
+      key,
+      captured,
+      receipt,
+      acknowledged,
+      notify,
+      input.messageId,
+    );
+  }
+
+  private async finishRemotePromptReply(
+    key: string,
+    captured: HostLinkJournal[string],
+    receipt: HostLinkReceipt,
+    acknowledged: string[],
+    notify: boolean,
+    messageId: string,
+  ): Promise<HostLinkReceipt> {
+    await this.notificationSource(captured);
+    const current = this.journal(this.outboxFile)[key]!;
+    this.save(this.outboxFile, key, {
+      ...current,
+      receivedNotices: (current.receivedNotices ?? []).filter(
+        (notice) => !acknowledged.includes(notice.id),
+      ),
+      generation: (current.generation ?? 0) + 1,
+      watch: { failures: 0, nextAt: 0 },
+    });
+    if (notify) this.scheduleNotifications(0);
+    if (receipt.state !== "admitted")
+      throw new HostLinkError(
+        receipt.state === "refused" ? "refused" : "uncertain",
+        `Remote prompt ${receipt.state}. Retain message ${messageId}.`,
+      );
+    return receipt;
+  }
+
+  private rejectPromptResponse(key: string, messageId: string, response: Response): never {
+    if (response.status >= 500)
+      throw new HostLinkError(
+        "uncertain",
+        `Remote admission is uncertain. Retain message ${messageId}.`,
+      );
+    const current = this.journal(this.outboxFile)[key]!;
+    this.save(this.outboxFile, key, {
+      ...current,
+      generation: (current.generation ?? 0) + 1,
+      pendingPromptIds: (current.pendingPromptIds ?? []).filter((id) => id !== messageId),
+    });
+    throw new HostLinkError("refused", "The remote host refused this prompt.");
+  }
+
   private resumeNotificationRetries(key: string): void {
     const entry = this.journal(this.outboxFile)[key]!;
     let changed = false;
@@ -393,10 +534,10 @@ export class HostLinks {
       profile: null,
       cwd: null,
       receipt: this.receipt(input.messageId, null),
-      ...(input.kind === "spawn" && input.notifyOnFinish
+      ...(input.kind === "spawn"
         ? {
             wire,
-            notifyOnFinish: true,
+            notifyOnFinish: input.notifyOnFinish ?? false,
             noticeGrant: authorityDigest(link),
             sourceSessionId: chat.sessionId ?? null,
             sourceGrant: authorityDigest(
@@ -571,6 +712,7 @@ export class HostLinks {
           notifyOnFinish: true,
           notices: [],
           started: false,
+          finishArmed: true,
           complete: false,
         });
     }
@@ -701,6 +843,15 @@ export class HostLinks {
         serverId: this.deps.serverId,
         agentId: input.agentId,
         complete: entry.complete ?? false,
+        settledPromptIds: Object.values(this.journal(this.inboxFile))
+          .filter(
+            (candidate) =>
+              candidate.profile === null &&
+              candidate.receipt.agentId === input.agentId &&
+              ["admitted", "refused", "uncertain"].includes(candidate.receipt.state),
+          )
+          .slice(-128)
+          .map((candidate) => candidate.receipt.messageId),
         notices: this.availableWorkerNotices(entry, input.agentId),
       });
     if (input.kind === "inspect") return this.deps.inspect(input.agentId);
@@ -740,16 +891,14 @@ export class HostLinks {
       .map((entry) => ({ agentId: entry.receipt.agentId!, started: entry.started === true }));
   }
 
-  recordWorkerStarted(agentId: string): void {
+  recordWorkerStarted(agentId: string, turnId?: string): void {
     for (const [key, entry] of Object.entries(this.journal(this.inboxFile))) {
-      if (
-        entry.receipt.agentId !== agentId ||
-        !entry.profile ||
-        !entry.notifyOnFinish ||
-        entry.started
-      )
-        continue;
-      this.save(this.inboxFile, key, { ...entry, started: true });
+      if (entry.receipt.agentId !== agentId || !entry.profile || !entry.notifyOnFinish) continue;
+      this.save(this.inboxFile, key, {
+        ...entry,
+        started: true,
+        ...(turnId ? { noticeTurnId: turnId } : {}),
+      });
     }
   }
 
@@ -758,6 +907,7 @@ export class HostLinks {
     kind: HostLinkWorkerNotice["kind"],
     eventId: string,
     text: string,
+    turnId?: string,
   ): void {
     for (const [key, entry] of Object.entries(this.journal(this.inboxFile))) {
       if (
@@ -767,6 +917,8 @@ export class HostLinks {
         entry.complete
       )
         continue;
+      if (entry.finishArmed === false) continue;
+      if (turnId && entry.noticeTurnId && turnId !== entry.noticeTurnId) continue;
       const notice = HostLinkWorkerNoticeSchema.parse({
         id: digest([agentId, kind, eventId]),
         kind,
@@ -789,7 +941,8 @@ export class HostLinks {
             : notice,
         ],
         started: true,
-        complete: kind !== "permission",
+        complete: kind !== "permission" && !entry.pendingPromptIds?.length,
+        finishArmed: kind === "permission",
       });
     }
   }
@@ -925,28 +1078,41 @@ export class HostLinks {
       const result = await this.fetchWorkerNotices(link, entry);
       await this.notificationSource(captured);
       entry = this.journal(this.outboxFile)[key]!;
+      if ((entry.generation ?? 0) !== (captured.generation ?? 0)) return;
+      const admitted = new Set(result.settledPromptIds ?? []);
+      const complete =
+        result.complete && (entry.pendingPromptIds ?? []).every((id) => admitted.has(id));
       const received = this.mergeWorkerNotices(entry, result.notices);
       const next = {
         ...entry,
         receivedNotices: received,
-        complete: result.complete,
+        complete,
+        ...(complete ? { pendingPromptIds: [] } : {}),
         watch: { failures: 0, nextAt: this.now() + 10000 },
       };
       this.save(this.outboxFile, key, next);
       this.kickNoticeDeliveries(key, next);
     } catch (error) {
-      if (this.notificationsClosed) return;
-      // Admission failures also have a durable retry limit; a restart never resets it.
-      const entry = this.journal(this.outboxFile)[key];
-      if (entry && entry.watch?.nextAt === captured.watch?.nextAt) {
-        const failures = Math.min(8, (entry.watch?.failures ?? 0) + 1);
-        this.save(this.outboxFile, key, {
-          ...entry,
-          watch: { failures, nextAt: this.now() + Math.min(60000, 1000 * 2 ** failures) },
-        });
-      }
-      this.deps.noticeError?.(error);
+      this.failWorkerNoticeRead(key, captured, error);
     }
+  }
+
+  private failWorkerNoticeRead(
+    key: string,
+    captured: HostLinkJournal[string],
+    error: unknown,
+  ): void {
+    if (this.notificationsClosed) return;
+    // Admission failures also have a durable retry limit; a restart never resets it.
+    const entry = this.journal(this.outboxFile)[key];
+    if (entry && entry.watch?.nextAt === captured.watch?.nextAt) {
+      const failures = Math.min(8, (entry.watch?.failures ?? 0) + 1);
+      this.save(this.outboxFile, key, {
+        ...entry,
+        watch: { failures, nextAt: this.now() + Math.min(60000, 1000 * 2 ** failures) },
+      });
+    }
+    this.deps.noticeError?.(error);
   }
 
   private async fetchWorkerNotices(link: OutgoingHostLink, entry: HostLinkJournal[string]) {
@@ -974,10 +1140,14 @@ export class HostLinks {
     const result = await this.fetchWorkerNotices(link, captured);
     await this.notificationSource(captured);
     const current = this.journal(this.outboxFile)[key]!;
+    if ((current.generation ?? 0) !== (captured.generation ?? 0))
+      throw new HostLinkError(
+        "unavailable",
+        "The retained permission watch changed; retry its notice.",
+      );
     const next = {
       ...current,
       receivedNotices: this.mergeWorkerNotices(current, result.notices),
-      complete: result.complete,
     };
     this.save(this.outboxFile, key, next);
     this.kickNoticeDeliveries(key, next);
@@ -1101,6 +1271,142 @@ export class HostLinks {
     }
   }
 
+  failQueuedPrompts(
+    agentId: string,
+    messageIds: string[],
+    reason: string,
+    uncertain = false,
+  ): void {
+    const entries = Object.entries(this.journal(this.inboxFile));
+    const requests = entries.filter(
+      ([, item]) =>
+        item.profile === null &&
+        item.receipt.agentId === agentId &&
+        messageIds.includes(item.receipt.messageId),
+    );
+    if (!requests.length) return;
+    const first = requests[0]![1];
+    const selected = entries.find(
+      ([, item]) =>
+        item.profile &&
+        item.receipt.agentId === agentId &&
+        item.sender === first.sender &&
+        item.sourceServerId === first.sourceServerId,
+    );
+    if (!selected) return;
+    const [key, owner] = selected;
+    for (const [requestKey, request] of requests) {
+      request.receipt.state = uncertain ? "uncertain" : "refused";
+      this.save(this.inboxFile, requestKey, request);
+    }
+    const pending = (owner.pendingPromptIds ?? []).filter((id) => !messageIds.includes(id));
+    const notices = owner.notices ?? [];
+    const id = digest([agentId, "undelivered", messageIds.toSorted()]);
+    if (
+      requests.some(([, item]) => item.notifyOnFinish) &&
+      !notices.some((notice) => notice.id === id)
+    ) {
+      if (notices.length >= 128)
+        throw new HostLinkError("unavailable", "The worker notice journal is full.");
+      notices.push({
+        id,
+        kind: "failed",
+        text: `${requests.length} queued message(s): ${uncertain ? "delivery is uncertain; do not replay" : "not delivered"}. ${reason}`.slice(
+          0,
+          4000,
+        ),
+      });
+    }
+    const wantsNotice = requests.some(([, request]) => request.notifyOnFinish);
+    const link = this.requiredConfig().incoming.find((candidate) => candidate.id === owner.linkId);
+    this.save(this.inboxFile, key, {
+      ...owner,
+      ...(wantsNotice && link && digest(link) === owner.grant
+        ? { notifyOnFinish: true, noticeGrant: authorityDigest(link) }
+        : {}),
+      pendingPromptIds: pending,
+      notices,
+      ...(uncertain ? { finishArmed: false } : {}),
+      complete: !pending.length && (uncertain || owner.finishArmed !== true),
+    });
+  }
+
+  async recoverPromptAdmissions(): Promise<void> {
+    for (const [key, entry] of Object.entries(this.journal(this.inboxFile))) {
+      if (!entry.promptRequest || entry.receipt.state !== "pending") continue;
+      const state = await this.deps.promptState?.(entry.receipt.agentId!, entry.receipt.messageId);
+      if (state === "queued" || state === "delivered") {
+        this.save(this.inboxFile, key, {
+          ...entry,
+          receipt: { ...entry.receipt, state: "admitted" },
+        });
+      } else {
+        this.failQueuedPrompts(
+          entry.receipt.agentId!,
+          [entry.receipt.messageId],
+          "Admission was interrupted. Check the worker before sending again.",
+          true,
+        );
+      }
+    }
+  }
+
+  private queuedPromptOwner(
+    agentId: string,
+    messageId: string,
+    sender: { agentId: string; serverId?: string },
+  ) {
+    const entries = Object.entries(this.journal(this.inboxFile));
+    const request = entries.find(
+      ([, item]) =>
+        item.profile === null &&
+        item.receipt.agentId === agentId &&
+        item.receipt.messageId === messageId,
+    )?.[1];
+    const selected = entries.find(
+      ([, item]) =>
+        item.profile &&
+        item.receipt.agentId === agentId &&
+        item.sender === sender.agentId &&
+        item.sourceServerId === sender.serverId,
+    );
+    if (
+      !request ||
+      !selected ||
+      request.sender !== sender.agentId ||
+      request.sourceServerId !== sender.serverId
+    )
+      throw new HostLinkError("refused", "The retained remote prompt owner changed.");
+    const [key, owner] = selected;
+    const link = this.requiredConfig().incoming.find((candidate) => candidate.id === owner.linkId);
+    if (!link || digest(link) !== owner.grant || request.grant !== owner.grant)
+      throw new HostLinkError("refused", "The queued remote prompt grant changed.");
+    this.recheck(link);
+    this.deps.workerCurrent(agentId, owner.profile!, `${sender.agentId}@${sender.serverId}`);
+    return { key, owner, request };
+  }
+  checkQueuedPrompt(
+    agentId: string,
+    messageId: string,
+    sender: { agentId: string; serverId?: string },
+  ): void {
+    this.queuedPromptOwner(agentId, messageId, sender);
+  }
+  armQueuedPrompt(
+    agentId: string,
+    messageId: string,
+    sender: { agentId: string; serverId?: string },
+  ): void {
+    const { key, owner, request } = this.queuedPromptOwner(agentId, messageId, sender);
+    if (!request.notifyOnFinish) return;
+    this.save(this.inboxFile, key, {
+      ...owner,
+      complete: false,
+      finishArmed: true,
+      pendingPromptIds: (owner.pendingPromptIds ?? []).filter((id) => id !== messageId),
+    });
+  }
+
   private async workerPrompt(
     link: IncomingHostLink,
     owner: HostLinkJournal[string],
@@ -1109,21 +1415,25 @@ export class HostLinks {
     const key = `${link.id}:${input.agentId}:${input.messageId}`;
     const retained = this.journal(this.inboxFile)[key];
     if (retained) {
-      if (retained.hash !== digest(input) || retained.grant !== owner.grant)
+      if (
+        retained.hash !== digest({ ...input, acknowledgedNoticeIds: undefined }) ||
+        retained.grant !== owner.grant
+      )
         throw new HostLinkError("conflict", "The retained prompt changed.");
       return retained.receipt;
     }
     const entry: HostLinkJournal[string] = {
-      hash: digest(input),
+      hash: digest({ ...input, acknowledgedNoticeIds: undefined }),
       grant: owner.grant,
       sender: owner.sender,
       linkId: owner.linkId,
       sourceServerId: owner.sourceServerId,
+      promptRequest: true,
+      notifyOnFinish: input.notifyOnFinish !== false,
       profile: null,
       cwd: owner.cwd,
       receipt: this.receipt(input.messageId, input.agentId),
     };
-    this.save(this.inboxFile, key, entry);
     const check = () => {
       this.recheck(link);
       this.deps.workerCurrent(
@@ -1132,14 +1442,70 @@ export class HostLinks {
         `${owner.sender}@${owner.sourceServerId}`,
       );
     };
-    await this.deps.prompt({
-      agentId: input.agentId,
-      text: input.prompt,
-      messageId: input.messageId,
-      check,
+    check();
+    const acknowledged = new Set(input.acknowledgedNoticeIds ?? []);
+    const ownerKey = Object.entries(this.journal(this.inboxFile)).find(
+      ([, candidate]) => candidate.receipt.token === owner.receipt.token,
+    )?.[0];
+    if (!ownerKey) throw new HostLinkError("refused", "Remote worker ownership changed.");
+    const current = this.journal(this.inboxFile)[ownerKey]!;
+    const pending =
+      input.notifyOnFinish === false
+        ? (current.pendingPromptIds ?? [])
+        : [...new Set([...(current.pendingPromptIds ?? []), input.messageId])];
+    if (pending.length > 50)
+      throw new HostLinkError("unavailable", "The remote prompt queue is full.");
+    entry.notifyOnFinish = input.notifyOnFinish !== false;
+    this.save(this.inboxFile, key, entry);
+    this.save(this.inboxFile, ownerKey, {
+      ...current,
+      notices: (current.notices ?? []).filter((notice) => !acknowledged.has(notice.id)),
+      finishArmed:
+        current.finishArmed ?? (current.notifyOnFinish === true && current.complete !== true),
+      ...(input.notifyOnFinish !== false
+        ? {
+            notifyOnFinish: true,
+            noticeGrant: authorityDigest(link),
+            complete: false,
+            pendingPromptIds: pending,
+          }
+        : {}),
     });
+    try {
+      await this.deps.prompt({
+        agentId: input.agentId,
+        text: input.prompt,
+        messageId: input.messageId,
+        steer: input.steer,
+        parent: { agentId: owner.sender, serverId: owner.sourceServerId },
+        check,
+        beforeSend: () =>
+          this.armQueuedPrompt(input.agentId, input.messageId, {
+            agentId: owner.sender,
+            serverId: owner.sourceServerId,
+          }),
+      });
+    } catch (error) {
+      const state = await this.deps.promptState?.(input.agentId, input.messageId);
+      const uncertain = Boolean(input.steer || (state && state !== "refused"));
+      this.failQueuedPrompts(
+        input.agentId,
+        [input.messageId],
+        error instanceof Error ? error.message : String(error),
+        uncertain,
+      );
+      return this.journal(this.inboxFile)[key]!.receipt;
+    }
     entry.receipt.state = "admitted";
     this.save(this.inboxFile, key, entry);
     return entry.receipt;
   }
+}
+
+const hostLinksByManager = new WeakMap<object, HostLinks>();
+export function registerHostLinks(manager: object, service: HostLinks): void {
+  hostLinksByManager.set(manager, service);
+}
+export function hostLinksFor(manager: object): HostLinks | undefined {
+  return hostLinksByManager.get(manager);
 }

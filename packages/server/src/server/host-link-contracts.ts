@@ -153,6 +153,9 @@ export const HostLinkWorkerRequestSchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("prompt"),
+      notifyOnFinish: z.boolean().optional(),
+      steer: z.boolean().optional(),
+      acknowledgedNoticeIds: z.array(name).max(128).optional(),
       ...identity,
       agentId: name,
       prompt: z.string().min(1).max(32000),
@@ -166,7 +169,15 @@ export const HostLinkReceiptSchema = z
   .object({
     serverId: name,
     messageId: z.string().uuid(),
-    state: z.enum(["pending", "created", "admitted", "delivered", "refused", "suppressed"]),
+    state: z.enum([
+      "pending",
+      "created",
+      "admitted",
+      "delivered",
+      "refused",
+      "uncertain",
+      "suppressed",
+    ]),
     agentId: name.nullable(),
     token: credential("hworker1").nullable(),
     endpoint: z.string().url().nullable(),
@@ -186,6 +197,7 @@ export const HostLinkWorkerNoticesSchema = z
     serverId: name,
     agentId: name,
     complete: z.boolean(),
+    settledPromptIds: z.array(z.string().uuid()).max(128).optional(),
     notices: z.array(HostLinkWorkerNoticeSchema).max(128),
   })
   .strict();
@@ -211,6 +223,11 @@ export const HostLinkJournalSchema = z.record(
       sourceGrant: z.string().optional(),
       noticeGrant: z.string().optional(),
       notifyOnFinish: z.boolean().optional(),
+      promptRequest: z.boolean().optional(),
+      generation: z.number().int().nonnegative().optional(),
+      pendingPromptIds: z.array(z.string().uuid()).max(50).optional(),
+      noticeTurnId: z.string().optional(),
+      finishArmed: z.boolean().optional(),
       started: z.boolean().optional(),
       complete: z.boolean().optional(),
       notices: z

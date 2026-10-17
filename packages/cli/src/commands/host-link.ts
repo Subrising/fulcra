@@ -1,3 +1,5 @@
+import { connectToDaemon } from "../utils/client.js";
+import { resolveSender } from "../utils/send-sender.js";
 import { Command } from "commander";
 import { z } from "zod";
 import { constants } from "node:fs";
@@ -140,7 +142,7 @@ export async function requestHostLink(
   await saveHostLinkReceipt(options.receiptFile, receipt);
   return receipt;
 }
-async function workerRequest(kind: "inspect" | "prompt", options: WorkerOptions): Promise<unknown> {
+async function workerRequest(options: WorkerOptions): Promise<unknown> {
   const receipt = ReceiptSchema.parse(privateJson(await privateRead(options.receiptFile)));
   if (
     !receipt.endpoint ||
@@ -149,17 +151,34 @@ async function workerRequest(kind: "inspect" | "prompt", options: WorkerOptions)
     !/^hworker1\.[A-Za-z0-9_-]{43}$/.test(receipt.token)
   )
     throw new Error("The retained receipt has no worker credential.");
-  const body =
-    kind === "inspect"
-      ? { kind, agentId: receipt.agentId }
-      : {
-          kind,
-          agentId: receipt.agentId,
-          messageId: z.string().uuid().parse(options.messageId),
-          prompt: await privateRead(z.string().min(1).parse(options.promptFile)),
-        };
-  return post(hostLinkEndpoint(receipt.endpoint, "worker"), receipt.token, body);
+  return post(hostLinkEndpoint(receipt.endpoint, "worker"), receipt.token, {
+    kind: "inspect",
+    agentId: receipt.agentId,
+  });
 }
+export async function promptHostLink(
+  options: WorkerOptions & CommandOptions & { steer?: boolean; notifyOnFinish?: boolean },
+) {
+  const receipt = ReceiptSchema.parse(privateJson(await privateRead(options.receiptFile)));
+  const sender = resolveSender({});
+  if (!sender) throw new Error("Send remote work from its parent chat on the parent host.");
+  if (!receipt.agentId) throw new Error("The retained receipt has no worker identity.");
+  const messageId = z.string().uuid().parse(options.messageId);
+  const prompt = await privateRead(z.string().min(1).parse(options.promptFile));
+  const client = await connectToDaemon({ target: options.daemonTarget });
+  try {
+    await client.sendAgentMessage(`${receipt.agentId}@${receipt.serverId}`, prompt, {
+      sender,
+      messageId,
+      ...(options.steer ? { activeTurnBehavior: "steer" as const } : {}),
+      ...(options.notifyOnFinish === false ? { notifyOnFinish: false } : {}),
+    });
+    return { agentId: receipt.agentId, messageId, state: "admitted" };
+  } finally {
+    await client.close();
+  }
+}
+
 export function createHostLinkCommand(): Command {
   const command = new Command("host-link").description("Use restricted host links");
   command.addCommand(
@@ -190,18 +209,24 @@ export function createHostLinkCommand(): Command {
     .command("inspect")
     .requiredOption("--receipt-file <path>", "Retained private worker receipt")
     .action(async (options: WorkerOptions) => {
-      process.stdout.write(`${JSON.stringify(await workerRequest("inspect", options))}\n`);
+      process.stdout.write(`${JSON.stringify(await workerRequest(options))}\n`);
     });
-  command
-    .command("prompt")
-    .requiredOption("--receipt-file <path>", "Retained private worker receipt")
-    .requiredOption("--message-id <id>", "Retained UUID for this prompt")
-    .requiredOption("--prompt-file <path>", "Private UTF-8 prompt")
-    .action(async (options: WorkerOptions) => {
-      const result = ReceiptSchema.parse(await workerRequest("prompt", options));
-      process.stdout.write(
-        `${JSON.stringify({ agentId: result.agentId, messageId: result.messageId, state: result.state })}\n`,
-      );
-    });
+  command.addCommand(
+    addLocalDaemonOptions(new Command("prompt"))
+      .requiredOption("--receipt-file <path>", "Retained private worker receipt")
+      .requiredOption("--message-id <id>", "Retained UUID for this prompt")
+      .requiredOption("--prompt-file <path>", "Private UTF-8 prompt")
+      .option("--steer", "Join the current remote turn when supported")
+      .option("--no-notify-on-finish", "Do not request a finish notice")
+      .action(
+        withGlobalOptions(
+          async (
+            options: WorkerOptions & CommandOptions & { steer?: boolean; notifyOnFinish?: boolean },
+          ) => {
+            process.stdout.write(`${JSON.stringify(await promptHostLink(options))}\n`);
+          },
+        ),
+      ),
+  );
   return command;
 }
