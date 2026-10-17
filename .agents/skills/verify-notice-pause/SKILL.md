@@ -15,7 +15,7 @@ Run the changed trust suite through the project slot wrapper:
 
 ```sh
 npm exec --workspace=@getpaseo/server -- vitest run src/server/held-sends.trust.test.ts --maxWorkers=1
-npm exec --workspace=@getpaseo/server -- vitest run src/server/daemon-e2e/reporting-lines-role.e2e.test.ts -t 'paused PC completion' --maxWorkers=1
+npm exec --workspace=@getpaseo/server -- vitest run src/server/daemon-e2e/send-finish-notice.e2e.test.ts src/server/daemon-e2e/reporting-lines-role.e2e.test.ts --maxWorkers=1
 python3 -m unittest discover -s scripts -p test_notice_pause.py
 npm run typecheck --workspace=@getpaseo/server
 ```
@@ -24,6 +24,10 @@ Require these results:
 
 - Paused Claude notices stay durable without provider input.
 - Codex notices still start through the socket API.
+- Paused parent sends do not arm a finish notice.
+- Resume keeps the finish notice request and its explicit opt-out.
+- A pause at final handoff clears the new arm without provider input.
+- Remote return routes arm only after the pause check.
 - Resume combines notices within each sender.
 - Queue restart retains paused notices.
 - Final handoff stops a pause race.

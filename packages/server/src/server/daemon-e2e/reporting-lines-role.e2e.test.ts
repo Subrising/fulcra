@@ -1,3 +1,4 @@
+import { hostLinksFor } from "../host-links.js";
 import { QueuedAgentMessages, queuedAgentMessagesFor } from "../queued-agent-messages.js";
 import { FINAL_INPUT_CHECK } from "../agent/agent-sdk-types.js";
 import { commitFinalInputCheck, recordFinalInputHandoff } from "../agent/final-input-check.js";
@@ -435,6 +436,25 @@ test("two isolated daemons create one remote worker and deliver a role notice th
         );
         await source.daemon.agentManager.waitForAgentEvent(lead.id);
       }
+      const pausedManager = target.daemon.agentManager;
+      const pauseFile = path.join(target.paseoHome, "pause.json");
+      const armRemote = vi.spyOn(hostLinksFor(pausedManager)!, "armQueuedPrompt");
+      const priorTurns = turns.filter((id) => id === receipt.agentId).length;
+      const priorNotices = parentInputs.length;
+      await writeFile(pauseFile, JSON.stringify({ pausedProviders: ["codex"] }));
+      for (const text of ["paused remote one", "paused remote two"])
+        await sourceClient.sendAgentMessage(destination, text, { sender: { agentId: lead.id } });
+      expect(armRemote).not.toHaveBeenCalled();
+      expect(turns.filter((id) => id === receipt.agentId)).toHaveLength(priorTurns);
+      expect(parentInputs).toHaveLength(priorNotices);
+      await writeFile(pauseFile, JSON.stringify({ pausedProviders: [] }));
+      await vi.waitFor(() => expect(parentInputs).toHaveLength(priorNotices + 1), {
+        timeout: 20000,
+      });
+      expect(turns.filter((id) => id === receipt.agentId)).toHaveLength(priorTurns + 1);
+      expect(armRemote).toHaveBeenCalledTimes(2);
+      armRemote.mockRestore();
+      await source.daemon.agentManager.waitForAgentEvent(lead.id);
       await sourceClient.sendAgentMessage(destination, "Quiet remote follow-up.", {
         sender: { agentId: lead.id },
         notifyOnFinish: false,
@@ -447,7 +467,7 @@ test("two isolated daemons create one remote worker and deliver a role notice th
         ).toBe(true),
       );
       await target.daemon.agentManager.waitForAgentEvent(receipt.agentId!);
-      expect(parentInputs).toHaveLength(6);
+      expect(parentInputs).toHaveLength(7);
       const remoteManager = target.daemon.agentManager;
       const remoteStorage = target.daemon.agentStorage;
       const live = remoteManager.getAgent(receipt.agentId!)!;
@@ -478,9 +498,9 @@ test("two isolated daemons create one remote worker and deliver a role notice th
       });
       try {
         await restored.start();
-        await vi.waitFor(() => expect(parentInputs).toHaveLength(7), { timeout: 20000 });
-        expect(parentInputs[6]).toContain("3 queued message(s)");
-        expect(parentInputs[6]).toContain("uncertain; do not replay");
+        await vi.waitFor(() => expect(parentInputs).toHaveLength(8), { timeout: 20000 });
+        expect(parentInputs[7]).toContain("3 queued message(s)");
+        expect(parentInputs[7]).toContain("uncertain; do not replay");
         Reflect.get(live.session!, "notifySubscribers").call(live.session, {
           type: "turn_completed",
           provider: "codex",

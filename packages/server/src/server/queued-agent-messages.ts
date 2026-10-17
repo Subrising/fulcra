@@ -20,7 +20,7 @@ import {
 import { buildAgentPrompt } from "./agent/prompt-attachments.js";
 import { FINAL_INPUT_CHECK } from "./agent/agent-sdk-types.js";
 import { ensureAgentLoaded } from "./agent/agent-loading.js";
-import { createFinalInputCheck } from "./agent/final-input-check.js";
+import { createFinalInputCheck, assertFinalInputCheck } from "./agent/final-input-check.js";
 import { writeJsonQueueFile } from "./atomic-file.js";
 import { HeldQueueFullError, MAX_HELD_PER_TARGET } from "./held-sends.js";
 import {
@@ -623,6 +623,7 @@ export class QueuedAgentMessages {
   ): Promise<void> {
     const { agentManager, logger } = this.deps;
     const prompt = promptForBatch(eligible);
+    const armed = new Map<string, string | null>();
     try {
       const asSource = eligible[0]!.request.sender
         ? <T>(run: () => Promise<T>) => agentManager.trustedPlugins.agentInput(run)
@@ -660,14 +661,19 @@ export class QueuedAgentMessages {
               }
             : undefined,
         );
+        const priorNotice = await this.deps.agentStorage.getFinishNotice(agentId);
         for (const record of eligible) {
-          if (record.request.notifyOnFinish && record.request.sender)
-            await armPromptFinishNotification({
+          if (record.request.notifyOnFinish && record.request.sender) {
+            assertFinalInputCheck(check);
+            const messageId = await armPromptFinishNotification({
               ...this.deps,
               childAgentId: agentId,
               callerAgentId: record.request.sender.agentId,
               forNextTurn: true,
             });
+            if (!(priorNotice?.status === "armed" && priorNotice.messageId === messageId))
+              armed.set(record.request.sender.agentId, messageId);
+          }
         }
         await withLeadEvent("queued_delivery", () =>
           sendPromptToAgentAndWaitForStart({
@@ -693,6 +699,12 @@ export class QueuedAgentMessages {
           });
       }
     } catch (error) {
+      if (error instanceof NoticePausedError)
+        for (const [callerId, messageId] of armed) {
+          disarmFinishNotification(agentManager, agentId, callerId);
+          if (messageId)
+            await this.deps.agentStorage.settleFinishNotice(agentId, messageId, "cancelled");
+        }
       if (await this.refuseClosedReceiver(agentId)) return;
       if (error instanceof QueuedLinesChangedError) {
         for (const { record, reason } of error.refused) {

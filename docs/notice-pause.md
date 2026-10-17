@@ -21,6 +21,9 @@ It watches policy changes and drains eligible notices after resume.
 It retains sender checks, receiver identity, archive checks, and message receipts.
 
 Notices combine within each sender. Owner input and agent input retain their original sources.
+Paused parent sends keep their finish notice request without arming it.
+Resume arms the combined delivery and preserves an explicit finish notice opt-out.
+A pause at final handoff stops provider input and clears new arming for that delivery.
 Plugin provenance and native queued capabilities remain on their existing admission paths.
 A paused send cannot convert those capabilities into ordinary owner input.
 

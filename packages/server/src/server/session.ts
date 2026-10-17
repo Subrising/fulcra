@@ -9886,29 +9886,8 @@ export class Session {
       const caller = msg.sender;
       let armed: string | null | undefined;
       const priorNotice = await this.agentStorage.getFinishNotice(agentId);
-      if (caller && msg.notifyOnFinish !== false) {
-        const decision = await decideSend(
-          this.lineStore(),
-          caller,
-          agentId,
-          this.localServerId ?? null,
-        );
-        if (decision?.allowed && decision.why === "child") {
-          if (caller.serverId && caller.serverId !== this.localServerId)
-            throw new Error(
-              "Send through the parent host as <child>@<server> to receive finish notices.",
-            );
-          armed = await armPromptFinishNotification({
-            agentManager: this.agentManager,
-            agentStorage: this.agentStorage,
-            childAgentId: agentId,
-            callerAgentId: caller.agentId,
-            forNextTurn: !this.agentManager.hasInFlightRun(agentId),
-            logger: this.sessionLogger,
-          });
-        }
-      }
       try {
+        armed = await this.armAgentMessageNotice(msg, agentId);
         await sendPromptToAgentAndWaitForStart({
           agentManager: this.agentManager,
           agentStorage: this.agentStorage,
@@ -10062,6 +10041,22 @@ export class Session {
     };
   }
 
+  private async armAgentMessageNotice(
+    msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
+    agentId: string,
+  ): Promise<string | null | undefined> {
+    if (!msg.sender || msg.notifyOnFinish === false) return;
+    if (!(await this.parentSendNeedsNotice(msg.sender, agentId))) return;
+    return armPromptFinishNotification({
+      agentManager: this.agentManager,
+      agentStorage: this.agentStorage,
+      childAgentId: agentId,
+      callerAgentId: msg.sender.agentId,
+      forNextTurn: !this.agentManager.hasInFlightRun(agentId),
+      logger: this.sessionLogger,
+    });
+  }
+
   private async parentSendNeedsNotice(
     sender: { agentId: string; serverId?: string },
     agentId: string,
@@ -10144,6 +10139,21 @@ export class Session {
     } else await send();
   }
 
+  private async holdOrRefuseAgentMessage(
+    msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
+    agentId: string,
+  ): Promise<boolean> {
+    const refusal = await this.reportingLineRefusal(msg.sender, agentId);
+    if (refusal) {
+      this.emit({
+        type: "send_agent_message_response",
+        payload: { requestId: msg.requestId, agentId, accepted: false, error: refusal },
+      });
+      return true;
+    }
+    return this.holdPausedAgentMessage(msg, agentId);
+  }
+
   private async holdPausedAgentMessage(
     msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
     agentId: string,
@@ -10166,6 +10176,10 @@ export class Session {
             attachments: msg.attachments,
             messageId: msg.messageId,
             sender: msg.sender,
+            notifyOnFinish:
+              Boolean(msg.sender) &&
+              msg.notifyOnFinish !== false &&
+              (await this.parentSendNeedsNotice(msg.sender!, agentId)),
             pauseNotice: true,
           },
           this.localServerId,
@@ -10267,16 +10281,7 @@ export class Session {
 
     try {
       const agentId = resolved.agentId;
-      const refusal = await this.reportingLineRefusal(msg.sender, agentId);
-      if (refusal) {
-        this.emit({
-          type: "send_agent_message_response",
-          payload: { requestId: msg.requestId, agentId, accepted: false, error: refusal },
-        });
-        return;
-      }
-
-      if (await this.holdPausedAgentMessage(msg, agentId)) return;
+      if (await this.holdOrRefuseAgentMessage(msg, agentId)) return;
       const prompt = buildAgentPrompt(msg.text, msg.images, msg.attachments);
       if (msg.nativeQueue) {
         if (!msg.messageId || msg.messageId.length > 256)
