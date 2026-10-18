@@ -563,3 +563,56 @@ test("loop guard (daemon): 3 no-tool Stop-hook repeats set WAITING with the job 
   await f.asLead.executeTool("work_job_done", { jobId: "ci-run-1", message: "CI passed." });
   expect(f.prompts).toHaveLength(after);
 });
+
+test("loop guard (daemon): provider-started Stop-hook turns are counted from the timeline, and a tool action does not trip", async () => {
+  const f = await fixture();
+  await f.assign();
+  await f.asWorker.executeTool("work_wait", { jobId: "ci-run-2" });
+  const session = f.worker.session!;
+  const notify = Reflect.get(session, "notifySubscribers") as (event: unknown) => void;
+  let n = 0;
+  // A turn the provider starts itself: the hook feedback arrives as a user message, no prompt from the host.
+  const hookTurn = (withTool: boolean) => {
+    const turnId = `hook-${(n += 1)}`;
+    notify.call(session, { type: "turn_started", provider: "codex", turnId });
+    notify.call(session, {
+      type: "timeline",
+      provider: "codex",
+      turnId,
+      item: { type: "user_message", text: "Stop hook feedback: goal not met" },
+    });
+    if (withTool)
+      notify.call(session, {
+        type: "timeline",
+        provider: "codex",
+        turnId,
+        item: {
+          type: "tool_call",
+          callId: `call-${n}`,
+          name: "shell",
+          status: "completed",
+          error: null,
+          detail: { type: "unknown", input: null, output: null },
+        },
+      });
+    notify.call(session, {
+      type: "timeline",
+      provider: "codex",
+      turnId,
+      item: { type: "assistant_message", text: "Goal not met." },
+    });
+    notify.call(session, { type: "turn_completed", provider: "codex", turnId });
+  };
+  // Two no-tool repeats, then a repeat WITH a tool action: the count resets and nothing trips.
+  hookTurn(false);
+  hookTurn(false);
+  hookTurn(true);
+  await vi.waitFor(() => expect(f.store.get("FU-1")?.noToolRepeats).toBe(0));
+  expect(f.store.get("FU-1")).toMatchObject({ state: "RUNNING", loopTrips: 0 });
+  // Three in a row with no tool action stop the loop.
+  hookTurn(false);
+  hookTurn(false);
+  hookTurn(false);
+  await vi.waitFor(() => expect(f.store.get("FU-1")?.state).toBe("WAITING"));
+  expect(f.store.get("FU-1")).toMatchObject({ waitingFor: { jobId: "ci-run-2" }, loopTrips: 1 });
+});
