@@ -4200,6 +4200,11 @@ export class AgentManager {
       const sequence = this.trustedPlugins.sequence(id);
       if (sequence.boot !== input.boot || sequence.humanAt !== input.humanAt)
         throw new Error("Native input changed; refresh before cleanup");
+      // FU-349: idle cleanup archives or closes a session, so it needs the same acceptance as every other route.
+      // A close without archive only retires the runtime; it checks but does not start the close transaction.
+      const acceptedItems = input.archive
+        ? await this.beginAcceptedClose(id)
+        : (await this.workAcceptance?.assertCanClose(id), []);
       const kind = input.archive ? "archive" : "close";
       let admissionHandle: TrustedOperationHandle | undefined;
       const requireCurrent = () => {
@@ -4237,6 +4242,7 @@ export class AgentManager {
               this.discardRetainedAgentState(id);
               if (!archived.internal) this.dispatchStoredAgentState(archived);
               await this.fireAgentArchived(id);
+              await this.finishAcceptedClose(acceptedItems);
             }
           } finally {
             this.idleCleanup.delete(id);
@@ -4415,16 +4421,19 @@ export class AgentManager {
   }
 
   /**
-   * FU-349: persist CLOSING before any archive effect. Returns the item to finish, or undefined when the
+   * FU-349: persist CLOSING before any archive effect. Returns the items to finish, or none when the
    * session has no open assignment. Refuses (throws) when the result is not approved for its live candidate.
    */
-  private async beginAcceptedClose(agentId: string): Promise<string | undefined> {
+  private async beginAcceptedClose(agentId: string): Promise<string[]> {
     const store = this.workAcceptance;
-    if (!store) return undefined;
-    const assignment = await store.assertCanClose(agentId);
-    if (!assignment) return undefined;
-    await store.beginClose(assignment.item);
-    return assignment.item;
+    if (!store) return [];
+    const assignments = await store.assertCanClose(agentId);
+    for (const assignment of assignments) await store.beginClose(assignment.item);
+    return assignments.map((assignment) => assignment.item);
+  }
+
+  private async finishAcceptedClose(items: string[]): Promise<void> {
+    for (const item of items) await this.workAcceptance?.finishClose(item);
   }
 
   /**
@@ -4633,7 +4642,7 @@ export class AgentManager {
     await this.closeAgentRuntime(agentId);
     await this.syncNativeArchiveState(stored.provider, stored.persistence, "archive");
     this.discardRetainedAgentState(agentId);
-    if (accepted) await this.workAcceptance?.finishClose(accepted);
+    await this.finishAcceptedClose(accepted);
 
     await this.cascadeArchiveChildren(agentId, cascadePlan);
 
@@ -5395,7 +5404,7 @@ export class AgentManager {
     await this.syncNativeArchiveState(record.provider, record.persistence, "archive");
 
     this.discardRetainedAgentState(agentId);
-    if (accepted) await this.workAcceptance?.finishClose(accepted);
+    await this.finishAcceptedClose(accepted);
     if (!nextRecord.internal) this.dispatchStoredAgentState(nextRecord);
 
     await this.fireAgentArchived(agentId);

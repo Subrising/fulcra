@@ -167,6 +167,8 @@ export interface PaseoToolHostDependencies {
    * Used for cwd/mode inheritance when agents spawn child agents.
    */
   callerAgentId?: string;
+  /** FU-349: false when the caller id came from an unverified request. Work tools then refuse. */
+  callerVerified?: boolean;
   /**
    * Optional resolver for session-bound speak handlers.
    * Used by hidden voice agents to narrate through daemon-managed TTS.
@@ -594,6 +596,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     providerSnapshotManager,
     daemonConfigStore,
     callerAgentId,
+    callerVerified = true,
     resolveSpeakHandler,
     resolveCallerContext,
     logger,
@@ -2476,6 +2479,15 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     if (!store) throw new Error("Approve-before-close is not configured on this daemon.");
     return store;
   };
+  // The caller id of an HTTP request is a claim until the agent's own token proves it. Work tools act on that id
+  // (lead, worker, reviewer), so they refuse an unproven one.
+  const verifiedWorkCaller = (): string | undefined => {
+    if (callerAgentId && !callerVerified)
+      throw new Error(
+        "Work tools need a verified agent identity. Restart the session to get its own token.",
+      );
+    return callerAgentId;
+  };
   const workResult = (value: unknown) => ({
     content: [],
     structuredContent: ensureValidJson({ success: true, result: value as never }),
@@ -2506,7 +2518,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       return workResult(
         await workStore().open({
           ...input,
-          leadId: callerAgentId,
+          leadId: verifiedWorkCaller(),
           cwd: worker?.cwd,
         }),
       );
@@ -2530,9 +2542,10 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       outputSchema: workOutput,
     },
     async (input) => {
-      if (!callerAgentId) throw new Error("Only the assigned worker can submit its result.");
+      const caller = verifiedWorkCaller();
+      if (!caller) throw new Error("Only the assigned worker can submit its result.");
       const submitted = await workStore().submit(
-        callerAgentId,
+        caller,
         { kind: input.candidateKind, id: input.candidateId, path: input.candidatePath },
         { passed: input.passed, checks: input.checks, evidence: input.evidence },
       );
@@ -2561,7 +2574,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         await reviewWork(
           { agentManager, agentStorage, logger: childLogger },
           input,
-          agentManager.currentReviewer(callerAgentId),
+          (verifiedWorkCaller(), agentManager.currentReviewer(callerAgentId)),
         ),
       ),
   );
@@ -2576,8 +2589,9 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       outputSchema: workOutput,
     },
     async ({ jobId }) => {
-      if (!callerAgentId) throw new Error("Only the assigned worker can declare its job.");
-      workStore().declareJob(callerAgentId, jobId);
+      const caller = verifiedWorkCaller();
+      if (!caller) throw new Error("Only the assigned worker can declare its job.");
+      workStore().declareJob(caller, jobId);
       return workResult({ jobId });
     },
   );
@@ -2592,6 +2606,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       outputSchema: workOutput,
     },
     async ({ jobId, message }) => {
+      verifiedWorkCaller();
       const items = agentManager.resumeWorkFromJob(jobId);
       for (const item of items) {
         const worker = workStore().get(item)?.workerId;
@@ -2606,6 +2621,25 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       }
       return workResult({ resumed: items });
     },
+  );
+
+  registerTool(
+    "work_raise_limit",
+    {
+      title: "Raise a worker's turn limit",
+      description:
+        "The assigning lead raises the turn limit for the current round of a worker that reached it. The worker cannot raise its own limit.",
+      inputSchema: { item: z.string().min(1), turnLimit: z.number().int().positive() },
+      outputSchema: workOutput,
+    },
+    async ({ item, turnLimit }) =>
+      workResult(
+        await workStore().raiseTurnLimit(
+          item,
+          (verifiedWorkCaller(), agentManager.currentReviewer(callerAgentId)),
+          turnLimit,
+        ),
+      ),
   );
 
   registerTool(

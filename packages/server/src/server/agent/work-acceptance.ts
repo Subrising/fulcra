@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import { writeJsonQueueFile } from "../atomic-file.js";
 
 // FULCRA(orchestration): FU-349 approve-before-close. Work acceptance is separate from runtime shutdown.
@@ -101,7 +101,8 @@ export class WorkAcceptanceError extends Error {
       | "turn-limit"
       | "waiting"
       | "awaiting-approval"
-      | "duplicate-assignment",
+      | "duplicate-assignment"
+      | "store-unavailable",
     message: string,
   ) {
     super(message);
@@ -136,13 +137,24 @@ export interface WorkAcceptanceOptions {
   resolveCandidate?: (assignment: Assignment) => Promise<string | null>;
 }
 
+export interface OverrideRecord {
+  at: string;
+  action: "cancel" | "raise_turn_limit" | "reset_store";
+  item?: string;
+  reason: string;
+}
+
 interface Snapshot {
   version: 1;
   assignments: Assignment[];
+  overrides?: OverrideRecord[];
 }
 
 export class WorkAcceptanceStore {
   private assignments: Assignment[] = [];
+  private overrides: OverrideRecord[] = [];
+  /** Set when the file is corrupt, or missing after it was written once. Every close then fails closed. */
+  private unavailable: string | null = null;
   private chain: Promise<unknown> = Promise.resolve();
   private readonly now: () => Date;
   private readonly resolveCandidate?: WorkAcceptanceOptions["resolveCandidate"];
@@ -153,19 +165,47 @@ export class WorkAcceptanceStore {
     this.load();
   }
 
+  private get markerFile(): string {
+    return `${this.options.file}.initialised`;
+  }
+
   private load(): void {
     let text: string;
     try {
       text = readFileSync(this.options.file, "utf8");
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      // A missing file is a fresh store only if it was never written. Otherwise it was deleted: fail closed.
+      let written = true;
+      try {
+        readFileSync(this.markerFile);
+      } catch (markerError) {
+        if ((markerError as NodeJS.ErrnoException).code === "ENOENT") written = false;
+      }
+      if (written)
+        this.unavailable =
+          "The work acceptance store file is missing after it was written. Closing is refused until the owner resets it.";
+      return;
     }
     // A corrupt store must stop closing, not silently forget open work.
-    const parsed = JSON.parse(text) as Snapshot;
-    if (parsed.version !== 1 || !Array.isArray(parsed.assignments))
-      throw new Error("Work acceptance store is unreadable");
-    this.assignments = parsed.assignments;
+    try {
+      const parsed = JSON.parse(text) as Snapshot;
+      if (parsed.version !== 1 || !Array.isArray(parsed.assignments)) throw new Error("shape");
+      this.assignments = parsed.assignments;
+      this.overrides = parsed.overrides ?? [];
+    } catch {
+      this.unavailable =
+        "The work acceptance store file is unreadable. Closing is refused until the owner resets it.";
+    }
+  }
+
+  private requireAvailable(): void {
+    if (this.unavailable) throw new WorkAcceptanceError("store-unavailable", this.unavailable);
+  }
+
+  /** The reason the store refuses closes, or null when it is healthy. */
+  unavailableReason(): string | null {
+    return this.unavailable;
   }
 
   private serial<T>(operation: () => Promise<T>): Promise<T> {
@@ -178,7 +218,45 @@ export class WorkAcceptanceStore {
     await writeJsonQueueFile(this.options.file, {
       version: 1,
       assignments: this.assignments,
+      overrides: this.overrides,
     } satisfies Snapshot);
+    // The marker proves the file existed once. A later missing file is then a deletion, not a fresh start.
+    await writeFile(this.markerFile, "1", "utf8");
+  }
+
+  /**
+   * Owner override for a corrupt or missing store. Keeps a copy of the bad file, starts empty and records the
+   * override. Only the owner route calls this.
+   */
+  resetStore(reason: string): Promise<void> {
+    return this.serial(async () => {
+      if (!this.unavailable)
+        throw new WorkAcceptanceError("wrong-state", "The store is healthy; nothing to reset.");
+      try {
+        await rename(this.options.file, `${this.options.file}.corrupt-${Date.now()}`);
+      } catch {
+        /* A missing file has nothing to keep. */
+      }
+      this.assignments = [];
+      this.overrides = [
+        ...this.overrides,
+        { at: this.now().toISOString(), action: "reset_store", reason },
+      ];
+      this.unavailable = null;
+      await this.persist();
+    });
+  }
+
+  /** Records an owner override that changed an assignment (cancel, turn-limit raise). */
+  recordOverride(action: OverrideRecord["action"], item: string, reason: string): Promise<void> {
+    return this.serial(async () => {
+      this.overrides = [...this.overrides, { at: this.now().toISOString(), action, item, reason }];
+      await this.persist();
+    });
+  }
+
+  overrideLog(): OverrideRecord[] {
+    return structuredClone(this.overrides);
   }
 
   /** Mutate a copy, persist, then publish. A failed write leaves memory and disk unchanged. */
@@ -207,6 +285,13 @@ export class WorkAcceptanceStore {
     return found && structuredClone(found);
   }
 
+  /** Every open assignment of a worker. One worker holds at most one, but a stored file may hold more. */
+  forWorkerAll(workerId: string): Assignment[] {
+    return this.assignments
+      .filter((a) => a.workerId === workerId && OPEN.has(a.state))
+      .map((a) => structuredClone(a));
+  }
+
   /** The open assignment owned by a worker session, if any. */
   forWorker(workerId: string): Assignment | undefined {
     const found = this.assignments.find((a) => a.workerId === workerId && OPEN.has(a.state));
@@ -233,6 +318,12 @@ export class WorkAcceptanceStore {
         (a) => a.item === input.item && a.requestId === input.requestId,
       );
       if (same) return structuredClone(same);
+      this.requireAvailable();
+      if (this.assignments.some((a) => a.workerId === input.workerId && OPEN.has(a.state)))
+        throw new WorkAcceptanceError(
+          "duplicate-assignment",
+          `Worker ${input.workerId} already has an open assignment. Give the next item to a new worker.`,
+        );
       if (this.assignments.some((a) => a.item === input.item && OPEN.has(a.state)))
         throw new WorkAcceptanceError(
           "duplicate-assignment",
@@ -433,8 +524,10 @@ export class WorkAcceptanceStore {
         d.verification = record;
         if (!passed) return;
         d.reviewNoticeKey = noticeKey;
-        if (d.approvalClass === "routine") {
-          // Routine work is approved by the passing check record itself.
+        // A routine result is approved by its passing check record, never by the worker's bare claim. The record
+        // needs at least one check that exited 0 and non-empty evidence. Anything weaker waits for a reviewer.
+        const hasCheckRecord = record.checks.length > 0 && verification.evidence.trim().length > 0;
+        if (d.approvalClass === "routine" && hasCheckRecord) {
           d.approval = {
             approver: { kind: "check" },
             candidateId: candidate.id,
@@ -530,9 +623,14 @@ export class WorkAcceptanceStore {
     return this.serial(async () => {
       const a = this.open_(item);
       this.requireReviewer(a, by);
-      if (a.state !== "AWAITING_APPROVAL" && a.state !== "APPROVED")
+      // A lead can also reject a RUNNING or WAITING worker (for example one stuck at its turn limit).
+      // Rejection then sends findings and opens a fresh round.
+      if (a.state === "CLOSING")
         throw new WorkAcceptanceError("wrong-state", `${item} is ${a.state}, nothing to reject.`);
       return this.commit(item, (d) => {
+        d.waitingFor = undefined;
+        d.pendingJob = undefined;
+        d.noToolRepeats = 0;
         d.rejections.push({
           findings,
           by,
@@ -572,9 +670,19 @@ export class WorkAcceptanceStore {
    * The close predicate: goal met, verification passed for the candidate, and an authorised approval for the
    * same candidate and evidence. Rechecks the live candidate. Throws with the reason when closing is unsafe.
    */
-  async assertCanClose(workerId: string): Promise<Assignment | undefined> {
-    let a = this.forWorker(workerId);
-    if (!a) return undefined;
+  /**
+   * Refuses unless EVERY open assignment of the worker is approved for its live result. Refuses for every worker
+   * while the store is unavailable (corrupt, or deleted after it was written). Returns the assignments to close.
+   */
+  async assertCanClose(workerId: string): Promise<Assignment[]> {
+    this.requireAvailable();
+    const checked: Assignment[] = [];
+    for (const open of this.forWorkerAll(workerId)) checked.push(await this.checkClosable(open));
+    return checked;
+  }
+
+  private async checkClosable(first: Assignment): Promise<Assignment> {
+    let a = first;
     if (a.state === "CLOSING") a = await this.reverify(a);
     if (!a.verification?.passed || a.verification.candidateId !== a.candidate?.id)
       throw new WorkAcceptanceError(

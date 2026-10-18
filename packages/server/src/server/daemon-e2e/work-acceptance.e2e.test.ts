@@ -1,4 +1,5 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
@@ -10,6 +11,7 @@ import { createPaseoToolCatalog } from "../agent/tools/paseo-tools.js";
 import { ProviderSnapshotManager } from "../agent/provider-snapshot-manager.js";
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import type { Assignment } from "../agent/work-acceptance.js";
+import { agentMcpToken } from "../agent/agent-mcp-token.js";
 
 // FU-349 approve-before-close on a real test daemon: isolated home, fake provider, real MCP tools, real app
 // websocket routes. No live daemon is touched.
@@ -624,4 +626,169 @@ test("loop guard (daemon): provider-started Stop-hook turns are counted from the
   hookTurn(false);
   await vi.waitFor(() => expect(f.store.get("FU-1")?.state).toBe("WAITING"));
   expect(f.store.get("FU-1")).toMatchObject({ waitingFor: { jobId: "ci-run-2" }, loopTrips: 1 });
+});
+
+// --- FU-349 review round 1 -------------------------------------------------------------------------------
+
+/** One real HTTP call to the Agent MCP endpoint, the way an agent's own MCP client makes it. */
+async function mcpCall(
+  port: number,
+  callerAgentId: string,
+  token: string,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<{ ok: boolean; text: string }> {
+  const response = await fetch(
+    `http://127.0.0.1:${port}/mcp/agents?callerAgentId=${callerAgentId}`,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name, arguments: args },
+      }),
+    },
+  );
+  const body = await response.text();
+  const data = body.split("\n").find((line) => line.startsWith("data:"));
+  const message = JSON.parse(data ? data.slice(5) : body) as {
+    result?: { isError?: boolean; content?: Array<{ text?: string }> };
+    error?: { message: string };
+  };
+  const text =
+    message.result?.content?.map((c) => c.text ?? "").join(" ") ?? message.error?.message ?? "";
+  return { ok: response.ok && !message.error && !message.result?.isError, text };
+}
+
+test("B2: a caller id in the URL cannot forge a review; only the agent's own token proves it", async () => {
+  const f = await fixture();
+  await f.assign();
+  const submitted = await f.submit("sha-1");
+  const review = {
+    item: "FU-1",
+    decision: "approve",
+    candidateId: "sha-1",
+    evidenceDigest: submitted.assignment.verification!.evidenceDigest,
+    milestone: "M1",
+  };
+  const master = f.manager.getMcpAuthToken()!;
+  expect(master).toBeTruthy();
+
+  // The daemon-wide token with the lead's id: refused. The worker's own token with the lead's id: refused.
+  const forgedWithMaster = await mcpCall(f.daemon.port, f.lead.id, master, "work_review", review);
+  expect(forgedWithMaster.ok).toBe(false);
+  expect(forgedWithMaster.text).toMatch(/verified agent identity/);
+  const forgedWithWorkerToken = await mcpCall(
+    f.daemon.port,
+    f.lead.id,
+    agentMcpToken(master, f.worker.id),
+    "work_review",
+    review,
+  );
+  expect(forgedWithWorkerToken.ok).toBe(false);
+  expect(f.store.get("FU-1")?.state).toBe("AWAITING_APPROVAL");
+
+  // The worker, with its own valid token, cannot approve its own work.
+  const selfApproval = await mcpCall(
+    f.daemon.port,
+    f.worker.id,
+    agentMcpToken(master, f.worker.id),
+    "work_review",
+    review,
+  );
+  expect(selfApproval.ok).toBe(false);
+  expect(selfApproval.text).toMatch(/Only the assigning lead|cannot review its own work/);
+  expect(f.store.get("FU-1")?.state).toBe("AWAITING_APPROVAL");
+
+  // The lead's own token approves.
+  const real = await mcpCall(
+    f.daemon.port,
+    f.lead.id,
+    agentMcpToken(master, f.lead.id),
+    "work_review",
+    review,
+  );
+  expect(real.ok).toBe(true);
+  expect(f.store.get("FU-1")?.state).toBe("APPROVED");
+});
+
+test("M3: the owner can cancel an assignment and raise a turn limit, and each override is recorded", async () => {
+  const f = await fixture();
+  await f.assign();
+  await f.client.overrideWorkAsOwner({
+    action: "raise_turn_limit",
+    item: "FU-1",
+    turnLimit: 40,
+    reason: "Long job",
+  });
+  expect(f.store.get("FU-1")?.turnLimit).toBe(40);
+  await f.client.overrideWorkAsOwner({ action: "cancel", item: "FU-1", reason: "Lead is gone" });
+  expect(f.store.get("FU-1")).toMatchObject({ state: "CANCELLED" });
+  expect(f.store.overrideLog().map((o) => [o.action, o.item, o.reason])).toEqual([
+    ["raise_turn_limit", "FU-1", "Long job"],
+    ["cancel", "FU-1", "Lead is gone"],
+  ]);
+  await f.client.archiveAgent(f.worker.id);
+  expect((await f.storage.get(f.worker.id))?.archivedAt).toBeTruthy();
+  // An agent cannot use the owner override.
+  await expect(
+    f.asLead.executeTool("work_cancel", { item: "FU-9", reason: "x" }),
+  ).rejects.toThrow();
+});
+
+test("M3 and B3: a deleted store fails closed on the daemon, and the owner reset reopens it with a record", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "work-accept-reset-"));
+  cleanups.push(() => rm(root, { recursive: true, force: true }));
+  const start = () =>
+    createTestPaseoDaemon({
+      paseoHomeRoot: root,
+      cleanup: false,
+      agentClients: { codex: createTestAgentClient("codex") },
+    });
+  const first = await start();
+  const lead = await first.daemon.agentManager.createAgent(
+    { provider: "codex", cwd: root, modeId: "full-access", title: "Lead" },
+    undefined,
+    {},
+  );
+  const worker = await first.daemon.agentManager.createAgent(
+    { provider: "codex", cwd: root, modeId: "full-access", title: "Worker" },
+    undefined,
+    { labels: { [PARENT_AGENT_ID_LABEL]: lead.id } },
+  );
+  await first.daemon.agentManager.flush();
+  await first.daemon.agentManager.workAcceptance!.open({
+    item: "FU-1",
+    project: "fulcra",
+    workerId: worker.id,
+    leadId: lead.id,
+    goal: "g",
+    acceptance: [],
+    approvalClass: "milestone",
+    requestId: "r1",
+  });
+  await first.close();
+  rmSync(path.join(root, ".paseo", "work-acceptance", "assignments.json"));
+
+  const second = await start();
+  cleanups.push(second.close);
+  const client = new DaemonClient({ url: `ws://127.0.0.1:${second.port}/ws` });
+  await client.connect();
+  cleanups.push(() => client.close());
+  const store = second.daemon.agentManager.workAcceptance!;
+  expect(store.unavailableReason()).toMatch(/missing after it was written/);
+  await expect(client.archiveAgent(worker.id)).rejects.toThrow(/missing after it was written/);
+  expect((await second.daemon.agentStorage.get(worker.id))?.archivedAt).toBeFalsy();
+
+  await client.overrideWorkAsOwner({ action: "reset_store", reason: "File deleted by mistake" });
+  expect(store.unavailableReason()).toBeNull();
+  expect(store.overrideLog()).toMatchObject([{ action: "reset_store" }]);
+  await client.archiveAgent(worker.id);
+  expect((await second.daemon.agentStorage.get(worker.id))?.archivedAt).toBeTruthy();
 });

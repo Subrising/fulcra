@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
@@ -494,10 +494,14 @@ test("turn limits are enforced by the host: turns past the limit are refused and
   expect(store.get("FU-1")?.roundTurns).toBe(1);
 });
 
-test("a corrupt store refuses to start instead of forgetting open work", () => {
+test("a corrupt store refuses every close instead of forgetting open work", async () => {
   const dir = home();
   writeFileSync(join(dir, "assignments.json"), "{ not json");
-  expect(() => new WorkAcceptanceStore({ file: join(dir, "assignments.json") })).toThrow();
+  const store = new WorkAcceptanceStore({ file: join(dir, "assignments.json") });
+  expect(store.unavailableReason()).toMatch(/unreadable/);
+  await expect(store.assertCanClose("any-worker")).rejects.toMatchObject({
+    code: "store-unavailable",
+  });
 });
 
 test("a failed write leaves memory and disk unchanged", async () => {
@@ -578,4 +582,147 @@ test("loop guard: a repeat WITH a tool action does not trip, and an ordinary tur
   expect(store.get("FU-1")?.noToolRepeats).toBe(2);
   // The third in a row after the reset does trip.
   expect(store.recordStopRepeat("w1", STOP)).toBe(true);
+});
+
+// --- FU-349 review round 1: each test below fails on head 394c2222 -----------------------------------------
+
+test("B3: a store file deleted after it was written fails closed, and only the owner reset reopens it", async () => {
+  const dir = home();
+  const store = newStore(dir);
+  await openFor(store, "w1");
+  // Deleted file, new process: the marker proves it existed.
+  rmSync(join(dir, "work-acceptance", "assignments.json"));
+  const restarted = newStore(dir);
+  expect(restarted.unavailableReason()).toMatch(/missing after it was written/);
+  await expect(restarted.assertCanClose("w1")).rejects.toMatchObject({ code: "store-unavailable" });
+  await expect(restarted.assertCanClose("a-worker-with-no-assignment")).rejects.toMatchObject({
+    code: "store-unavailable",
+  });
+  await expect(openFor(restarted, "w2", { item: "FU-9", requestId: "r9" })).rejects.toMatchObject({
+    code: "store-unavailable",
+  });
+  await restarted.resetStore("File deleted by mistake");
+  expect(restarted.unavailableReason()).toBeNull();
+  await expect(restarted.assertCanClose("w1")).resolves.toEqual([]);
+  expect(restarted.overrideLog()).toMatchObject([
+    { action: "reset_store", reason: "File deleted by mistake" },
+  ]);
+  // The override survives a restart. A never-written store is still a fresh start, not an error.
+  expect(newStore(dir).overrideLog()).toHaveLength(1);
+  expect(newStore(home()).unavailableReason()).toBeNull();
+});
+
+test("M1: a worker with two open assignments closes only when every one is approved", async () => {
+  const dir = home();
+  const store = newStore(dir);
+  await openFor(store, "w1");
+  // A second open assignment for the same worker is refused at open time.
+  await expect(openFor(store, "w1", { item: "FU-2", requestId: "r2" })).rejects.toMatchObject({
+    code: "duplicate-assignment",
+  });
+  // A stored file can still hold two (written by hand or by an older build). Close checks all of them.
+  const file = join(dir, "work-acceptance", "assignments.json");
+  const snapshot = JSON.parse(readFileSync(file, "utf8"));
+  const first = snapshot.assignments[0];
+  snapshot.assignments.push({ ...first, item: "FU-2", requestId: "r2", state: "RUNNING" });
+  snapshot.assignments[0] = {
+    ...first,
+    state: "APPROVED",
+    candidate: { kind: "commit", id: "sha-1" },
+    verification: { passed: true, candidateId: "sha-1", checks: [], evidenceDigest: "d", at: "t" },
+    approval: {
+      approver: { kind: "lead", id: "lead-1" },
+      candidateId: "sha-1",
+      evidenceDigest: "d",
+      milestone: "M1",
+      at: "t",
+      loopsStopped: 0,
+    },
+  };
+  writeFileSync(file, JSON.stringify(snapshot));
+  const reloaded = newStore(dir);
+  expect(reloaded.forWorkerAll("w1")).toHaveLength(2);
+  await expect(reloaded.assertCanClose("w1")).rejects.toThrow(/FU-2/);
+});
+
+test("M2: a worker at its turn limit can be rejected by the lead and gets a fresh round; the lead can raise the limit", async () => {
+  const store = newStore(home());
+  await openFor(store, "w1", { turnLimit: 1 });
+  expect(store.recordTurn("w1")).toBeUndefined();
+  expect(store.recordTurn("w1")).toMatchObject({ code: "turn-limit" });
+  // Before the fix this threw "nothing to reject" because the worker was RUNNING.
+  const rejected = await store.reject("FU-1", LEAD, "Stop looping and report what blocks you");
+  expect(rejected).toMatchObject({ state: "RUNNING", roundTurns: 0 });
+  expect(store.recordTurn("w1")).toBeUndefined();
+  expect(store.recordTurn("w1")).toMatchObject({ code: "turn-limit" });
+  await store.raiseTurnLimit("FU-1", LEAD, 5);
+  expect(store.recordTurn("w1")).toBeUndefined();
+  // A WAITING worker can be rejected too: it returns to RUNNING and the wait is cleared.
+  const waiting = newStore(home());
+  await openFor(waiting, "w1");
+  waiting.declareJob("w1", "job-1");
+  for (let i = 0; i < 3; i += 1)
+    waiting.recordStopRepeat("w1", { stopHook: true, toolAction: false });
+  expect(waiting.get("FU-1")?.state).toBe("WAITING");
+  await waiting.reject("FU-1", LEAD, "Report instead");
+  expect(waiting.get("FU-1")).toMatchObject({ state: "RUNNING", waitingFor: undefined });
+});
+
+test("M4: a routine result is approved only from a real check record, not a bare claim", async () => {
+  const store = newStore(home());
+  await openFor(store, "w1", { approvalClass: "routine" });
+  const bare = await store.submit(
+    "w1",
+    { kind: "commit", id: "sha-1" },
+    {
+      passed: true,
+      checks: [],
+      evidence: "",
+    },
+  );
+  expect(bare.assignment.state).toBe("AWAITING_APPROVAL");
+  expect(bare.assignment.approval).toBeUndefined();
+  await store.reject("FU-1", LEAD, "Run a real check");
+  const real = await store.submit("w1", { kind: "commit", id: "sha-2" }, GOOD);
+  expect(real.assignment.state).toBe("APPROVED");
+  expect(real.assignment.approval?.approver.kind).toBe("check");
+});
+
+test("B1: idle cleanup refuses unapproved work and leaves the session live", async () => {
+  const dir = home();
+  const storage = new AgentStorage(join(dir, "agents"), logger);
+  await storage.initialize();
+  const store = newStore(dir);
+  const manager = new AgentManager({
+    registry: storage,
+    logger,
+    archiveLedgerDirectory: join(dir, "ledgers"),
+    workAcceptance: store,
+    clients: { codex: createTestAgentClient("codex") },
+  });
+  cleanups.push(async () => {
+    for (const agent of manager.listAgents()) await manager.closeAgent(agent.id).catch(() => {});
+    await manager.flush();
+  });
+  const worker = await manager.createAgent(
+    { provider: "codex", model: "fixture-model", cwd: dir },
+    undefined,
+    { workspaceId: undefined, labels: { owner: "orca-control" } },
+  );
+  await openFor(store, worker.id);
+  const sequence = manager.trustedPlugins.sequence(worker.id);
+  const request = (archive: boolean) => ({
+    agentId: worker.id,
+    runtimeInstanceId: worker.instanceId,
+    updatedAt: worker.updatedAt.toISOString(),
+    lastUserMessageAt: worker.lastUserMessageAt?.toISOString() ?? null,
+    boot: sequence.boot,
+    humanAt: sequence.humanAt,
+    archive,
+  });
+  await expect(manager.cleanupIdleAgent(request(true))).rejects.toThrow(/Archive refused/);
+  await expect(manager.cleanupIdleAgent(request(false))).rejects.toThrow(/Archive refused/);
+  expect(manager.getAgent(worker.id)).toBeTruthy();
+  expect((await storage.get(worker.id))?.archivedAt).toBeFalsy();
+  expect(store.get("FU-1")?.state).toBe("RUNNING");
 });

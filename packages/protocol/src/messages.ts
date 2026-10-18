@@ -2414,6 +2414,23 @@ export const AgentWorkOwnerReviewResponseMessageSchema = z.object({
   }),
 });
 
+export const AgentWorkOwnerOverrideRequestMessageSchema = z.object({
+  type: z.literal("agent.work.owner_override.request"),
+  action: z.enum(["cancel", "raise_turn_limit", "reset_store"]),
+  item: z.string().optional(),
+  turnLimit: z.number().int().positive().optional(),
+  reason: z.string().min(1),
+  requestId: z.string(),
+});
+export const AgentWorkOwnerOverrideResponseMessageSchema = z.object({
+  type: z.literal("agent.work.owner_override.response"),
+  payload: z.object({
+    requestId: z.string(),
+    accepted: z.boolean(),
+    error: z.string().nullable(),
+  }),
+});
+
 export const AgentParentAdoptRequestMessageSchema = z.object({
   type: z.literal("agent.parent.adopt.request"),
   agentId: z.string(),
@@ -3969,6 +3986,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   AgentParentAdoptRequestMessageSchema,
   AgentCleanupIdleRequestMessageSchema,
   AgentWorkOwnerReviewRequestMessageSchema,
+  AgentWorkOwnerOverrideRequestMessageSchema,
   AgentDetachRequestMessageSchema,
   AgentRewindRequestMessageSchema,
   AgentPermissionResponseMessageSchema,
@@ -8265,6 +8283,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   AgentParentAdoptResponseMessageSchema,
   AgentCleanupIdleResponseMessageSchema,
   AgentWorkOwnerReviewResponseMessageSchema,
+  AgentWorkOwnerOverrideResponseMessageSchema,
   AgentDetachResponseMessageSchema,
   AgentRewindResponseMessageSchema,
   UpdateAgentResponseMessageSchema,

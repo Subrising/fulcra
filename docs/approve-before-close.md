@@ -57,21 +57,35 @@ The number of stopped loops is stored in the approval record (`loopsStopped`).
 ## MCP tools
 
 `work_assign` opens an assignment. `work_submit` sends the result and check evidence.
+`work_raise_limit` lets the assigning lead raise a worker's turn limit.
 `work_wait` names the job a worker waits for. `work_job_done` reports that the job finished.
 `work_review` approves or rejects. `work_cancel` cancels.
 Rejection sends the findings to the same worker with a new finish notice for the lead.
 The owner reviews over the app connection with `agent.work.owner_review.request` (client method `reviewWorkAsOwner`).
 
+## Caller identity
+
+An agent's MCP request names its id in the URL. That id is only a claim.
+Each agent gets its own token, derived from the daemon token and its id. The work tools act only on a request that carries the token for its own id.
+A request with the daemon-wide token, a password, or another agent's token is refused by the work tools.
+
+## Owner override
+
+The owner can cancel an assignment, raise a turn limit, or reset a corrupt or deleted store (`agent.work.owner_override.request`, client method `overrideWorkAsOwner`).
+Each override is written to the override log in the store file.
+
 ## Storage
 
 `$PASEO_HOME/work-acceptance/assignments.json`. The daemon writes it before any effect.
-A corrupt file stops the daemon from starting. It does not forget open work.
+A corrupt file, or a file deleted after it was written, makes every close refuse. The daemon still starts. Only the owner reset reopens it. The old file is kept as `assignments.json.corrupt-<time>`.
 After a restart, a `CLOSING` assignment finishes when its worker is archived.
 
 ## Not covered
 
 - A session with no assignment keeps the old behaviour. Open an assignment before work starts.
-- The app has no cancel button yet. A lead cancels with `work_cancel`.
+- The app has no cancel button yet. A lead cancels with `work_cancel`. The owner uses the override request.
+- A routine result is approved when it has at least one check that exited 0 and non-empty evidence. The host does not run the check itself.
+- If the live commit cannot be read at close time, the approval is kept (the reviewer's minor finding m1, not fixed in this round).
 - Provider-internal `/goal` checks inside one provider turn are not counted until the provider reports a new turn.
 - The guard sees a Stop-hook prompt by its text, from the prompt the host sent or the provider's user message. Whether the real Claude provider records hook feedback as a user message is not verified.
 - Automatic next-item dispatch stays off.
