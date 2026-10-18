@@ -170,20 +170,36 @@ function applyFixtureCwds(candidates: ResourceProcess[], output: string): void {
 
 async function populateFixtureCwds(rows: ResourceProcess[]): Promise<void> {
   // Bound the fixture scan. Arguments and environments stay unread.
-  const candidates = rows.filter((row) => row.ppid === 1 && !row.serviceLabel &&
-    /(?:^|\/)node$/.test(row.command) && (row.ageSeconds ?? 0) > TEST_FIXTURE_MIN_AGE_SECONDS);
+  const candidates = rows.filter(
+    (row) =>
+      row.ppid === 1 &&
+      !row.serviceLabel &&
+      /(?:^|\/)node$/.test(row.command) &&
+      (row.ageSeconds ?? 0) > TEST_FIXTURE_MIN_AGE_SECONDS,
+  );
   if (candidates.length === 0 || candidates.length > 128) return;
   try {
     if (process.platform === "darwin") {
-      const result = await exec("lsof", ["-a", "-p", candidates.map((row) => row.pid).join(","), "-d", "cwd", "-Fpn"], { timeout: 5_000, maxBuffer: 1024 * 1024 });
+      const result = await exec(
+        "lsof",
+        ["-a", "-p", candidates.map((row) => row.pid).join(","), "-d", "cwd", "-Fpn"],
+        { timeout: 5_000, maxBuffer: 1024 * 1024 },
+      );
       applyFixtureCwds(candidates, result.stdout);
     } else if (process.platform === "linux") {
-      await Promise.all(candidates.map(async (row) => {
-        try { row.cwd = await fs.readlink(`/proc/${row.pid}/cwd`); }
-        catch { /* Missing cwd never admits a fixture. */ }
-      }));
+      await Promise.all(
+        candidates.map(async (row) => {
+          try {
+            row.cwd = await fs.readlink(`/proc/${row.pid}/cwd`);
+          } catch {
+            /* Missing cwd never admits a fixture. */
+          }
+        }),
+      );
     }
-  } catch { /* Missing cwd never admits a fixture. */ }
+  } catch {
+    /* Missing cwd never admits a fixture. */
+  }
 }
 
 export function systemSimulators(): SimulatorTable {
