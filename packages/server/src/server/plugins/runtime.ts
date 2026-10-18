@@ -247,8 +247,14 @@ function resolveWorkerExecArgv(): string[] {
 }
 
 function spawnPluginChild(): PluginChild {
+  // This IPC channel belongs to the plugin host, not the daemon supervisor.
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (/^PASEO_SUPERVISED$/i.test(key)) delete env[key];
+  }
   return fork(fileURLToPath(resolveWorkerUrl()), [], {
     execArgv: resolveWorkerExecArgv(),
+    env,
     serialization: "advanced",
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   }) as PluginChild;

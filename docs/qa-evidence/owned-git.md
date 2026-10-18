@@ -22,6 +22,7 @@ Missing-ref fallback remains available within a requested checkout. Different st
 - Workspace type checks, changed-file lint, and formatting passed.
 - All 57 SDK boundary checks and 76 compiler checks passed.
 - The actual Command Centre build passed against the updated SDK.
+- All 46 plugin runtime tests passed, including the supervised worker IPC regression.
 - One fresh risk review passed after its listed repairs.
 
 The Windows authentication endpoint returned HTTP 401. The scratch repository used GCM with no matching stored credential.
