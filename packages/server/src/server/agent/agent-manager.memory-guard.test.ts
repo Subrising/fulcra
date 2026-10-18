@@ -83,7 +83,7 @@ test("the create command returns the plain-words reason to its caller", async ()
     },
   );
   await expect(result).rejects.toThrow(
-    "Not started: this mac is under memory pressure (pressure warn, swap 92%). Start the agent on another host or wait until memory is free.",
+    "Not started: this mac is under memory pressure (pressure warn). Swap used: 92%. Start the agent on another host or wait until memory is free.",
   );
   expect(manager.listAgents()).toHaveLength(0);
 });

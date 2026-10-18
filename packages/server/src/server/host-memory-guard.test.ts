@@ -36,18 +36,18 @@ describe("evaluateMemoryGuard", () => {
     expect(evaluateMemoryGuard(darwin("critical", null), settings).decision).toBe("refuse");
   });
 
-  test("swap at the limit refuses even when pressure is normal", () => {
-    expect(evaluateMemoryGuard(darwin("normal", 85), settings)).toEqual({
-      decision: "refuse",
-      reasons: ["swap 85%"],
-    });
-    expect(evaluateMemoryGuard(darwin("normal", 84.9), settings).decision).toBe("allow");
+  test("high swap with normal pressure allows by default", () => {
+    expect(evaluateMemoryGuard(darwin("normal", 92), settings).decision).toBe("allow");
+    expect(evaluateMemoryGuard(darwin("normal", 100), settings).decision).toBe("allow");
   });
 
   test("a configured swap limit applies", () => {
-    expect(
-      evaluateMemoryGuard(darwin("normal", 60), { ...settings, swapUsedPercent: 50 }).decision,
-    ).toBe("refuse");
+    const withSwap = { ...settings, swapUsedPercent: 85 };
+    expect(evaluateMemoryGuard(darwin("normal", 85), withSwap)).toEqual({
+      decision: "refuse",
+      reasons: ["swap 85%"],
+    });
+    expect(evaluateMemoryGuard(darwin("normal", 84.9), withSwap).decision).toBe("allow");
   });
 
   test("unknown readings allow", () => {
@@ -173,7 +173,7 @@ describe("createAgentStartMemoryGuard", () => {
     );
     expect(failure).toBeInstanceOf(AgentStartMemoryRefusedError);
     expect((failure as Error).message).toBe(
-      "Not started: this mac is under memory pressure (pressure warn, swap 92%). Start the agent on another host or wait until memory is free.",
+      "Not started: this mac is under memory pressure (pressure warn). Swap used: 92%. Start the agent on another host or wait until memory is free.",
     );
     expect(warn).toHaveBeenCalledWith(
       expect.objectContaining({

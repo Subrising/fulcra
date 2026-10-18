@@ -19,15 +19,17 @@ export interface HostMemoryReading {
 
 export interface MemoryGuardSettings {
   enabled: boolean;
-  /** macOS: swap used at or above this percent of swap total counts as high. */
-  swapUsedPercent: number;
+  /**
+   * macOS: swap used at or above this percent of swap total counts as high. Unset by default: macOS keeps swap
+   * allocated long after pressure has passed, so the kernel pressure level alone decides.
+   */
+  swapUsedPercent?: number;
   /** Linux and Windows: free memory below this percent of total counts as high. */
   freeMemoryPercent: number;
 }
 
 export const DEFAULT_MEMORY_GUARD_SETTINGS: MemoryGuardSettings = {
   enabled: true,
-  swapUsedPercent: 85,
   freeMemoryPercent: 10,
 };
 
@@ -204,7 +206,7 @@ export type MemoryGuardDecision =
   | { decision: "allow"; reasons: [] }
   | { decision: "refuse"; reasons: string[] };
 
-/** High = pressure warn or critical, OR macOS swap at or above its limit, OR Linux/Windows free RAM below its limit. Unknown allows. */
+/** High = pressure warn or critical, OR macOS swap at or above its limit (only when one is set), OR Linux/Windows free RAM below its limit. Unknown allows. */
 export function evaluateMemoryGuard(
   reading: HostMemoryReading,
   settings: MemoryGuardSettings,
@@ -215,6 +217,7 @@ export function evaluateMemoryGuard(
   }
   if (
     reading.platform === "darwin" &&
+    settings.swapUsedPercent !== undefined &&
     reading.swapUsedPercent !== null &&
     reading.swapUsedPercent >= settings.swapUsedPercent
   ) {
@@ -243,9 +246,13 @@ export function formatMemoryGuardRefusal(reading: HostMemoryReading, reasons: st
     reading.freeBytes === null
       ? ""
       : ` Free memory: ${(reading.freeBytes / 1024 ** 3).toFixed(1)} GB.`;
+  const swap =
+    reading.platform === "darwin" && reading.swapUsedPercent !== null
+      ? ` Swap used: ${Math.round(reading.swapUsedPercent)}%.`
+      : "";
   return (
     `Not started: ${describeHost(reading.platform).toLowerCase()} is under memory pressure (${reasons.join(", ")}).` +
-    `${free} Start the agent on another host or wait until memory is free.`
+    `${free}${swap} Start the agent on another host or wait until memory is free.`
   );
 }
 
