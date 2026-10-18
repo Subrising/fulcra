@@ -443,6 +443,8 @@ class Gate:
                     if batch['sender'].get('refusal'): args.extend(['--outbound-refusal', batch['sender']['refusal']])
                     env = dict(os.environ)
                     env.pop('PASEO_AGENT_ID', None)
+                    endpoint = record['endpoint']
+                    if '--home' in endpoint: env['PASEO_HOME'] = endpoint[endpoint.index('--home') + 1]
                     if batch['sender']['agent']: env['PASEO_AGENT_ID'] = batch['sender']['agent']
                 try:
                     result = self.run(cli, args, env=env, capture_output=True, text=True, timeout=60)

@@ -216,6 +216,31 @@ class NoticePauseTests(unittest.TestCase):
         self.gate.drain()
         self.assertEqual(self.sends()[0][2]['env']['PASEO_AGENT_ID'], 'source')
 
+    def test_local_sender_drain_restores_record_home_without_daemon_environment(self):
+        selected_home = str(self.root / 'selected-home')
+        original = self.gate.run
+        deliveries = []
+        def run(cli, args, **kwargs):
+            if 'send' in args:
+                env = kwargs.get('env', {})
+                deliveries.append((args, env))
+                matched = env.get('PASEO_HOME') == selected_home and env.get('PASEO_AGENT_ID') == 'source'
+                return subprocess.CompletedProcess(args, 0 if matched else 1,
+                    json.dumps({'status': 'sent'}) if matched else '',
+                    '' if matched else json.dumps({'error': {'code': 'SENDER_HOST_MISMATCH'}}))
+            return original(cli, args, **kwargs)
+        self.gate.run = run
+        with patch.dict(os.environ, {}, clear=True):
+            with patch.dict(os.environ, {'PASEO_AGENT_ID': 'source'}):
+                self.gate.send('/native/cli', ['--home', selected_home, 'send', 'claude-owner', '--prompt', 'held local result'])
+            self.assertNotIn('PASEO_HOME', os.environ)
+            self.policy([])
+            self.gate.drain()
+        self.assertEqual(self.records()[0]['state'], 'delivered')
+        self.assertEqual(len(deliveries), 1)
+        self.assertEqual(deliveries[0][1]['PASEO_HOME'], selected_home)
+        self.assertEqual(deliveries[0][1]['PASEO_AGENT_ID'], 'source')
+
     def test_different_senders_are_retained_with_their_source(self):
         with patch.dict(os.environ, {'PASEO_AGENT_ID': 'source-a'}): self.send(text='one')
         with patch.dict(os.environ, {'PASEO_AGENT_ID': 'source-b'}): self.send(text='two')

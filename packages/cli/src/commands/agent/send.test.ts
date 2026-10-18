@@ -478,6 +478,16 @@ describe("send reporting lines", () => {
     });
   });
 
+  it("passes the selected home or endpoint to sender identity validation", async () => {
+    senderStamp.mockReturnValue({ agentId: "source" });
+    await parsedSend(["target", "hello", "--no-wait"]);
+    expect(senderHost).toHaveBeenCalledExactlyOnceWith({
+      sender: { agentId: "source" },
+      serverId: "source-host",
+      target: daemonTarget,
+    });
+  });
+
   it("does not connect when the sender is refused", async () => {
     senderStamp.mockImplementationOnce(() => {
       throw {

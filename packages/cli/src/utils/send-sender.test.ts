@@ -89,3 +89,26 @@ it("binds a stamped sender to its own daemon, even with another selected endpoin
     await rm(home, { recursive: true, force: true });
   }
 });
+
+it("uses the selected instance home when a local drain has no PASEO_HOME", async () => {
+  const home = await mkdtemp(join(tmpdir(), "sender-drain-home-"));
+  try {
+    await writeFile(join(home, "server-id"), "selected-home-host\n");
+    await assertSenderDaemon({
+      sender: { agentId: "source" },
+      serverId: "selected-home-host",
+      env: {},
+      target: { kind: "instance", home },
+    });
+    await expect(
+      assertSenderDaemon({
+        sender: { agentId: "source" },
+        serverId: "other-host",
+        env: { PASEO_HOME: home },
+        target: { kind: "instance", home: "/different-selected-home" },
+      }),
+    ).rejects.toMatchObject({ code: "SENDER_HOST_MISMATCH" });
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});

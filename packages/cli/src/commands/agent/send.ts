@@ -485,7 +485,11 @@ export async function runSendCommand(
   const client = await connectToDaemon({ target: options.daemonTarget });
 
   try {
-    await assertSenderDaemon({ sender, serverId: client.getLastServerInfoMessage()?.serverId });
+    await assertSenderDaemon({
+      sender,
+      serverId: client.getLastServerInfoMessage()?.serverId,
+      target: options.daemonTarget,
+    });
     const admission = await checkSendAdmission({ client, sender, agentId: agentIdArg, options });
     if (admission) return admission;
     if (nativeQueue) {
