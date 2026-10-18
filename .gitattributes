@@ -13,3 +13,6 @@
 # on purpose: packages/desktop/bin/paseo.cmd is a batch file that wants CRLF,
 # and no other tracked file is an npm bin target.
 packages/cli/bin/paseo text eol=lf
+
+# Bundled skill hashes cover exact source bytes on every platform.
+skills/** text eol=lf

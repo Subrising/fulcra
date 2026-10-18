@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { QueryClient } from "@tanstack/react-query";
+import { applyProvidersSnapshotUpdate } from "./push-router";
+import { fetchProvidersSnapshot, providersSnapshotQueryKey } from "./providers-snapshot";
 import { Buffer } from "buffer";
 import type { ProviderSnapshotEntry } from "@getpaseo/protocol/agent-types";
 import { compactProviderSnapshot } from "@getpaseo/protocol/provider-snapshot-codec";
@@ -637,10 +640,6 @@ it("stores and expands identical content once across directory associations", as
 });
 
 it("coalesces missing bodies and keeps a newer pushed association when an older pull completes", async () => {
-  const { QueryClient } = await import("@tanstack/react-query");
-  const { applyProvidersSnapshotUpdate } = await import("./push-router");
-  const { fetchProvidersSnapshot, providersSnapshotQueryKey } =
-    await import("./providers-snapshot");
   const storage = createStorage();
   const cache = createProviderSnapshotCache(storage);
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });

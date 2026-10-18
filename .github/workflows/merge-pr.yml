@@ -63,10 +63,15 @@ jobs:
         run: |
           set -euo pipefail
           cp scripts/check-machine-data.mjs "$RUNNER_TEMP/check-machine-data.mjs"
+          cp .github/scripts/ci-check.mjs "$RUNNER_TEMP/ci-check.mjs"
           gh api "repos/$GH_REPO/pulls/$PR" > "$RUNNER_TEMP/pr.json"
           jq -e --arg sha "$SHA" '.state == "open" and .base.ref == "main" and .head.sha == $sha and .draft == false' "$RUNNER_TEMP/pr.json"
           gh api "repos/$GH_REPO/commits/$SHA/check-runs?check_name=ci-passed&filter=latest&per_page=100" > "$RUNNER_TEMP/checks.json"
-          jq -e --arg sha "$SHA" '[.check_runs[] | select(.name == "ci-passed" and .app.id == 15368)] | length == 1 and all(.head_sha == $sha and .status == "completed" and .conclusion == "success")' "$RUNNER_TEMP/checks.json"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          const { selectPassedCI } = await import(`${process.env.RUNNER_TEMP}/ci-check.mjs`);
+          selectPassedCI(JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/checks.json`, "utf8")), process.env.SHA);
+          NODE
           node --input-type=module <<'NODE'
           import { readFileSync } from 'node:fs';
           const { findInText, parsePrivateRules, genericRules } = await import(`${process.env.RUNNER_TEMP}/check-machine-data.mjs`);

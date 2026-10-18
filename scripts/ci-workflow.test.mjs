@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -16,6 +17,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { relative as relativePath } from "node:path";
 import test from "node:test";
 import { requiresFullSuite } from "./ci-shared-changes.mjs";
+import { selectPassedCI } from "../.github/scripts/ci-check.mjs";
 import { proveMerge, complete } from "../.github/scripts/ci-finished.mjs";
 import { balanceTests, testListPath, BROWSER_SHARDS } from "../.github/scripts/browser-shards.mjs";
 import { startStaticWeb } from "../.github/scripts/static-e2e-web.mjs";
@@ -480,6 +482,7 @@ function proofFixture() {
       check_runs: [
         {
           name: "ci-passed",
+          id: 100,
           app: { id: 15368 },
           head_sha: sha,
           status: "completed",
@@ -518,6 +521,19 @@ function proofFixture() {
   };
   return { run, data, api, writes };
 }
+
+test("tested-tree proof retains successful CI provenance beside a cancelled run", async () => {
+  const fixture = proofFixture();
+  fixture.data.checks.check_runs.push({
+    ...fixture.data.checks.check_runs[0],
+    id: 101,
+    conclusion: "cancelled",
+    details_url: "https://github.com/Subrising/fulcra/actions/runs/999/job/123",
+  });
+  const proof = await proveMerge(fixture.run, fixture.api);
+  assert.equal(proof.ciRunId, 456);
+  assert.equal(proof.ciAttempt, 1);
+});
 
 test("merge proof refuses changed trees, identities, workflows and stale checks", async () => {
   const good = proofFixture();
@@ -943,6 +959,11 @@ test("merge workflow rejects unsafe callers, PRs, CI results, and identities", (
     const bin = join(root, "bin");
     mkdirSync(bin);
     mkdirSync(join(root, "scripts"));
+    mkdirSync(join(root, ".github", "scripts"), { recursive: true });
+    writeFileSync(
+      join(root, ".github", "scripts", "ci-check.mjs"),
+      readFileSync(new URL(".github/scripts/ci-check.mjs", repoRoot)),
+    );
     writeFileSync(
       join(root, "scripts/check-machine-data.mjs"),
       readFileSync(new URL("scripts/check-machine-data.mjs", repoRoot)),
@@ -970,6 +991,7 @@ console.log(JSON.stringify(a.includes('PUT') ? f.merged : a.some(x=>x.includes('
         check_runs: [
           {
             name: "ci-passed",
+            id: 100,
             app: { id: 15368 },
             head_sha: sha,
             status: "completed",
@@ -1044,6 +1066,13 @@ console.log(JSON.stringify(a.includes('PUT') ? f.merged : a.some(x=>x.includes('
         0,
       );
     assert.equal(run("Check the PR, tested SHA, and merge title"), 0);
+    const superseded = structuredClone(base);
+    superseded.checks.check_runs.push({
+      ...base.checks.check_runs[0],
+      id: 101,
+      conclusion: "cancelled",
+    });
+    assert.equal(run("Check the PR, tested SHA, and merge title", superseded), 0);
     for (const change of [
       (f) => (f.pr.draft = true),
       (f) => (f.pr.base.ref = "next"),
@@ -1634,6 +1663,80 @@ test("prebuilt web server serves SPA routes without masking missing bundle asset
     assert.match((await fetch(`${origin}/app.js`)).headers.get("content-type"), /javascript/);
   } finally {
     await server.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("CI selection ignores cancelled runs and refuses failures or incomplete checks", () => {
+  const sha = "a".repeat(40);
+  const success = {
+    id: 10,
+    name: "ci-passed",
+    app: { id: 15368 },
+    head_sha: sha,
+    status: "completed",
+    conclusion: "success",
+  };
+  const select = (check_runs, extra = {}) => selectPassedCI({ check_runs, ...extra }, sha);
+  const cancelled = { ...success, id: 11, conclusion: "cancelled" };
+  assert.equal(select([success, cancelled]), success);
+  const latest = { ...success, id: 12 };
+  assert.equal(select([success, latest, cancelled]), latest);
+  for (const other of [
+    { ...cancelled, conclusion: "failure" },
+    { ...cancelled, status: "in_progress", conclusion: null },
+    { ...cancelled, conclusion: "timed_out" },
+    { ...cancelled, conclusion: "neutral" },
+    { ...cancelled, head_sha: "b".repeat(40) },
+    { ...cancelled, id: undefined },
+    success,
+  ])
+    assert.throws(() => select([success, other]));
+  assert.throws(() => select([]));
+  assert.throws(() => select([cancelled]));
+  assert.throws(() => select([{ ...success, app: { id: 1 } }]));
+  assert.throws(() => select([success], { total_count: 101 }));
+});
+
+test("bundled skill bytes stay unchanged with Windows checkout conversion", () => {
+  const root = mkdtempSync(join(tmpdir(), "fulcra-skill-eol-"));
+  try {
+    const git = (...args) =>
+      execFileSync("git", ["-c", "core.autocrlf=true", ...args], { cwd: root, stdio: "pipe" });
+    git("init", "--quiet");
+    cpSync(new URL(".gitattributes", repoRoot), join(root, ".gitattributes"));
+    cpSync(new URL("skills/", repoRoot), join(root, "skills"), { recursive: true });
+    git("add", ".");
+    rmSync(join(root, "skills"), { recursive: true });
+    git("checkout-index", "--all", "--force");
+    mkdirSync(join(root, "scripts"));
+    cpSync(
+      new URL("scripts/record-bundled-skill-hashes.mjs", repoRoot),
+      join(root, "scripts", "record-bundled-skill-hashes.mjs"),
+    );
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/record-bundled-skill-hashes.mjs", "--check"],
+      { cwd: root, encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(
+      readFileSync(join(root, "skills", ".bundled-skill-hashes.json")).includes(13),
+      false,
+    );
+    // Prove that this Git checkout exercises conversion when the rule is absent.
+    writeFileSync(join(root, ".gitattributes"), "");
+    git("add", ".gitattributes");
+    rmSync(join(root, "skills"), { recursive: true });
+    git("checkout-index", "--all", "--force");
+    const converted = spawnSync(
+      process.execPath,
+      ["scripts/record-bundled-skill-hashes.mjs", "--check"],
+      { cwd: root, encoding: "utf8" },
+    );
+    assert.notEqual(converted.status, 0);
+    assert.match(converted.stderr, /Record the current bundled skill hashes/);
+  } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });

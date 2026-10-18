@@ -19,7 +19,8 @@ export default defineConfig({
         },
         {
           command: "npm run build && npm run preview -- --host 127.0.0.1 --port 8187 --strictPort",
-          url: baseURL,
+          // Readiness must not wait for the root loader's external GitHub requests.
+          url: `${baseURL}/favicon.ico`,
           env: {
             CLOUDFLARE_INCLUDE_PROCESS_ENV: "true",
             PLUGINS_REGISTRY_URL: "http://127.0.0.1:8188",

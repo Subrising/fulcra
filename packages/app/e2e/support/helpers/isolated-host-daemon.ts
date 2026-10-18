@@ -164,6 +164,7 @@ export async function startIsolatedHostDaemon(
         FULCRA_COMMAND_CENTRE_AUTH_HASH: undefined,
         ...options.environment,
         PASEO_HOME: paseoHome,
+        PASEO_SKILLS_HOME: path.join(paseoHome, "user-home"),
         PASEO_SERVER_ID: serverId,
         PASEO_LISTEN: `127.0.0.1:${port}`,
         PASEO_CORS_ORIGINS: `http://localhost:${metroPort}`,

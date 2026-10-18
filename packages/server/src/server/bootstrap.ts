@@ -195,6 +195,7 @@ import {
 import { CheckoutDiffManager } from "./checkout-diff-manager.js";
 import { ScheduleService } from "./schedule/service.js";
 import { DaemonConfigStore, type MutableDaemonConfig } from "./daemon-config-store.js";
+import { resolveSkillTargets } from "./orchestration-skills/internal/paths.js";
 import { createOrchestrationSkills } from "./orchestration-skills/index.js";
 import { resolveConfigFromPersisted, type CliConfigOverrides } from "./config.js";
 import { resolvePaseoToolPolicy } from "./agent/paseo-tool-policy.js";
@@ -445,6 +446,8 @@ export interface PaseoDaemonConfig {
   bundledControllerPluginId?: string;
   listen: string;
   paseoHome: string;
+  /** User-home root for managed skills. Embedders must isolate scratch daemons. */
+  skillsHome?: string;
   daemonVersion?: string;
   desktopManaged?: boolean;
   worktreesRoot?: string;
@@ -781,7 +784,9 @@ export async function createPaseoDaemon(
       },
     },
   });
-  const orchestrationSkills = createOrchestrationSkills(daemonConfigStore);
+  const orchestrationSkills = createOrchestrationSkills(daemonConfigStore, () =>
+    resolveSkillTargets(config.skillsHome),
+  );
   void orchestrationSkills.autoUpdate().catch((error) => {
     logger.error({ err: error }, "Failed to maintain orchestration skills at startup");
   });

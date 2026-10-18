@@ -199,6 +199,7 @@ async function prepareTestDaemonConfig(
   const config: PaseoDaemonConfig = {
     listen: `${listenHost}:${listenPort}`,
     paseoHome,
+    skillsHome: path.join(paseoHome, "user-home"),
     daemonVersion: options.daemonVersion,
     desktopManaged: options.desktopManaged,
     corsAllowedOrigins: options.corsAllowedOrigins ?? [],

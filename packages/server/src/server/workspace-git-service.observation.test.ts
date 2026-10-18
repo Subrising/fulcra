@@ -268,6 +268,51 @@ describe("WorkspaceGitService checkout observation", () => {
     vi.useRealTimers();
   });
 
+  test("concurrent consumers join watcher startup before using its published target", async () => {
+    const watcher = createWatcherHarness();
+    const opened = createDeferred<void>();
+    const inventory = createDeferred<void>();
+    const service = createService(watcher, {
+      subscribe: async (...args: Parameters<typeof watcher.subscribe>) => {
+        if (args[0] === REPO_CWD) {
+          opened.resolve();
+          await inventory.promise;
+        }
+        return watcher.subscribe(...args);
+      },
+    });
+    const ready: string[] = [];
+    const first = service
+      .requestWorkingTreeWatch(REPO_CWD, () => {})
+      .then((result) => {
+        ready.push("first");
+        return result;
+      });
+    await opened.promise;
+    const second = service
+      .requestWorkingTreeWatch(REPO_CWD, () => {})
+      .then((result) => {
+        ready.push("second");
+        return result;
+      });
+    const workspace = service.registerWorkspace({ cwd: REPO_CWD }, () => {});
+    try {
+      await vi.waitFor(() => expect(service.getMetrics().workspaceRefreshInFlightCount).toBe(0));
+      await flushPromises();
+      expect(ready).toEqual([]);
+      expect(getWatcherSubscribeCallCount(watcher, GIT_DIR)).toBe(0);
+      inventory.resolve();
+      await Promise.all([first, second]);
+      await vi.waitFor(() => expect(getWatcherSubscribeCallCount(watcher, GIT_DIR)).toBe(1));
+      expect(getWatcherSubscribeCallCount(watcher, REPO_CWD)).toBe(1);
+    } finally {
+      inventory.resolve();
+      for (const subscription of await Promise.all([first, second])) subscription.unsubscribe();
+      workspace.unsubscribe();
+      await service.dispose();
+    }
+  });
+
   test("waits for the initial watcher inventory before building a cold diff", async () => {
     const watcher = createWatcherHarness();
     const inventoryFinished = createDeferred<void>();

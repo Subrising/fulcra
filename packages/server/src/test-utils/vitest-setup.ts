@@ -27,3 +27,8 @@ if (process.platform !== "win32") {
   firstRun({ ORCA_HOME: controllerHome });
   afterAll(() => rmSync(controllerHome, { recursive: true, force: true }));
 }
+
+// Direct and child-process scratch daemons must never update installed user skills.
+const skillsHome = realpathSync(mkdtempSync(path.join(tmpdir(), "paseo-test-skills-")));
+process.env.PASEO_SKILLS_HOME = skillsHome;
+afterAll(() => rmSync(skillsHome, { recursive: true, force: true }));

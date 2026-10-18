@@ -6,6 +6,9 @@ This is for test code only. Executable daemon processes must start through
 `scripts/supervisor-entrypoint.ts` or `dist/scripts/supervisor-entrypoint.js`;
 do not use `createPaseoDaemon` as a product launch path.
 
+Bundled skills use a separate user-home root. Set `skillsHome` for embedded test daemons or
+`PASEO_SKILLS_HOME` for child processes. `PASEO_HOME` alone does not isolate user skills.
+
 ## Quick start
 
 ```typescript
@@ -26,6 +29,7 @@ const daemon = await createPaseoDaemon(
   {
     listen: "127.0.0.1:0", // OS picks a free port
     paseoHome,
+    skillsHome: path.join(paseoHome, "user-home"),
     corsAllowedOrigins: [],
     hostnames: true,
     mcpEnabled: false,
