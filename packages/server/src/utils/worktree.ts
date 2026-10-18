@@ -1079,7 +1079,7 @@ export async function deletePaseoWorktree({
   worktreesRoot,
   paseoHome,
   worktreesBaseRoot,
-}: DeletePaseoWorktreeOptions): Promise<void> {
+}: DeletePaseoWorktreeOptions): Promise<boolean> {
   if (!worktreePath && !worktreeSlug) {
     throw new Error("worktreePath or worktreeSlug is required");
   }
@@ -1114,7 +1114,7 @@ export async function deletePaseoWorktree({
   }
 
   // The shared guard owns checks and removal. No teardown or force fallback can bypass it.
-  await removeWithCleanupGuard(resolvedWorktree);
+  return removeWithCleanupGuard(resolvedWorktree);
 }
 
 export async function rollbackCreatedPaseoWorktree(
