@@ -1920,8 +1920,8 @@ export async function createPaseoDaemon(
             return end(...args);
           }) as typeof res.end;
         }
-        // COMPAT(claude-mcp-2026-07-28): added in v0.2.26, remove after 2027-01-19 when the SDK supports it.
-        // Claude sends this header after the SDK negotiates its older supported version.
+        // COMPAT(mcp-protocol-2026-07-28): added in v0.2.26, remove after 2027-01-19 when the SDK supports it.
+        // Keep the negotiated SDK version while accepting this known client header.
         if (req.header("mcp-protocol-version") === "2026-07-28") {
           req.headers["mcp-protocol-version"] = LATEST_PROTOCOL_VERSION;
           // The Node transport builds Fetch headers from rawHeaders.
