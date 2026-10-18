@@ -253,4 +253,32 @@ describe("Claude idle sleep", () => {
       await session.close();
     }
   });
+  test("hasBackgroundWork (FU-362 restart record) reads the signals that refuse sleep", async () => {
+    const shell = fixture([BACKGROUND_SHELL_TURN_EVENTS]);
+    const withShell = await shell.client.createSession({ provider: "claude", cwd: process.cwd() });
+    const plain = fixture([TURN_EVENTS]);
+    const idle = await plain.client.createSession({ provider: "claude", cwd: process.cwd() });
+    try {
+      await withShell.run("start a background shell");
+      expect(await withShell.hasBackgroundWork?.()).toBe(true);
+
+      await idle.run("first");
+      treeReader.read.mockResolvedValue({ rootBornMs: 1_000_000, descendants: [] });
+      expect(await idle.hasBackgroundWork?.()).toBe(false);
+      treeReader.read.mockResolvedValue({
+        rootBornMs: 1_000_000,
+        descendants: [{ pid: 4242, bornMs: 1_000_000 + 31_000 }],
+      });
+      expect(await idle.hasBackgroundWork?.()).toBe(true);
+      treeReader.read.mockResolvedValue(null);
+      expect(await idle.hasBackgroundWork?.()).toBe(true);
+      treeReader.read.mockResolvedValue({ rootBornMs: 1_000_000, descendants: [] });
+      expect(await idle.sleep?.()).toBe(true);
+      // A sleeping session has no process, so no work.
+      expect(await idle.hasBackgroundWork?.()).toBe(false);
+    } finally {
+      await withShell.close();
+      await idle.close();
+    }
+  });
 });

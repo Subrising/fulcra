@@ -1578,6 +1578,11 @@ export function readEventIdentifiers(message: SDKMessage): EventIdentifiers {
 // A child born this long after the Claude process itself is work started during the session.
 const SLEEP_CHILD_GRACE_MS = 30_000;
 
+/** Descendants of the provider process born more than the grace after it: work that sleeping or a restart would end. */
+function lateChildren(tree: NonNullable<Awaited<ReturnType<typeof readProcessTreeBirths>>>) {
+  return tree.descendants.filter((entry) => entry.bornMs - tree.rootBornMs > SLEEP_CHILD_GRACE_MS);
+}
+
 export class ClaudeAgentClient implements AgentClient {
   // Update-7 W3: a new session without a mode takes Claude's own default, never its caller's.
   readonly resolveCreateConfig = resolveOwnDefaultCreateConfig;
@@ -3214,9 +3219,7 @@ class ClaudeAgentSession implements AgentSession {
       );
       return false;
     }
-    const late = tree.descendants.filter(
-      (entry) => entry.bornMs - tree.rootBornMs > SLEEP_CHILD_GRACE_MS,
-    );
+    const late = lateChildren(tree);
     if (late.length > 0) {
       this.logger.info(
         { agentId: this.agentId, reason: "child process running", pids: late.map((e) => e.pid) },
@@ -3260,6 +3263,23 @@ class ClaudeAgentSession implements AgentSession {
     return this.childProcess;
   }
 
+  /**
+   * FU-362: true when this session, idle, still has background work that a restart would stop: work Fulcra tracks
+   * (shells, workflows, agents, tasks) or a process born well after Claude (Monitor watches, nohup children). The
+   * same signals refuse idle sleep. An unreadable process tree counts as work. A session with no process has none.
+   */
+  async hasBackgroundWork(read?: Parameters<typeof readProcessTreeBirths>[1]): Promise<boolean> {
+    if (this.closed || !this.query) return false;
+    if (this.hasTrackedBackgroundWork()) return true;
+    if (!this.currentChild) return false;
+    const tree = await readProcessTreeBirths(this.currentChild, read);
+    return !tree || lateChildren(tree).length > 0;
+  }
+
+  private hasTrackedBackgroundWork(): boolean {
+    return this.backgroundWork.snapshot() !== null || this.taskProtocolSource.hasRunningTasks();
+  }
+
   // The session is idle with a live query and nothing in flight.
   private sleepBlocked(): boolean {
     return (
@@ -3271,8 +3291,7 @@ class ClaudeAgentSession implements AgentSession {
       Boolean(this.autonomousTurn) ||
       Boolean(this.cancelCurrentTurn) ||
       this.pendingPermissions.size > 0 ||
-      this.backgroundWork.snapshot() !== null ||
-      this.taskProtocolSource.hasRunningTasks() ||
+      this.hasTrackedBackgroundWork() ||
       this.queryRestartNeeded
     );
   }

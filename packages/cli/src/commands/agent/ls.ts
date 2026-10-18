@@ -31,6 +31,8 @@ export interface AgentListItem {
   provider: string;
   thinking: string;
   status: string;
+  /** "not loaded": the session is open (stored status idle or running) but no provider process is loaded for it. */
+  note: string;
   cwd: string;
   created: string;
 }
@@ -82,6 +84,7 @@ export const agentLsSchema: OutputSchema<AgentListItem> = {
         return undefined;
       },
     },
+    { header: "NOTE", field: "note", width: 11 },
     { header: "CWD", field: "cwd", width: 30 },
     { header: "CREATED", field: "created", width: 15 },
   ],
@@ -90,13 +93,19 @@ export const agentLsSchema: OutputSchema<AgentListItem> = {
 /** Transform agent snapshot to AgentListItem */
 export function toListItem(agent: AgentSnapshotPayload): AgentListItem {
   const model = normalizeModelId(agent.runtimeInfo?.model) ?? normalizeModelId(agent.model);
+  // A stored record has native lifecycle "closed" whenever no provider process is loaded for it, also after a restart
+  // reopened it as idle. Show the stored status for such a session; "closed" stays for records that really closed.
+  const unloaded =
+    agent.nativeLifecycle === "closed" && (agent.status === "idle" || agent.status === "running");
+  const status = unloaded ? agent.status : (agent.nativeLifecycle ?? agent.status);
   return {
     id: agent.id,
     shortId: agent.id.slice(0, 7),
     name: agent.title ?? "-",
     provider: model ? `${agent.provider}/${model}` : agent.provider,
     thinking: agent.effectiveThinkingOptionId ?? "auto",
-    status: agent.nativeLifecycle ?? agent.status,
+    status,
+    note: unloaded ? "not loaded" : "",
     cwd: shortenPath(agent.cwd),
     created: relativeTime(agent.createdAt),
   };

@@ -60,8 +60,8 @@ describe("buildAgentLsFetchOptions", () => {
   });
 });
 
-it("shows the native closed state when the saved session status is idle", () => {
-  const agent = {
+describe("ls status of an unloaded session", () => {
+  const base = {
     id: "dormant",
     title: "Dormant",
     provider: "claude",
@@ -71,6 +71,27 @@ it("shows the native closed state when the saved session status is idle", () => 
     cwd: "/tmp",
     createdAt: new Date().toISOString(),
   } as Parameters<typeof toListItem>[0];
-  expect(toListItem(agent).status).toBe("closed");
-  expect(toListItem({ ...agent, nativeLifecycle: undefined }).status).toBe("idle");
+
+  it("shows the stored status and a note for a reopened session that is not loaded", () => {
+    expect(toListItem(base)).toMatchObject({ status: "idle", note: "not loaded" });
+    expect(toListItem({ ...base, status: "running" })).toMatchObject({
+      status: "running",
+      note: "not loaded",
+    });
+  });
+
+  it("keeps closed for a record that really closed", () => {
+    expect(toListItem({ ...base, status: "closed" })).toMatchObject({ status: "closed", note: "" });
+  });
+
+  it("shows a loaded session as it is", () => {
+    expect(toListItem({ ...base, nativeLifecycle: undefined })).toMatchObject({
+      status: "idle",
+      note: "",
+    });
+    expect(toListItem({ ...base, nativeLifecycle: "running", status: "running" })).toMatchObject({
+      status: "running",
+      note: "",
+    });
+  });
 });

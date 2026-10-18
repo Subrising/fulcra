@@ -176,7 +176,7 @@ export interface OwnedProcessIdentity {
 }
 
 /** Read identities only. Do not request command arguments or environment variables. */
-async function readOwnedProcessTable(): Promise<OwnedProcessIdentity[]> {
+export async function readOwnedProcessTable(): Promise<OwnedProcessIdentity[]> {
   if (process.platform === "win32") {
     const { stdout } = await execFileAsync(
       "powershell.exe",

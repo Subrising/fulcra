@@ -2263,7 +2263,7 @@ export async function createPaseoDaemon(
             // The boot has read and removed the previous records: keep a crash-safe copy from now on.
             liveRecorder ??= startLiveRecorder({
               paseoHome: config.paseoHome,
-              listAgents: () => agentManager.listAgents(),
+              listAgents: () => agentManager.listAgentsForRevive(),
               logger,
             });
             // The final recovery chain below owns error reporting.
@@ -2318,7 +2318,14 @@ export async function createPaseoDaemon(
     // FULCRA(orchestration): the next boot loads these sessions again (revive-on-restart.ts).
     await recordOpenSessions({
       paseoHome: config.paseoHome,
-      agents: agentManager.listAgents(),
+      agents: await withTimeout({
+        promise: agentManager.listAgentsForRevive(),
+        timeoutMs: 5_000,
+        label: "read background work for the restart record",
+      }).catch((err) => {
+        logger.warn({ err }, "Background work could not be read for the restart record");
+        return agentManager.listAgents();
+      }),
     }).catch((err) => logger.warn({ err }, "Could not record the open sessions for the next boot"));
     // The clean record is on disk: now remove the crash-safe copy. A crash between the two writes still leaves a
     // record, and boot prefers the clean one.
