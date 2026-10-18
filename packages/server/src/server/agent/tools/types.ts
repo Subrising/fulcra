@@ -42,6 +42,8 @@ export interface PaseoToolCatalog {
 export interface PaseoToolRuntimeContext {
   nativeReportOrigin?: NativeReportOrigin;
   callerAgentId?: string;
+  /** True when the caller id was proven by the agent's own token. Unset means trusted host code. */
+  callerVerified?: boolean;
   paseoToolPolicy?: ProviderPaseoToolsPolicy;
   enableVoiceTools?: boolean;
   voiceOnly?: boolean;

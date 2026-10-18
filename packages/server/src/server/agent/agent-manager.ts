@@ -9,6 +9,12 @@ import { recordSessionCost, sessionCost, type SessionCostRecords } from "./sessi
 import { queuedAgentMessagesFor } from "../queued-agent-messages.js";
 import { heldSendsFor } from "../held-sends.js";
 import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  WorkAcceptanceError,
+  isStopHookPrompt,
+  type Approver,
+  type WorkAcceptanceStore,
+} from "./work-acceptance.js";
 import { isArchiveLead, isArchiveChild, reportsToArchiveParent } from "./archive-policy.js";
 import { defaultLedgerDir, readOpenLedgerRows, rowsOwnedBy } from "../ledger-items.js";
 import { archiveReportCount } from "../archive-observation.js";
@@ -516,6 +522,8 @@ export interface AgentManagerOptions {
   costOutboxFile?: string;
   archiveServerId?: string;
   archiveLedgerDirectory?: string;
+  /** FU-349: approve-before-close store. Absent means no assignment is enforced. */
+  workAcceptance?: WorkAcceptanceStore;
   automaticInputNow?: () => number;
   /** Host-private registration journal, derived from the existing private home. Not a shared config key. */
   reportRegistryFile?: string;
@@ -2204,6 +2212,9 @@ export class AgentManager {
   private readonly restoreConfirmations = new AsyncLocalStorage<string>();
   private readonly archiveServerId?: string;
   private readonly archiveLedgerDirectory?: string;
+  readonly workAcceptance?: WorkAcceptanceStore;
+  /** Text of the last prompt the host sent per agent. Read once when that turn ends (FU-349 loop guard). */
+  private readonly hostPromptText = new Map<string, string>();
   private acceptingAgentRegistrations = true;
   private readonly automaticInputLimits: AutomaticInputLimits;
   private readonly costOutbox: SessionCostOutbox;
@@ -2213,6 +2224,7 @@ export class AgentManager {
     this.costOutbox = new SessionCostOutbox(options.costOutboxFile);
     this.archiveServerId = options.archiveServerId;
     this.archiveLedgerDirectory = options.archiveLedgerDirectory;
+    this.workAcceptance = options.workAcceptance;
     this.automaticInputLimits = new AutomaticInputLimits(options.automaticInputNow);
     this.trustedPlugins = resolveTrustedPlugins(options.trustedPlugins);
     this.trustedPlugins.setAutomaticInputGate((id) => {
@@ -4188,6 +4200,11 @@ export class AgentManager {
       const sequence = this.trustedPlugins.sequence(id);
       if (sequence.boot !== input.boot || sequence.humanAt !== input.humanAt)
         throw new Error("Native input changed; refresh before cleanup");
+      // FU-349: idle cleanup archives or closes a session, so it needs the same acceptance as every other route.
+      // A close without archive only retires the runtime; it checks but does not start the close transaction.
+      const acceptedItems = input.archive
+        ? await this.beginAcceptedClose(id)
+        : (await this.workAcceptance?.assertCanClose(id), []);
       const kind = input.archive ? "archive" : "close";
       let admissionHandle: TrustedOperationHandle | undefined;
       const requireCurrent = () => {
@@ -4225,6 +4242,7 @@ export class AgentManager {
               this.discardRetainedAgentState(id);
               if (!archived.internal) this.dispatchStoredAgentState(archived);
               await this.fireAgentArchived(id);
+              await this.finishAcceptedClose(acceptedItems);
             }
           } finally {
             this.idleCleanup.delete(id);
@@ -4402,6 +4420,80 @@ export class AgentManager {
     return result;
   }
 
+  /**
+   * FU-349: persist CLOSING before any archive effect. Returns the items to finish, or none when the
+   * session has no open assignment. Refuses (throws) when the result is not approved for its live candidate.
+   */
+  private async beginAcceptedClose(agentId: string): Promise<string[]> {
+    const store = this.workAcceptance;
+    if (!store) return [];
+    const assignments = await store.assertCanClose(agentId);
+    for (const assignment of assignments) await store.beginClose(assignment.item);
+    return assignments.map((assignment) => assignment.item);
+  }
+
+  private async finishAcceptedClose(items: string[]): Promise<void> {
+    for (const item of items) await this.workAcceptance?.finishClose(item);
+  }
+
+  /**
+   * FU-349: a finished turn that answered a Stop hook or goal prompt with no tool action is a repeat. Three in a row
+   * stop the loop: the worker goes to WAITING with its job id and the host cancels any turn the provider starts
+   * next. The job's completion event resumes it.
+   */
+  private observeStopRepeat(agentId: string): void {
+    const store = this.workAcceptance;
+    const hostPrompt = this.hostPromptText.get(agentId);
+    this.hostPromptText.delete(agentId);
+    if (!store?.forWorker(agentId)) return;
+    const items = this.timelineStore.getItems(agentId);
+    const promptIndex = items.findLastIndex((item) => item.type === "user_message");
+    const prompt = promptIndex >= 0 ? items[promptIndex] : undefined;
+    // Two signals: the prompt the host sent, and the user message the provider put in the timeline.
+    const stopHook =
+      (hostPrompt !== undefined && isStopHookPrompt(hostPrompt)) ||
+      (prompt?.type === "user_message" && isStopHookPrompt(prompt.text));
+    const toolAction = items.slice(promptIndex + 1).some((item) => item.type === "tool_call");
+    if (!store.recordStopRepeat(agentId, { stopHook, toolAction })) return;
+    const waiting = store.forWorker(agentId)?.waitingFor;
+    this.logger.warn(
+      { agentId, jobId: waiting?.jobId },
+      "Work acceptance stopped a Stop-hook loop with no tool action",
+    );
+    void this.trustedPlugins.daemon(() => this.cancelAgentRun(agentId)).catch(() => undefined);
+  }
+
+  /** FU-349: the job's completion event resumes the workers that wait for it. */
+  resumeWorkFromJob(jobId: string): string[] {
+    return this.workAcceptance?.resumeFromJob(jobId) ?? [];
+  }
+
+  /** FU-349: the host, not the model, stops a turn past the round limit or started while review is pending. */
+  private enforceWorkTurnLimit(agentId: string): void {
+    const refusal = this.workAcceptance?.recordTurn(agentId);
+    if (!refusal) return;
+    this.logger.warn({ agentId, code: refusal.code }, "Work acceptance cancelled a turn");
+    void this.trustedPlugins
+      .daemon(() => this.cancelAgentRun(agentId))
+      .catch((error) =>
+        this.logger.warn({ err: error, agentId }, "Failed to cancel a turn past its limit"),
+      );
+  }
+
+  /** FU-349: the session close route (kill_agent, app close) refuses unaccepted work. Runtime shutdown does not use it. */
+  async assertWorkCloseAllowed(agentId: string): Promise<void> {
+    await this.workAcceptance?.assertCanClose(agentId);
+  }
+
+  /** Who is asking: the owner (human input) or a lead session. A worker's own id is passed through for the self check. */
+  currentReviewer(callerAgentId?: string): Approver {
+    // The caller id is bound to the authenticated MCP connection; work_assign and work_submit trust it the same way.
+    const id = callerAgentId ?? this.agentCallers.getStore()?.agentId;
+    if (id) return { kind: "lead", id };
+    if (this.trustedPlugins.currentInputSource() === "human") return { kind: "owner" };
+    throw new WorkAcceptanceError("unauthorised", "Review needs a lead session or the owner.");
+  }
+
   async getArchiveProtection(
     agentId: string,
   ): Promise<{ confirmationRequired: boolean; reasons: string[] }> {
@@ -4461,6 +4553,8 @@ export class AgentManager {
     records = await this.requireRegistry().list();
     const record = records.find((candidate) => candidate.id === agentId);
     if (!record || record.archivedAt) return;
+    // FU-349: no route archives a worker whose result is not approved. Cancel records CANCELLED instead.
+    await this.workAcceptance?.assertCanClose(agentId);
     const workers = records.filter(
       (child) => !child.archivedAt && reportsToArchiveParent(record, child, this.archiveServerId),
     );
@@ -4534,6 +4628,7 @@ export class AgentManager {
     }
 
     const cascadePlan = admittedPlan ?? (await this.admitArchiveDescendants(agentId));
+    const accepted = await this.beginAcceptedClose(agentId);
     await this.registry.applySnapshot(agent, {
       internal: agent.internal,
     });
@@ -4547,6 +4642,7 @@ export class AgentManager {
     await this.closeAgentRuntime(agentId);
     await this.syncNativeArchiveState(stored.provider, stored.persistence, "archive");
     this.discardRetainedAgentState(agentId);
+    await this.finishAcceptedClose(accepted);
 
     await this.cascadeArchiveChildren(agentId, cascadePlan);
 
@@ -5302,11 +5398,13 @@ export class AgentManager {
       commandPayload("archive", { archivedAt }),
       operationHandle,
     );
+    const accepted = await this.beginAcceptedClose(agentId);
     const nextRecord = await this.persistArchivedRecord(record, { archivedAt });
 
     await this.syncNativeArchiveState(record.provider, record.persistence, "archive");
 
     this.discardRetainedAgentState(agentId);
+    await this.finishAcceptedClose(accepted);
     if (!nextRecord.internal) this.dispatchStoredAgentState(nextRecord);
 
     await this.fireAgentArchived(agentId);
@@ -5981,6 +6079,8 @@ export class AgentManager {
             [TRUSTED_OPERATION]: handle,
           });
         }
+        this.workAcceptance?.assertTurnAllowed(agentId);
+        this.hostPromptText.set(agentId, typeof prompt === "string" ? prompt : "");
         const existingAgent = this.requireSessionAgent(agentId);
         const eventCause = currentLeadEvent(
           this.trustedPlugins.currentInputSource(),
@@ -6214,6 +6314,7 @@ export class AgentManager {
             [TRUSTED_OPERATION]: handle,
           });
         }
+        this.workAcceptance?.assertTurnAllowed(agentId);
         const snapshot = this.requireAgent(agentId);
         if (
           snapshot.lifecycle !== "running" &&
@@ -9664,17 +9765,21 @@ export class AgentManager {
       };
     }
     const agent = this.agents.get(agentId);
-    if (event.type === "turn_started") this.automaticInputLimits.clear(agentId);
-    else if (event.type === "turn_failed")
+    if (event.type === "turn_started") {
+      this.automaticInputLimits.clear(agentId);
+      this.enforceWorkTurnLimit(agentId);
+    } else if (event.type === "turn_failed")
       this.automaticInputLimits.observe(agentId, {
         failed: [event.error, event.code, event.diagnostic].filter(Boolean).join(" "),
         account: this.automaticLimitAccount(agentId),
       });
-    else if (event.type === "turn_completed")
+    else if (event.type === "turn_completed") {
       this.automaticInputLimits.observe(agentId, {
         assistant: this.getLastAssistantMessageFromTimeline(this.timelineStore.getItems(agentId)),
         account: this.automaticLimitAccount(agentId),
       });
+      this.observeStopRepeat(agentId);
+    }
     this.logger.trace(
       {
         agentId,

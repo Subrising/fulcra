@@ -1,3 +1,4 @@
+import { agentMcpToken } from "./agent-mcp-token.js";
 import { registerArchiveReportCount } from "../archive-observation.js";
 import { archiveAgentCommand as archiveSafetyCommand } from "./lifecycle-command.js";
 import { mkdirSync } from "node:fs";
@@ -4832,7 +4833,7 @@ test("createAgent allows best-effort internal MCP when the provider session repo
   expect(client.lastConfig?.mcpServers?.paseo).toEqual({
     type: "http",
     url: `http://127.0.0.1:6767/mcp/agents?callerAgentId=${snapshot.id}`,
-    headers: { Authorization: "Bearer cap-token" },
+    headers: { Authorization: `Bearer ${agentMcpToken("cap-token", snapshot.id)}` },
   });
 
   rmSync(workdir, { recursive: true, force: true });

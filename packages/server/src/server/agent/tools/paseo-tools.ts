@@ -78,6 +78,7 @@ import {
   SteerUnavailableError,
 } from "../agent-prompt.js";
 import { FINAL_INPUT_CHECK } from "../agent-sdk-types.js";
+import { reviewWork } from "../work-review.js";
 import {
   recipientLimit,
   queuedAgentMessagesFor,
@@ -166,6 +167,8 @@ export interface PaseoToolHostDependencies {
    * Used for cwd/mode inheritance when agents spawn child agents.
    */
   callerAgentId?: string;
+  /** FU-349: false when the caller id came from an unverified request. Work tools then refuse. */
+  callerVerified?: boolean;
   /**
    * Optional resolver for session-bound speak handlers.
    * Used by hidden voice agents to narrate through daemon-managed TTS.
@@ -593,6 +596,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     providerSnapshotManager,
     daemonConfigStore,
     callerAgentId,
+    callerVerified = true,
     resolveSpeakHandler,
     resolveCallerContext,
     logger,
@@ -2467,6 +2471,190 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         structuredContent: ensureValidJson({ success: cancelled }),
       };
     },
+  );
+
+  // FULCRA(orchestration): FU-349 approve-before-close. The host keeps the assignment; the model only asks.
+  const workStore = () => {
+    const store = agentManager.workAcceptance;
+    if (!store) throw new Error("Approve-before-close is not configured on this daemon.");
+    return store;
+  };
+  // The caller id of an HTTP request is a claim until the agent's own token proves it. Work tools act on that id
+  // (lead, worker, reviewer), so they refuse an unproven one.
+  const verifiedWorkCaller = (): string | undefined => {
+    if (callerAgentId && !callerVerified)
+      throw new Error(
+        "Work tools need a verified agent identity. Restart the session to get its own token.",
+      );
+    return callerAgentId;
+  };
+  const workResult = (value: unknown) => ({
+    content: [],
+    structuredContent: ensureValidJson({ success: true, result: value as never }),
+  });
+  const workOutput = { success: z.boolean(), result: z.unknown() };
+
+  registerTool(
+    "work_assign",
+    {
+      title: "Open work assignment",
+      description:
+        "Record a worker's goal before work starts. The worker cannot be archived or closed until its result is verified and approved. Routine work is approved by its passing check; milestone work by the assigning lead or the owner; a creative look by the owner.",
+      inputSchema: {
+        item: z.string().min(1),
+        project: z.string().min(1),
+        workerId: z.string().min(1),
+        goal: z.string().min(1),
+        acceptance: z.array(z.string()).default([]),
+        approvalClass: z.enum(["routine", "milestone", "creative"]).default("routine"),
+        requestId: z.string().min(1),
+        turnLimit: z.number().int().positive().optional(),
+      },
+      outputSchema: workOutput,
+    },
+    async (input) => {
+      const worker =
+        agentManager.getAgent(input.workerId) ?? (await agentStorage.get(input.workerId));
+      return workResult(
+        await workStore().open({
+          ...input,
+          leadId: verifiedWorkCaller(),
+          cwd: worker?.cwd,
+        }),
+      );
+    },
+  );
+
+  registerTool(
+    "work_submit",
+    {
+      title: "Submit work result",
+      description:
+        "The worker submits its result and check evidence. Failed checks keep the worker running. A passing result waits for approval and starts no further turns.",
+      inputSchema: {
+        candidateKind: z.enum(["commit", "artifact"]),
+        candidateId: z.string().min(1),
+        candidatePath: z.string().optional(),
+        passed: z.boolean(),
+        checks: z.array(z.object({ command: z.string(), exitCode: z.number().int() })),
+        evidence: z.string(),
+      },
+      outputSchema: workOutput,
+    },
+    async (input) => {
+      const caller = verifiedWorkCaller();
+      if (!caller) throw new Error("Only the assigned worker can submit its result.");
+      const submitted = await workStore().submit(
+        caller,
+        { kind: input.candidateKind, id: input.candidateId, path: input.candidatePath },
+        { passed: input.passed, checks: input.checks, evidence: input.evidence },
+      );
+      return workResult(submitted);
+    },
+  );
+
+  registerTool(
+    "work_review",
+    {
+      title: "Review work result",
+      description:
+        "Approve or reject a submitted result. Approval names the exact candidate and evidence digest. Rejection sends the findings to the same worker with a new finish notice.",
+      inputSchema: {
+        item: z.string().min(1),
+        decision: z.enum(["approve", "reject"]),
+        candidateId: z.string().optional(),
+        evidenceDigest: z.string().optional(),
+        milestone: z.string().default("milestone"),
+        findings: z.string().optional(),
+      },
+      outputSchema: workOutput,
+    },
+    async (input) =>
+      workResult(
+        await reviewWork(
+          { agentManager, agentStorage, logger: childLogger },
+          input,
+          (verifiedWorkCaller(), agentManager.currentReviewer(callerAgentId)),
+        ),
+      ),
+  );
+
+  registerTool(
+    "work_wait",
+    {
+      title: "Declare the job a worker waits for",
+      description:
+        "The worker names the job it waits for (a CI run id or PC job id). If a Stop hook or goal repeats three times with no tool action, the host stops the loop and sets the worker to WAITING with this job id.",
+      inputSchema: { jobId: z.string().min(1) },
+      outputSchema: workOutput,
+    },
+    async ({ jobId }) => {
+      const caller = verifiedWorkCaller();
+      if (!caller) throw new Error("Only the assigned worker can declare its job.");
+      workStore().declareJob(caller, jobId);
+      return workResult({ jobId });
+    },
+  );
+
+  registerTool(
+    "work_job_done",
+    {
+      title: "Job completion event",
+      description:
+        "Report that a job finished. Workers waiting for it resume, and each gets the message as its next turn. Repeating the event changes nothing.",
+      inputSchema: { jobId: z.string().min(1), message: z.string().optional() },
+      outputSchema: workOutput,
+    },
+    async ({ jobId, message }) => {
+      verifiedWorkCaller();
+      const items = agentManager.resumeWorkFromJob(jobId);
+      for (const item of items) {
+        const worker = workStore().get(item)?.workerId;
+        if (worker)
+          await sendPromptToAgent({
+            agentManager,
+            agentStorage,
+            agentId: worker,
+            prompt: message ?? `Job ${jobId} finished. Continue ${item}.`,
+            logger: childLogger,
+          });
+      }
+      return workResult({ resumed: items });
+    },
+  );
+
+  registerTool(
+    "work_raise_limit",
+    {
+      title: "Raise a worker's turn limit",
+      description:
+        "The assigning lead raises the turn limit for the current round of a worker that reached it. The worker cannot raise its own limit.",
+      inputSchema: { item: z.string().min(1), turnLimit: z.number().int().positive() },
+      outputSchema: workOutput,
+    },
+    async ({ item, turnLimit }) =>
+      workResult(
+        await workStore().raiseTurnLimit(
+          item,
+          (verifiedWorkCaller(), agentManager.currentReviewer(callerAgentId)),
+          turnLimit,
+        ),
+      ),
+  );
+
+  registerTool(
+    "work_cancel",
+    {
+      title: "Cancel work assignment",
+      description:
+        "Cancel an assignment. This records CANCELLED, never DONE, and lets the worker be archived. Only the assigning lead or the owner can cancel.",
+      inputSchema: { item: z.string().min(1), reason: z.string().min(1) },
+      outputSchema: workOutput,
+    },
+    async ({ item, reason }) =>
+      workResult(
+        await workStore().cancel(item, agentManager.currentReviewer(callerAgentId), reason),
+      ),
   );
 
   registerTool(
