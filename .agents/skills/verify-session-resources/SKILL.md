@@ -8,7 +8,7 @@ Run checks in an isolated checkout. Keep the live daemon and user apps running.
 From `packages/server`, run:
 
 ```sh
-npx vitest run src/server/agent/session-resources.test.ts src/utils/tree-kill.test.ts --maxWorkers=1
+npx vitest run src/server/agent/session-resources.test.ts src/server/agent/windows-resource-processes.test.ts src/utils/tree-kill.test.ts --maxWorkers=1
 npx vitest run src/server/agent/agent-manager.test.ts --maxWorkers=1 -t 'stops a session-owned detached process|archiveAgent cascade closes|provider close failure retains'
 npm run typecheck
 npm run build
@@ -21,6 +21,9 @@ Keep fixture cleanup in `finally` blocks when changing these tests.
 
 Check live owners, unknown owners, recent records, reused PIDs, failed journals, and protected apps.
 Check pre-booted devices, repeated boots, shared use, changed manager identities, and the 30-minute interval.
+On Windows, verify native start ticks, open GPU receipts, missing policy, and bounded queue reads.
+Keep queue-managed Python engines and user apps. A large PowerShell process is not stop permission.
+Run native Windows scripts from saved `.ps1` files with stdin closed. Redact user names from evidence.
 The native terminal loader test must pass after shared process utility changes.
 Both server build targets must pass; type checks do not cover the script target.
 

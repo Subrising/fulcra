@@ -275,7 +275,8 @@ export class SessionResources {
             );
             if (existing) {
               // An external queue lease blocks stops, not ownership capture. Never transfer the owner.
-              existing.kind = resourceKind(row, existing.kind === "unbounded-log-tail");
+              existing.kind = resourceKind(row, existing.kind === "unbounded-log-tail" ||
+                this.logReaders.has(`${root.agentId}:${root.instanceId}`));
               continue;
             }
             ledger.processes.push({
@@ -339,6 +340,7 @@ export class SessionResources {
       ...record,
       ageSeconds: (this.now() - record.observedAt) / 1_000,
       rssKiB: row.rssKiB,
+      privateMemoryBytes: row.privateMemoryBytes,
     });
     const freshRows = await this.read();
     const fresh = freshRows.find((r) => r.pid === record.pid);
@@ -348,7 +350,7 @@ export class SessionResources {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
     }
-    await this.log({ action: signal, ...record, rssKiB: fresh.rssKiB });
+    await this.log({ action: signal, ...record, rssKiB: fresh.rssKiB, privateMemoryBytes: fresh.privateMemoryBytes });
     return "signaled";
   }
   private async stopProcesses(

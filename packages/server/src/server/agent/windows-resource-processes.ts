@@ -19,7 +19,7 @@ if ($PolicyPath -and (Test-Path -LiteralPath $PolicyPath)) {
     if ($policyItem.Length -gt 65536) { throw 'Policy too large' }
     $policy = Get-Content -LiteralPath $PolicyPath -Raw | ConvertFrom-Json
     $directory = [string]$policy.queueReceiptDirectory
-    if ($policy.version -ne 1 -or $directory -notmatch '^[a-zA-Z]:\' -or $directory -match '(?i)(^|\)(Games|Videos|Steam)(\|$)|song-studio|video-studio') { throw 'Invalid queue policy' }
+    if ($policy.version -ne 1 -or $directory -notmatch '^[a-zA-Z]:\\' -or $directory -match '(?i)(^|\\)(Games|Videos|Steam)(\\|$)|song-studio|video-studio') { throw 'Invalid queue policy' }
     $item = Get-Item -LiteralPath $directory
     if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Uncertain queue directory' }
     $queueState = 'clear'
@@ -82,5 +82,5 @@ export async function readWindowsResourceProcesses(policyFile?: string): Promise
 
 export function protectedSessionDirectory(cwd: string, title?: string | null): boolean {
   return /\b(?:Song|Video) Studio\b/i.test(title ?? "") || /(?:^|[\\/])(?:song-studio|video-studio)(?:[\\/]|$)/i.test(cwd) ||
-    /^E:[\\/](?:Games|Videos|Steam)(?:[\\/]|$)/i.test(cwd);
+    /^[A-Za-z]:[\\/](?:Games|Videos|Steam)(?:[\\/]|$)/i.test(cwd);
 }

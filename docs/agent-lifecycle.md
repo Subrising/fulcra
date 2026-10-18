@@ -48,7 +48,7 @@ the unfinished turn is lost.
 
 ### Session resources
 
-The daemon records observed Claude and Codex child processes on macOS. Each record binds the
+The daemon records observed Claude and Codex child processes on macOS and Windows. Each record binds the
 child PID and birth time to its session generation. Close and archive capture the tree before
 the provider exits. They then end retained children, including detached children whose parent
 has exited. A failed cleanup retains the ownership record for retry.
@@ -67,8 +67,21 @@ scripts must shut down their own simulators with an exit handler. Processes that
 samples without an observed parent link also stay unowned. Existing unrecorded leftovers require
 an owner check; this change does not adopt them.
 
-Daemon shutdown retains the existing detached-job policy. Windows process collection remains
-disabled until its executable and service protections have native verification.
+Daemon shutdown retains the existing detached-job policy.
+
+Windows collection uses process names, parent IDs, native start ticks, resident memory, and private
+memory. It reads no process arguments or environments. A private
+`runtime/session-resource-policy.json` supplies the host's GPU queue receipt directory:
+
+```json
+{ "version": 1, "queueReceiptDirectory": "D:\\queue\\jobs" }
+```
+
+Missing or unreadable queue proof keeps processes. An open queue job blocks Windows stops.
+Queue-managed Python engines remain owned by the queue, including between jobs. The queue controls
+their shutdown. User apps and protected studio directories stay protected. Log-tail observations
+and PowerShell private memory above 2 GiB add cleanup reasons. They never override live owners,
+process birth checks, or queue protection. Queue metadata reads have size limits.
 
 ### Quiet MCP configuration refresh
 
