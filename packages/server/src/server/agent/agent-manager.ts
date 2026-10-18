@@ -2351,19 +2351,23 @@ export class AgentManager {
   private createSessionResources(file?: string): SessionResources | undefined {
     if (!file) return undefined;
     return new SessionResources({
-        file, logger: this.logger,
-        roots: () => [...this.agents.values()].flatMap((agent) => {
+      file,
+      logger: this.logger,
+      roots: () =>
+        [...this.agents.values()].flatMap((agent) => {
           const pid = agent.session.getProcessId?.();
-          return pid && agent.instanceId ? [{ agentId: agent.id, instanceId: agent.instanceId, pid }] : [];
+          return pid && agent.instanceId
+            ? [{ agentId: agent.id, instanceId: agent.instanceId, pid }]
+            : [];
         }),
-        ownerState: (id) => {
-          if (!this.acceptingAgentRegistrations) return "unknown";
-          if (this.agents.has(id)) return "live";
-          const record = this.registry?.getCached(id);
-          if (!record) return "unknown";
-          return record.archivedAt || record.lastStatus === "closed" ? "inactive" : "live";
-        },
-      });
+      ownerState: (id) => {
+        if (!this.acceptingAgentRegistrations) return "unknown";
+        if (this.agents.has(id)) return "live";
+        const record = this.registry?.getCached(id);
+        if (!record) return "unknown";
+        return record.archivedAt || record.lastStatus === "closed" ? "inactive" : "live";
+      },
+    });
   }
 
   private configurePaseoTools(options: AgentManagerOptions): void {
@@ -4542,8 +4546,11 @@ export class AgentManager {
     await nativeDispatch(() => agent.session.close());
     if (this.acceptingAgentRegistrations && agent.instanceId) {
       const instanceId = agent.instanceId;
-      await this.sessionResources?.closeOwner(agentId, instanceId,
-        () => this.agents.get(agentId) === agent && agent.instanceId === instanceId);
+      await this.sessionResources?.closeOwner(
+        agentId,
+        instanceId,
+        () => this.agents.get(agentId) === agent && agent.instanceId === instanceId,
+      );
     }
     this.cancelRunningProviderSubagents(agentId);
     const closedAgent = await this.prepareAgentForClosure(agent, "agent closed");
@@ -8419,8 +8426,14 @@ export class AgentManager {
     if (event.type === "timeline" && event.item.type === "tool_call" && agent.instanceId) {
       const pid = agent.session.getProcessId?.();
       if (pid) {
-        try { await this.sessionResources?.observeTool({ agentId: agent.id, instanceId: agent.instanceId, pid }, event.item); }
-        catch { this.logger.warn({ agentId: agent.id }, "Could not record session simulator ownership"); }
+        try {
+          await this.sessionResources?.observeTool(
+            { agentId: agent.id, instanceId: agent.instanceId, pid },
+            event.item,
+          );
+        } catch {
+          this.logger.warn({ agentId: agent.id }, "Could not record session simulator ownership");
+        }
       }
     }
     if (event.type === "provider_subagent") {

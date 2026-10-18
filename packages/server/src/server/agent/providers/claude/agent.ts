@@ -3262,7 +3262,9 @@ class ClaudeAgentSession implements AgentSession {
 
   getProcessId(): number | null {
     const child = this.currentChild;
-    return child && child.exitCode === null && child.signalCode === null ? child.pid ?? null : null;
+    return child && child.exitCode === null && child.signalCode === null
+      ? (child.pid ?? null)
+      : null;
   }
 
   /**
