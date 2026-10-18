@@ -70,7 +70,8 @@ export function parseWindowsResourceSnapshot(output: string): ResourceProcess[] 
         command: row.Name,
         rssKiB: row.WorkingSet64 / 1024,
         privateMemoryBytes: row.PrivateMemorySize64,
-        protectionReason: snapshot.queueState === "clear" ? undefined : `queue-${snapshot.queueState}`,
+        protectionReason:
+          snapshot.queueState === "clear" ? undefined : `queue-${snapshot.queueState}`,
       },
     ];
   });
