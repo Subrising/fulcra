@@ -184,7 +184,7 @@ import {
   type ResolvedProviderLaunch,
 } from "../../provider-launch-config.js";
 import { withTimeout } from "../../../../utils/promise-timeout.js";
-import { terminateWithTreeKill } from "../../../../utils/tree-kill.js";
+import { readProcessTreeBirths, terminateWithTreeKill } from "../../../../utils/tree-kill.js";
 import { execCommand } from "../../../../utils/spawn.js";
 import { composeSystemPromptParts } from "../../system-prompt.js";
 
@@ -1574,6 +1574,9 @@ export function readEventIdentifiers(message: SDKMessage): EventIdentifiers {
     ]),
   };
 }
+
+// A child born this long after the Claude process itself is work started during the session.
+const SLEEP_CHILD_GRACE_MS = 30_000;
 
 export class ClaudeAgentClient implements AgentClient {
   // Update-7 W3: a new session without a mode takes Claude's own default, never its caller's.
@@ -3197,22 +3200,37 @@ class ClaudeAgentSession implements AgentSession {
    * queried yet. Returns false, and changes nothing, when the session is not idle.
    */
   async sleep(): Promise<boolean> {
-    if (this.closed || !this.query || this.queryStarting) return false;
-    if (
-      this.turnState !== "idle" ||
-      this.activeForegroundTurnId ||
-      this.autonomousTurn ||
-      this.cancelCurrentTurn ||
-      this.pendingPermissions.size > 0 ||
-      this.backgroundWork.snapshot() !== null ||
-      this.taskProtocolSource.hasRunningTasks() ||
-      this.queryRestartNeeded
-    ) {
+    if (this.sleepBlocked()) return false;
+    const oldQuery = this.query!;
+    // Claude Monitor watches, nohup children and other tasks that Fulcra does not track live in the process tree.
+    // A process born well after Claude itself is such work: do not stop it. An unreadable tree is not safe either.
+    const tree = this.currentChild ? await readProcessTreeBirths(this.currentChild) : null;
+    // The reads above awaited: the session may have taken work or slept meanwhile.
+    if (this.sleepBlocked() || this.query !== oldQuery) return false;
+    if (!tree) {
+      this.logger.info(
+        { agentId: this.agentId, reason: "process tree unreadable" },
+        "agent.sleep.skipped",
+      );
       return false;
     }
-    const oldQuery = this.query;
+    const late = tree.descendants.filter(
+      (entry) => entry.bornMs - tree.rootBornMs > SLEEP_CHILD_GRACE_MS,
+    );
+    if (late.length > 0) {
+      this.logger.info(
+        { agentId: this.agentId, reason: "child process running", pids: late.map((e) => e.pid) },
+        "agent.sleep.skipped",
+      );
+      return false;
+    }
     const oldInput = this.input;
     const retiredChild = this.childProcess;
+    // Only the processes that exist now belong to this sleep. A process that starts while the awaits below run is
+    // the session waking up and must stay.
+    const retiring = new Set(this.liveChildren);
+    if (retiredChild) retiring.add(retiredChild);
+    for (const child of retiring) this.liveChildren.delete(child);
     // Detach first, as the restart path in ensureQuery does: the pump and the exit handler must see a
     // retired query, not a crash.
     this.query = null;
@@ -3223,9 +3241,40 @@ class ClaudeAgentSession implements AgentSession {
     oldInput?.end();
     oldQuery.close?.();
     await this.awaitWithTimeout(oldQuery.return?.(), "sleep query return");
-    if (retiredChild) await this.endProcessTree(retiredChild);
-    await this.endLeftoverChildren();
+    await Promise.all(
+      [...retiring].map((child) =>
+        this.endProcessTree(child).catch(() => {
+          /* process may already be dead */
+        }),
+      ),
+    );
+    // A message, listCommands() or a held send started a new process while the old one ended: the session is awake.
+    if (this.query || this.queryStarting) {
+      this.sleptAt = null;
+      return false;
+    }
     return true;
+  }
+
+  private get currentChild(): ChildProcess | null {
+    return this.childProcess;
+  }
+
+  // The session is idle with a live query and nothing in flight.
+  private sleepBlocked(): boolean {
+    return (
+      this.closed ||
+      !this.query ||
+      Boolean(this.queryStarting) ||
+      this.turnState !== "idle" ||
+      Boolean(this.activeForegroundTurnId) ||
+      Boolean(this.autonomousTurn) ||
+      Boolean(this.cancelCurrentTurn) ||
+      this.pendingPermissions.size > 0 ||
+      this.backgroundWork.snapshot() !== null ||
+      this.taskProtocolSource.hasRunningTasks() ||
+      this.queryRestartNeeded
+    );
   }
 
   async listCommands(): Promise<AgentSlashCommand[]> {

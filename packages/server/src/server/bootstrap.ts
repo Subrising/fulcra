@@ -1656,7 +1656,8 @@ export async function createPaseoDaemon(
   // FU-362: an idle session stops its provider process after this many minutes; a held or queued message wakes it.
   agentManager.configureIdleSleep({
     minutes: () => config.idleSleepMinutes ?? 20,
-    providers: () => config.idleSleepProviders ?? ["claude"],
+    // config.ts sets the default provider list; a config built without it sleeps nothing.
+    providers: () => config.idleSleepProviders ?? [],
     deliveryPending: (agentId) =>
       heldSends.pending(agentId) > 0 || queuedAgentMessages.pending(agentId) > 0,
   });
@@ -2298,15 +2299,16 @@ export async function createPaseoDaemon(
     // Freeze both ingress and registration before taking the agent closure snapshot.
     wsServer?.prepareForShutdown();
     agentManager.prepareForShutdown();
-    // A clean stop writes its own record: remove the crash-safe copy first (revive-on-restart.ts).
-    await liveRecorder
-      ?.stop()
-      .catch((err) => logger.warn({ err }, "Could not stop the live record"));
     // FULCRA(orchestration): the next boot loads these sessions again (revive-on-restart.ts).
     await recordOpenSessions({
       paseoHome: config.paseoHome,
       agents: agentManager.listAgents(),
     }).catch((err) => logger.warn({ err }, "Could not record the open sessions for the next boot"));
+    // The clean record is on disk: now remove the crash-safe copy. A crash between the two writes still leaves a
+    // record, and boot prefers the clean one.
+    await liveRecorder
+      ?.stop()
+      .catch((err) => logger.warn({ err }, "Could not stop the live record"));
     await withDetachedJobsPreserved(() =>
       trustedPlugins.shutdownClosure(() => closeAllAgents(logger, agentManager, agentStorage)),
     );

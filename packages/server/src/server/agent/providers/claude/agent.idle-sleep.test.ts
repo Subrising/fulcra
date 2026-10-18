@@ -5,13 +5,23 @@ import type {
   Query,
   SpawnOptions as ClaudeSpawnOptions,
 } from "@anthropic-ai/claude-agent-sdk";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+
+// The stubs have no real pid. The tree reader is replaced; the default tree is empty and readable.
+const treeReader = vi.hoisted(() => ({ read: vi.fn() }));
+vi.mock("../../../../utils/tree-kill.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../utils/tree-kill.js")>()),
+  readProcessTreeBirths: treeReader.read,
+}));
 
 import { createTestLogger } from "../../../../test-utils/test-logger.js";
 import * as spawnUtils from "../../../../utils/spawn.js";
 import type { AgentStreamEvent } from "../../agent-sdk-types.js";
 import { ClaudeAgentClient } from "./agent.js";
 import type { ClaudeQueryInput } from "./query.js";
+
+// When set, the next query return() waits for it, so a test can act while sleep() ends the old process.
+let returnGate: Promise<void> | null = null;
 
 function createQueryMock(events: unknown[]): Query {
   let index = 0;
@@ -25,6 +35,9 @@ function createQueryMock(events: unknown[]): Query {
       return { done: true, value: undefined };
     }),
     return: vi.fn(async () => {
+      const gate = returnGate;
+      returnGate = null;
+      if (gate) await gate;
       ended();
       return { done: true, value: undefined };
     }),
@@ -120,6 +133,11 @@ function fixture(turns: unknown[][]) {
 
 describe("Claude idle sleep", () => {
   afterEach(() => vi.restoreAllMocks());
+  beforeEach(() => {
+    returnGate = null;
+    treeReader.read.mockReset();
+    treeReader.read.mockResolvedValue({ rootBornMs: 0, descendants: [] });
+  });
 
   test("sleep ends the process, keeps the session, and the next turn resumes the same Claude session", async () => {
     const f = fixture([TURN_EVENTS]);
@@ -168,6 +186,69 @@ describe("Claude idle sleep", () => {
     const session = await f.client.createSession({ provider: "claude", cwd: process.cwd() });
     try {
       expect(await session.sleep?.()).toBe(false);
+    } finally {
+      await session.close();
+    }
+  });
+  test("a message that arrives while sleep() ends the old process keeps its new process", async () => {
+    const f = fixture([TURN_EVENTS]);
+    const session = await f.client.createSession({ provider: "claude", cwd: process.cwd() });
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    try {
+      await session.run("first");
+      await vi.waitFor(() => expect(f.children).toHaveLength(1));
+      let release: () => void = () => undefined;
+      returnGate = new Promise<void>((resolve) => (release = resolve));
+      const sleeping = session.sleep!();
+      // sleep() has detached the old query once it calls return().
+      await vi.waitFor(() => expect(returnGate).toBeNull());
+      // While sleep() waits for the old query to return, a message starts a new process.
+      const second = session.run("second");
+      await vi.waitFor(() => expect(f.children).toHaveLength(2));
+      release();
+      expect(await sleeping).toBe(false);
+      await second;
+      expect(f.children[0].killSignals.length).toBeGreaterThan(0);
+      expect(f.children[1].killSignals).toEqual([]);
+      expect(events.some((event) => event.type === "turn_failed")).toBe(false);
+      expect(session.isSleeping?.()).toBe(false);
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("a process born long after Claude blocks sleep; one born at start does not", async () => {
+    const f = fixture([TURN_EVENTS]);
+    const session = await f.client.createSession({ provider: "claude", cwd: process.cwd() });
+    try {
+      await session.run("first");
+      await vi.waitFor(() => expect(f.children).toHaveLength(1));
+      treeReader.read.mockResolvedValue({
+        rootBornMs: 1_000_000,
+        descendants: [{ pid: 4242, bornMs: 1_000_000 + 31_000 }],
+      });
+      expect(await session.sleep?.()).toBe(false);
+      expect(f.children[0].killSignals).toEqual([]);
+      expect(session.isSleeping?.()).toBe(false);
+      treeReader.read.mockResolvedValue({
+        rootBornMs: 1_000_000,
+        descendants: [{ pid: 4242, bornMs: 1_000_000 + 5_000 }],
+      });
+      expect(await session.sleep?.()).toBe(true);
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("an unreadable process tree blocks sleep", async () => {
+    const f = fixture([TURN_EVENTS]);
+    const session = await f.client.createSession({ provider: "claude", cwd: process.cwd() });
+    try {
+      await session.run("first");
+      treeReader.read.mockResolvedValue(null);
+      expect(await session.sleep?.()).toBe(false);
+      expect(f.children[0].killSignals).toEqual([]);
     } finally {
       await session.close();
     }

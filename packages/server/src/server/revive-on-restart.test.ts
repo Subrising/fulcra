@@ -602,10 +602,24 @@ describe("live record after an unclean stop", () => {
       ],
     });
     await writeLive(f.home, "2026-10-11T09:28:00Z");
-    const result = await f.run();
+    // The live record lists RUNNING as cut off, but it can be 30 s old: only the boot's own reading counts.
+    const result = await f.run([RUNNING]);
     expect(result.reopened.sort()).toEqual([IDLE, RUNNING].sort());
     expect(result.continued).toEqual([RUNNING]);
     await expect(stat(path.join(f.home, REVIVE_LIVE_FILE))).rejects.toThrow();
+  });
+
+  test("the live record's own list of running turns is not used", async () => {
+    const f = await fixture({
+      records: [
+        { id: IDLE, updatedAt: "2026-10-11T09:20:00Z" },
+        { id: RUNNING, updatedAt: "2026-10-11T09:20:00Z" },
+      ],
+    });
+    await writeLive(f.home, "2026-10-11T09:28:00Z");
+    const result = await f.run();
+    expect(result.reopened.sort()).toEqual([IDLE, RUNNING].sort());
+    expect(result.continued).toEqual([]);
   });
 
   test("a session used long after the live record is not reopened", async () => {

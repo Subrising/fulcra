@@ -323,7 +323,9 @@ export async function reviveAfterRestart(
   deps.onSessionsReady?.();
   const interrupted = [
     ...new Set([
-      ...(stopRecord?.interruptedIds ?? []).filter(notLaterThanStop),
+      // The live record can be older than the crash: a turn it lists may have ended since. Only the boot's own
+      // reading of turns still running (crashInterrupted) is current.
+      ...(liveRecord ? [] : (stopRecord?.interruptedIds ?? [])).filter(notLaterThanStop),
       ...input.crashInterrupted,
     ]),
   ].filter(eligible);
