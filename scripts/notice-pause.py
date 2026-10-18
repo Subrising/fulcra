@@ -210,20 +210,44 @@ class Gate:
         self.store = self.root / 'paused-notices'
         self.run = run
 
+    def route_hint(self, identifier):
+        policy = read_policy(self.policy)
+        roles = policy.get('roles', {})
+        resolved = roles.get(identifier[5:]) if identifier.startswith('role:') else identifier
+        routes = policy.get('noticeRoutes', {})
+        if not isinstance(routes, dict):
+            raise ValueError('Invalid notice routes. No notice was sent.')
+        matches = [(key, value) for key, value in routes.items()
+                   if resolved and key.startswith(resolved)]
+        if len(matches) != 1:
+            return ''
+        target_id, route = matches[0]
+        if not isinstance(route, dict) or any(
+            not isinstance(route.get(key), str) or not route[key].strip()
+            for key in ['host', 'route']
+        ):
+            raise ValueError('Invalid notice route. No notice was sent.')
+        return f" Target {target_id} is on {route['host']}. Use {route['route']}."
+
     def target(self, cli, endpoint, identifier):
         result = self.run(cli, [*endpoint, 'ls', '-g', '--json'], capture_output=True, text=True, timeout=60)
         if result.returncode:
-            raise RuntimeError('Cannot resolve the notice target. No notice was sent.')
+            raise RuntimeError('Cannot list sessions on the selected daemon (exit '
+                               + str(result.returncode) + ').'
+                               + self.route_hint(identifier) + ' No notice was sent.')
         rows = json.loads(result.stdout)
         if not isinstance(rows, list):
             raise ValueError('Unknown session list schema')
-        if identifier == 'role:main-assistant':
-            role = read_policy(self.policy).get('roles', {}).get('main-assistant')
+        if identifier.startswith('role:'):
+            role = read_policy(self.policy).get('roles', {}).get(identifier[5:])
             matches = [row for row in rows if row['id'] == role]
         else:
             matches = [row for row in rows if row['id'].startswith(identifier)]
         if len(matches) != 1:
-            raise TargetUnavailableError('The notice target must resolve to one active session')
+            if not matches:
+                raise TargetUnavailableError('The target is absent from the selected daemon.'
+                                             + self.route_hint(identifier) + ' No notice was sent.')
+            raise TargetUnavailableError('The notice target is ambiguous. Use its full session ID. No notice was sent.')
         row = matches[0]
         if not isinstance(row.get('provider'), str):
             raise ValueError('Unknown notice provider')

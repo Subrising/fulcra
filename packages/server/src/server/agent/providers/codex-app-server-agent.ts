@@ -5577,6 +5577,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   async close(): Promise<void> {
+    await this.disposeClient();
     this.closed = true;
     this.clearPendingPermissions();
     this.pendingSubAgentNotificationsByThreadId.clear();
@@ -5585,7 +5586,6 @@ export class CodexAppServerAgentSession implements AgentSession {
     this.activeClientMessageId = null;
     this.pendingForegroundTurnIdentification?.resolve(null);
     this.pendingForegroundTurnIdentification = null;
-    await this.disposeClient();
     this.currentThreadId = null;
   }
 
@@ -5614,11 +5614,11 @@ export class CodexAppServerAgentSession implements AgentSession {
 
   private async disposeClient(): Promise<void> {
     const client = this.client;
-    this.connectionState = "disconnected";
-    this.currentTurnId = null;
     if (client) {
       await client.dispose();
     }
+    this.connectionState = "disconnected";
+    this.currentTurnId = null;
     this.client = null;
   }
 

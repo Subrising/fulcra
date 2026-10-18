@@ -350,16 +350,20 @@ export class CodexAppServerClient {
   }
 
   async dispose(): Promise<void> {
-    this.disposed = true;
-    this.unexpectedTerminationHandler = null;
-    this.rl.close();
-    this.rejectPending(new Error("Codex app-server client is closed"));
-    try {
-      this.child.stdin.end();
-    } catch {
-      // ignore
-    }
     const result = await terminateWithTreeKill(this.child, {
+      retainDescendants: true,
+      beforeSignal: () => {
+        // Failed identity discovery leaves the transport available for a close retry.
+        this.disposed = true;
+        this.unexpectedTerminationHandler = null;
+        this.rl.close();
+        this.rejectPending(new Error("Codex app-server client is closed"));
+        try {
+          this.child.stdin.end();
+        } catch {
+          /* Ignore a closed pipe. */
+        }
+      },
       gracefulTimeoutMs: APP_SERVER_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
       forceTimeoutMs: APP_SERVER_FORCE_SHUTDOWN_TIMEOUT_MS,
       onForceSignal: () => {
