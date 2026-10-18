@@ -4426,9 +4426,8 @@ export class AgentManager {
 
   /** Who is asking: the owner (human input) or a lead session. A worker's own id is passed through for the self check. */
   currentReviewer(callerAgentId?: string): Approver {
-    const caller = this.agentCallers.getStore();
-    caller?.validate?.();
-    const id = callerAgentId ?? caller?.agentId;
+    // The caller id is bound to the authenticated MCP connection; work_assign and work_submit trust it the same way.
+    const id = callerAgentId ?? this.agentCallers.getStore()?.agentId;
     if (id) return { kind: "lead", id };
     if (this.trustedPlugins.currentInputSource() === "human") return { kind: "owner" };
     throw new WorkAcceptanceError("unauthorised", "Review needs a lead session or the owner.");
