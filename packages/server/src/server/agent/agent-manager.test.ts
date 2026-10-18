@@ -13610,6 +13610,7 @@ async function automaticPermissionRun(
   }
   const attention: string[] = [];
   const auditLogger = logger.child({});
+  auditLogger.level = "info";
   vi.spyOn(auditLogger, "child").mockReturnValue(auditLogger);
   const audit = vi.spyOn(auditLogger, "info");
   const manager = new AgentManager({
@@ -13645,9 +13646,14 @@ async function automaticPermissionRun(
       return admitted ? "allow" : "ask";
     });
   });
-  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
-    workspaceId: undefined,
-  });
+  const agent = await manager.createAgent(
+    { provider: "codex", cwd: workdir, title: "Permission audit fixture" },
+    undefined,
+    {
+      workspaceId: undefined,
+    },
+  );
+  await manager.setTitle(agent.id, "Current permission job");
   const seen: string[] = [];
   let maxPending = 0;
   const unsubscribe = manager.subscribe((event) => {
@@ -13681,6 +13687,7 @@ test("FIX-8 Z: a permission a trusted plugin allows is answered before it is sur
   expect(run.audit).toHaveBeenCalledWith(
     expect.objectContaining({
       event: "permission.decision",
+      sessionName: "Current permission job",
       agentId: run.agentId,
       tool: "mcp__docs__search",
       decision: "allow",
@@ -13736,6 +13743,7 @@ test("FU-339: a delivered deny writes a session and rule record", async () => {
   expect(run.audit).toHaveBeenCalledWith(
     expect.objectContaining({
       event: "permission.decision",
+      sessionName: "Current permission job",
       agentId: run.agentId,
       requestId: "perm-auto",
       tool: "mcp__docs__search",

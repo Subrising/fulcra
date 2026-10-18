@@ -14,13 +14,14 @@ export function permissionAudit(
   decision: "allow" | "deny" | "defer" | "failed",
   rule: string,
   source: string,
+  sessionName?: string | null,
 ) {
   return {
     event: "permission.decision",
     time: new Date().toISOString(),
     agentId: agent.id,
     sessionId: agent.runtimeInfo?.sessionId ?? null,
-    sessionName: agent.title ?? null,
+    sessionName: sessionName ?? agent.title ?? null,
     requestId,
     tool: request?.name ?? null,
     target: {

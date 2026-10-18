@@ -6605,6 +6605,7 @@ export class AgentManager {
               "deny",
               "trusted-permission-guard",
               auditSource,
+              this.registry?.getCached(agent.id)?.title ?? agent.config.title,
             ),
             "Permission response refused",
           );
@@ -6631,6 +6632,7 @@ export class AgentManager {
                 "failed",
                 "permission-response",
                 auditSource,
+                this.registry?.getCached(agent.id)?.title ?? agent.config.title,
               ),
               "Permission response failed",
             );
@@ -6646,6 +6648,7 @@ export class AgentManager {
               response.behavior === "deny" ? "deny" : "allow",
               "permission-response",
               auditSource,
+              this.registry?.getCached(agent.id)?.title ?? agent.config.title,
             ),
             "Permission response delivered",
           );
@@ -9036,6 +9039,7 @@ export class AgentManager {
           decision,
           "trusted-automatic-permission",
           "daemon",
+          this.registry?.getCached(agent.id)?.title ?? agent.config.title,
         ),
         "Automatic permission decision",
       );
@@ -10052,6 +10056,7 @@ export class AgentManager {
             decision.action === "accept" ? "allow" : "deny",
             "computer-use-" + decision.source,
             "daemon",
+            this.registry?.getCached(agent.id)?.title ?? agent.config.title,
           );
           this.logger.info(
             {
@@ -10073,7 +10078,15 @@ export class AgentManager {
           const eligible = allowed && this.currentComputerUseSession(agentId, session) === agent;
           if (!eligible)
             this.logger.info(
-              permissionAudit(agent, request, request.id, "defer", "computer-use-policy", "daemon"),
+              permissionAudit(
+                agent,
+                request,
+                request.id,
+                "defer",
+                "computer-use-policy",
+                "daemon",
+                this.registry?.getCached(agent.id)?.title ?? agent.config.title,
+              ),
               "Computer Use automatic approval refused",
             );
           return eligible;
