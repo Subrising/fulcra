@@ -23,27 +23,8 @@ async function testedCI(sha, api) {
   const checks = await api(
     `/commits/${sha}/check-runs?check_name=ci-passed&filter=latest&per_page=100`,
   );
-  const gate = selectPassedCI(checks, sha);
-  const source =
-    /^https:\/\/github\.com\/Subrising\/fulcra\/actions\/runs\/([0-9]+)\/job\/[0-9]+$/.exec(
-      gate.details_url,
-    );
-  if (!source) throw new Error("Missing CI workflow provenance");
-  const ci = await api(`/actions/runs/${source[1]}`);
-  if (
-    ci.path !== ".github/workflows/ci.yml" ||
-    ci.event !== "pull_request" ||
-    ci.head_sha !== sha ||
-    ci.id !== Number(source[1]) ||
-    !Number.isSafeInteger(ci.run_attempt) ||
-    ci.run_attempt < 1 ||
-    ci.status !== "completed" ||
-    ci.conclusion !== "success" ||
-    ci.repository.full_name !== repository
-  ) {
-    throw new Error("Wrong CI workflow");
-  }
-  return ci;
+  const { run } = await selectPassedCI(checks, sha, api);
+  return run;
 }
 
 export async function proveMerge(run, api) {

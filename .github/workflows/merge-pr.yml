@@ -17,6 +17,7 @@ permissions:
   contents: write
   pull-requests: write
   checks: read
+  actions: read
 
 concurrency:
   group: merge-pr-main
@@ -69,8 +70,10 @@ jobs:
           gh api "repos/$GH_REPO/commits/$SHA/check-runs?check_name=ci-passed&filter=latest&per_page=100" > "$RUNNER_TEMP/checks.json"
           node --input-type=module <<'NODE'
           import { readFileSync } from "node:fs";
+          import { execFileSync } from "node:child_process";
           const { selectPassedCI } = await import(`${process.env.RUNNER_TEMP}/ci-check.mjs`);
-          selectPassedCI(JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/checks.json`, "utf8")), process.env.SHA);
+          const api = async (route) => JSON.parse(execFileSync("gh", ["api", `repos/${process.env.GH_REPO}${route}`], { encoding: "utf8" }));
+          await selectPassedCI(JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/checks.json`, "utf8")), process.env.SHA, api);
           NODE
           node --input-type=module <<'NODE'
           import { readFileSync } from 'node:fs';

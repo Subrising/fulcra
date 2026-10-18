@@ -479,6 +479,7 @@ function proofFixture() {
     },
     head: { commit: { tree: { sha: tree } } },
     checks: {
+      total_count: 1,
       check_runs: [
         {
           name: "ci-passed",
@@ -530,6 +531,7 @@ test("tested-tree proof retains successful CI provenance beside a cancelled run"
     conclusion: "cancelled",
     details_url: "https://github.com/Subrising/fulcra/actions/runs/999/job/123",
   });
+  fixture.data.checks.total_count = 2;
   const proof = await proveMerge(fixture.run, fixture.api);
   assert.equal(proof.ciRunId, 456);
   assert.equal(proof.ciAttempt, 1);
@@ -931,7 +933,7 @@ test("merge workflow limits writes and authenticates check reads", () => {
   const source = mergeWorkflow();
   assert.match(
     source,
-    /permissions:\n  contents: write\n  pull-requests: write\n  checks: read\n\n/,
+    /permissions:\n  contents: write\n  pull-requests: write\n  checks: read\n  actions: read\n\n/,
   );
   assert.equal((source.match(/permissions:/g) ?? []).length, 1);
   assert.match(source, /persist-credentials: false/);
@@ -975,7 +977,7 @@ test("merge workflow rejects unsafe callers, PRs, CI results, and identities", (
       `#!/usr/bin/env node
 const fs=require('node:fs'); const f=JSON.parse(fs.readFileSync(process.env.FIXTURE)); const a=process.argv.slice(2);
 fs.appendFileSync(process.env.CALLS,JSON.stringify(a)+'\\n');
-console.log(JSON.stringify(a.includes('PUT') ? f.merged : a.some(x=>x.includes('/check-runs')) ? f.checks : a.some(x=>x.includes('/commits/')) ? f.commit : f.pr));
+console.log(JSON.stringify(a.includes('PUT') ? f.merged : a.some(x=>x.includes('/check-runs')) ? f.checks : a.some(x=>x.includes('/actions/runs/')) ? (f.runs?.[a.at(-1).split('/').at(-1)] ?? f.ci) : a.some(x=>x.includes('/commits/')) ? f.commit : f.pr));
 `,
     );
     const sha = "a".repeat(40);
@@ -988,6 +990,7 @@ console.log(JSON.stringify(a.includes('PUT') ? f.merged : a.some(x=>x.includes('
         title: "Safe title",
       },
       checks: {
+        total_count: 1,
         check_runs: [
           {
             name: "ci-passed",
@@ -996,8 +999,19 @@ console.log(JSON.stringify(a.includes('PUT') ? f.merged : a.some(x=>x.includes('
             head_sha: sha,
             status: "completed",
             conclusion: "success",
+            details_url: "https://github.com/Subrising/fulcra/actions/runs/456/job/789",
           },
         ],
+      },
+      ci: {
+        id: 456,
+        run_attempt: 1,
+        status: "completed",
+        conclusion: "success",
+        path: ".github/workflows/ci.yml",
+        event: "pull_request",
+        head_sha: sha,
+        repository: { full_name: "Subrising/fulcra" },
       },
       merged: { merged: true, sha: "b".repeat(40) },
       commit: {
@@ -1072,8 +1086,31 @@ console.log(JSON.stringify(a.includes('PUT') ? f.merged : a.some(x=>x.includes('
       id: 101,
       conclusion: "cancelled",
     });
+    superseded.checks.total_count = 2;
     assert.equal(run("Check the PR, tested SHA, and merge title", superseded), 0);
+    const otherApp = structuredClone(base);
+    otherApp.checks.check_runs.push({
+      ...base.checks.check_runs[0],
+      id: 101,
+      app: { id: 1 },
+      conclusion: "failure",
+    });
+    otherApp.checks.total_count = 2;
+    assert.equal(run("Check the PR, tested SHA, and merge title", otherApp), 0);
+    for (const event of ["workflow_dispatch", "push"]) {
+      const dispatched = structuredClone(superseded);
+      dispatched.checks.check_runs[0].conclusion = "cancelled";
+      dispatched.checks.check_runs[1].conclusion = "success";
+      dispatched.ci.event = event;
+      assert.notEqual(run("Check the PR, tested SHA, and merge title", dispatched), 0);
+    }
     for (const change of [
+      (f) => (f.ci.path = ".github/workflows/other.yml"),
+      (f) => (f.ci.head_sha = "c".repeat(40)),
+      (f) => (f.ci.event = "workflow_dispatch"),
+      (f) => delete f.checks.total_count,
+      (f) => (f.checks.check_runs[0].app = null),
+      (f) => (f.checks.check_runs[0].conclusion = "skipped"),
       (f) => (f.pr.draft = true),
       (f) => (f.pr.base.ref = "next"),
       (f) => (f.pr.head.sha = "c".repeat(40)),
@@ -1667,35 +1704,79 @@ test("prebuilt web server serves SPA routes without masking missing bundle asset
   }
 });
 
-test("CI selection ignores cancelled runs and refuses failures or incomplete checks", () => {
-  const sha = "a".repeat(40);
-  const success = {
-    id: 10,
-    name: "ci-passed",
-    app: { id: 15368 },
-    head_sha: sha,
-    status: "completed",
-    conclusion: "success",
-  };
-  const select = (check_runs, extra = {}) => selectPassedCI({ check_runs, ...extra }, sha);
-  const cancelled = { ...success, id: 11, conclusion: "cancelled" };
-  assert.equal(select([success, cancelled]), success);
-  const latest = { ...success, id: 12 };
-  assert.equal(select([success, latest, cancelled]), latest);
+test("CI selection ignores cancelled runs and refuses failures or incomplete checks", async () => {
+  const fixture = proofFixture();
+  const sha = fixture.data.pr.head.sha;
+  const success = fixture.data.checks.check_runs[0];
+  const select = (check_runs, extra = {}) =>
+    selectPassedCI({ total_count: check_runs.length, check_runs, ...extra }, sha, fixture.api);
+  const cancelled = { ...success, id: 101, conclusion: "cancelled" };
+  assert.equal((await select([success, cancelled])).gate, success);
+  const latest = { ...success, id: 102 };
+  assert.equal((await select([success, latest, cancelled])).gate, latest);
   for (const other of [
     { ...cancelled, conclusion: "failure" },
     { ...cancelled, status: "in_progress", conclusion: null },
     { ...cancelled, conclusion: "timed_out" },
     { ...cancelled, conclusion: "neutral" },
+    { ...cancelled, conclusion: "skipped" },
     { ...cancelled, head_sha: "b".repeat(40) },
     { ...cancelled, id: undefined },
     success,
   ])
-    assert.throws(() => select([success, other]));
-  assert.throws(() => select([]));
-  assert.throws(() => select([cancelled]));
-  assert.throws(() => select([{ ...success, app: { id: 1 } }]));
-  assert.throws(() => select([success], { total_count: 101 }));
+    await assert.rejects(select([success, other]));
+  await assert.rejects(select([]));
+  await assert.rejects(select([cancelled]));
+  await assert.rejects(select([{ ...success, app: { id: 1 } }]));
+  await assert.rejects(select([{ ...success, app: null }]), /Missing CI check app identity/);
+  for (const total_count of [undefined, null, -1, 0, 101])
+    await assert.rejects(select([success], { total_count }), /Incomplete CI check results/);
+});
+
+test("merge admission and tested-tree proof enforce the same PR CI provenance", async () => {
+  for (const scenario of [
+    "cancelled-dispatch",
+    "cancelled-other-workflow",
+    "real-newer-dispatch",
+    "skipped",
+    "stale-check",
+    "stale-run",
+    "other-app-failure",
+  ]) {
+    const fixture = proofFixture();
+    const real = fixture.data.checks.check_runs[0];
+    const other = {
+      ...real,
+      id: 101,
+      details_url: "https://github.com/Subrising/fulcra/actions/runs/999/job/888",
+    };
+    const otherRun = { ...fixture.data.ci, id: 999, event: "workflow_dispatch" };
+    fixture.data.checks.check_runs = [real, other];
+    if (scenario.startsWith("cancelled-")) real.conclusion = "cancelled";
+    if (scenario === "cancelled-other-workflow") {
+      otherRun.event = "pull_request";
+      otherRun.path = ".github/workflows/other.yml";
+    }
+    if (scenario === "skipped") real.conclusion = "skipped";
+    if (scenario === "stale-check") real.head_sha = "e".repeat(40);
+    if (scenario === "stale-run") fixture.data.ci.head_sha = "e".repeat(40);
+    if (["skipped", "stale-check", "stale-run"].includes(scenario))
+      fixture.data.checks.check_runs = [real];
+    if (scenario === "other-app-failure") {
+      other.app = { id: 1 };
+      other.conclusion = "failure";
+    }
+    fixture.data.checks.total_count = fixture.data.checks.check_runs.length;
+    const api = async (route) => (route === "/actions/runs/999" ? otherRun : fixture.api(route));
+    const admission = () => selectPassedCI(fixture.data.checks, fixture.data.pr.head.sha, api);
+    if (scenario === "other-app-failure") {
+      assert.equal((await admission()).run.id, 456);
+      assert.equal((await proveMerge(fixture.run, api)).ciRunId, 456);
+    } else {
+      await assert.rejects(admission(), undefined, scenario);
+      await assert.rejects(proveMerge(fixture.run, api), undefined, scenario);
+    }
+  }
 });
 
 test("bundled skill bytes stay unchanged with Windows checkout conversion", () => {
