@@ -226,7 +226,7 @@ test("ordinary Hub workspace recovery preserves its worker archive after daemon 
       requestId: "ordinary-archive",
     }),
   ).toMatchObject({ payload: { error: null, archivedAt: expect.any(String) } });
-  expect((await hub.worktreeState(agent.cwd)).exists).toBe(false);
+  expect((await hub.worktreeState(agent.cwd)).exists).toBe(true);
   expect(
     await hub.requestOrdinary({
       type: "workspace.recovery.inspect.request",
@@ -412,7 +412,7 @@ test("Hub creates and archives distinct local workspaces for classifier and work
   expect(await hub.archivedWorkspaceAt(workerWorkspaceId!)).toEqual(expect.any(String));
 });
 
-test("Hub archives a running execution's Paseo-created worktree", async () => {
+test("Hub archives a running execution while cleanup keeps its unproved worktree", async () => {
   const hub = await launchRelationship();
   hub.beginOwnedCreate("worktree-create", "execution-worktree", {
     worktree: { mode: "branch-off", newBranch: "hub-created-worktree", base: "main" },
@@ -433,7 +433,7 @@ test("Hub archives a running execution's Paseo-created worktree", async () => {
   expect(worktreeCwd).not.toBe(hub.repoRoot());
   expect(duringRun).toEqual({ exists: true, listed: true });
   expect(response).toMatchObject({ success: true, error: null, action: "archive" });
-  expect(afterArchive).toEqual({ exists: false, listed: false });
+  expect(afterArchive).toEqual({ exists: true, listed: true });
   expect(workspaceId).toEqual(expect.any(String));
   expect(await hub.archivedWorkspaceAt(workspaceId!)).toEqual(expect.any(String));
   expect(await hub.ownedAgentArchivedAt(worktreeCreated.payload.agentId!)).toEqual(
@@ -499,7 +499,7 @@ test("archiving a second same-slug execution leaves the first worktree intact", 
   expect(hub.pathsReferToSameLocation(reused.payload.agent!.cwd, worktreeCwd)).toBe(false);
   expect(hub.pathsReferToSameLocation(reused.payload.agent!.cwd, secondWorktreeCwd)).toBe(true);
   expect(await hub.worktreeState(worktreeCwd)).toEqual({ exists: true, listed: true });
-  expect(await hub.worktreeState(secondWorktreeCwd)).toEqual({ exists: false, listed: false });
+  expect(await hub.worktreeState(secondWorktreeCwd)).toEqual({ exists: true, listed: true });
   expect(await hub.agentRemainsAvailable(original.payload.agentId!)).toBe(true);
   expect(await hub.ownedAgentArchivedAt(reused.payload.agentId!)).toEqual(expect.any(String));
   expect(await hub.ownedWorkspaceArchivedAt(reused.payload.agentId!)).toEqual(expect.any(String));
@@ -526,7 +526,7 @@ test("Hub resolves persisted execution ownership after daemon restart", async ()
   expect(await hub.ownedAgentArchivedAt(created.payload.agentId!)).toEqual(expect.any(String));
   expect(workspaceId).toEqual(expect.any(String));
   expect(await hub.archivedWorkspaceAt(workspaceId!)).toEqual(expect.any(String));
-  expect(await hub.worktreeState(worktreeCwd)).toEqual({ exists: false, listed: false });
+  expect(await hub.worktreeState(worktreeCwd)).toEqual({ exists: true, listed: true });
 }, 20_000);
 
 test("Hub treats missing and foreign executions as already controlled without exposing ownership", async () => {

@@ -209,7 +209,7 @@ describe("paseo worktree manager", () => {
     });
   });
 
-  it("deletes a worktree whose .git admin dir has already been removed", async () => {
+  it("keeps a worktree whose Git admin directory is missing", async () => {
     const created = await createLegacyWorktreeForTest({
       branchName: "orphan-delete-branch",
       cwd: repoDir,
@@ -230,10 +230,10 @@ describe("paseo worktree manager", () => {
       paseoHome,
     });
 
-    expect(existsSync(created.worktreePath)).toBe(false);
+    expect(existsSync(created.worktreePath)).toBe(true);
   });
 
-  it("is idempotent: deleting an already-absent worktree succeeds", async () => {
+  it("keeps repeated removal requests for an absent fixture without errors", async () => {
     const created = await createLegacyWorktreeForTest({
       branchName: "idempotent-delete-branch",
       cwd: repoDir,
@@ -242,20 +242,20 @@ describe("paseo worktree manager", () => {
       paseoHome,
     });
 
-    await deletePaseoWorktree({
-      cwd: repoDir,
-      worktreePath: created.worktreePath,
-      paseoHome,
-    });
-    expect(existsSync(created.worktreePath)).toBe(false);
-
-    // Second call — nothing left on disk and no admin entry — must not throw.
+    // The fixture controller removes only its own temporary directory.
+    rmSync(created.worktreePath, { recursive: true, force: true });
     await expect(
       deletePaseoWorktree({ cwd: repoDir, worktreePath: created.worktreePath, paseoHome }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(false);
+    expect(existsSync(created.worktreePath)).toBe(false);
+
+    // A second refused removal must not throw.
+    await expect(
+      deletePaseoWorktree({ cwd: repoDir, worktreePath: created.worktreePath, paseoHome }),
+    ).resolves.toBe(false);
   });
 
-  it("deletes a worktree when the parent repo root is not available", async () => {
+  it("keeps a worktree when the parent repository is unavailable", async () => {
     const created = await createLegacyWorktreeForTest({
       branchName: "no-cwd-branch",
       cwd: repoDir,
@@ -277,7 +277,7 @@ describe("paseo worktree manager", () => {
       paseoHome,
     });
 
-    expect(existsSync(created.worktreePath)).toBe(false);
+    expect(existsSync(created.worktreePath)).toBe(true);
   });
 
   describe("branch-off from a remote-tracking base", () => {

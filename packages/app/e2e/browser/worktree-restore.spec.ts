@@ -82,9 +82,7 @@ test.describe("Worktree restore", () => {
     }
 
     await archiveWorkspaceFromDaemon(worktreeClient, worktree.workspaceDirectory);
-    await expect
-      .poll(() => existsSync(worktree.workspaceDirectory), { timeout: 30_000 })
-      .toBe(false);
+    removeArchivedWorktreeFixture(tempRepo.path, worktree.workspaceDirectory);
 
     // Match the remote cloud-race record: workspace archived and absent, while
     // the surviving closed agent record is not agent-archived. Refresh now owns
@@ -168,7 +166,7 @@ test.describe("Worktree restore", () => {
   test("committed changes survive archive, restore and page reload", async ({ page }) => {
     const { worktree, route } = await createWorkspaceWithCommittedChange();
     await openCommittedWorkspace(page, route);
-    await archiveCommittedWorkspace(page, worktree);
+    await archiveCommittedWorkspace(page, worktree, tempRepo.path);
     await restoreCommittedWorkspace(page, route);
     await expectCommittedFileAfterReload(page, "restored-change.txt");
     await expectRestoredCommitDiff(page);
@@ -388,9 +386,7 @@ test.describe("Worktree restore", () => {
     await archiveWorkspaceFromDaemon(worktreeClient, backingWorktree.workspaceDirectory, {
       scope: "worktree",
     });
-    await expect
-      .poll(() => existsSync(backingWorktree.workspaceDirectory), { timeout: 30_000 })
-      .toBe(false);
+    removeArchivedWorktreeFixture(tempRepo.path, backingWorktree.workspaceDirectory);
     await expect.poll(() => fetchAgentArchivedAt(client, agent.id)).not.toBeNull();
 
     await gotoAppShell(page);
@@ -505,6 +501,17 @@ test.describe("Worktree restore", () => {
   });
 });
 
+function removeArchivedWorktreeFixture(fixtureRepo: string, directory: string): void {
+  // Prove the guard kept the directory. Then create this test's missing-directory fault.
+  expect(existsSync(directory)).toBe(true);
+  // Git refuses a worktree that is not registered to this owned temporary repository.
+  execFileSync("git", ["worktree", "remove", "--force", directory], {
+    cwd: fixtureRepo,
+    stdio: "pipe",
+  });
+  expect(existsSync(directory)).toBe(false);
+}
+
 async function captureBranchlessRestoreStep(page: Page, filename: string): Promise<void> {
   const screenshotDirectory = path.join(tmpdir(), "paseo-branchless-restore-evidence");
   mkdirSync(screenshotDirectory, { recursive: true });
@@ -528,9 +535,10 @@ async function openCommittedWorkspace(page: Page, route: string): Promise<void> 
 async function archiveCommittedWorkspace(
   page: Page,
   worktree: { workspaceId: string; workspaceDirectory: string },
+  fixtureRepo: string,
 ): Promise<void> {
   await archiveWorkspaceFromSidebar(page, worktree.workspaceId);
-  await expect.poll(() => existsSync(worktree.workspaceDirectory)).toBe(false);
+  removeArchivedWorktreeFixture(fixtureRepo, worktree.workspaceDirectory);
 }
 
 async function restoreCommittedWorkspace(page: Page, route: string): Promise<void> {

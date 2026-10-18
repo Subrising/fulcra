@@ -292,7 +292,7 @@ test("does not overwrite a committed exact-project config with source checkout e
   ).toBe("");
 });
 
-test("removes a new worktree when its ref does not contain the selected project directory", async () => {
+test("keeps an unproved worktree when its ref does not contain the selected project directory", async () => {
   const { repoDir, tempDir } = createGitRepo();
   cleanupPaths.push(tempDir);
   execFileSync("git", ["branch", "without-subproject"], { cwd: repoDir, stdio: "pipe" });
@@ -322,15 +322,15 @@ test("removes a new worktree when its ref does not contain the selected project 
   ).rejects.toThrow("Selected project directory is missing from the worktree");
 
   expect(deps.workspaces.size).toBe(0);
-  expect(existsSync(worktreePath)).toBe(false);
+  expect(existsSync(worktreePath)).toBe(true);
   expect(
     execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: repoDir, stdio: "pipe" })
       .toString()
       .includes("missing-subproject"),
-  ).toBe(false);
+  ).toBe(true);
 });
 
-test("removes a new worktree when workspace persistence fails", async () => {
+test("keeps an unproved worktree when workspace persistence fails", async () => {
   const { repoDir, tempDir } = createGitRepo();
   cleanupPaths.push(tempDir);
   const paseoHome = path.join(tempDir, ".paseo");
@@ -352,12 +352,12 @@ test("removes a new worktree when workspace persistence fails", async () => {
     ),
   ).rejects.toThrow("Unknown project: missing-project");
 
-  expect(existsSync(worktreePath)).toBe(false);
+  expect(existsSync(worktreePath)).toBe(true);
   expect(
     execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: repoDir, stdio: "pipe" })
       .toString()
       .includes("persistence-failure"),
-  ).toBe(false);
+  ).toBe(true);
 });
 
 test("maps a nested cwd from an existing Paseo worktree into the next worktree", async () => {
