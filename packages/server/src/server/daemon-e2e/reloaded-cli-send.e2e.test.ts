@@ -338,7 +338,7 @@ test.each(["none", "local", "remote", "paused Claude"])(
         },
       );
     const result = await send(child.id, "new child task");
-    expect(JSON.parse(result.stdout).status).toBe("sent");
+    expect(JSON.parse(result.stdout).status).toBe(pausedClaude ? "held" : "sent");
     if (pausedClaude) {
       expect(JSON.parse(result.stdout).message).toContain("Provider paused");
       const control = await send(unpaused!.id, "unpaused child task");
