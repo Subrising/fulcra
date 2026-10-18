@@ -214,7 +214,6 @@ export class QueuedAgentMessages {
       const target =
         this.deps.agentManager.getAgent(agentId) ?? (await this.deps.agentStorage.get(agentId));
       if (
-        !this.deps.agentManager.getAgent(agentId) ||
         !target ||
         target.archivedAt ||
         ("lifecycle" in target ? target.lifecycle : target.lastStatus) === "closed"

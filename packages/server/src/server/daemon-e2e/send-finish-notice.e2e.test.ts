@@ -474,8 +474,7 @@ test("a paused follow-up keeps prior spend and reports the resumed cumulative to
 test("CLI --no-wait refuses a closed receiver", async () => {
   const f = await fixture();
   await f.manager.trustedPlugins.daemon(() => f.manager.closeAgent(f.child.id));
-  const stored = (await f.storage.get(f.child.id))!;
-  await f.storage.upsert({ ...stored, lastStatus: "idle" });
+  expect((await f.storage.get(f.child.id))?.lastStatus).toBe("closed");
   const before = await f.storage.get(f.child.id);
   const failure = await promisify(execFile)(
     process.execPath,

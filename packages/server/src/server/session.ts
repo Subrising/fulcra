@@ -10056,14 +10056,14 @@ export class Session {
     return true;
   }
 
-  private async assertSendReceiverOpen(agentId: string): Promise<void> {
+  private async assertSendReceiverNotClosed(agentId: string): Promise<void> {
     const stored = await this.agentStorage.get(agentId);
     const live = this.agentManager.getAgent(agentId);
     if (stored?.archivedAt || live?.archivedAt)
       throw Object.assign(new Error("The receiver is archived. Restore it first."), {
         code: "QUEUED_RECEIVER_CLOSED",
       });
-    if (stored && (!live || live.lifecycle === "closed"))
+    if (live?.lifecycle === "closed" || (!live && stored?.lastStatus === "closed"))
       throw Object.assign(new Error("session closed: reload it or start a new worker"), {
         code: "QUEUED_RECEIVER_CLOSED",
       });
@@ -10281,7 +10281,7 @@ export class Session {
 
     try {
       const agentId = resolved.agentId;
-      await this.assertSendReceiverOpen(agentId);
+      await this.assertSendReceiverNotClosed(agentId);
       if (await this.holdOrRefuseAgentMessage(msg, agentId)) return;
       const prompt = buildAgentPrompt(msg.text, msg.images, msg.attachments);
       if (msg.nativeQueue) {

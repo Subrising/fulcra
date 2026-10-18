@@ -147,6 +147,7 @@ test("restart, reload and account switch count new turns with reused provider ID
     const agent = await f.create();
     await f.turn(agent.id, 4);
     await f.restart();
+    await f.client.refreshAgent(agent.id);
     expect((await f.turn(agent.id, 5)).sessionCost?.totalUsd).toBe(9);
     await f.manager.reloadAgentSession(agent.id);
     expect((await f.turn(agent.id, 3)).sessionCost?.totalUsd).toBe(12);
@@ -167,6 +168,7 @@ test("restart, reload and account switch count new turns with reused provider ID
     await f.client.updateAgent(agent.id, { labels: { "fulcra.session-cost-cap-usd": "14" } });
     expect((await f.turn(agent.id, 1000)).sessionCost?.totalUsd).toBe(1014);
     await f.restart();
+    await f.client.refreshAgent(agent.id);
     expect((await f.turn(agent.id, 1)).sessionCost?.totalUsd).toBe(1015);
     expect(f.started).toBe(6);
   } finally {
@@ -197,6 +199,7 @@ test("failed billing retains a warning, allows more turns, and recovers after re
       warning: expect.stringContaining("Billing write failed"),
     });
     await rm(path.join(f.root, "fail"));
+    await f.client.refreshAgent(agent.id);
     const recovered = await f.turn(agent.id, 5);
     expect(recovered.sessionCost).toMatchObject({ totalUsd: 12, recordedTurns: 3 });
     expect(recovered.sessionCost?.warning).toBeUndefined();
@@ -261,6 +264,7 @@ test("durable API billing incidents clear after a successful native turn", async
     await f.turn(agent.id, 2);
     await vi.waitFor(() => expect(readBilling(f.pool).events[0].clearedAt).toBeDefined());
     await f.restart();
+    await f.client.refreshAgent(agent.id);
     await fail(agent.id);
     await vi.waitFor(() => expect(readBilling(f.pool).events).toHaveLength(2));
     expect(readBilling(f.pool).events[1].id).not.toBe(eventId);

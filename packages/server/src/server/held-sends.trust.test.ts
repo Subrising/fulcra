@@ -1092,15 +1092,19 @@ test.each([false, true])(
   },
 );
 
-test.each([false, true])(
-  "closed owner sends refuse before queue or pause (queue: %s)",
-  async (queueOwner) => {
+test.each([
+  { queueOwner: false, paused: false },
+  { queueOwner: true, paused: false },
+  { queueOwner: false, paused: true },
+  { queueOwner: true, paused: true },
+])(
+  "closed owner sends refuse before queue or pause (queue: $queueOwner, pause: $paused)",
+  async ({ queueOwner, paused }) => {
     const f = await fixture();
     await f.host.daemon(() => f.manager.closeAgent(f.target.id));
-    // A durable idle status does not mean that a provider runtime is open.
-    const stored = (await f.storage.get(f.target.id))!;
-    await f.storage.upsert({ ...stored, lastStatus: "idle" });
-    await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+    expect((await f.storage.get(f.target.id))?.lastStatus).toBe("closed");
+    if (paused)
+      await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
     const before = await f.storage.get(f.target.id);
     await f.send("Do not queue", undefined, false, undefined, queueOwner);
     expect(f.messages.findLast((m) => m.type === "send_agent_message_response")).toMatchObject({

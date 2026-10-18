@@ -28,7 +28,8 @@ Require these results:
 - An excepted lead's child and grandchild receive notices through parent labels.
 - Unrelated Claude targets and unreadable labels remain paused.
 - Parent reads stay within one call; cycles do not start input.
-- Closed sends fail before queue acceptance, including records with an earlier idle status.
+- Explicitly closed sends fail before queue acceptance.
+- Stored idle sessions still load after a daemon restart.
 - Paused parent sends do not arm a finish notice.
 - Resume keeps the finish notice request and its explicit opt-out.
 - A pause at final handoff clears the new arm without provider input.
