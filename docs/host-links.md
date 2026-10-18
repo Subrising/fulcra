@@ -264,6 +264,7 @@ Limit sharing uses the same durable private-file commit.
 ## Verification boundary
 
 Run focused tests through the existing test scripts and queue.
+Use the [Windows verification skill](../.agents/skills/verify-windows-host-links/SKILL.md) for the real-PC durability check.
 The source tests use real HTTP, private files, durable receipts, and isolated agent runtimes with test providers.
 They cover admission, initial input, credential refusal, permission restrictions, retries, response loss, and role moves during held delivery.
 Return-notice cases cover finish, error, permission, restart, link recovery, duplicate suppression, and the real runtime-to-provider handoff.
