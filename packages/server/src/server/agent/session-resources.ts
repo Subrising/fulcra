@@ -126,6 +126,7 @@ export class SessionResources {
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
   private sampling = false;
   private readonly boots = new Map<string, { root: Root; udid: string; shutdown: boolean }>();
+  private readonly bootUsers = new Map<string, Map<string, { agentId: string; instanceId: string }>>();
 
   constructor(options: Options) {
     this.options = options; this.read = options.readProcesses ?? readResourceProcesses;
@@ -300,6 +301,16 @@ export class SessionResources {
     this.options.logger.info(entry, "Session resource cleanup");
   }
 
+  private async startBoot(root: Root, key: string, udid: string, owned: SimulatorRecord | undefined, ledger: Ledger): Promise<void> {
+        const before = await this.simulators.inspect(udid);
+        if (!before.booted && owned) {
+          ledger.simulators = ledger.simulators.filter((s) => s !== owned);
+          await this.save(ledger);
+        }
+        if (!before.booted && !this.bootUsers.has(udid)) this.bootUsers.set(udid, new Map());
+        this.boots.set(key, { root, udid, shutdown: !before.booted });
+  }
+
   /** A successful, explicit UUID boot proves ownership. Pre-booted devices never become owned. */
   observeTool(root: Root, item: ToolCallTimelineItem): Promise<void> {
     return this.serial(async () => {
@@ -308,13 +319,14 @@ export class SessionResources {
       const udid = command.udid.toUpperCase(); const key = `${root.agentId}:${root.instanceId}:${item.callId}`;
       const ledger = await this.load();
       const owned = ledger.simulators.find((s) => s.udid === udid);
+      const pendingUsers = this.bootUsers.get(udid);
+      if (pendingUsers) pendingUsers.set(`${root.agentId}:${root.instanceId}`, { agentId: root.agentId, instanceId: root.instanceId });
       if (owned && !owned.users.some((u) => u.agentId === root.agentId && u.instanceId === root.instanceId)) {
         owned.users.push({ agentId: root.agentId, instanceId: root.instanceId }); await this.save(ledger);
       }
       if (command.action !== "boot") return;
       if (item.status === "running" && !this.boots.has(key)) {
-        const before = await this.simulators.inspect(udid);
-        this.boots.set(key, { root, udid, shutdown: !before.booted }); return;
+        await this.startBoot(root, key, udid, owned, ledger); return;
       }
       if (item.status === "running") return;
       const pending = this.boots.get(key); this.boots.delete(key);
@@ -323,7 +335,8 @@ export class SessionResources {
       const after = await this.simulators.inspect(udid);
       if (!after.booted || after.pid === null || after.birth === null) return;
       ledger.simulators.push({ agentId: root.agentId, instanceId: root.instanceId, udid,
-        pid: after.pid, birth: after.birth, observedAt: this.now(), users: [] });
+        pid: after.pid, birth: after.birth, observedAt: this.now(), users: [...(this.bootUsers.get(udid)?.values() ?? [])] });
+      this.bootUsers.delete(udid);
       await this.save(ledger);
     });
   }

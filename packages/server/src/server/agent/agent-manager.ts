@@ -2357,6 +2357,7 @@ export class AgentManager {
           return pid && agent.instanceId ? [{ agentId: agent.id, instanceId: agent.instanceId, pid }] : [];
         }),
         ownerState: (id) => {
+          if (!this.acceptingAgentRegistrations) return "unknown";
           if (this.agents.has(id)) return "live";
           const record = this.registry?.getCached(id);
           if (!record) return "unknown";
@@ -4540,8 +4541,9 @@ export class AgentManager {
     this.invokeReportRelaunchGuard(requireRetiringIdentity);
     await nativeDispatch(() => agent.session.close());
     if (this.acceptingAgentRegistrations && agent.instanceId) {
-      await this.sessionResources?.closeOwner(agentId, agent.instanceId,
-        () => this.agents.get(agentId) === agent);
+      const instanceId = agent.instanceId;
+      await this.sessionResources?.closeOwner(agentId, instanceId,
+        () => this.agents.get(agentId) === agent && agent.instanceId === instanceId);
     }
     this.cancelRunningProviderSubagents(agentId);
     const closedAgent = await this.prepareAgentForClosure(agent, "agent closed");

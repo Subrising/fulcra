@@ -164,6 +164,20 @@ describe("owned simulators", () => {
     f.setBirth("new-boot"); f.setLive(false); f.setNow(ORPHAN_INTERVAL_MS + 1);
     await f.tracker.sweep(); expect(f.stopped).toEqual([]);
   });
+  test("keeps a device used by another session before boot completion arrives", async () => {
+    const f = await simulatorFixture(); await f.tracker.observeTool(f.owner, bootItem("running"));
+    f.setBooted(true);
+    await f.tracker.observeTool({ ...f.owner, agentId: "other" }, bootItem("completed", `xcrun simctl io ${udid} screenshot shot.png`));
+    await f.tracker.observeTool(f.owner, bootItem("completed"));
+    await f.tracker.closeOwner("owner", "generation", () => true); expect(f.stopped).toEqual([]);
+  });
+  test("records a fresh boot after the earlier owned device was shut down", async () => {
+    const f = await simulatorFixture(); await f.tracker.observeTool(f.owner, bootItem("running"));
+    f.setBooted(true); await f.tracker.observeTool(f.owner, bootItem("completed"));
+    f.setBooted(false); await f.tracker.observeTool(f.owner, bootItem("running"));
+    f.setBooted(true); f.setBirth("second-boot"); await f.tracker.observeTool(f.owner, bootItem("completed"));
+    await f.tracker.closeOwner("owner", "generation", () => true); expect(f.stopped).toEqual([udid.toUpperCase()]);
+  });
 });
 
 test.skipIf(process.platform === "win32")("native persisted cleanup kills the retained job and preserves an unrelated process", async () => {
