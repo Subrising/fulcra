@@ -3,6 +3,9 @@
 Parent sends request one finish notice by default. This applies to CLI sends, native steering, and MCP prompts.
 Several messages in one turn share one notice. Queued messages form one combined turn and produce one notice.
 A notice marked `delivered` covers its earlier turn only.
+An idle worker can start another task while its earlier result waits for its busy parent.
+Each result keeps its own saved notice and message text until delivery.
+The native report inbox requires separate enrollment. Ordinary parent sends do not require that inbox.
 When cost is available, each finish notice includes cumulative session spend, including earlier turns.
 
 After a restart, queued delivery starts when saved open sessions are available.

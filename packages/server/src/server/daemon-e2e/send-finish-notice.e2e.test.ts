@@ -1,3 +1,4 @@
+import type { AgentPromptInput } from "../agent/agent-sdk-types.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdtemp, rm, writeFile, readFile, readdir, mkdir } from "node:fs/promises";
@@ -26,10 +27,16 @@ async function fixture(
 ) {
   const root = await mkdtemp(path.join(tmpdir(), "send-finish-"));
   const prompts: string[] = [];
-  const provider = createTestAgentClient("codex", {
-    onStartTurn: (prompt) =>
-      prompts.push(typeof prompt === "string" ? prompt : JSON.stringify(prompt)),
+  let resolveNotice!: () => void;
+  const noticeReceived = new Promise<void>((resolve) => {
+    resolveNotice = resolve;
   });
+  function recordPrompt(prompt: AgentPromptInput): void {
+    const text = typeof prompt === "string" ? prompt : JSON.stringify(prompt);
+    prompts.push(text);
+    if (text.includes("<paseo-system>") && text.includes(child.id)) resolveNotice();
+  }
+  const provider = createTestAgentClient("codex", { onStartTurn: recordPrompt });
   const create = provider.createSession.bind(provider);
   provider.createSession = async (...args) => {
     const session = await create(...args);
@@ -50,8 +57,7 @@ async function fixture(
     paseoHomeRoot: root,
     agentClients: {
       claude: createTestAgentClient("claude", {
-        onStartTurn: (prompt) =>
-          prompts.push(typeof prompt === "string" ? prompt : JSON.stringify(prompt)),
+        onStartTurn: recordPrompt,
       }),
       codex: provider,
     },
@@ -88,7 +94,7 @@ async function fixture(
   });
   const notices = () => prompts.filter((p) => p.includes("<paseo-system>") && p.includes(child.id));
   const finish = async () => {
-    await vi.waitFor(() => expect(notices()).toHaveLength(1));
+    await noticeReceived;
     await manager.waitForAgentEvent(parent.id);
     expect(notices()).toHaveLength(1);
   };

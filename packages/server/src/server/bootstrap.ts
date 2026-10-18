@@ -1,3 +1,4 @@
+import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 // FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
 import {
   createAgentStartMemoryGuard,
@@ -1918,6 +1919,16 @@ export async function createPaseoDaemon(
             checkNativeReportOriginPublication(nativeReportOrigin);
             return end(...args);
           }) as typeof res.end;
+        }
+        // COMPAT(mcp-protocol-2026-07-28): added in v0.2.26, remove after 2027-01-19 when the SDK supports it.
+        // Keep the negotiated SDK version while accepting this known client header.
+        if (req.header("mcp-protocol-version") === "2026-07-28") {
+          req.headers["mcp-protocol-version"] = LATEST_PROTOCOL_VERSION;
+          // The Node transport builds Fetch headers from rawHeaders.
+          for (let index = 0; index < req.rawHeaders.length; index += 2) {
+            if (req.rawHeaders[index]!.toLowerCase() === "mcp-protocol-version")
+              req.rawHeaders[index + 1] = LATEST_PROTOCOL_VERSION;
+          }
         }
         const { server, transport } = await createAgentMcpSession(
           callerAgentId,

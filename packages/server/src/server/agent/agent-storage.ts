@@ -1,3 +1,4 @@
+import { HeldQueueFullError, MAX_HELD_PER_TARGET } from "../held-sends.js";
 import { SessionCostSchema, type SessionCost } from "@getpaseo/protocol/recorded-usage";
 import { sessionCost, SessionCostRecordsSchema } from "./session-cost.js";
 import { stripInternalPaseoMcpServer } from "./runtime-mcp-config.js";
@@ -143,6 +144,8 @@ const STORED_AGENT_SCHEMA = z.object({
   owner: AgentOwnerSchema.optional(),
   interruptedTurn: StoredInterruptedTurnSchema.nullable().optional(),
   finishNotice: FinishNoticeSchema.optional(),
+  previousFinishNotices: z.array(FinishNoticeSchema).max(MAX_HELD_PER_TARGET).optional(),
+  finishNoticeResults: z.record(z.string(), z.string().nullable()).optional(),
 });
 
 export type SerializableAgentConfig = Pick<
@@ -158,6 +161,32 @@ export type SerializableAgentConfig = Pick<
 >;
 
 export type StoredAgentRecord = z.infer<typeof STORED_AGENT_SCHEMA>;
+export function storedFinishNotices(record: StoredAgentRecord): FinishNotice[] {
+  return [
+    ...(record.previousFinishNotices ?? []),
+    ...(record.finishNotice ? [record.finishNotice] : []),
+  ];
+}
+
+function findFinishNotice(
+  record: StoredAgentRecord | null | undefined,
+  messageId: string,
+): FinishNotice | undefined {
+  if (!record) return undefined;
+  return storedFinishNotices(record).find((notice) => notice.messageId === messageId);
+}
+
+function withFinishNotice(record: StoredAgentRecord, notice: FinishNotice): StoredAgentRecord {
+  if (record.finishNotice?.messageId === notice.messageId)
+    return { ...record, finishNotice: notice };
+  return {
+    ...record,
+    previousFinishNotices: (record.previousFinishNotices ?? []).map((prior) =>
+      prior.messageId === notice.messageId ? notice : prior,
+    ),
+  };
+}
+
 export function parseStoredAgentRecord(value: unknown): StoredAgentRecord {
   return stripStoredRuntimeMcp(STORED_AGENT_SCHEMA.parse(value));
 }
@@ -217,10 +246,11 @@ export class AgentStorage {
     return this.cache.get(agentId) ?? null;
   }
 
-  async getFinishNotice(agentId: string): Promise<FinishNotice | null> {
+  async getFinishNotice(agentId: string, messageId?: string): Promise<FinishNotice | null> {
     await this.load();
     await this.pendingWrites.get(agentId);
-    return this.cache.get(agentId)?.finishNotice ?? null;
+    const record = this.cache.get(agentId);
+    return (messageId ? findFinishNotice(record, messageId) : record?.finishNotice) ?? null;
   }
 
   async armFinishNotice(
@@ -252,30 +282,46 @@ export class AgentStorage {
     await this.load();
     let next: FinishNotice | null = null;
     await this.queueRecordMutation(agentId, (record) => {
-      const prior = record?.finishNotice;
-      if (!record || finishNoticeParentId(record.labels) !== parentId) return null;
+      if (!record) return null;
+      if (finishNoticeParentId(record.labels) !== parentId) return null;
+      const prior = record.finishNotice;
       if (reuseArmed && prior?.parentId === parentId && prior.status === "armed") {
         next = prior;
         return null;
       }
       if (!prior && !reuseArmed) return null;
+      const retainPrior =
+        prior?.owner === "report-up" && ["pending", "sending"].includes(prior.status);
       if (
         prior &&
-        prior.status !== "delivered" &&
-        prior.status !== "cancelled" &&
-        prior.status !== "unknown" &&
+        !retainPrior &&
+        !["delivered", "cancelled", "unknown"].includes(prior.status) &&
         !(prior.status === "pending" && prior.retryAfterRefusal)
       )
         throw Object.assign(new Error("Previous finish notice is still active"), {
           code: "FINISH_NOTICE_PENDING",
         });
+      const previous = (record.previousFinishNotices ?? []).filter(
+        (notice) => notice.status !== "delivered" && notice.status !== "cancelled",
+      );
+      if (retainPrior) previous.push(prior);
+      if (previous.length >= MAX_HELD_PER_TARGET) throw new HeldQueueFullError(agentId);
       next = {
         parentId: z.string().uuid().parse(parentId),
         owner: "report-up",
         status: "armed",
         messageId: `paseo-notify:${randomUUID()}`,
       };
-      return { ...record, finishNotice: next };
+      const retainedIds = new Set(previous.map((notice) => notice.messageId));
+      const retainedResults = Object.entries(record.finishNoticeResults ?? {}).filter(([id]) =>
+        retainedIds.has(id),
+      );
+      return {
+        ...record,
+        finishNotice: next,
+        previousFinishNotices: previous,
+        finishNoticeResults: Object.fromEntries(retainedResults),
+      };
     });
     return next;
   }
@@ -285,6 +331,7 @@ export class AgentStorage {
     turnId: string,
     reason: "finished" | "errored" | "closed" | "stopped" | "cancelled",
     cost?: SessionCost,
+    lastMessage?: string | null,
   ): Promise<FinishNotice | null> {
     await this.load();
     let result: FinishNotice | null = null;
@@ -317,7 +364,9 @@ export class AgentStorage {
         endedAt: Date.now(),
         sessionCost: cost ?? sessionCost(record.costRecords),
       };
-      return { ...record, finishNotice: result };
+      const finishNoticeResults = { ...record.finishNoticeResults };
+      if (lastMessage !== undefined) finishNoticeResults[notice.messageId] = lastMessage;
+      return { ...record, finishNotice: result, finishNoticeResults };
     });
     return result;
   }
@@ -330,57 +379,49 @@ export class AgentStorage {
   ) {
     await this.load();
     await this.queueRecordMutation(agentId, (record) => {
-      if (!record?.finishNotice || record.finishNotice.messageId !== messageId)
-        throw new Error("Finish notice ownership changed");
-      if (record.finishNotice.status === status) return null;
-      if (status === "cancelled" && record.finishNotice.status === "pending") return null;
+      const notice = findFinishNotice(record, messageId);
+      if (!record || !notice) throw new Error("Finish notice ownership changed");
+      if (notice.status === status) return null;
+      if (status === "cancelled" && notice.status === "pending") return null;
       if (
-        record.finishNotice.status !== "armed" &&
-        record.finishNotice.status !== "pending" &&
-        !(status === "delivered" && record.finishNotice.status === "sending")
+        notice.status !== "armed" &&
+        notice.status !== "pending" &&
+        !(status === "delivered" && notice.status === "sending")
       )
         throw new Error("Finish notice already settled");
-      return {
-        ...record,
-        finishNotice: {
-          ...record.finishNotice,
-          status,
-          ...(status === "delivered" && deliveredBy ? { deliveredBy } : {}),
-        },
-      };
+      return withFinishNotice(record, {
+        ...notice,
+        status,
+        ...(status === "delivered" && deliveredBy ? { deliveredBy } : {}),
+      });
     });
   }
 
   async markFinishNoticeSending(agentId: string, messageId: string): Promise<void> {
     await this.load();
     await this.queueRecordMutation(agentId, (record) => {
-      if (record?.finishNotice?.messageId !== messageId || record.finishNotice.status !== "pending")
+      const notice = findFinishNotice(record, messageId);
+      if (!record || !notice || notice.status !== "pending")
         throw new Error("Finish notice changed before provider call");
-      return {
-        ...record,
-        finishNotice: { ...record.finishNotice, status: "sending", retryAfterRefusal: false },
-      };
+      return withFinishNotice(record, { ...notice, status: "sending", retryAfterRefusal: false });
     });
   }
 
   async markFinishNoticeRefused(agentId: string, messageId: string): Promise<void> {
     await this.load();
     await this.queueRecordMutation(agentId, (record) => {
-      if (record?.finishNotice?.messageId !== messageId || record.finishNotice.status !== "sending")
-        return null;
-      return {
-        ...record,
-        finishNotice: { ...record.finishNotice, status: "pending", retryAfterRefusal: true },
-      };
+      const notice = findFinishNotice(record, messageId);
+      if (!record || !notice || notice.status !== "sending") return null;
+      return withFinishNotice(record, { ...notice, status: "pending", retryAfterRefusal: true });
     });
   }
 
   async markFinishNoticeUnknown(agentId: string, messageId: string): Promise<void> {
     await this.load();
     await this.queueRecordMutation(agentId, (record) => {
-      if (record?.finishNotice?.messageId !== messageId || record.finishNotice.status !== "sending")
-        return null;
-      return { ...record, finishNotice: { ...record.finishNotice, status: "unknown" } };
+      const notice = findFinishNotice(record, messageId);
+      if (!record || !notice || notice.status !== "sending") return null;
+      return withFinishNotice(record, { ...notice, status: "unknown" });
     });
   }
 
@@ -392,15 +433,16 @@ export class AgentStorage {
     await this.load();
     let next: FinishNotice | null = null;
     await this.queueRecordMutation(agentId, (record) => {
+      const notice = findFinishNotice(record, messageId);
       if (
-        !record?.finishNotice ||
-        record.finishNotice.status !== "pending" ||
-        record.finishNotice.messageId !== messageId ||
+        !record ||
+        !notice ||
+        notice.status !== "pending" ||
         finishNoticeParentId(record.labels) !== parentId
       )
         throw new Error("Finish notice reparent changed");
-      next = { ...record.finishNotice, parentId: z.string().uuid().parse(parentId) };
-      return { ...record, finishNotice: next };
+      next = { ...notice, parentId: z.string().uuid().parse(parentId) };
+      return withFinishNotice(record, next);
     });
     return next!;
   }
@@ -408,13 +450,10 @@ export class AgentStorage {
   async dropFinishNotice(agentId: string, messageId: string): Promise<void> {
     await this.load();
     await this.queueRecordMutation(agentId, (record) => {
-      if (!record?.finishNotice || record.finishNotice.messageId !== messageId)
-        throw new Error("Finish notice owner changed");
-      if (record.finishNotice.status !== "pending") return null;
-      return {
-        ...record,
-        finishNotice: { ...record.finishNotice, status: "cancelled" },
-      };
+      const notice = findFinishNotice(record, messageId);
+      if (!record || !notice) throw new Error("Finish notice owner changed");
+      if (notice.status !== "pending") return null;
+      return withFinishNotice(record, { ...notice, status: "cancelled" });
     });
   }
 
@@ -588,7 +627,11 @@ export class AgentStorage {
       if (existing && existing.archivedAt !== undefined) {
         record.archivedAt = existing.archivedAt;
       }
-      if (existing?.finishNotice) record.finishNotice = existing.finishNotice;
+      if (existing) {
+        record.finishNotice = existing.finishNotice;
+        record.previousFinishNotices = existing.previousFinishNotices;
+        record.finishNoticeResults = existing.finishNoticeResults;
+      }
       // Orca R3a: keep the interruption marker until the agent receives a new user message.
       if (
         existing?.interruptedTurn &&

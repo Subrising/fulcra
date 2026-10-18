@@ -1227,3 +1227,66 @@ test.each([0, 1250])(
   },
   30_000,
 );
+
+test("FU-365 agent MCP accepts the newer Claude protocol and keeps version validation", async () => {
+  const daemon = await createTestPaseoDaemon({
+    auth: { password: hashDaemonPassword("mcp-fixture-password") },
+  });
+  try {
+    const call = (version: string, method = "tools/list") =>
+      fetch(`http://127.0.0.1:${daemon.port}/mcp/agents`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          "MCP-Protocol-Version": version,
+          Authorization: "Bearer mcp-fixture-password",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method,
+          ...(method === "initialize"
+            ? {
+                params: {
+                  protocolVersion: version,
+                  capabilities: {},
+                  clientInfo: { name: "claude-fixture", version: "1" },
+                },
+              }
+            : {}),
+        }),
+      });
+    const initialized = await call("2026-07-28", "initialize");
+    expect(initialized.status).toBe(200);
+    expect(await initialized.text()).toContain('"protocolVersion"');
+    for (const version of [
+      "2026-07-28",
+      "2025-11-25",
+      "2025-06-18",
+      "2025-03-26",
+      "2024-11-05",
+      "2024-10-07",
+    ]) {
+      const response = await call(version);
+      expect(response.status, version).toBe(200);
+      expect(await response.text()).toContain('"tools"');
+    }
+    const unsupported = await call("2099-01-01");
+    expect(unsupported.status).toBe(400);
+    expect(await unsupported.text()).toContain("Unsupported protocol version");
+    const unauthorized = await fetch(`http://127.0.0.1:${daemon.port}/mcp/agents`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        "MCP-Protocol-Version": "2026-07-28",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    expect(unauthorized.status).toBe(401);
+    await unauthorized.text();
+  } finally {
+    await daemon.close();
+  }
+});
