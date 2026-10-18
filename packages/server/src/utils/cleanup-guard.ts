@@ -17,6 +17,9 @@ export async function removeWithCleanupGuard(worktree: string): Promise<boolean>
     const { stdout } = await execute(
       process.platform === "win32" ? "py" : "python3",
       [
+        ...(process.platform === "win32" ? ["-3"] : []),
+        "-I",
+        "-S",
         guard,
         "remove",
         "--path",
@@ -64,10 +67,14 @@ export async function removeWithCleanupGuard(worktree: string): Promise<boolean>
 export async function retainLegacyCleanup(): Promise<string> {
   const guard = join(homedir(), ".local", "share", "fulcra-cleanup", "cleanup_guard.py");
   try {
-    await execute(process.platform === "win32" ? "py" : "python3", [guard, "legacy"], {
-      timeout: 30_000,
-      maxBuffer: 65536,
-    });
+    await execute(
+      process.platform === "win32" ? "py" : "python3",
+      [...(process.platform === "win32" ? ["-3"] : []), "-I", "-S", guard, "legacy"],
+      {
+        timeout: 30_000,
+        maxBuffer: 65536,
+      },
+    );
   } catch {
     // KEEP affects this cleanup step. It does not fail the caller's main work.
   }

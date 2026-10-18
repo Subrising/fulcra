@@ -36,7 +36,7 @@ TMP=$(mktemp -d "${TMPDIR:-/tmp}/fulcra-release.XXXXXX")
 WORKTREE=$TMP/source
 cleanup_step() {
   if [ -r "$HOME/.local/share/fulcra-cleanup/cleanup_steps.py" ]; then
-    python3 "$HOME/.local/share/fulcra-cleanup/cleanup_steps.py" --require-policy-version 2 "$@" || true
+    python3 -I -S "$HOME/.local/share/fulcra-cleanup/cleanup_steps.py" --require-policy-version 3 "$@" || true
   else
     printf '%s\n' 'KEEP: cleanup proof is unavailable; main work continues.' >&2
   fi

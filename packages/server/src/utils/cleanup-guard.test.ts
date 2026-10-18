@@ -54,3 +54,14 @@ test("M5 sends the original path to the guard without collapsing a link and pare
   const args = mocks.execute.mock.calls[0][1] as string[];
   expect(args[args.indexOf("--path") + 1]).toBe(requested);
 });
+
+test("M6 isolates the guard interpreter before it loads the policy", async () => {
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  mocks.execute.mockResolvedValue({ stdout: '{"action":"KEEP","policyVersion":2}' });
+  await removeWithCleanupGuard("/tmp/fixture-worktree");
+  const args = mocks.execute.mock.calls[0][1] as string[];
+  expect(args.indexOf("-I")).toBeLessThan(
+    args.findIndex((arg) => arg.endsWith("cleanup_guard.py")),
+  );
+  expect(args).toContain("-S");
+});
