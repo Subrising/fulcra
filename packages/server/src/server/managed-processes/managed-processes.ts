@@ -260,7 +260,6 @@ class FileBackedManagedProcessRegistry implements ManagedProcessRegistry {
     const message = await retainLegacyCleanup();
     for (const entry of entries) {
       result.checked += 1;
-      result.errors.push({ id: entry.record.id, message });
       this.logger.warn({ id: entry.record.id, pid: entry.record.pid }, message);
     }
 

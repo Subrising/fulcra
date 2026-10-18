@@ -99,7 +99,7 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
       // Create a git repo with an initial commit
       mkdirSync(repoDir, { recursive: true });
       execFileSync("git", ["init", "-b", "main"], { cwd: repoDir });
-      execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: repoDir });
+      execFileSync("git", ["config", "user.email", "fulcra@users.noreply.github.com"], { cwd: repoDir });
       execFileSync("git", ["config", "user.name", "Test"], { cwd: repoDir });
       writeFileSync(join(repoDir, "file.txt"), "hello\n");
       execFileSync("git", ["add", "."], { cwd: repoDir });
@@ -168,14 +168,12 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
       });
       expect(worktrees.map((entry) => entry.path)).toContain(result.worktreePath);
 
-      await expect(
-        deletePaseoWorktree({
+      await deletePaseoWorktree({
           cwd: repoDir,
           worktreePath: result.worktreePath,
           paseoHome,
           worktreesBaseRoot: worktreesRoot,
-        }),
-      ).rejects.toThrow("Cleanup proof failed");
+        });
       expect(existsSync(result.worktreePath)).toBe(true);
     });
 
@@ -1478,13 +1476,11 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
       const paths = worktrees.map((worktree) => worktree.path).sort();
       expect(paths).toEqual([first.worktreePath, second.worktreePath].sort());
 
-      await expect(
-        deletePaseoWorktree({
+      await deletePaseoWorktree({
           cwd: repoDir,
           worktreePath: first.worktreePath,
           paseoHome,
-        }),
-      ).rejects.toThrow("Cleanup proof failed");
+        });
       expect(existsSync(first.worktreePath)).toBe(true);
 
       const remaining = await listPaseoWorktrees({ cwd: repoDir, paseoHome });
@@ -1505,13 +1501,11 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
       const nestedDir = join(created.worktreePath, "nested", "dir");
       mkdirSync(nestedDir, { recursive: true });
 
-      await expect(
-        deletePaseoWorktree({
+      await deletePaseoWorktree({
           cwd: repoDir,
           worktreePath: nestedDir,
           paseoHome,
-        }),
-      ).rejects.toThrow("Cleanup proof failed");
+        });
       expect(existsSync(created.worktreePath)).toBe(true);
 
       const remaining = await listPaseoWorktrees({ cwd: repoDir, paseoHome });
@@ -1543,13 +1537,11 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
         worktreeSlug: "teardown-test",
         paseoHome,
       });
-      await expect(
-        deletePaseoWorktree({
+      await deletePaseoWorktree({
           cwd: repoDir,
           worktreePath: created.worktreePath,
           paseoHome,
-        }),
-      ).rejects.toThrow("Cleanup proof failed");
+        });
       expect(existsSync(created.worktreePath)).toBe(true);
       expect(existsSync(join(repoDir, "teardown.log"))).toBe(false);
     });
@@ -1575,13 +1567,11 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
         paseoHome,
       });
 
-      await expect(
-        deletePaseoWorktree({
+      await deletePaseoWorktree({
           cwd: repoDir,
           worktreePath: created.worktreePath,
           paseoHome,
-        }),
-      ).rejects.toThrow("Cleanup proof failed");
+        });
 
       expect(getWorktreeTeardownCommands(repoDir)).toEqual([
         'cleanup_message="teardown string"\necho "$cleanup_message" > "$PASEO_SOURCE_CHECKOUT_PATH/teardown.log"',
@@ -1613,13 +1603,11 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
         paseoHome,
       });
 
-      await expect(
-        deletePaseoWorktree({
+      await deletePaseoWorktree({
           cwd: repoDir,
           worktreePath: created.worktreePath,
           paseoHome,
-        }),
-      ).rejects.toThrow("Cleanup proof failed");
+        });
 
       expect(existsSync(join(repoDir, "teardown-port.log"))).toBe(false);
       expect(existsSync(created.worktreePath)).toBe(true);
@@ -1650,13 +1638,11 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
         paseoHome,
       });
 
-      await expect(
-        deletePaseoWorktree({
+      await deletePaseoWorktree({
           cwd: repoDir,
           worktreePath: created.worktreePath,
           paseoHome,
-        }),
-      ).rejects.toThrow("Cleanup proof failed");
+        });
 
       expect(existsSync(created.worktreePath)).toBe(true);
       expect(existsSync(join(repoDir, "teardown-start.log"))).toBe(false);

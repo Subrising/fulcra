@@ -7,10 +7,19 @@ ARTIFACTS_DIR="${PASEO_MOBILE_E2E_ARTIFACTS_DIR:-${REPO_ROOT}/.dev/agent-device-
 METRO_PORT="${PASEO_MOBILE_E2E_METRO_PORT:-8081}"
 METRO_PID=0
 
+cleanup_step() {
+  if [ -r "$HOME/.local/share/fulcra-cleanup/cleanup_steps.py" ]; then
+    python3 "$HOME/.local/share/fulcra-cleanup/cleanup_steps.py" "$@" || true
+  else
+    printf '%s\n' 'KEEP: cleanup proof is unavailable; main work continues.' >&2
+  fi
+}
 cleanup() {
-  # The external launcher supplied no retained child and birth receipt.
-  # The shared guard keeps every process and state file in this legacy path.
-  python3 "$HOME/.local/share/fulcra-cleanup/cleanup_guard.py" legacy || true
+  cleanup_step service-stop "${STATE_DIR}"
+  if [[ "${METRO_PID}" -gt 0 ]]; then
+    cleanup_step pkill -TERM -P "${METRO_PID}"
+    cleanup_step kill -TERM "${METRO_PID}"
+  fi
 }
 
 trap cleanup EXIT INT TERM

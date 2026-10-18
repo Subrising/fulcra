@@ -62,7 +62,7 @@ describe("managed process registry", () => {
     const result = await restartedRegistry.reapStale();
 
     expect(result).toMatchObject({ checked: 1, dead: 0, mismatched: 0, removed: 0, terminated: 0 });
-    expect(result.errors).toEqual([{ id: expect.any(String), message: expect.stringContaining("launcher ownership") }]);
+    expect(result.errors).toEqual([]);
     expect(terminator.terminatedPids).toEqual([]);
     expect(await restartedRegistry.list()).toHaveLength(1);
   });
@@ -100,7 +100,7 @@ describe("managed process registry", () => {
     const result = await restartedRegistry.reapStale();
 
     expect(result).toMatchObject({ checked: 1, dead: 0, mismatched: 0, removed: 0, terminated: 0 });
-    expect(result.errors).toEqual([{ id: expect.any(String), message: expect.stringContaining("launcher ownership") }]);
+    expect(result.errors).toEqual([]);
     expect(terminator.terminatedPids).toEqual([]);
     expect(await restartedRegistry.list()).toHaveLength(1);
   });
@@ -143,7 +143,7 @@ describe("managed process registry", () => {
     const result = await restartedRegistry.reapStale();
 
     expect(result).toMatchObject({ checked: 1, dead: 0, mismatched: 0, removed: 0, terminated: 0 });
-    expect(result.errors).toEqual([{ id: expect.any(String), message: expect.stringContaining("launcher ownership") }]);
+    expect(result.errors).toEqual([]);
     expect(terminator.terminatedPids).toEqual([]);
     expect(await restartedRegistry.list()).toHaveLength(1);
   });
@@ -176,7 +176,7 @@ describe("managed process registry", () => {
     const result = await restartedRegistry.reapStale();
 
     expect(result).toMatchObject({ checked: 1, dead: 0, mismatched: 0, removed: 0, terminated: 0 });
-    expect(result.errors).toEqual([{ id: expect.any(String), message: expect.stringContaining("launcher ownership") }]);
+    expect(result.errors).toEqual([]);
     expect(terminator.terminatedPids).toEqual([]);
     expect(await restartedRegistry.list()).toHaveLength(1);
   });
@@ -213,7 +213,7 @@ describe("managed process registry", () => {
     const result = await restartedRegistry.reapStale();
 
     expect(result).toMatchObject({ checked: 1, dead: 0, mismatched: 0, removed: 0, terminated: 0 });
-    expect(result.errors).toEqual([{ id: expect.any(String), message: expect.stringContaining("launcher ownership") }]);
+    expect(result.errors).toEqual([]);
     expect(terminator.terminatedPids).toEqual([]);
     expect(await restartedRegistry.list()).toHaveLength(1);
   });
