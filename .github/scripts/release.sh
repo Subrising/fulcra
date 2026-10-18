@@ -35,8 +35,8 @@ FULCRA_PRIVATE_PATTERNS=$(cat "$PATTERNS")
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/fulcra-release.XXXXXX")
 WORKTREE=$TMP/source
 cleanup() {
-  git worktree remove --force "$WORKTREE" >/dev/null 2>&1 || true
-  rm -rf "$TMP"
+  python3 "$HOME/.local/share/fulcra-cleanup/cleanup_guard.py" remove --path "$WORKTREE" --root "$TMP" || true
+  python3 "$HOME/.local/share/fulcra-cleanup/cleanup_guard.py" legacy || true
 }
 trap cleanup EXIT
 git fetch -q origin main

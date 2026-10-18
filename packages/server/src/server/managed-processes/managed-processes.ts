@@ -1,3 +1,4 @@
+import { retainLegacyCleanup } from "../../utils/cleanup-guard.js";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -5,11 +6,8 @@ import type { Logger } from "pino";
 import { z } from "zod";
 import { writeJsonFileAtomic } from "../atomic-file.js";
 import { execCommand } from "../../utils/spawn.js";
-import type { ProcessTerminator, TreeKillTarget } from "../../utils/tree-kill.js";
+import type { ProcessTerminator } from "../../utils/tree-kill.js";
 
-const MANAGED_PROCESS_GRACEFUL_SHUTDOWN_TIMEOUT_MS = 5_000;
-const MANAGED_PROCESS_FORCE_SHUTDOWN_TIMEOUT_MS = 1_000;
-const MANAGED_PROCESS_EXIT_POLL_INTERVAL_MS = 50;
 const MANAGED_PROCESS_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
 // `ps -o lstart` emits a fixed-width 24-char ctime stamp, e.g. "Sat Jun 20 10:30:40 2026".
 const POSIX_LSTART_WIDTH = 24;
@@ -209,13 +207,11 @@ class SystemManagedProcessTable implements ManagedProcessTable {
 class FileBackedManagedProcessRegistry implements ManagedProcessRegistry {
   private readonly directory: string;
   private readonly processTable: ManagedProcessTable;
-  private readonly terminateProcess: ProcessTerminator;
   private readonly logger: Logger;
 
   constructor(options: ManagedProcessRegistryOptions) {
     this.directory = path.join(options.paseoHome, "runtime", "managed-processes");
     this.processTable = options.processTable;
-    this.terminateProcess = options.terminateProcess;
     this.logger = options.logger.child({ module: "managed-processes" });
   }
 
@@ -259,69 +255,13 @@ class FileBackedManagedProcessRegistry implements ManagedProcessRegistry {
       errors: [],
     };
 
-    for (const entry of await this.readEntries()) {
+    const entries = await this.readEntries();
+    if (entries.length === 0) return result;
+    const message = await retainLegacyCleanup();
+    for (const entry of entries) {
       result.checked += 1;
-      try {
-        const inspection = await this.processTable.inspect(entry.record.pid);
-        if (inspection.status === "not-found") {
-          await fs.rm(entry.path, { force: true });
-          result.dead += 1;
-          result.removed += 1;
-          continue;
-        }
-
-        if (inspection.status === "error") {
-          // Inspection failed, so we cannot tell whether the helper is still
-          // alive. Keep the record and retry on the next reconcile rather than
-          // orphaning a live process by deleting its record without killing it.
-          const message =
-            inspection.error instanceof Error ? inspection.error.message : String(inspection.error);
-          result.errors.push({ id: entry.record.id, message });
-          this.logger.warn(
-            {
-              err: inspection.error,
-              id: entry.record.id,
-              pid: entry.record.pid,
-              owner: entry.record.owner,
-            },
-            "Could not inspect managed helper process; leaving record for next reconcile",
-          );
-          continue;
-        }
-
-        const snapshot = inspection.snapshot;
-        if (!processIdentityMatches(entry.record, snapshot)) {
-          await fs.rm(entry.path, { force: true });
-          result.mismatched += 1;
-          result.removed += 1;
-          continue;
-        }
-
-        await this.terminateProcess(createPidTarget(entry.record.pid), {
-          gracefulTimeoutMs: MANAGED_PROCESS_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
-          forceTimeoutMs: MANAGED_PROCESS_FORCE_SHUTDOWN_TIMEOUT_MS,
-          onForceSignal: () => {
-            this.logger.warn(
-              {
-                pid: entry.record.pid,
-                owner: entry.record.owner,
-                timeoutMs: MANAGED_PROCESS_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
-              },
-              "Managed helper process did not exit after SIGTERM; sending SIGKILL",
-            );
-          },
-        });
-        await fs.rm(entry.path, { force: true });
-        result.terminated += 1;
-        result.removed += 1;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        result.errors.push({ id: entry.record.id, message });
-        this.logger.warn(
-          { err: error, id: entry.record.id, pid: entry.record.pid, owner: entry.record.owner },
-          "Failed to reap managed helper process",
-        );
-      }
+      result.errors.push({ id: entry.record.id, message });
+      this.logger.warn({ id: entry.record.id, pid: entry.record.pid }, message);
     }
 
     return result;
@@ -365,76 +305,6 @@ class FileBackedManagedProcessRegistry implements ManagedProcessRegistry {
       }
     }
     return entries;
-  }
-}
-
-function processIdentityMatches(
-  record: ManagedProcessRecord,
-  snapshot: ManagedProcessSnapshot,
-): boolean {
-  if (record.identity.startedAt && snapshot.startedAt) {
-    if (record.identity.startedAt !== snapshot.startedAt) {
-      return false;
-    }
-    return snapshot.commandLine ? commandLineMatchesRecord(record, snapshot.commandLine) : true;
-  }
-
-  if (record.identity.commandLine && snapshot.commandLine) {
-    return (
-      normalizeCommandLine(record.identity.commandLine) ===
-      normalizeCommandLine(snapshot.commandLine)
-    );
-  }
-
-  return snapshot.commandLine ? commandLineMatchesRecord(record, snapshot.commandLine) : false;
-}
-
-function commandLineMatchesRecord(record: ManagedProcessRecord, commandLine: string): boolean {
-  // Require the command name and args as one contiguous run, not scattered
-  // tokens. Without exact process identity (lstart), a reused PID whose command
-  // line merely mentions "opencode", "serve" and the port elsewhere must not be
-  // mistaken for our leftover and killed.
-  const normalized = normalizeCommandLine(commandLine);
-  const commandName = path.basename(record.command).toLowerCase();
-  const signature = [commandName, ...record.args].map((token) => token.toLowerCase()).join(" ");
-  return normalized.includes(signature);
-}
-
-function normalizeCommandLine(commandLine: string): string {
-  return commandLine.replace(/\s+/g, " ").trim().toLowerCase();
-}
-
-export function createPidTarget(pid: number): TreeKillTarget {
-  return {
-    pid,
-    exitCode: null,
-    signalCode: null,
-    kill(signal?: NodeJS.Signals | number) {
-      process.kill(pid, signal);
-      return true;
-    },
-    // The reaper has no ChildProcess handle for a leftover from a previous
-    // daemon, so it observes exit by polling the pid. Without this, termination
-    // can never see a graceful SIGTERM exit and always waits out the full
-    // graceful+force window before escalating to SIGKILL.
-    once(_event, listener) {
-      const timer = setInterval(() => {
-        if (!isProcessAlive(pid)) {
-          clearInterval(timer);
-          listener();
-        }
-      }, MANAGED_PROCESS_EXIT_POLL_INTERVAL_MS);
-      timer.unref();
-    },
-  };
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return isNodeErrorWithCode(error, "EPERM");
   }
 }
 

@@ -8,11 +8,9 @@ METRO_PORT="${PASEO_MOBILE_E2E_METRO_PORT:-8081}"
 METRO_PID=0
 
 cleanup() {
-  AGENT_DEVICE_STATE_DIR="${STATE_DIR}" agent-device daemon stop --clean >/dev/null 2>&1 || true
-  if [[ "${METRO_PID}" -gt 0 ]]; then
-    pkill -TERM -P "${METRO_PID}" >/dev/null 2>&1 || true
-    kill -TERM "${METRO_PID}" >/dev/null 2>&1 || true
-  fi
+  # The external launcher supplied no retained child and birth receipt.
+  # The shared guard keeps every process and state file in this legacy path.
+  python3 "$HOME/.local/share/fulcra-cleanup/cleanup_guard.py" legacy || true
 }
 
 trap cleanup EXIT INT TERM

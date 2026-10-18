@@ -20,7 +20,7 @@ import {
   readPaseoWorktreeMetadata,
   writePaseoWorktreeMetadata,
 } from "../../../utils/worktree-metadata.js";
-import { createWorktree, deletePaseoWorktree } from "../../../utils/worktree.js";
+import { createWorktree } from "../../../utils/worktree.js";
 import {
   FileBackedWorkspaceRegistry,
   createPersistedProjectRecord,
@@ -244,7 +244,7 @@ describe("workspace recovery", () => {
       "Selected project directory is missing from the restored worktree",
     );
     expect(unarchived).toEqual([]);
-    expect(existsSync(worktreeRoot)).toBe(false);
+    expect(existsSync(worktreeRoot)).toBe(true);
     expect(
       execFileSync("git", ["worktree", "list", "--porcelain"], {
         cwd: repoDir,
@@ -252,7 +252,7 @@ describe("workspace recovery", () => {
       })
         .toString()
         .includes("without-subproject"),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   test("keeps the workspace archived when its persisted source repository is missing", async () => {
@@ -281,7 +281,7 @@ function createGitRepository(): { tempDir: string; repoDir: string } {
   const repoDir = join(tempDir, "repo");
   mkdirSync(repoDir);
   execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "pipe" });
-  execFileSync("git", ["config", "user.email", "test@example.com"], {
+  execFileSync("git", ["config", "user.email", "fulcra@users.noreply.github.com"], {
     cwd: repoDir,
     stdio: "pipe",
   });
@@ -340,7 +340,9 @@ async function createBaseRecoveryFixture(baseBranch: string | null) {
       workspaceId: workspace.workspaceId,
       workspaceRegistry: registry,
     });
-    await deletePaseoWorktree({ cwd: repoDir, worktreePath: workspace.cwd, paseoHome });
+    // This fixture simulates an already removed checkout. It does not test cleanup authority.
+    rmSync(workspace.cwd, { recursive: true, force: true });
+    execFileSync("git", ["worktree", "prune"], { cwd: repoDir, stdio: "pipe" });
     expect(existsSync(workspace.cwd)).toBe(false);
   }
   return { workspace, registry, service, paseoHome, repoDir, tempDir, archiveAndRemove };

@@ -1,3 +1,4 @@
+import { retainLegacyCleanup } from "../../../utils/cleanup-guard.js";
 import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
 
@@ -159,11 +160,9 @@ export function createWorkspaceRecoveryService(deps: {
           baseRef: await resolveRecoveryBase(sourceRepoRoot, workspace.baseBranch),
         };
 
-    try {
-      await runGitCommand(["worktree", "prune"], { cwd: sourceRepoRoot, timeout: 30_000 });
-    } catch {
-      // A stale worktree registration is not guaranteed; creation reports any real conflict.
-    }
+    // Repository-wide pruning cannot prove that every registration is unused.
+    // Keep registrations. Creation reports a target-specific conflict without deleting data.
+    await retainLegacyCleanup();
 
     let previousWorktreePath = workspace.worktreeRoot;
     if (!previousWorktreePath) {
