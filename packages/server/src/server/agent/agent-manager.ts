@@ -1,3 +1,4 @@
+import { withCleanupAdmission } from "../../utils/cleanup-admission.js";
 import {
   assertComputerUseLabels,
   computerUseFromLabels,
@@ -2698,72 +2699,80 @@ export class AgentManager {
   }
 
   async listDraftCommands(config: AgentSessionConfig): Promise<AgentSlashCommand[]> {
-    const normalizedConfig = await this.normalizeConfig(config, { resolveDefaultModel: false });
-    const client = this.requireClient(normalizedConfig.provider);
-    if (!normalizedConfig.model) {
-      return [];
-    }
-    const available = await client.isAvailable();
-    if (!available) {
-      throw new Error(
-        `Provider '${normalizedConfig.provider}' is not available. Please ensure the CLI is installed.`,
-      );
-    }
-
-    if (client.listCommands) {
-      return await client.listCommands(normalizedConfig);
-    }
-
-    const session = await nativeDispatch(() => client.createSession(normalizedConfig));
-    try {
-      if (!session.listCommands) {
+    return withCleanupAdmission(async () => {
+      const normalizedConfig = await this.normalizeConfig(config, {
+        resolveDefaultModel: false,
+      });
+      const client = this.requireClient(normalizedConfig.provider);
+      if (!normalizedConfig.model) {
+        return [];
+      }
+      const available = await client.isAvailable();
+      if (!available) {
         throw new Error(
-          `Provider '${normalizedConfig.provider}' does not support listing commands`,
+          `Provider '${normalizedConfig.provider}' is not available. Please ensure the CLI is installed.`,
         );
       }
-      return await session.listCommands();
-    } finally {
+
+      if (client.listCommands) {
+        return await client.listCommands(normalizedConfig);
+      }
+
+      const session = await nativeDispatch(() => client.createSession(normalizedConfig));
       try {
-        await nativeDispatch(() => session.close());
-      } catch (error) {
-        this.logger.warn(
-          { err: error, provider: normalizedConfig.provider },
-          "Failed to close draft command listing session",
-        );
+        if (!session.listCommands) {
+          throw new Error(
+            `Provider '${normalizedConfig.provider}' does not support listing commands`,
+          );
+        }
+        return await session.listCommands();
+      } finally {
+        try {
+          await nativeDispatch(() => session.close());
+        } catch (error) {
+          this.logger.warn(
+            { err: error, provider: normalizedConfig.provider },
+            "Failed to close draft command listing session",
+          );
+        }
       }
-    }
+    });
   }
 
   async listDraftFeatures(config: AgentSessionConfig): Promise<AgentFeature[]> {
-    const normalizedConfig = await this.normalizeConfig(config, { resolveDefaultModel: false });
-    const client = this.requireClient(normalizedConfig.provider);
-    if (!normalizedConfig.model && !client.listFeatures) {
-      return [];
-    }
-    const available = await client.isAvailable();
-    if (!available) {
-      throw new Error(
-        `Provider '${normalizedConfig.provider}' is not available. Please ensure the CLI is installed.`,
-      );
-    }
-
-    if (client.listFeatures) {
-      return await client.listFeatures(normalizedConfig);
-    }
-
-    const session = await nativeDispatch(() => client.createSession(normalizedConfig));
-    try {
-      return session.features ?? [];
-    } finally {
-      try {
-        await nativeDispatch(() => session.close());
-      } catch (error) {
-        this.logger.warn(
-          { err: error, provider: normalizedConfig.provider },
-          "Failed to close draft feature listing session",
+    return withCleanupAdmission(async () => {
+      const normalizedConfig = await this.normalizeConfig(config, {
+        resolveDefaultModel: false,
+      });
+      const client = this.requireClient(normalizedConfig.provider);
+      if (!normalizedConfig.model && !client.listFeatures) {
+        return [];
+      }
+      const available = await client.isAvailable();
+      if (!available) {
+        throw new Error(
+          `Provider '${normalizedConfig.provider}' is not available. Please ensure the CLI is installed.`,
         );
       }
-    }
+
+      if (client.listFeatures) {
+        return await client.listFeatures(normalizedConfig);
+      }
+
+      const session = await nativeDispatch(() => client.createSession(normalizedConfig));
+      try {
+        return session.features ?? [];
+      } finally {
+        try {
+          await nativeDispatch(() => session.close());
+        } catch (error) {
+          this.logger.warn(
+            { err: error, provider: normalizedConfig.provider },
+            "Failed to close draft feature listing session",
+          );
+        }
+      }
+    });
   }
 
   usageSession(id: string) {
@@ -2946,7 +2955,9 @@ export class AgentManager {
     agentId: string | undefined,
     options: CreateAgentOptions,
   ): Promise<ManagedAgent> {
-    return this.trackAgentRegistrationOperation(this.createAgentInternal(config, agentId, options));
+    return this.trackAgentRegistrationOperation(
+      withCleanupAdmission(() => this.createAgentInternal(config, agentId, options)),
+    );
   }
 
   private async createAgentInternal(
@@ -3209,7 +3220,9 @@ export class AgentManager {
     workspaceId: string;
     labels?: Record<string, string>;
   }): Promise<ManagedAgent> {
-    return this.trackAgentRegistrationOperation(this.importProviderSessionInternal(input));
+    return this.trackAgentRegistrationOperation(
+      withCleanupAdmission(() => this.importProviderSessionInternal(input)),
+    );
   }
 
   private async importProviderSessionInternal(input: {
@@ -5560,7 +5573,7 @@ export class AgentManager {
     // Parent cascade classifies a child inside the same lane used by open-tab
     // label writes, so a received ownership update cannot be overtaken.
     const previous = this.lifecycleMutationTails.get(agentId) ?? Promise.resolve();
-    const result = previous.catch(() => undefined).then(mutation);
+    const result = previous.catch(() => undefined).then(() => withCleanupAdmission(mutation));
     const tail = result.then(
       () => undefined,
       () => undefined,

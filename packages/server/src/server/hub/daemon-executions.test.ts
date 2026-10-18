@@ -239,7 +239,7 @@ test("removing a daemon-owned agent removes its execution association", async ()
   expect(removed.durableAgentCount).toBe(0);
 });
 
-test("a failed Hub create removes its auto-created worktree", async () => {
+test("a failed Hub create keeps its unproved worktree and removes its agent records", async () => {
   const hub = await launchRelationship();
   hub.beginOwnedCreate("failed-worktree-create", "failed-worktree-execution", {
     modeId: "missing-mode",
@@ -252,7 +252,7 @@ test("a failed Hub create removes its auto-created worktree", async () => {
     type: "hub.execution.agent.create.response",
     payload: { success: false, executionId: "failed-worktree-execution" },
   });
-  expect(await hub.listedWorktrees()).toHaveLength(1);
+  expect(await hub.listedWorktrees()).toHaveLength(2);
   expect(await hub.durableOwnedAgentIds()).toEqual([]);
 });
 
@@ -272,7 +272,7 @@ test("failed Hub creates release their lifecycle subscriptions", async () => {
   });
   expect(hub.activeOwnedAgentIds()).toEqual([]);
   expect(await hub.durableOwnedAgentIds()).toEqual([]);
-  expect(await hub.listedWorktrees()).toHaveLength(1);
+  expect(await hub.listedWorktrees()).toHaveLength(2);
   expect(hub.agentSubscriptionCount()).toBe(subscriptionBaseline);
 
   hub.failProviderPromptStart();
@@ -285,7 +285,7 @@ test("failed Hub creates release their lifecycle subscriptions", async () => {
   });
   expect(hub.activeOwnedAgentIds()).toEqual([]);
   expect(await hub.durableOwnedAgentIds()).toEqual([]);
-  expect(await hub.listedWorktrees()).toHaveLength(1);
+  expect(await hub.listedWorktrees()).toHaveLength(2);
   expect(hub.agentSubscriptionCount()).toBe(subscriptionBaseline);
 });
 
@@ -305,7 +305,7 @@ test("failed Hub create cleans durable state when provider close rejects", async
   });
   expect(hub.activeOwnedAgentIds()).toEqual([]);
   expect(await hub.durableOwnedAgentIds()).toEqual([]);
-  expect(await hub.listedWorktrees()).toHaveLength(1);
+  expect(await hub.listedWorktrees()).toHaveLength(2);
 });
 
 test("Hub checkout uses the requested branch ref", async () => {

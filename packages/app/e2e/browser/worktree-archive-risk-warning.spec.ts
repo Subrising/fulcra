@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Dialog, Page } from "@playwright/test";
@@ -103,7 +103,7 @@ test.describe("Workspace archive risk warning for worktree backing", () => {
     await tempRepo?.cleanup().catch(() => undefined);
   });
 
-  test("a risky workspace archive is gated by confirmation and removes its worktree after acceptance", async ({
+  test("confirmation archives the workspace while cleanup keeps uncommitted and unpushed work", async ({
     page,
   }) => {
     const serverId = getServerId();
@@ -137,10 +137,12 @@ test.describe("Workspace archive risk warning for worktree backing", () => {
     expect(secondWarning.message()).toContain("1 unpushed commit");
 
     await expectWorkspaceAbsentFromSidebar(page, worktree.workspaceId);
-    await expect
-      .poll(() => existsSync(worktree.workspaceDirectory), { timeout: 30_000 })
-      .toBe(false);
-
-    createdWorktreeDirectories.delete(worktree.workspaceDirectory);
+    expect(existsSync(worktree.workspaceDirectory)).toBe(true);
+    expect(readFileSync(path.join(worktree.workspaceDirectory, "DIRTY.md"), "utf8")).toBe(
+      "# dirty\n",
+    );
+    expect(readFileSync(path.join(worktree.workspaceDirectory, "UNPUSHED.md"), "utf8")).toBe(
+      "# unpushed\n",
+    );
   });
 });

@@ -755,7 +755,7 @@ describe("Hub relationship", () => {
 
     expect(relationship.activeOwnedAgentIds()).toEqual([]);
     expect(await relationship.durableOwnedAgentIds()).toEqual([]);
-    expect(await relationship.listedWorktrees()).toHaveLength(1);
+    expect(await relationship.listedWorktrees()).toHaveLength(2);
   });
 
   test("re-enrollment gives the same daemon fresh execution authority", async () => {

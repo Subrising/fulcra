@@ -114,11 +114,14 @@ test.describe("Worktree restore after daemon restart", () => {
     });
     expect(existsSync(worktree.workspaceDirectory)).toBe(true);
 
-    // Archive through the default production path (no scope): the worktree dir is deleted.
     await archiveWorkspaceFromDaemon(worktreeClient, worktree.workspaceDirectory);
-    await expect
-      .poll(() => existsSync(worktree.workspaceDirectory), { timeout: 30_000 })
-      .toBe(false);
+    expect(existsSync(worktree.workspaceDirectory)).toBe(true);
+    // Create this test's missing-directory fault in its owned registered worktree.
+    execFileSync("git", ["worktree", "remove", "--force", worktree.workspaceDirectory], {
+      cwd: tempRepo.path,
+      stdio: "pipe",
+    });
+    expect(existsSync(worktree.workspaceDirectory)).toBe(false);
 
     // Restart this spec's daemon on the same home and port so it rebuilds all
     // workspace/agent links from persisted state without replacing the shared
