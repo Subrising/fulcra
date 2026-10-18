@@ -246,7 +246,9 @@ export class OwnedProcessTree {
 
   async signal(signal: NodeJS.Signals): Promise<void> {
     // Children first. A later phase uses the retained birth time even after reparenting.
-    for (const row of (await this.survivors()).toReversed()) {
+    const survivors = await this.survivors();
+    for (let index = survivors.length - 1; index >= 0; index -= 1) {
+      const row = survivors[index]!;
       try {
         this.sendSignal(row.pid, signal);
       } catch (error) {
