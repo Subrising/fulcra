@@ -52,6 +52,9 @@ Run each host's installed helper and packaged CLI against that daemon.
 Use a separate marker for each host and descendant.
 Require one held unrelated notice per host.
 Require each descendant marker exactly once in the provider's received prompts.
+Repeat the CLI steer path with both the host and daemon pause policies active.
+Check the installed daemon, as well as the candidate source.
+A guard allowance can still receive a native daemon hold on an older release.
 Require no unrelated marker in those prompts.
 Read the packaged CLI path when a host launcher forces its live home.
 Do not change the launcher to test an isolated endpoint.
