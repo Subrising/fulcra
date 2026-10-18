@@ -219,7 +219,7 @@ test("design 8 (daemon): a usage-limited session holds automatic sends and stays
   await expect(f.client.archiveAgent(f.worker.id)).rejects.toThrow(/Archive refused/);
 });
 
-test("design 8 (daemon): an archived session stays closed, and a cancelled assignment records CANCELLED", async () => {
+test("design 8 (daemon): a canceled assignment records CANCELLED, never DONE, and the item gets a fresh worker", async () => {
   const f = await fixture();
   await f.assign();
   await f.asLead.executeTool("work_cancel", { item: "FU-1", reason: "Superseded" });
@@ -227,14 +227,6 @@ test("design 8 (daemon): an archived session stays closed, and a cancelled assig
   expect(f.store.get("FU-1")?.approval).toBeUndefined();
   await f.client.archiveAgent(f.worker.id);
   expect((await f.storage.get(f.worker.id))?.archivedAt).toBeTruthy();
-  expect(f.store.get("FU-1")?.state).toBe("CANCELLED");
-
-  // The archived session starts no turn and gets no assignment state back.
-  const before = f.prompts.length;
-  await expect(
-    f.asLead.executeTool("send_agent_prompt", { agentId: f.worker.id, prompt: "wake up" }),
-  ).rejects.toThrow();
-  expect(f.prompts).toHaveLength(before);
   expect(f.store.get("FU-1")?.state).toBe("CANCELLED");
 
   // The item can get a fresh worker as generation 2.
@@ -245,6 +237,23 @@ test("design 8 (daemon): an archived session stays closed, and a cancelled assig
   );
   await f.assign("FU-1", next.id, "req-fresh");
   expect(f.store.get("FU-1")).toMatchObject({ generation: 2, workerId: next.id });
+});
+
+test("design 8 (daemon): an archived session stays closed and starts no turn", async () => {
+  const f = await fixture();
+  await f.assign();
+  const submitted = await f.submit("sha-1");
+  await f.approve("sha-1", submitted.assignment.verification!.evidenceDigest);
+  await f.client.archiveAgent(f.worker.id);
+  expect(f.store.get("FU-1")).toMatchObject({ state: "CLOSED" });
+
+  const before = f.prompts.length;
+  await expect(
+    f.asLead.executeTool("send_agent_prompt", { agentId: f.worker.id, prompt: "wake up" }),
+  ).rejects.toThrow();
+  expect(f.prompts).toHaveLength(before);
+  expect(f.store.get("FU-1")?.state).toBe("CLOSED");
+  expect((await f.storage.get(f.worker.id))?.archivedAt).toBeTruthy();
 });
 
 test("design 8 (daemon): a lead on another host cannot review, and remote sends keep their guard", async () => {
