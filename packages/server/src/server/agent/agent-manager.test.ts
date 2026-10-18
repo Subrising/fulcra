@@ -18,6 +18,7 @@ import { ProviderSnapshotManager } from "./provider-snapshot-manager.js";
 import * as archiveLedger from "../ledger-routing/ledger.js";
 import { SessionAuthorization, OWNER_PERMISSIONS } from "../authorization/index.js";
 import { spawn } from "node:child_process";
+import { readOwnedProcessTable } from "../../utils/tree-kill.js";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -16447,7 +16448,7 @@ test.each(["terminal", "human", "MCP terminal", "MCP human"])(
   },
 );
 
-test.each(["close", "archive"] as const)(
+test.skipIf(process.platform === "win32").each(["close", "archive"] as const)(
   "%s stops a session-owned detached process after its provider exits",
   async (action) => {
     const workdir = mkdtempSync(join(tmpdir(), "manager-session-resource-"));
@@ -16489,7 +16490,10 @@ test.each(["close", "archive"] as const)(
       });
       if (action === "close") await manager.closeAgent(agent.id);
       else await manager.archiveAgent(agent.id);
-      expect(() => process.kill(jobPid, 0)).toThrow();
+      const runningJob = (await readOwnedProcessTable()).some(
+        (row) => row.pid === jobPid && !row.zombie,
+      );
+      expect(runningJob).toBe(false);
       const record = await storage.get(agent.id);
       expect(record?.lastStatus).toBe("closed");
       if (action === "archive") expect(record?.archivedAt).toEqual(expect.any(String));
