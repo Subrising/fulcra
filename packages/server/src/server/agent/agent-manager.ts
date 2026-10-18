@@ -2357,7 +2357,13 @@ export class AgentManager {
       windowsPolicyFile: join(dirname(file), "session-resource-policy.json"),
       roots: () =>
         [...this.agents.values()].flatMap((agent) => {
-          if (protectedSessionDirectory(agent.cwd, this.registry?.getCached(agent.id)?.title ?? agent.config.title)) return [];
+          if (
+            protectedSessionDirectory(
+              agent.cwd,
+              this.registry?.getCached(agent.id)?.title ?? agent.config.title,
+            )
+          )
+            return [];
           const pid = agent.session.getProcessId?.();
           return pid && agent.instanceId
             ? [{ agentId: agent.id, instanceId: agent.instanceId, pid }]
