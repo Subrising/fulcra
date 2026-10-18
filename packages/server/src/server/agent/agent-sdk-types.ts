@@ -800,6 +800,14 @@ export interface AgentSession {
   interrupt(): Promise<void>;
   /** Release live runtime resources without archiving or deleting the durable native session. */
   close(): Promise<void>;
+  /**
+   * Idle sleep (FU-362): stop the provider process and its children, keep this session object, and start the
+   * process again on the next call that needs it. Resolves false, and changes nothing, unless the session is idle
+   * with no turn, permission, background work or goal.
+   */
+  sleep?(): Promise<boolean>;
+  /** True between sleep() and the next process start. */
+  isSleeping?(): boolean;
   listCommands?(): Promise<AgentSlashCommand[]>;
   setModel?(modelId: string | null): Promise<void>;
   setThinkingOption?(thinkingOptionId: string | null): Promise<void | AgentProviderNotice>;

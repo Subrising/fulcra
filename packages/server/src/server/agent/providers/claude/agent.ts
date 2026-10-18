@@ -2225,6 +2225,8 @@ class ClaudeAgentSession implements AgentSession {
   private readonly liveChildren = new Set<ChildProcess>();
   // The in-flight query start. Concurrent ensureQuery() callers share it, so one session never spawns two processes.
   private queryStarting: Promise<Query> | null = null;
+  // Set by sleep(); the next query start logs the wake and clears it.
+  private sleptAt: number | null = null;
   private input: AsyncMessageInput<SDKUserMessage> | null = null;
   private readonly queryInputs = new WeakMap<Query, AsyncMessageInput<SDKUserMessage>>();
   /** The exact SDK query/input pair that owns the current foreground turn. */
@@ -3101,30 +3103,12 @@ class ClaudeAgentSession implements AgentSession {
     // orphan accumulation. The SDK's internal cleanup may only kill the
     // direct child process.
     if (this.childProcess) {
-      const result = await terminateWithTreeKill(this.childProcess, {
-        gracefulTimeoutMs: 2_000,
-        forceTimeoutMs: 2_000,
-      });
-      if (result === "kill-timeout") {
-        this.logger.warn(
-          { pid: this.childProcess.pid, agentId: this.agentId },
-          "Claude process tree did not report exit after SIGKILL",
-        );
-      }
+      const child = this.childProcess;
+      await this.endProcessTree(child);
       this.childProcess = null;
     }
     // Reload and refresh end the old session through close(), so this also ends a leaked extra process.
-    const leftover = [...this.liveChildren];
-    this.liveChildren.clear();
-    await Promise.all(
-      leftover.map((child) =>
-        terminateWithTreeKill(child, { gracefulTimeoutMs: 2_000, forceTimeoutMs: 2_000 }).catch(
-          () => {
-            /* process may already be dead */
-          },
-        ),
-      ),
-    );
+    await this.endLeftoverChildren();
     if (this.persistSession === false && this.claudeSessionId) {
       // Claude Code currently ignores --no-session-persistence outside --print mode
       // (see `claude --help`), so the SDK's persistSession=false is silently dropped
@@ -3151,6 +3135,97 @@ class ClaudeAgentSession implements AgentSession {
       },
       "provider.claude.session_close.complete",
     );
+  }
+
+  // agent.wake: how long a sleeping session took to bring its process back, until the CLI answered its init.
+  private logWakeWhenReady(query: Query, startedAt: number): void {
+    const sleptAt = this.sleptAt;
+    if (sleptAt === null) return;
+    this.sleptAt = null;
+    const ready = query.initializationResult?.();
+    if (!ready) return;
+    void ready.then(
+      () =>
+        this.logger.info(
+          {
+            agentId: this.agentId,
+            provider: "claude",
+            sleptMinutes: Math.round(((startedAt - sleptAt) / 60_000) * 10) / 10,
+            wakeMs: Date.now() - startedAt,
+            pid: this.childProcess?.pid,
+          },
+          "agent.wake",
+        ),
+      () => undefined,
+    );
+  }
+
+  isSleeping(): boolean {
+    return this.sleptAt !== null && !this.query;
+  }
+
+  // Every process this session spawned that is still alive, with its MCP children. close() and sleep() both call it.
+  private async endLeftoverChildren(): Promise<void> {
+    const leftover = [...this.liveChildren];
+    this.liveChildren.clear();
+    await Promise.all(
+      leftover.map((child) =>
+        this.endProcessTree(child).catch(() => {
+          /* process may already be dead */
+        }),
+      ),
+    );
+  }
+
+  // The one place a Claude process tree (claude + MCP children) ends. close() and sleep() both use it.
+  private async endProcessTree(child: ChildProcess): Promise<void> {
+    const result = await terminateWithTreeKill(child, {
+      gracefulTimeoutMs: 2_000,
+      forceTimeoutMs: 2_000,
+    });
+    if (result === "kill-timeout") {
+      this.logger.warn(
+        { pid: child.pid, agentId: this.agentId },
+        "Claude process tree did not report exit after SIGKILL",
+      );
+    }
+  }
+
+  /**
+   * Idle sleep: end the Claude process tree but keep this session object. The next ensureQuery() starts
+   * `claude --resume` with the same Claude session id, as it does for a resumed session that has not
+   * queried yet. Returns false, and changes nothing, when the session is not idle.
+   */
+  async sleep(): Promise<boolean> {
+    if (this.closed || !this.query || this.queryStarting) return false;
+    if (
+      this.turnState !== "idle" ||
+      this.activeForegroundTurnId ||
+      this.autonomousTurn ||
+      this.cancelCurrentTurn ||
+      this.pendingPermissions.size > 0 ||
+      this.backgroundWork.snapshot() !== null ||
+      this.taskProtocolSource.hasRunningTasks() ||
+      this.queryRestartNeeded
+    ) {
+      return false;
+    }
+    const oldQuery = this.query;
+    const oldInput = this.input;
+    const retiredChild = this.childProcess;
+    // Detach first, as the restart path in ensureQuery does: the pump and the exit handler must see a
+    // retired query, not a crash.
+    this.query = null;
+    this.input = null;
+    this.queryPumpPromise = null;
+    this.childProcess = null;
+    this.sleptAt = Date.now();
+    oldInput?.end();
+    oldQuery.close?.();
+    await this.awaitWithTimeout(oldQuery.return?.(), "sleep query return");
+    if (retiredChild) await this.endProcessTree(retiredChild);
+    await this.endLeftoverChildren();
+    return true;
   }
 
   async listCommands(): Promise<AgentSlashCommand[]> {
@@ -3582,6 +3657,7 @@ class ClaudeAgentSession implements AgentSession {
     // resume: sessionId and the new query continues the existing conversation.
     this.persistence = null;
 
+    const wakeStartedAt = Date.now();
     const input = createAsyncMessageInput<SDKUserMessage>();
     const options = await this.buildOptions(launchMode);
     if (this.closed) throw new Error("Claude session closed");
@@ -3611,6 +3687,7 @@ class ClaudeAgentSession implements AgentSession {
     );
     const preparedQuery = this.query;
     this.queryInputs.set(preparedQuery, input);
+    this.logWakeWhenReady(preparedQuery, wakeStartedAt);
     const fastMode = this.resolveFastModeSetting();
     if (fastMode !== null) {
       await preparedQuery.applyFlagSettings({ fastMode });

@@ -290,6 +290,8 @@ export const PersistedConfigSchema = z
         idleLeadNudgeSkipOwners: z.array(z.string()).optional(),
         idleLeadNudgeMinIntervalMinutes: z.number().int().positive().optional(),
         reviveOnRestart: z.boolean().optional(),
+        // FU-362: minutes an idle session waits before its provider process stops; 0 turns it off. Read-only default 20.
+        idleSleepMinutes: z.number().int().min(0).max(10_080).optional(),
         // Transitional input only: migrate this introduced key to a sidecar before saving.
         autoResumeOnLimit: z.boolean().optional(),
         appendSystemPrompt: z.string().optional(),

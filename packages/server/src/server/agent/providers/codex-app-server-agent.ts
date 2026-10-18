@@ -3662,6 +3662,8 @@ export class CodexAppServerAgentSession implements AgentSession {
   private unpairedCompactionNotificationCompletions = 0;
   private unpairedCompactionItemCompletions = 0;
   private connectionState: "disconnected" | "history-ready" | "connected" = "disconnected";
+  // Set by sleep(); the next connect() logs the wake and clears it.
+  private sleptAt: number | null = null;
   private connectionPromise: Promise<void> | null = null;
   private closed = false;
   private collaborationModes: Array<{
@@ -3801,6 +3803,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       this.connectionState = "history-ready";
       return;
     }
+    const connectStartedAt = Date.now();
     const child = await this.spawnAppServer();
     this.processId = child.pid ?? null;
     const client = new CodexAppServerClient(child, this.logger, () => this.traceContext());
@@ -3841,6 +3844,7 @@ export class CodexAppServerAgentSession implements AgentSession {
         throw this.createClosedError();
       }
       this.connectionState = "connected";
+      this.logWake(connectStartedAt);
     } catch (error) {
       try {
         if (this.client === client) {
@@ -3856,6 +3860,23 @@ export class CodexAppServerAgentSession implements AgentSession {
       }
       throw error;
     }
+  }
+
+  // agent.wake: how long a sleeping session took to bring its app-server back, until the thread is loaded.
+  private logWake(startedAt: number): void {
+    const sleptAt = this.sleptAt;
+    if (sleptAt === null) return;
+    this.sleptAt = null;
+    this.logger.info(
+      {
+        agentId: this.agentId,
+        provider: CODEX_PROVIDER,
+        sleptMinutes: Math.round(((startedAt - sleptAt) / 60_000) * 10) / 10,
+        wakeMs: Date.now() - startedAt,
+        pid: this.processId,
+      },
+      "agent.wake",
+    );
   }
 
   private async loadResolvedWorkspaceWrite(): Promise<void> {
@@ -5587,6 +5608,53 @@ export class CodexAppServerAgentSession implements AgentSession {
     this.pendingForegroundTurnIdentification?.resolve(null);
     this.pendingForegroundTurnIdentification = null;
     this.currentThreadId = null;
+  }
+
+  /**
+   * Idle sleep: end the app-server process tree and keep this session object. The next send, or any call
+   * that needs the app-server, runs connect(), which starts a new app-server and loads the same thread.
+   * Returns false, and changes nothing, when a turn, a permission, an active goal or a connection is in progress.
+   */
+  async sleep(): Promise<boolean> {
+    if (
+      this.closed ||
+      this.connectionState !== "connected" ||
+      this.connectionPromise ||
+      !this.client ||
+      this.activeForegroundTurnId !== null ||
+      this.currentTurnId !== null ||
+      this.pendingForegroundTurnIdentification !== null ||
+      this.pendingPermissionHandlers.size > 0 ||
+      this.pendingManualCompactionStarts > 0
+    ) {
+      return false;
+    }
+    if (this.goalsEnabled && (await this.goalMayRun())) return false;
+    // The goal read awaited: a turn or a close may have started.
+    if (this.closed || this.client === null || this.activeForegroundTurnId !== null) return false;
+    this.sleptAt = Date.now();
+    await this.disposeClient();
+    this.processId = null;
+    return true;
+  }
+
+  isSleeping(): boolean {
+    return this.sleptAt !== null && this.connectionState === "disconnected";
+  }
+
+  // A goal continues inside the app-server, so a thread with an active goal must keep its process.
+  // Any read failure counts as "may run": sleeping is an optimisation and never worth a stalled goal.
+  private async goalMayRun(): Promise<boolean> {
+    if (!this.client || !this.currentThreadId) return false;
+    try {
+      const response = toObjectRecord(
+        await this.client.request("thread/goal/get", { threadId: this.currentThreadId }),
+      );
+      const goal = toObjectRecord(response?.goal);
+      return goal !== null && goal !== undefined && goal.status === "active";
+    } catch {
+      return true;
+    }
   }
 
   private clearPendingPermissions(options?: { preservePlanApprovals?: boolean }): void {

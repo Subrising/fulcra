@@ -473,6 +473,7 @@ export interface PaseoDaemonConfig {
   idleLeadNudgeSkipOwners?: string[];
   idleLeadNudgeMinIntervalMinutes?: number;
   reviveOnRestart?: boolean;
+  idleSleepMinutes?: number;
   autoResumeOnLimit?: boolean;
   appendSystemPrompt?: string;
   terminalProfiles?: TerminalProfile[];
@@ -1644,6 +1645,12 @@ export async function createPaseoDaemon(
     agentStorage,
     logger,
     deferStart: true,
+  });
+  // FU-362: an idle session stops its provider process after this many minutes; a held or queued message wakes it.
+  agentManager.configureIdleSleep({
+    minutes: () => config.idleSleepMinutes ?? 20,
+    deliveryPending: (agentId) =>
+      heldSends.pending(agentId) > 0 || queuedAgentMessages.pending(agentId) > 0,
   });
   // FULCRA(orchestration): a worker's finished turn reaches its lead as one notice (report-up.ts).
   const stopReportUp = startReportUp({

@@ -242,6 +242,7 @@ import {
 } from "./provider-subagents/store.js";
 import { withTimeout } from "../../utils/promise-timeout.js";
 import { extractAttention } from "../persistence-hooks.js";
+import { IdleSleep } from "./agent-idle-sleep.js";
 
 const RELOAD_SESSION_CLOSE_TIMEOUT_MS = 3_000;
 const INTERRUPT_SESSION_TIMEOUT_MS = 2_000;
@@ -2160,6 +2161,10 @@ export class AgentManager {
   private readonly timelineStore = new InMemoryAgentTimelineStore();
   private readonly timelineJournalPins = new Map<string, () => void>();
   private readonly providerSubagents = new ProviderSubagentStore();
+  // FU-362: idle sessions release their provider process. Off until the host sets a delay (configureIdleSleep).
+  private idleSleepMinutes: () => number = () => 0;
+  private idleSleepDeliveryPending: (agentId: string) => boolean = () => false;
+  private readonly idleSleep: IdleSleep;
   private readonly agentsAwaitingInitialSnapshotPersist = new Set<string>();
   private readonly sessionEventTails = new Map<string, Promise<void>>();
   private readonly steerEventBarriers = new Map<string, SteerEventBarrier>();
@@ -2283,6 +2288,11 @@ export class AgentManager {
     this.resolvePaseoToolPolicy = options.resolvePaseoToolPolicy ?? (() => undefined);
     this.appendSystemPrompt = options.appendSystemPrompt ?? "";
     this.logger = options.logger.child({ module: "agent", component: "agent-manager" });
+    this.idleSleep = new IdleSleep({
+      logger: this.logger,
+      minutes: () => this.idleSleepMinutes(),
+      trySleep: (agentId, idleMinutes) => this.trySleepAgent(agentId, idleMinutes),
+    });
     this.rescueTimeouts = {
       reloadSessionCloseMs:
         options.rescueTimeouts?.reloadSessionCloseMs ?? RELOAD_SESSION_CLOSE_TIMEOUT_MS,
@@ -2382,6 +2392,50 @@ export class AgentManager {
 
   prepareForShutdown(): void {
     this.acceptingAgentRegistrations = false;
+    this.idleSleep.dispose();
+  }
+
+  /**
+   * FU-362 idle sleep. `minutes` is read each time a timer starts or fires, so a config change applies at once;
+   * 0 turns sleeping off. `deliveryPending` says a held or queued message waits for the session.
+   */
+  configureIdleSleep(input: {
+    minutes: () => number;
+    deliveryPending?: (agentId: string) => boolean;
+  }) {
+    this.idleSleepMinutes = input.minutes;
+    this.idleSleepDeliveryPending = input.deliveryPending ?? (() => false);
+  }
+
+  /** True while the session keeps its record but its provider process is stopped. Its lifecycle is still "idle". */
+  isAgentSleeping(agentId: string): boolean {
+    const agent = this.agents.get(agentId);
+    return Boolean(agent?.session?.isSleeping?.());
+  }
+
+  private async trySleepAgent(
+    agentId: string,
+    idleMinutes: number,
+  ): Promise<"slept" | "busy" | "gone"> {
+    const agent = this.agents.get(agentId);
+    if (!agent?.session || agent.lifecycle !== "idle") return "gone";
+    const session = agent.session;
+    if (!session.sleep) return "gone";
+    if (session.isSleeping?.()) return "gone";
+    if (
+      this.hasInFlightRun(agentId) ||
+      agent.pendingPermissions.size > 0 ||
+      agent.activeTurnId !== null ||
+      this.lifecycleMutationTails.has(agentId) ||
+      this.idleSleepDeliveryPending(agentId) ||
+      this.providerSubagents.list(agentId).some((subagent) => subagent.status === "running")
+    ) {
+      return "busy";
+    }
+    const slept = await nativeDispatch(() => session.sleep!());
+    if (!slept) return "busy";
+    this.logger.info({ agentId, provider: agent.provider, idleMinutes }, "agent.sleep");
+    return "slept";
   }
 
   /** Host entry points bind the caller independently of target and parent labels. */
@@ -9615,6 +9669,7 @@ export class AgentManager {
 
     this.syncFeaturesFromSession(agent);
     this.scheduleNativeMessages(agent.id);
+    this.idleSleep.observe(agent.id, agent.lifecycle === "idle" && !agent.internal);
 
     this.logger.trace(
       {

@@ -313,6 +313,12 @@ export class ClaudeTaskProtocolSource {
     return observations;
   }
 
+  /** True while any declared task is still running; idle sleep must not end its process. */
+  hasRunningTasks(): boolean {
+    for (const id of this.declaredIds) if (this.lastStatusById.get(id) === "running") return true;
+    return false;
+  }
+
   /** A lost Claude process terminates every task it owned, including backgrounded workflows. */
   failRunningTasks(): SubagentObservation[] {
     const observations: SubagentObservation[] = [];
