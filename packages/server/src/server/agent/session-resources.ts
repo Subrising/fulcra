@@ -311,24 +311,15 @@ export class SessionResources {
         this.boots.set(key, { root, udid, shutdown: !before.booted });
   }
 
-  /** A successful, explicit UUID boot proves ownership. Pre-booted devices never become owned. */
-  observeTool(root: Root, item: ToolCallTimelineItem): Promise<void> {
-    return this.serial(async () => {
-      const command = simulatorCommand(item);
-      if (!command) return;
-      const udid = command.udid.toUpperCase(); const key = `${root.agentId}:${root.instanceId}:${item.callId}`;
-      const ledger = await this.load();
-      const owned = ledger.simulators.find((s) => s.udid === udid);
+  private async recordSimulatorUse(root: Root, udid: string, owned: SimulatorRecord | undefined, ledger: Ledger): Promise<void> {
       const pendingUsers = this.bootUsers.get(udid);
       if (pendingUsers) pendingUsers.set(`${root.agentId}:${root.instanceId}`, { agentId: root.agentId, instanceId: root.instanceId });
       if (owned && !owned.users.some((u) => u.agentId === root.agentId && u.instanceId === root.instanceId)) {
         owned.users.push({ agentId: root.agentId, instanceId: root.instanceId }); await this.save(ledger);
       }
-      if (command.action !== "boot") return;
-      if (item.status === "running" && !this.boots.has(key)) {
-        await this.startBoot(root, key, udid, owned, ledger); return;
-      }
-      if (item.status === "running") return;
+  }
+  private async finishBoot(root: Root, key: string, udid: string, owned: SimulatorRecord | undefined,
+    ledger: Ledger, item: ToolCallTimelineItem): Promise<void> {
       const pending = this.boots.get(key); this.boots.delete(key);
       if (!pending?.shutdown || item.status !== "completed" || (item.detail.type !== "shell" || item.detail.exitCode !== 0) || owned) return;
       if (!this.options.roots().some((r) => r.agentId === root.agentId && r.instanceId === root.instanceId)) return;
@@ -338,6 +329,23 @@ export class SessionResources {
         pid: after.pid, birth: after.birth, observedAt: this.now(), users: [...(this.bootUsers.get(udid)?.values() ?? [])] });
       this.bootUsers.delete(udid);
       await this.save(ledger);
+  }
+
+  /** A successful, explicit UUID boot proves ownership. Pre-booted devices never become owned. */
+  observeTool(root: Root, item: ToolCallTimelineItem): Promise<void> {
+    return this.serial(async () => {
+      const command = simulatorCommand(item);
+      if (!command) return;
+      const udid = command.udid.toUpperCase(); const key = `${root.agentId}:${root.instanceId}:${item.callId}`;
+      const ledger = await this.load();
+      const owned = ledger.simulators.find((s) => s.udid === udid);
+      await this.recordSimulatorUse(root, udid, owned, ledger);
+      if (command.action !== "boot") return;
+      if (item.status === "running" && !this.boots.has(key)) {
+        await this.startBoot(root, key, udid, owned, ledger); return;
+      }
+      if (item.status === "running") return;
+      await this.finishBoot(root, key, udid, owned, ledger, item);
     });
   }
 }
