@@ -515,6 +515,11 @@ export class WorkAcceptanceStore {
     });
   }
 
+  /** Throws unless this reviewer may review the item: its assigning lead or the owner, never the worker. */
+  assertCanReview(item: string, by: Approver): void {
+    this.requireReviewer(this.open_(item), by);
+  }
+
   /** The newest rejection whose findings never reached the worker, if any. */
   pendingRejection(item: string): { findings: string; index: number } | undefined {
     const a = this.assignments.find((x) => x.item === item && OPEN.has(x.state));
