@@ -34,6 +34,8 @@ export async function reviewWork(
   // A rejection whose findings never reached the worker is saved. Repeating the rejection resends those findings
   // and arms one new notice; it does not reject twice.
   const pending = store.pendingRejection(input.item);
+  // The retry resends saved findings, so it needs the same reviewer rule as a new rejection.
+  if (pending) store.assertCanReview(input.item, reviewer);
   if (!pending && !input.findings) throw new Error("Rejection needs findings.");
   const rejected = pending
     ? (store.get(input.item) as Assignment)

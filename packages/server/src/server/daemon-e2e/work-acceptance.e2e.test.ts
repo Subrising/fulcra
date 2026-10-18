@@ -830,10 +830,61 @@ test("rejection findings are kept when the send fails, and repeating the rejecti
   // Once delivered, a new rejection is a new rejection.
   await vi.waitFor(() => expect(f.manager.getAgent(f.worker.id)?.lifecycle).toBe("idle"));
   await f.submit("sha-2");
-  await f.asLead.executeTool("work_review", {
-    item: "FU-1",
-    decision: "reject",
-    findings: "Second round",
+  // The worker can still be finishing its turn here. A refused send keeps the findings saved, and repeating the
+  // same rejection delivers them without adding a second rejection.
+  await vi.waitFor(async () => {
+    await f.asLead.executeTool("work_review", {
+      item: "FU-1",
+      decision: "reject",
+      findings: "Second round",
+    });
   });
   expect(f.store.get("FU-1")?.rejections).toHaveLength(2);
+});
+
+test("only the assigning lead or the owner can retry a pending rejection", async () => {
+  const f = await fixture();
+  await f.assign();
+  await f.submit("sha-1");
+  vi.spyOn(f.storage, "rearmFinishNotice").mockRejectedValueOnce(
+    new Error("notice store unavailable"),
+  );
+  await expect(
+    f.asLead.executeTool("work_review", {
+      item: "FU-1",
+      decision: "reject",
+      findings: "Cover the failure path",
+    }),
+  ).rejects.toThrow(/findings are saved/);
+  const before = f.prompts.length;
+
+  // An unrelated agent, and the worker itself, are refused. Nothing is sent.
+  const stranger = await f.manager.createAgent(
+    { provider: "codex", cwd: f.root, modeId: "full-access", title: "Stranger" },
+    undefined,
+    {},
+  );
+  const asStranger = createPaseoToolCatalog({
+    agentManager: f.manager,
+    agentStorage: f.storage,
+    providerSnapshotManager: Object.create(ProviderSnapshotManager.prototype),
+    callerAgentId: stranger.id,
+    logger: createTestLogger(),
+  });
+  const retry = { item: "FU-1", decision: "reject", findings: "x" };
+  await expect(asStranger.executeTool("work_review", retry)).rejects.toThrow(
+    /Only the assigning lead/,
+  );
+  await expect(f.asWorker.executeTool("work_review", retry)).rejects.toThrow(
+    /Only the assigning lead|cannot review its own work/,
+  );
+  expect(f.prompts).toHaveLength(before);
+  expect(f.store.get("FU-1")?.rejections).toMatchObject([{ delivered: false }]);
+
+  // The owner can retry it over the app connection.
+  await f.client.reviewWorkAsOwner({ item: "FU-1", decision: "reject", findings: "x" });
+  await vi.waitFor(() =>
+    expect(f.prompts.filter((p) => p.includes("Cover the failure path"))).toHaveLength(1),
+  );
+  expect(f.store.get("FU-1")?.rejections).toMatchObject([{ delivered: true }]);
 });
