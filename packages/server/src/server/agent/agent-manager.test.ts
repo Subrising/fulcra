@@ -16446,3 +16446,46 @@ test.each(["terminal", "human", "MCP terminal", "MCP human"])(
     }
   },
 );
+
+test.each(["close", "archive"] as const)(
+  "%s stops a session-owned detached process after its provider exits",
+  async (action) => {
+    const workdir = mkdtempSync(join(tmpdir(), "manager-session-resource-"));
+    const storage = new AgentStorage(join(workdir, "agents"), logger);
+    const helper = "process.on('SIGTERM',()=>{});process.send('ready');setInterval(()=>{},1000)";
+    const code = `const {spawn}=require('node:child_process');const c=spawn(process.execPath,['-e',${JSON.stringify(helper)}],{detached:true,stdio:['ignore','ignore','ignore','ipc']});c.once('message',()=>process.send(c.pid));setInterval(()=>{},1000)`;
+    const provider = spawn(process.execPath, ["-e", code], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+    const jobPid = await new Promise<number>((resolve, reject) => {
+      provider.once("message", (pid) => resolve(Number(pid)));
+      provider.once("error", reject);
+    });
+    class ResourceSession extends TestAgentSession {
+      getProcessId(): number | null { return provider.exitCode === null && provider.signalCode === null ? provider.pid! : null; }
+      override async close(): Promise<void> {
+        if (provider.exitCode !== null || provider.signalCode !== null) return;
+        const exit = new Promise<void>((resolve) => provider.once("exit", () => resolve()));
+        provider.kill("SIGKILL"); await exit;
+      }
+    }
+    class ResourceClient extends TestAgentClient {
+      override async createSession(config: AgentSessionConfig): Promise<AgentSession> { return new ResourceSession(config); }
+    }
+    const manager = new AgentManager({ clients: { codex: new ResourceClient() }, registry: storage, logger,
+      sessionResourcesFile: join(workdir, "runtime", "session-resources.json") });
+    try {
+      const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, { workspaceId: undefined });
+      if (action === "close") await manager.closeAgent(agent.id);
+      else await manager.archiveAgent(agent.id);
+      expect(() => process.kill(jobPid, 0)).toThrow();
+      const record = await storage.get(agent.id);
+      expect(record?.lastStatus).toBe("closed");
+      if (action === "archive") expect(record?.archivedAt).toEqual(expect.any(String));
+    } finally {
+      try { process.kill(jobPid, "SIGKILL"); } catch { /* already stopped */ }
+      provider.kill("SIGKILL");
+      await manager.flushForShutdown();
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  },
+  20_000,
+);

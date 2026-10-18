@@ -104,6 +104,16 @@ export function systemSimulators(): SimulatorTable {
   };
 }
 
+
+function simulatorCommand(item: ToolCallTimelineItem): { action: string; udid: string } | null {
+  if (item.detail.type !== "shell") return null;
+  const command = item.detail.command.trim();
+  const match = /^(?:\/usr\/bin\/)?xcrun\s+simctl\s+(boot|bootstatus|install|launch|spawn|io|ui)\s+["']?([a-fA-F0-9-]{36})["']?(?:\s.*)?$/.exec(command);
+  if (!match || !z.string().uuid().safeParse(match[2]).success) return null;
+  if (match[1] === "boot" && !/^(?:\/usr\/bin\/)?xcrun\s+simctl\s+boot\s+["']?[a-fA-F0-9-]{36}["']?\s*$/.test(command)) return null;
+  return { action: match[1]!, udid: match[2]! };
+}
+
 /** Only observed descendants enter the ledger. Name scans never authorize a stop. */
 export class SessionResources {
   private readonly options: Options;
@@ -154,6 +164,10 @@ export class SessionResources {
       const rows = await this.read(); const ledger = await this.load();
       const currentRoots = this.options.roots();
       const byPid = new Map(rows.map((row) => [row.pid, row]));
+      ledger.processes = ledger.processes.filter((record) => {
+        const row = byPid.get(record.pid);
+        return row && !row.zombie && row.birth === record.birth;
+      });
       const rootPids = new Set(currentRoots.map((root) => root.pid));
       for (const root of roots) {
         if (!currentRoots.some((r) => r.agentId === root.agentId && r.instanceId === root.instanceId && r.pid === root.pid)) continue;
@@ -183,51 +197,61 @@ export class SessionResources {
   }
   private async clean(close?: { agentId: string; instanceId: string; admitted(): boolean }): Promise<void> {
     const ledger = await this.load();
-    const signaled: ProcessRecord[] = [];
     const admitted = (record: ProcessRecord | SimulatorRecord): boolean => {
       if (close) return record.agentId === close.agentId && record.instanceId === close.instanceId && close.admitted();
       return this.now() - record.observedAt > ORPHAN_INTERVAL_MS && this.options.ownerState(record.agentId) === "inactive";
     };
-    for (const record of [...ledger.processes].reverse()) {
-      if (!admitted(record)) continue;
-      const rows = await this.read();
-      const row = rows.find((r) => r.pid === record.pid);
-      if (!admitted(record)) continue;
-      if (!row || row.zombie || row.birth !== record.birth) {
-        ledger.processes = ledger.processes.filter((r) => r !== record); await this.save(ledger); continue;
-      }
-      if (!this.canSignal(record, rows)) continue;
-      // Write the attempt before sending any signal. A failed journal keeps the process.
-      await this.log({ action: "stop-attempt", ...record, ageSeconds: (this.now() - record.observedAt) / 1_000, rssKiB: row.rssKiB });
-      const freshRows = await this.read();
-      const fresh = freshRows.find((r) => r.pid === record.pid);
-      if (!fresh || !this.canSignal(record, freshRows) || !admitted(record)) continue;
-      try { this.signal(fresh.pid, "SIGTERM"); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
-      await this.log({ action: "SIGTERM", ...record, rssKiB: fresh.rssKiB });
-      signaled.push(record);
-      // Keep the receipt until a later identity check proves exit. Do not signal an unknown new child.
+    await this.stopProcesses(ledger, admitted);
+    await this.stopSimulators(ledger, admitted);
+  }
+  private async signalRecord(record: ProcessRecord, admitted: (record: ProcessRecord) => boolean,
+    signal: NodeJS.Signals): Promise<"gone" | "kept" | "signaled"> {
+    if (!admitted(record)) return "kept";
+    const rows = await this.read();
+    const row = rows.find((r) => r.pid === record.pid);
+    if (!admitted(record)) return "kept";
+    if (!row || row.zombie || row.birth !== record.birth) return "gone";
+    if (!this.canSignal(record, rows)) return "kept";
+    await this.log({ action: signal === "SIGTERM" ? "stop-attempt" : "force-stop-attempt",
+      ...record, ageSeconds: (this.now() - record.observedAt) / 1_000, rssKiB: row.rssKiB });
+    const freshRows = await this.read();
+    const fresh = freshRows.find((r) => r.pid === record.pid);
+    if (!fresh || !this.canSignal(record, freshRows) || !admitted(record)) return "kept";
+    try { this.signal(fresh.pid, signal); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+    await this.log({ action: signal, ...record, rssKiB: fresh.rssKiB });
+    return "signaled";
+  }
+  private async stopProcesses(ledger: Ledger, admitted: (record: ProcessRecord) => boolean): Promise<void> {
+    const signaled: ProcessRecord[] = [];
+    const records = ledger.processes;
+    for (let index = records.length - 1; index >= 0; index -= 1) {
+      const record = records[index]!;
+      const outcome = await this.signalRecord(record, admitted, "SIGTERM");
+      if (outcome === "gone") {
+        ledger.processes = ledger.processes.filter((r) => r !== record); await this.save(ledger);
+      } else if (outcome === "signaled") signaled.push(record);
     }
-    if (signaled.length > 0) {
-      await new Promise((resolve) => setTimeout(resolve, this.options.gracefulTimeoutMs ?? 2_000));
-      for (const record of signaled) {
-        const rows = await this.read();
-        const row = rows.find((r) => r.pid === record.pid);
-        if (!row || row.zombie || row.birth !== record.birth) {
-          ledger.processes = ledger.processes.filter((r) => r !== record);
-          await this.save(ledger); continue;
-        }
-        if (!admitted(record) || !this.canSignal(record, rows)) continue;
-        await this.log({ action: "force-stop-attempt", ...record, rssKiB: row.rssKiB });
-        const freshRows = await this.read();
-        const fresh = freshRows.find((r) => r.pid === record.pid);
-        if (!fresh || !this.canSignal(record, freshRows) || !admitted(record)) continue;
-        try { this.signal(fresh.pid, "SIGKILL"); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
-        await this.log({ action: "SIGKILL", ...record, rssKiB: fresh.rssKiB });
+    if (signaled.length === 0) return;
+    await new Promise((resolve) => setTimeout(resolve, this.options.gracefulTimeoutMs ?? 2_000));
+    for (const record of signaled) await this.signalRecord(record, admitted, "SIGKILL");
+    // One bounded grace period, then prove exit before completing a close.
+    await new Promise((resolve) => setTimeout(resolve, this.options.gracefulTimeoutMs ?? 100));
+    const remaining = new Map((await this.read()).map((row) => [row.pid, row]));
+    let pending = false;
+    for (const record of signaled) {
+      const row = remaining.get(record.pid);
+      if (row && !row.zombie && row.birth === record.birth) {
+        if (admitted(record)) pending = true;
+        continue;
       }
+      ledger.processes = ledger.processes.filter((r) => r !== record);
     }
-    for (const record of [...ledger.simulators]) {
+    await this.save(ledger);
+    if (pending) throw new Error("Owned session processes did not exit; ownership retained for retry");
+  }
+  private async stopSimulators(ledger: Ledger, admitted: (record: SimulatorRecord) => boolean): Promise<void> {
+    for (const record of ledger.simulators) {
       const unused = () => !record.users.some((u) => u.agentId !== record.agentId && this.options.ownerState(u.agentId) !== "inactive");
       if (!admitted(record) || !unused()) continue;
       const state = await this.simulators.inspect(record.udid);
@@ -265,24 +289,22 @@ export class SessionResources {
   /** A successful, explicit UUID boot proves ownership. Pre-booted devices never become owned. */
   observeTool(root: Root, item: ToolCallTimelineItem): Promise<void> {
     return this.serial(async () => {
-      if (item.detail.type !== "shell") return;
-      const match = /^(?:\/usr\/bin\/)?xcrun\s+simctl\s+(boot|bootstatus|install|launch|spawn|io|ui)\s+["']?([a-fA-F0-9-]{36})["']?(?:\s.*)?$/.exec(item.detail.command.trim());
-      if (!match || !z.string().uuid().safeParse(match[2]).success) return;
-      if (match[1] === "boot" && !/^(?:\/usr\/bin\/)?xcrun\s+simctl\s+boot\s+["']?[a-fA-F0-9-]{36}["']?\s*$/.test(item.detail.command.trim())) return;
-      const udid = match[2]!.toUpperCase(); const key = `${root.agentId}:${root.instanceId}:${item.callId}`;
+      const command = simulatorCommand(item);
+      if (!command) return;
+      const udid = command.udid.toUpperCase(); const key = `${root.agentId}:${root.instanceId}:${item.callId}`;
       const ledger = await this.load();
       const owned = ledger.simulators.find((s) => s.udid === udid);
       if (owned && !owned.users.some((u) => u.agentId === root.agentId && u.instanceId === root.instanceId)) {
         owned.users.push({ agentId: root.agentId, instanceId: root.instanceId }); await this.save(ledger);
       }
-      if (match[1] !== "boot") return;
+      if (command.action !== "boot") return;
       if (item.status === "running" && !this.boots.has(key)) {
         const before = await this.simulators.inspect(udid);
         this.boots.set(key, { root, udid, shutdown: !before.booted }); return;
       }
       if (item.status === "running") return;
       const pending = this.boots.get(key); this.boots.delete(key);
-      if (!pending?.shutdown || item.status !== "completed" || item.detail.exitCode !== 0 || owned) return;
+      if (!pending?.shutdown || item.status !== "completed" || (item.detail.type !== "shell" || item.detail.exitCode !== 0) || owned) return;
       if (!this.options.roots().some((r) => r.agentId === root.agentId && r.instanceId === root.instanceId)) return;
       const after = await this.simulators.inspect(udid);
       if (!after.booted || after.pid === null || after.birth === null) return;

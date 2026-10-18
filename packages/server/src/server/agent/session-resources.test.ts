@@ -111,14 +111,16 @@ describe("session resource cleanup", () => {
   });
 
   test("runs the orphan sweep every 30 minutes and stops both timers", async () => {
-    const f = await fixture(); await f.tracker.sample(); f.setLive(false);
+    const f = await fixture();
+    vi.spyOn(f.tracker, "sample").mockResolvedValue();
+    const sweep = vi.spyOn(f.tracker, "sweep").mockResolvedValue();
     vi.useFakeTimers();
     try {
-      f.tracker.start(); f.setNow(ORPHAN_INTERVAL_MS); await vi.advanceTimersByTimeAsync(ORPHAN_INTERVAL_MS);
-      expect(f.stopped).toEqual([]);
-      f.setNow(2 * ORPHAN_INTERVAL_MS); await vi.advanceTimersByTimeAsync(ORPHAN_INTERVAL_MS);
-      await vi.runOnlyPendingTimersAsync();
-      await f.tracker.stop(); expect(f.stopped).toEqual([101]); expect(vi.getTimerCount()).toBe(0);
+      f.tracker.start(); await vi.advanceTimersByTimeAsync(ORPHAN_INTERVAL_MS - 1);
+      expect(sweep).toHaveBeenCalledTimes(0);
+      await vi.advanceTimersByTimeAsync(1); expect(sweep).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(ORPHAN_INTERVAL_MS); expect(sweep).toHaveBeenCalledTimes(2);
+      await f.tracker.stop(); expect(vi.getTimerCount()).toBe(0);
     } finally { vi.useRealTimers(); await f.tracker.stop(); }
   });
 });

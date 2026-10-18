@@ -2307,21 +2307,7 @@ export class AgentManager {
     this.resolvePaseoToolPolicy = options.resolvePaseoToolPolicy ?? (() => undefined);
     this.appendSystemPrompt = options.appendSystemPrompt ?? "";
     this.logger = options.logger.child({ module: "agent", component: "agent-manager" });
-    if (options.sessionResourcesFile) {
-      this.sessionResources = new SessionResources({
-        file: options.sessionResourcesFile, logger: this.logger,
-        roots: () => [...this.agents.values()].flatMap((agent) => {
-          const pid = agent.session.getProcessId?.();
-          return pid && agent.instanceId ? [{ agentId: agent.id, instanceId: agent.instanceId, pid }] : [];
-        }),
-        ownerState: (id) => {
-          if (this.agents.has(id)) return "live";
-          const record = this.registry?.getCached(id);
-          if (!record) return "unknown";
-          return record.archivedAt || record.lastStatus === "closed" ? "inactive" : "live";
-        },
-      });
-    }
+    this.sessionResources = this.createSessionResources(options.sessionResourcesFile);
     this.idleSleep = new IdleSleep({
       logger: this.logger,
       minutes: () => this.idleSleepMinutes(),
@@ -2360,6 +2346,23 @@ export class AgentManager {
       providerDefinitions: options.providerDefinitions ?? {},
       clients: options.clients ?? {},
     });
+  }
+
+  private createSessionResources(file?: string): SessionResources | undefined {
+    if (!file) return undefined;
+    return new SessionResources({
+        file, logger: this.logger,
+        roots: () => [...this.agents.values()].flatMap((agent) => {
+          const pid = agent.session.getProcessId?.();
+          return pid && agent.instanceId ? [{ agentId: agent.id, instanceId: agent.instanceId, pid }] : [];
+        }),
+        ownerState: (id) => {
+          if (this.agents.has(id)) return "live";
+          const record = this.registry?.getCached(id);
+          if (!record) return "unknown";
+          return record.archivedAt || record.lastStatus === "closed" ? "inactive" : "live";
+        },
+      });
   }
 
   private configurePaseoTools(options: AgentManagerOptions): void {
