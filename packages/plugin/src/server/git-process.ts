@@ -56,6 +56,23 @@ if (!runtime.exitCleanupRegistered) {
   });
 }
 
+function collectUnixGitDescendants(input: {
+  rows: number[][];
+  root: number;
+  owned: Set<number>;
+}): void {
+  let added = true;
+  while (added) {
+    added = false;
+    for (const [pid, parent, group] of input.rows) {
+      if (!input.owned.has(pid) && (input.owned.has(parent) || group === input.root)) {
+        input.owned.add(pid);
+        added = true;
+      }
+    }
+  }
+}
+
 async function stopUnixGitTree(root: number): Promise<void> {
   const signal = (pid: number, kind: NodeJS.Signals) => {
     try {
@@ -78,23 +95,14 @@ async function stopUnixGitTree(root: number): Promise<void> {
         .trim()
         .split("\n")
         .map((line) => line.trim().split(/\s+/).map(Number));
-      let added = true;
-      while (added) {
-        added = false;
-        for (const [pid, parent, group] of rows) {
-          if (!owned.has(pid) && (owned.has(parent) || group === root)) {
-            owned.add(pid);
-            added = true;
-          }
-        }
-      }
+      collectUnixGitDescendants({ rows, root, owned });
       for (const pid of owned) signal(pid, "SIGSTOP");
     }
   } catch (error) {
     errors.push(error);
   } finally {
     try {
-      for (const pid of [...owned].reverse()) {
+      for (const pid of [...owned].toReversed()) {
         try {
           signal(pid, "SIGKILL");
         } catch (error) {
