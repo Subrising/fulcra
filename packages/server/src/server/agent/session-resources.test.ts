@@ -76,19 +76,29 @@ describe("session resource cleanup", () => {
   test("retains ownership during an open GPU receipt and stops only after it closes", async () => {
     const f = await fixture();
     f.setRows([root, { ...child, protectionReason: "queue-open" }]);
-    await f.tracker.sample(); f.setLive(false); f.setNow(ORPHAN_INTERVAL_MS + 1);
-    await f.tracker.sweep(); expect(f.stopped).toEqual([]);
+    await f.tracker.sample();
+    f.setLive(false);
+    f.setNow(ORPHAN_INTERVAL_MS + 1);
+    await f.tracker.sweep();
+    expect(f.stopped).toEqual([]);
     f.setRows([{ ...child, ppid: 1 }]);
-    await f.tracker.sweep(); expect(f.stopped).toEqual([101]);
+    await f.tracker.sweep();
+    expect(f.stopped).toEqual([101]);
   });
   test("logs a closed owner's old PowerShell read over 2 GiB, but preserves its live owner", async () => {
     const f = await fixture();
     f.setRows([root, { ...child, command: "powershell", privateMemoryBytes: 3 * 1024 ** 3 }]);
-    await f.tracker.observeTool({ agentId: "owner", instanceId: "generation", pid: 100 },
-      bootItem("running", "Get-Content -LiteralPath fixture.log -Wait"));
-    await f.tracker.sample(); f.setNow(ORPHAN_INTERVAL_MS + 1);
-    await f.tracker.sweep(); expect(f.stopped).toEqual([]);
-    f.setLive(false); await f.tracker.sweep(); expect(f.stopped).toEqual([101]);
+    await f.tracker.observeTool(
+      { agentId: "owner", instanceId: "generation", pid: 100 },
+      bootItem("running", "Get-Content -LiteralPath fixture.log -Wait"),
+    );
+    await f.tracker.sample();
+    f.setNow(ORPHAN_INTERVAL_MS + 1);
+    await f.tracker.sweep();
+    expect(f.stopped).toEqual([]);
+    f.setLive(false);
+    await f.tracker.sweep();
+    expect(f.stopped).toEqual([101]);
     const log = await readFile(`${f.options.file}.stops.jsonl`, "utf8");
     expect(log).toContain('"kind":"powershell-over-2gb"');
     expect(log).not.toContain("Get-Content");

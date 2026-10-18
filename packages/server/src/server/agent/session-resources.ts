@@ -79,7 +79,9 @@ interface Options {
 export function protectedSessionProcess(row: ResourceProcess): boolean {
   return (
     Boolean(row.protectionReason) ||
-    /^(?:fulcra(?:[ ._-].*)?|chrome|msedge|spotify|discord|explorer|mail|chatgpt|codex|ollama|steam)(?:\.exe)?$/i.test(row.command) ||
+    /^(?:fulcra(?:[ ._-].*)?|chrome|msedge|spotify|discord|explorer|mail|chatgpt|codex|ollama|steam)(?:\.exe)?$/i.test(
+      row.command,
+    ) ||
     row.pid === process.pid ||
     !row.command ||
     /(?:^|\/)ollama(?:$|\s)/i.test(row.command) ||
@@ -93,7 +95,9 @@ export function protectedSessionProcess(row: ResourceProcess): boolean {
 }
 
 /** Read identities and program names only. Never collect arguments or environments. */
-export async function readResourceProcesses(windowsPolicyFile?: string): Promise<ResourceProcess[]> {
+export async function readResourceProcesses(
+  windowsPolicyFile?: string,
+): Promise<ResourceProcess[]> {
   if (process.platform === "win32") return readWindowsResourceProcesses(windowsPolicyFile);
   const identities = await readOwnedProcessTable();
   const { stdout } = await exec("ps", ["-axo", "pid=,ppid=,etime=,rss=,comm="], {
@@ -268,15 +272,19 @@ export class SessionResources {
           for (const row of rows) {
             if (row.ppid !== parent || seen.has(row.pid) || rootPids.has(row.pid)) continue;
             seen.add(row.pid);
-            if (row.zombie || protectedSessionProcess({ ...row, protectionReason: undefined })) continue;
+            if (row.zombie || protectedSessionProcess({ ...row, protectionReason: undefined }))
+              continue;
             queue.push(row.pid);
             const existing = ledger.processes.find(
               (p) => p.pid === row.pid && p.birth === row.birth,
             );
             if (existing) {
               // An external queue lease blocks stops, not ownership capture. Never transfer the owner.
-              existing.kind = resourceKind(row, existing.kind === "unbounded-log-tail" ||
-                this.logReaders.has(`${root.agentId}:${root.instanceId}`));
+              existing.kind = resourceKind(
+                row,
+                existing.kind === "unbounded-log-tail" ||
+                  this.logReaders.has(`${root.agentId}:${root.instanceId}`),
+              );
               continue;
             }
             ledger.processes.push({
@@ -350,7 +358,12 @@ export class SessionResources {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
     }
-    await this.log({ action: signal, ...record, rssKiB: fresh.rssKiB, privateMemoryBytes: fresh.privateMemoryBytes });
+    await this.log({
+      action: signal,
+      ...record,
+      rssKiB: fresh.rssKiB,
+      privateMemoryBytes: fresh.privateMemoryBytes,
+    });
     return "signaled";
   }
   private async stopProcesses(
@@ -539,8 +552,12 @@ export class SessionResources {
   /** A successful, explicit UUID boot proves ownership. Pre-booted devices never become owned. */
   observeTool(root: Root, item: ToolCallTimelineItem): Promise<void> {
     return this.serial(async () => {
-      if (item.detail.type === "shell" && item.status === "running" &&
-        /\bGet-Content\b/i.test(item.detail.command) && /(?:^|\s)-Wait\b/i.test(item.detail.command)) {
+      if (
+        item.detail.type === "shell" &&
+        item.status === "running" &&
+        /\bGet-Content\b/i.test(item.detail.command) &&
+        /(?:^|\s)-Wait\b/i.test(item.detail.command)
+      ) {
         this.logReaders.add(`${root.agentId}:${root.instanceId}`);
       }
       const command = simulatorCommand(item);
