@@ -266,6 +266,16 @@ export const PersistedConfigSchema = z
           })
           .strict()
           .optional(),
+        // FU-362: refuse a new agent start while this host is under memory pressure. Never written by default:
+        // an older reader rejects an unknown daemon key, so a host writes this only when its owner sets it.
+        memoryGuard: z
+          .object({
+            enabled: z.boolean().optional(),
+            swapUsedPercent: z.number().min(1).max(100).optional(),
+            freeMemoryPercent: z.number().min(1).max(100).optional(),
+          })
+          .strict()
+          .optional(),
         autoArchiveAfterMerge: z.boolean().optional(),
         explainDailyLimit: z.number().int().min(0).max(1000).optional(),
         notificationMode: z.enum(["all", "primes", "off"]).optional(),

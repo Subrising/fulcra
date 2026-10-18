@@ -638,6 +638,7 @@ export function resolveConfigFromPersisted(
     reportUpOnTurnEnd: persistedSettings.reportUpOnTurnEnd,
     nativeFinishNotices: persistedSettings.nativeFinishNotices,
     receiptRetentionMs: persisted.daemon?.receiptRetentionMs,
+    memoryGuard: persisted.daemon?.memoryGuard,
     ledgerDispatchEnabled: persistedSettings.ledgerDispatchEnabled,
     projectDispatch: persistedSettings.projectDispatch,
     idleLeadNudge: persistedSettings.idleLeadNudge,

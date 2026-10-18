@@ -530,6 +530,11 @@ export interface AgentManagerOptions {
   reportGrantDirectory?: string;
   trustedPlugins?: TrustedPlugins;
   pluginLifecycle?: PluginLifecycle;
+  /**
+   * FU-362: runs before every genuinely new, non-internal agent start on this host. It throws a plain-words
+   * refusal when the host is under memory pressure. Restores of stored records and internal helpers skip it.
+   */
+  startAdmission?: () => Promise<void>;
   /** Trusted synchronous host ownership/grant fence. Never supplied by an RPC caller. */
   mcpRefreshAdmission?: (agent: ManagedAgent) => {
     revision: string;
@@ -2137,6 +2142,7 @@ export class AgentManager {
   }
 
   private readonly pluginLifecycle: PluginLifecycle | undefined;
+  private readonly startAdmission: (() => Promise<void>) | undefined;
   private readonly clients = new Map<AgentProvider, AgentClient>();
   private readonly providerEnabled = new Map<AgentProvider, boolean>();
   private readonly providerDefinitions = new Map<AgentProvider, ProviderEnabledFlag>();
@@ -2263,6 +2269,7 @@ export class AgentManager {
       options.reportGrantDirectory,
     );
     this.pluginLifecycle = options.pluginLifecycle;
+    this.startAdmission = options.startAdmission;
     this.mcpRefreshAdmission = options.mcpRefreshAdmission;
     this.idFactory = options?.idFactory ?? (() => randomUUID());
     this.registry = options?.registry;
@@ -2972,12 +2979,21 @@ export class AgentManager {
     );
   }
 
+  private async admitNewStart(
+    config: AgentSessionConfig,
+    options: CreateAgentOptions,
+  ): Promise<void> {
+    if (options.fromStoredRecord || config.internal) return;
+    await this.startAdmission?.();
+  }
+
   private async createAgentInternal(
     config: AgentSessionConfig,
     agentId: string | undefined,
     options: CreateAgentOptions,
   ): Promise<ManagedAgent> {
     this.assertAcceptingAgentRegistrations();
+    await this.admitNewStart(config, options);
     const resolvedAgentId = validateAgentId(agentId ?? this.idFactory(), "createAgent");
     this.assertInjectionLabelWrite(options.labels);
     this.validateComputerUseCreate(config, options);

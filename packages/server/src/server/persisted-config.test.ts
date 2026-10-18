@@ -853,3 +853,15 @@ test("receipt retention is optional and must exceed the six-hour retry lifetime"
   for (const receiptRetentionMs of [0, -1, 21600000, 21600000.5, Infinity])
     expect(PersistedConfigSchema.safeParse({ daemon: { receiptRetentionMs } }).success).toBe(false);
 });
+
+test("daemon.memoryGuard is optional, never defaulted into the file, and rejects unknown fields", () => {
+  expect(PersistedConfigSchema.parse({}).daemon?.memoryGuard).toBeUndefined();
+  expect(PersistedConfigSchema.parse({ daemon: {} }).daemon?.memoryGuard).toBeUndefined();
+  expect(
+    PersistedConfigSchema.parse({ daemon: { memoryGuard: { swapUsedPercent: 70 } } }).daemon
+      ?.memoryGuard,
+  ).toEqual({ swapUsedPercent: 70 });
+  expect(
+    PersistedConfigSchema.safeParse({ daemon: { memoryGuard: { swapUsed: 70 } } }).success,
+  ).toBe(false);
+});

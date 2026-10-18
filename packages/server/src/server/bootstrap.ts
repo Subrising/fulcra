@@ -1,4 +1,9 @@
 // FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
+import {
+  createAgentStartMemoryGuard,
+  DEFAULT_MEMORY_GUARD_SETTINGS,
+  type MemoryGuardSettings,
+} from "./host-memory-guard.js";
 import { startSyncIoMeter } from "./sync-io-meter.js";
 import { checkNativeReportOriginPublication, requireNativeReportOrigin } from "./report-origin.js";
 import type { NativeReportOrigin } from "./report-origin.js";
@@ -461,6 +466,7 @@ export interface PaseoDaemonConfig {
   reportUpOnTurnEnd?: boolean;
   nativeFinishNotices?: boolean;
   receiptRetentionMs?: number;
+  memoryGuard?: Partial<MemoryGuardSettings>;
   ledgerDispatchEnabled?: boolean;
   projectDispatch?: MutableDaemonConfig["projectDispatch"];
   idleLeadNudge?: boolean;
@@ -1167,6 +1173,10 @@ export async function createPaseoDaemon(
     durableTimelineStore,
     timelineRetention: config.timelineRetention,
     pluginLifecycle: pluginRuntime,
+    startAdmission: createAgentStartMemoryGuard({
+      settings: () => ({ ...DEFAULT_MEMORY_GUARD_SETTINGS, ...config.memoryGuard }),
+      logger,
+    }),
     trustedPlugins,
     mcpRefreshAdmission: (agent) => trustedPlugins.mcpRefresh(agent),
     clients: initialAgentManagerState.clients,
