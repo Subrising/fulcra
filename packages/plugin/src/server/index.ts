@@ -32,13 +32,3 @@ export type {
 
 export type * from "./management.js";
 export { spawnProcess, execCommand, terminateProcess } from "./process.js";
-
-export {
-  spawnGitProcess,
-  terminateGitProcess,
-  execGitCommand,
-  execGitCommandSync,
-  gitEnvironment,
-  gitArguments,
-  withGitFetchPolicy,
-} from "./git-process.js";

@@ -20,6 +20,8 @@ Missing-ref fallback remains available within a requested checkout. Different st
 - Forty-five daemon and worktree tests passed.
 - All 141 selected controller, architecture, connector, and deploy tests passed.
 - Workspace type checks, changed-file lint, and formatting passed.
+- All 57 SDK boundary checks and 76 compiler checks passed.
+- The actual Command Centre build passed against the updated SDK.
 - One fresh risk review passed after its listed repairs.
 
 The Windows authentication endpoint returned HTTP 401. The scratch repository used GCM with no matching stored credential.
@@ -33,6 +35,7 @@ The final boundary check used the final compiled helper. It refused a ninth chil
 A detached descendant remained alive after its parent exited. The 1,800 ms deadline stopped the tree.
 A second check wrote two MiB through the synchronous adapter. Its deadline also removed the descendant.
 The saved JSON contains samples, final boundary results, and the compiled bundle hash.
+The published SDK entry also passed asynchronous and synchronous Git calls on Windows.
 
 The logs prove GCM attempted to create credential UI. They do not prove the source of each repeated console window.
 The old shared launcher already used `windowsHide`. Some direct probes lacked it.
@@ -42,7 +45,7 @@ All owned Git launches now hide their windows. Native Windows Git also uses `CRE
 
 The optional standalone portable build rejects hoisted Zod and protocol inputs on both the base and this candidate.
 The source snapshots produced the same dependency-scope failure. No scope exception was added for those dependencies.
-The candidate permits only the two new, self-contained Git helper modules in that build.
+The candidate permits only the three new, self-contained Git modules in that build.
 This check does not establish portable-release acceptance.
 
 No live daemon was restarted. No installed application was changed.

@@ -1,4 +1,4 @@
-import { execGitCommand } from "@getpaseo/plugin/server";
+import { execGitCommand } from "@getpaseo/plugin/server/git";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";

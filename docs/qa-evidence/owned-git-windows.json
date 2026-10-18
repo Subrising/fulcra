@@ -664,5 +664,11 @@
     "workerPrivateLast": null,
     "cFreeGB": 12.16
   },
-  "finalBundleSha256": "49abf5ca92b4a139190869623799882842d936346a6e9ab9f3ce7b8f6edd12d5"
+  "finalBundleSha256": "49abf5ca92b4a139190869623799882842d936346a6e9ab9f3ce7b8f6edd12d5",
+  "publishedSdkEntry": {
+    "pass": true,
+    "asyncVersion": "git version 2.52.0.windows.1",
+    "syncVersion": "git version 2.52.0.windows.1",
+    "entry": "@getpaseo/plugin/server/git"
+  }
 }

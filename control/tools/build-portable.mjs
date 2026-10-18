@@ -56,7 +56,9 @@ for (const entry of entries) {
   const forbidden = Object.keys(result.metafile.inputs).filter(
     (p) =>
       !p.startsWith("node_modules/") &&
-      !/^\.\.\/packages\/plugin\/dist\/server\/(?:git-process|git-guardian-windows)\.js$/.test(p) &&
+      !/^\.\.\/packages\/plugin\/dist\/server\/(?:git|git-process|git-guardian-windows)\.js$/.test(
+        p,
+      ) &&
       !inScope(p),
   );
   if (forbidden.length)

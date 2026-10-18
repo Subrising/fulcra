@@ -55,9 +55,9 @@
       "default": "./dist/client/index.js"
     },
     "./server/git": {
-      "types": "./dist/server/git-process.d.ts",
-      "source": "./src/server/git-process.ts",
-      "default": "./dist/server/git-process.js"
+      "types": "./dist/server/git.d.ts",
+      "source": "./src/server/git.ts",
+      "default": "./dist/server/git.js"
     }
   },
   "publishConfig": {
