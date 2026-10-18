@@ -50,8 +50,10 @@ describe("server config", () => {
     const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-idle-sleep-config-"));
     roots.push(paseoHome);
     expect(loadConfig(paseoHome, { env: {} }).idleSleepMinutes).toBe(20);
+    expect(loadConfig(paseoHome, { env: {} }).idleSleepProviders).toEqual(["claude"]);
     // The default is code only: loading must not write the key, because older readers reject unknown keys.
     expect(loadPersistedConfig(paseoHome).daemon?.idleSleepMinutes).toBeUndefined();
+    expect(loadPersistedConfig(paseoHome).daemon?.idleSleepProviders).toBeUndefined();
     await writeFile(
       path.join(paseoHome, "config.json"),
       JSON.stringify({ daemon: { idleSleepMinutes: 0 } }),

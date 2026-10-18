@@ -646,6 +646,7 @@ export function resolveConfigFromPersisted(
     idleLeadNudgeMinIntervalMinutes: persistedSettings.idleLeadNudgeMinIntervalMinutes,
     reviveOnRestart: persistedSettings.reviveOnRestart,
     idleSleepMinutes: persistedSettings.idleSleepMinutes,
+    idleSleepProviders: persistedSettings.idleSleepProviders,
     autoResumeOnLimit: persistedSettings.autoResumeOnLimit,
     appendSystemPrompt,
     terminalProfiles,
@@ -709,6 +710,7 @@ function orchestrationSettings(persisted: PersistedConfig) {
     idleLeadNudgeMinIntervalMinutes: daemon?.idleLeadNudgeMinIntervalMinutes ?? 60,
     reviveOnRestart: daemon?.reviveOnRestart ?? true,
     idleSleepMinutes: daemon?.idleSleepMinutes ?? 20,
+    idleSleepProviders: daemon?.idleSleepProviders ?? ["claude"],
   };
 }
 

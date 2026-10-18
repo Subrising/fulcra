@@ -2163,6 +2163,7 @@ export class AgentManager {
   private readonly providerSubagents = new ProviderSubagentStore();
   // FU-362: idle sessions release their provider process. Off until the host sets a delay (configureIdleSleep).
   private idleSleepMinutes: () => number = () => 0;
+  private idleSleepProviders: () => readonly string[] = () => ["claude"];
   private idleSleepDeliveryPending: (agentId: string) => boolean = () => false;
   private readonly idleSleep: IdleSleep;
   private readonly agentsAwaitingInitialSnapshotPersist = new Set<string>();
@@ -2401,9 +2402,12 @@ export class AgentManager {
    */
   configureIdleSleep(input: {
     minutes: () => number;
+    /** Providers whose sessions may sleep. Default ["claude"]. */
+    providers?: () => readonly string[];
     deliveryPending?: (agentId: string) => boolean;
   }) {
     this.idleSleepMinutes = input.minutes;
+    this.idleSleepProviders = input.providers ?? (() => ["claude"]);
     this.idleSleepDeliveryPending = input.deliveryPending ?? (() => false);
   }
 
@@ -2421,6 +2425,13 @@ export class AgentManager {
     if (!agent?.session || agent.lifecycle !== "idle") return "gone";
     const session = agent.session;
     if (!session.sleep) return "gone";
+    if (!this.idleSleepProviders().includes(agent.provider)) {
+      this.logger.debug(
+        { agentId, provider: agent.provider, reason: "provider not enabled" },
+        "agent.sleep.skipped",
+      );
+      return "gone";
+    }
     if (session.isSleeping?.()) return "gone";
     if (
       this.hasInFlightRun(agentId) ||

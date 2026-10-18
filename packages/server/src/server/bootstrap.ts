@@ -474,6 +474,7 @@ export interface PaseoDaemonConfig {
   idleLeadNudgeMinIntervalMinutes?: number;
   reviveOnRestart?: boolean;
   idleSleepMinutes?: number;
+  idleSleepProviders?: string[];
   autoResumeOnLimit?: boolean;
   appendSystemPrompt?: string;
   terminalProfiles?: TerminalProfile[];
@@ -1649,6 +1650,7 @@ export async function createPaseoDaemon(
   // FU-362: an idle session stops its provider process after this many minutes; a held or queued message wakes it.
   agentManager.configureIdleSleep({
     minutes: () => config.idleSleepMinutes ?? 20,
+    providers: () => config.idleSleepProviders ?? ["claude"],
     deliveryPending: (agentId) =>
       heldSends.pending(agentId) > 0 || queuedAgentMessages.pending(agentId) > 0,
   });

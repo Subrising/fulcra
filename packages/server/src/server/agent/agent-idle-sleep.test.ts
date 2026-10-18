@@ -179,7 +179,11 @@ class SleepySession implements AgentSession {
   }
 }
 
-async function fixture(options: { minutes: number; deliveryPending?: () => boolean }) {
+async function fixture(options: {
+  minutes: number;
+  deliveryPending?: () => boolean;
+  providers?: string[];
+}) {
   // The idle timer starts at createAgent, so the fake clock must exist before it.
   vi.useFakeTimers();
   const workdir = mkdtempSync(join(tmpdir(), "agent-idle-sleep-"));
@@ -196,6 +200,7 @@ async function fixture(options: { minutes: number; deliveryPending?: () => boole
   const manager = new AgentManager({ clients: { codex: client }, registry: storage, logger });
   manager.configureIdleSleep({
     minutes: () => options.minutes,
+    providers: options.providers ? () => options.providers! : undefined,
     deliveryPending: options.deliveryPending,
   });
   const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
@@ -219,7 +224,7 @@ describe("AgentManager idle sleep", () => {
   afterEach(() => vi.useRealTimers());
 
   test("an idle session sleeps after N minutes and stays idle, not closed", async () => {
-    const f = await fixture({ minutes: 20 });
+    const f = await fixture({ minutes: 20, providers: ["codex"] });
     try {
       await vi.advanceTimersByTimeAsync(19 * MINUTE);
       expect(f.session.sleeps).toBe(0);
@@ -238,8 +243,20 @@ describe("AgentManager idle sleep", () => {
     }
   });
 
+  test("a Codex session does not sleep by default", async () => {
+    // No providers setting: the default list is ["claude"] (Codex background terminals die with the app-server).
+    const f = await fixture({ minutes: 20 });
+    try {
+      await vi.advanceTimersByTimeAsync(10 * 60 * MINUTE);
+      expect(f.session.sleeps).toBe(0);
+      expect(f.manager.isAgentSleeping(f.agent.id)).toBe(false);
+    } finally {
+      await f.cleanup();
+    }
+  });
+
   test("setting 0 never sleeps", async () => {
-    const f = await fixture({ minutes: 0 });
+    const f = await fixture({ minutes: 0, providers: ["codex"] });
     try {
       await vi.advanceTimersByTimeAsync(48 * 60 * MINUTE);
       expect(f.session.sleeps).toBe(0);
@@ -249,7 +266,7 @@ describe("AgentManager idle sleep", () => {
   });
 
   test("a running turn does not sleep", async () => {
-    const f = await fixture({ minutes: 20 });
+    const f = await fixture({ minutes: 20, providers: ["codex"] });
     try {
       f.session.holdTurn = true;
       await startAgentRun(f.manager, f.agent.id, "work", logger);
@@ -263,7 +280,7 @@ describe("AgentManager idle sleep", () => {
   });
 
   test("a pending permission does not sleep", async () => {
-    const f = await fixture({ minutes: 20 });
+    const f = await fixture({ minutes: 20, providers: ["codex"] });
     try {
       f.session.push({
         type: "permission_requested",
@@ -279,7 +296,7 @@ describe("AgentManager idle sleep", () => {
 
   test("a held or queued message waiting for the session does not sleep it, and it sleeps once the message is gone", async () => {
     let pending = true;
-    const f = await fixture({ minutes: 20, deliveryPending: () => pending });
+    const f = await fixture({ minutes: 20, providers: ["codex"], deliveryPending: () => pending });
     try {
       await vi.advanceTimersByTimeAsync(60 * MINUTE);
       expect(f.session.sleeps).toBe(0);
@@ -292,7 +309,7 @@ describe("AgentManager idle sleep", () => {
   });
 
   test("a provider that refuses (goal, background work) is retried and not forced", async () => {
-    const f = await fixture({ minutes: 20 });
+    const f = await fixture({ minutes: 20, providers: ["codex"] });
     try {
       f.session.mayNotSleep = true;
       await vi.advanceTimersByTimeAsync(100 * MINUTE);
@@ -306,7 +323,7 @@ describe("AgentManager idle sleep", () => {
   });
 
   test("a message wakes the sleeping session and is delivered once", async () => {
-    const f = await fixture({ minutes: 20 });
+    const f = await fixture({ minutes: 20, providers: ["codex"] });
     try {
       await vi.advanceTimersByTimeAsync(21 * MINUTE);
       expect(f.manager.isAgentSleeping(f.agent.id)).toBe(true);
@@ -323,7 +340,7 @@ describe("AgentManager idle sleep", () => {
   });
 
   test("after a wake and a finished turn the session sleeps again", async () => {
-    const f = await fixture({ minutes: 20 });
+    const f = await fixture({ minutes: 20, providers: ["codex"] });
     try {
       await vi.advanceTimersByTimeAsync(21 * MINUTE);
       await startAgentRun(f.manager, f.agent.id, "again", logger);
