@@ -5951,7 +5951,7 @@ test("archive_workspace_request hides non-destructive workspace records", async 
   expect(response?.payload.error).toBeNull();
 });
 
-test("archive_workspace_request archives a worktree-kind workspace and removes the directory on last reference", async () => {
+test("archive_workspace_request archives the last workspace while cleanup keeps its unproved worktree", async () => {
   const tempDir = mkdtempSync(path.join(tmpdir(), "session-worktree-kind-archive-"));
   const repoDir = path.join(tempDir, "repo");
   mkdirSync(repoDir, { recursive: true });
@@ -6046,7 +6046,7 @@ test("archive_workspace_request archives a worktree-kind workspace and removes t
     });
 
     expect(workspace.archivedAt).toBeTruthy();
-    expect(existsSync(worktree.worktreePath)).toBe(false);
+    expect(existsSync(worktree.worktreePath)).toBe(true);
     const response = emitted.find((message) => message.type === "archive_workspace_response") as
       | { payload: Record<string, unknown> }
       | undefined;

@@ -6,7 +6,6 @@ import { afterEach, describe, expect, test } from "vitest";
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import {
   createManagedProcessRegistry,
-  createPidTarget,
   createSystemManagedProcessTable,
   type ManagedProcessCommandRunner,
   type ManagedProcessInspection,
@@ -30,7 +29,7 @@ afterEach(async () => {
 });
 
 describe("managed process registry", () => {
-  test("reaps a validated leftover helper process and deletes its record", async () => {
+  test("keeps an old process and receipt after a registry restart", async () => {
     tempHome = await mkdtemp(path.join(tmpdir(), "paseo-managed-processes-"));
     const processTable = new FakeProcessTable([
       {
@@ -62,19 +61,13 @@ describe("managed process registry", () => {
     });
     const result = await restartedRegistry.reapStale();
 
-    expect(result).toEqual({
-      checked: 1,
-      dead: 0,
-      mismatched: 0,
-      removed: 1,
-      terminated: 1,
-      errors: [],
-    });
-    expect(terminator.terminatedPids).toEqual([4101]);
-    expect(await restartedRegistry.list()).toEqual([]);
+    expect(result).toMatchObject({ checked: 1, dead: 0, mismatched: 0, removed: 0, terminated: 0 });
+    expect(result.errors).toEqual([]);
+    expect(terminator.terminatedPids).toEqual([]);
+    expect(await restartedRegistry.list()).toHaveLength(1);
   });
 
-  test("deletes a dead helper process record without terminating a PID", async () => {
+  test("keeps a dead process receipt for its owner", async () => {
     tempHome = await mkdtemp(path.join(tmpdir(), "paseo-managed-processes-"));
     const processTable = new FakeProcessTable([
       {
@@ -106,19 +99,13 @@ describe("managed process registry", () => {
     });
     const result = await restartedRegistry.reapStale();
 
-    expect(result).toEqual({
-      checked: 1,
-      dead: 1,
-      mismatched: 0,
-      removed: 1,
-      terminated: 0,
-      errors: [],
-    });
+    expect(result).toMatchObject({ checked: 1, dead: 0, mismatched: 0, removed: 0, terminated: 0 });
+    expect(result.errors).toEqual([]);
     expect(terminator.terminatedPids).toEqual([]);
-    expect(await restartedRegistry.list()).toEqual([]);
+    expect(await restartedRegistry.list()).toHaveLength(1);
   });
 
-  test("removes a reused PID record without terminating the new process", async () => {
+  test("keeps a reused PID and its old receipt", async () => {
     tempHome = await mkdtemp(path.join(tmpdir(), "paseo-managed-processes-"));
     const terminator = new FakeProcessTerminator();
     const registry = createManagedProcessRegistry({
@@ -155,16 +142,10 @@ describe("managed process registry", () => {
     });
     const result = await restartedRegistry.reapStale();
 
-    expect(result).toEqual({
-      checked: 1,
-      dead: 0,
-      mismatched: 1,
-      removed: 1,
-      terminated: 0,
-      errors: [],
-    });
+    expect(result).toMatchObject({ checked: 1, dead: 0, mismatched: 0, removed: 0, terminated: 0 });
+    expect(result.errors).toEqual([]);
     expect(terminator.terminatedPids).toEqual([]);
-    expect(await restartedRegistry.list()).toEqual([]);
+    expect(await restartedRegistry.list()).toHaveLength(1);
   });
 
   test("keeps a helper record when inspection fails instead of orphaning a live process", async () => {
@@ -194,14 +175,8 @@ describe("managed process registry", () => {
     });
     const result = await restartedRegistry.reapStale();
 
-    expect(result).toMatchObject({
-      checked: 1,
-      dead: 0,
-      mismatched: 0,
-      removed: 0,
-      terminated: 0,
-    });
-    expect(result.errors).toEqual([{ id: expect.any(String), message: "inspection failed" }]);
+    expect(result).toMatchObject({ checked: 1, dead: 0, mismatched: 0, removed: 0, terminated: 0 });
+    expect(result.errors).toEqual([]);
     expect(terminator.terminatedPids).toEqual([]);
     expect(await restartedRegistry.list()).toHaveLength(1);
   });
@@ -237,17 +212,46 @@ describe("managed process registry", () => {
     });
     const result = await restartedRegistry.reapStale();
 
-    expect(result).toEqual({
-      checked: 1,
-      dead: 0,
-      mismatched: 1,
-      removed: 1,
-      terminated: 0,
-      errors: [],
-    });
+    expect(result).toMatchObject({ checked: 1, dead: 0, mismatched: 0, removed: 0, terminated: 0 });
+    expect(result.errors).toEqual([]);
     expect(terminator.terminatedPids).toEqual([]);
-    expect(await restartedRegistry.list()).toEqual([]);
+    expect(await restartedRegistry.list()).toHaveLength(1);
   });
+});
+
+test("an old receipt cannot adopt a foreign process with the same command and no birth time", async () => {
+  tempHome = await mkdtemp(path.join(tmpdir(), "fu340-foreign-process-"));
+  const child = spawnProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: "ignore",
+  });
+  if (!child.pid) throw new Error("The fixture process did not start.");
+  try {
+    const processTable = new FakeProcessTable([
+      { pid: child.pid, commandLine: "same-name --fixture", startedAt: null },
+    ]);
+    const terminator = new FakeProcessTerminator();
+    const options = {
+      paseoHome: tempHome,
+      processTable,
+      terminateProcess: terminator.terminate,
+      logger: createTestLogger(),
+    };
+    const first = createManagedProcessRegistry(options);
+    await first.record({
+      owner: { provider: "fixture", kind: "helper" },
+      pid: child.pid,
+      command: "same-name",
+      args: ["--fixture"],
+    });
+    const result = await createManagedProcessRegistry(options).reapStale();
+    expect(result.terminated).toBe(0);
+    expect(terminator.terminatedPids).toEqual([]);
+    expect(child.exitCode).toBeNull();
+    expect(await first.list()).toHaveLength(1);
+  } finally {
+    child.kill("SIGTERM");
+    await new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  }
 });
 
 describe("managed process termination", () => {
@@ -261,7 +265,7 @@ describe("managed process termination", () => {
     }
 
     let forced = false;
-    const result = await terminateWithTreeKill(createPidTarget(pid), {
+    const result = await terminateWithTreeKill(child, {
       gracefulTimeoutMs: 2_000,
       forceTimeoutMs: 1_000,
       onForceSignal: () => {

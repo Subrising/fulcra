@@ -458,7 +458,7 @@ async function maybeRemoveDirectory(
   }
 
   try {
-    await deletePaseoWorktree({
+    const removed = await deletePaseoWorktree({
       cwd: backing.mainRepoRoot,
       worktreePath: backing.path,
       teardownCwds: [],
@@ -466,8 +466,8 @@ async function maybeRemoveDirectory(
       paseoHome: dependencies.paseoHome,
       worktreesBaseRoot: dependencies.paseoWorktreesBaseRoot,
     });
-    dependencies.github.invalidate({ cwd: backing.path });
-    return true;
+    if (removed) dependencies.github.invalidate({ cwd: backing.path });
+    return removed;
   } catch (error) {
     dependencies.sessionLogger?.warn(
       { err: error, targetPath: backing.path, requestId: request.requestId },

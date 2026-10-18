@@ -117,7 +117,7 @@ async function createAgentInBranchOffWorktree(options?: {
   return { repoDir, agentId: created.id, worktreePath: created.cwd };
 }
 
-test("create_agent_request creates a worktree and auto-archives both after the first turn", async () => {
+test("create_agent_request creates a worktree and auto-archives both records while keeping its directory", async () => {
   const repoDir = createGitRepo();
   const worktree: CreateAgentWorktreeTarget = {
     mode: "branch-off",
@@ -150,18 +150,21 @@ test("create_agent_request creates a worktree and auto-archives both after the f
 
   await ctx.client.waitForFinish(created.id, 10000);
 
-  // Auto-archive is asynchronous after the agent turns complete; poll until the
-  // last-reference worktree directory is gone.
+  // Wait for both logical archives. Unproved directory cleanup must stay skipped.
   await expectAgentAbsentFromActiveList(created.id);
-  await expect.poll(() => existsSync(created.cwd), { timeout: 10000, interval: 100 }).toBe(false);
-  // Archived tabs can continue asking for history, and those reads are served from
-  // persisted state. They must not recreate the removed worktree or its workspace
-  // observation, and must not compromise the next agent lifecycle.
+  await expect
+    .poll(async () => (await ctx.client.fetchWorkspaces()).entries.length, {
+      timeout: 10000,
+      interval: 100,
+    })
+    .toBe(0);
+  expect(existsSync(created.cwd)).toBe(true);
+  // History reads must preserve the directory and keep archived workspace records inactive.
   const staleTimelineReads = await Promise.allSettled(
     Array.from({ length: 10 }, () => ctx.client.fetchAgentTimeline(created.id, { limit: 20 })),
   );
   expect(staleTimelineReads.every((result) => result.status === "fulfilled")).toBe(true);
-  expect(existsSync(created.cwd)).toBe(false);
+  expect(existsSync(created.cwd)).toBe(true);
   expect((await ctx.client.fetchWorkspaces()).entries).toHaveLength(0);
   const subsequent = await ctx.client.createAgent({
     config: { ...getFullAccessConfig("codex"), cwd: repoDir },
@@ -215,13 +218,13 @@ test("create_agent_request auto-archives a nested workspace from an existing Pas
       { timeout: 10000, interval: 100 },
     )
     .toBe(false);
-  await expect.poll(() => existsSync(created.cwd), { timeout: 10000, interval: 100 }).toBe(false);
+  expect(existsSync(created.cwd)).toBe(true);
   expect(existsSync(source.worktreePath)).toBe(true);
 
   await ctx.client.archivePaseoWorktree({ worktreePath: source.worktreePath });
 }, 30000);
 
-test("failed nested worktree creation cleans up the created workspace and backing directory", async () => {
+test("failed nested worktree creation removes its workspace record and keeps its unproved directory", async () => {
   const repoDir = createGitRepoWithNestedDirectory();
   const source = await createAgentInBranchOffWorktree({
     branchName: "nested-failure-source",
@@ -247,10 +250,11 @@ test("failed nested worktree creation cleans up the created workspace and backin
       async () => {
         const listed = await ctx.client.getPaseoWorktreeList({ cwd: source.repoDir });
         return (
-          listed.worktrees.length === 1 &&
-          createRealpathAwarePathMatcher(source.worktreePath)(
-            listed.worktrees[0]?.worktreePath ?? "",
-          )
+          listed.worktrees.length === 2 &&
+          listed.worktrees.some((worktree) =>
+            createRealpathAwarePathMatcher(source.worktreePath)(worktree.worktreePath),
+          ) &&
+          listed.worktrees.some((worktree) => worktree.branchName === "nested-failure-cleanup")
         );
       },
       { timeout: 10000, interval: 100 },
@@ -338,15 +342,15 @@ test("create_agent_request with worktree but no autoArchive leaves agent and wor
   await ctx.client.archivePaseoWorktree({ worktreePath: created.worktreePath });
 });
 
-test("archiving a created worktree removes the directory on last reference", async () => {
+test("archiving the last workspace keeps its unproved worktree directory", async () => {
   const created = await createAgentInBranchOffWorktree();
 
   await ctx.client.waitForFinish(created.agentId, 10000);
   await ctx.client.archivePaseoWorktree({ worktreePath: created.worktreePath });
 
   await expectAgentAbsentFromActiveList(created.agentId);
-  await expectWorktreeListEmpty(created.repoDir);
-  expect(existsSync(created.worktreePath)).toBe(false);
+  await expectWorktreePresentInList(created.repoDir, created.worktreePath);
+  expect(existsSync(created.worktreePath)).toBe(true);
 });
 
 test("auto-archiving a created worktree keeps the directory when a sibling workspace references it", async () => {

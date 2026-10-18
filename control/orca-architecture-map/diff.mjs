@@ -8,7 +8,7 @@
 // The comparison and the reach walk are pure and import nothing, so the plugin, the controller and the
 // app's TypeScript twin (packages/app/src/architecture-map/map-diff.ts, same cases in its tests) agree.
 // Reading a map at a commit goes through `git show <sha>:<path>` only -- never the working tree -- and
-// loads node:child_process lazily so importing this file needs no Node built-ins.
+// loads the bounded Git helper lazily so importing this file needs no Node built-ins.
 //
 // Usage: node diff.mjs <repo-root> <base-rev> <head-rev> [.fulcra/architecture/<name>.ir.json]
 
@@ -207,8 +207,8 @@ export const isMapPath = (p) => typeof p === "string" && MAP_PATH.test(p) && !p.
 export const isRevision = (r) => typeof r === "string" && REVISION.test(r) && !r.includes("..");
 
 async function git(root, args) {
-  const { execFileSync } = await import("node:child_process");
-  return execFileSync("git", args, {
+  const { execGitCommandSync } = await import("@getpaseo/plugin/server/git");
+  return execGitCommandSync(args, {
     cwd: root,
     encoding: "utf8",
     maxBuffer: 8 * 1024 * 1024,

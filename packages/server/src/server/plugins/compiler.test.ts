@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { evaluateBundle } from "./bundle-evaluator.js";
 import {
   compilePlugin,
   resolveExistingAsarUnpackedEsbuildBinary,
@@ -141,6 +142,17 @@ async function createRootAlias(directory: string): Promise<string> {
 }
 
 describe("plugin runtime entries", () => {
+  it("resolves the owned Git entry through the server host", async () => {
+    const entries = await createSplitPlugin();
+    await writeFile(
+      entries.server,
+      `import { execGitCommand } from "@getpaseo/plugin/server/git"; export default function contribute() { if (typeof execGitCommand !== "function") throw new Error("Missing owned Git runner"); return () => undefined; }`,
+    );
+    const result = await compilePlugin({ client: null, server: entries.server });
+    expect(result.serverBundle).toContain("@getpaseo/plugin/server/git");
+    expect(typeof evaluateBundle(result.serverBundle!)({} as never)).toBe("function");
+  });
+
   it.each([
     "react",
     "react/jsx-runtime",
@@ -159,6 +171,7 @@ describe("plugin runtime entries", () => {
   it.each([
     "@getpaseo/plugin/server",
     "@getpaseo/plugin/server/provider",
+    "@getpaseo/plugin/server/git",
     "@getpaseo/plugin/server/acp",
   ])("rejects %s from client code", async (specifier) => {
     const entries = await createSplitPlugin();

@@ -1,14 +1,8 @@
+import { removeWithCleanupGuard } from "./cleanup-guard.js";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import {
-  constants as fsConstants,
-  existsSync,
-  mkdirSync,
-  realpathSync,
-  rmSync,
-  statSync,
-} from "fs";
-import { copyFile, rm, stat } from "fs/promises";
+import { constants as fsConstants, existsSync, mkdirSync, realpathSync, statSync } from "fs";
+import { copyFile } from "fs/promises";
 import { join, basename, dirname, isAbsolute, resolve, sep } from "path";
 import net from "node:net";
 import { createHash } from "node:crypto";
@@ -684,12 +678,9 @@ export async function runWorktreeSetupCommands(options: {
     if (result.exitCode !== 0) {
       if (options.cleanupOnFailure) {
         try {
-          await runGitCommand(["worktree", "remove", options.worktreePath, "--force"], {
-            cwd: options.worktreePath,
-            timeout: 120_000,
-          });
+          await removeWithCleanupGuard(options.worktreePath);
         } catch {
-          rmSync(options.worktreePath, { recursive: true, force: true });
+          console.warn("Cleanup proof failed. The failed setup worktree was kept.");
         }
       }
       throw new WorktreeSetupError(
@@ -1078,14 +1069,21 @@ export interface DeletePaseoWorktreeOptions {
 export async function deletePaseoWorktree({
   cwd,
   worktreePath,
-  teardownCwds,
   worktreeSlug,
   worktreesRoot,
   paseoHome,
   worktreesBaseRoot,
-}: DeletePaseoWorktreeOptions): Promise<void> {
+}: DeletePaseoWorktreeOptions): Promise<boolean> {
   if (!worktreePath && !worktreeSlug) {
     throw new Error("worktreePath or worktreeSlug is required");
+  }
+  if (
+    [worktreePath, worktreeSlug, worktreesRoot].some((value) =>
+      value?.split(/[\\/]/).includes(".."),
+    )
+  ) {
+    console.warn("KEEP cleanup: The original path has parent traversal.");
+    return false;
   }
 
   // Resolve the worktrees-root. With a repo cwd we hash it the normal way; if
@@ -1117,38 +1115,9 @@ export async function deletePaseoWorktree({
     throw new Error("Refusing to delete non-Fulcra worktree");
   }
 
-  if (await pathExists(resolvedWorktree)) {
-    for (const teardownCwd of teardownCwds ?? [resolvedWorktree]) {
-      await runWorktreeTeardownCommands({
-        worktreePath: resolvedWorktree,
-        teardownCwd,
-      });
-    }
-  }
-
-  if (cwd) {
-    try {
-      await runGitCommand(["worktree", "remove", resolvedWorktree, "--force"], {
-        cwd,
-        timeout: 120_000,
-      });
-    } catch {
-      // `git worktree remove` fails if the admin dir is already gone (e.g. a
-      // prior archive attempt removed it before the working tree could be
-      // fully cleaned up), or if the repo root has moved. Fall through to the
-      // rm retry loop below so the operation stays idempotent.
-    }
-  }
-
-  await removeDirectoryWithRetries(resolvedWorktree);
-
-  if (cwd) {
-    try {
-      await runGitCommand(["worktree", "prune"], { cwd, timeout: 30_000 });
-    } catch {
-      // not critical; git will prune lazily
-    }
-  }
+  // The shared guard owns checks and removal. No teardown or force fallback can bypass it.
+  // Keep the original path. Normalization must not hide a link before the guard checks it.
+  return removeWithCleanupGuard(requestedPath);
 }
 
 export async function rollbackCreatedPaseoWorktree(
@@ -1170,47 +1139,6 @@ export async function rollbackCreatedPaseoWorktree(
     throw failure;
   }
   throw cause;
-}
-
-async function pathExists(path: string): Promise<boolean> {
-  try {
-    await stat(path);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
-    }
-    throw error;
-  }
-}
-
-async function removeDirectoryWithRetries(path: string): Promise<void> {
-  if (!(await pathExists(path))) {
-    return;
-  }
-
-  const delaysMs = [0, 100, 300, 700, 1500];
-  let lastError: unknown = null;
-  for (const delay of delaysMs) {
-    if (delay > 0) {
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, delay));
-    }
-    try {
-      await rm(path, { recursive: true, force: true });
-      if (!(await pathExists(path))) {
-        return;
-      }
-      lastError = new Error(`Directory still present after rm: ${path}`);
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  if (await pathExists(path)) {
-    throw lastError instanceof Error
-      ? lastError
-      : new Error(`Failed to remove worktree directory: ${path}`);
-  }
 }
 
 /**
@@ -1553,6 +1481,8 @@ async function fetchWorktreeCheckoutRefs(options: {
         cwd: options.cwd,
         timeout: 120_000,
         acceptExitCodes: [0, 1, 128],
+        retryFetch: checkoutRef === options.checkoutRefs[0],
+        allowFetchRefFallback: true,
       },
     );
     if (lastResult.exitCode === 0) {
@@ -1582,6 +1512,7 @@ async function tryFetchWorktreeTrackingRemote(options: {
       cwd: options.cwd,
       timeout: 120_000,
       acceptExitCodes: [0, 1, 128],
+      retryFetch: true,
     },
   );
   if (result.exitCode !== 0) {
@@ -1728,6 +1659,7 @@ async function refreshRemoteTrackingBaseRef(cwd: string, baseRef: string): Promi
     // No refspec is added to remote.<name>.fetch: one left behind breaks later fetches once the
     // branch is deleted on the remote.
     await runGitCommand(["fetch", remoteName, `+refs/heads/${remoteBranch}:${baseRef}`], {
+      retryFetch: true,
       cwd,
       envOverlay: { GIT_TERMINAL_PROMPT: "0" },
       timeout: REMOTE_BASE_REFRESH_TIMEOUT_MS,
@@ -1744,6 +1676,7 @@ async function ensureLocalBranch(cwd: string, branchName: string): Promise<void>
   }
   try {
     await runGitCommand(["fetch", "origin", `${branchName}:${branchName}`], {
+      retryFetch: true,
       cwd,
       timeout: 120_000,
     });

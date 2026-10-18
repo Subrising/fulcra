@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import * as server from "./server/index.js";
+import * as git from "./server/git.js";
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const entries = {
@@ -13,6 +14,7 @@ const entries = {
   "./server/provider": "server",
   "./server/usage": "server",
   "./server/acp": "server",
+  "./server/git": "server",
   "./client": "client",
   "./client/host": "client",
   "./client/react-native": "client",
@@ -67,6 +69,16 @@ function boundaryViolations(entry: string, runtime: "shared" | "server" | "clien
 describe("plugin SDK import boundaries", () => {
   it("publishes process capabilities without their Windows implementation helpers", () => {
     expect(Object.keys(server).sort()).toEqual(["execCommand", "spawnProcess", "terminateProcess"]);
+  });
+
+  it("publishes owned Git capabilities without implementation helpers", () => {
+    expect(Object.keys(git).sort()).toEqual([
+      "execGitCommand",
+      "execGitCommandSync",
+      "spawnGitProcess",
+      "terminateGitProcess",
+      "withGitFetchPolicy",
+    ]);
   });
 
   it("classifies every published entry", () => {

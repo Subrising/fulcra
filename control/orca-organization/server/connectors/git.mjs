@@ -1,7 +1,12 @@
 // Fulcra J4: read-only git for commit provenance. Five fixed argv templates, checked element by element
 // before every spawn, so nothing here can fetch, write, check out or run a hook. The environment is rebuilt
 // from scratch (no inherited credentials, no system config, no prompts) and stderr is never forwarded.
-import { execFile } from "node:child_process";
+import { execGitCommand } from "@getpaseo/plugin/server/git";
+const execFile = (_binary, args, options, callback) =>
+  execGitCommand(args, options).then(
+    (result) => callback(null, result.stdout),
+    (error) => callback(error, ""),
+  );
 export const SCAN_DAYS = 30,
   MAX_COMMITS = 200;
 const US = "%x1f",

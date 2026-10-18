@@ -1895,7 +1895,12 @@ it("creates a PR from a restored exact base using the host metadata and a forge 
     writeFileSync(join(created.worktreePath, "feature.txt"), "feature\n");
     git(created.worktreePath, "add", ".");
     git(created.worktreePath, "commit", "-m", "feature");
-    await deletePaseoWorktree({ cwd: repo, paseoHome, worktreePath: created.worktreePath });
+    await expect(
+      deletePaseoWorktree({ cwd: repo, paseoHome, worktreePath: created.worktreePath }),
+    ).resolves.toBe(false);
+    expect(readFileSync(join(created.worktreePath, "feature.txt"), "utf8")).toBe("feature\n");
+    // The controller creates a missing-directory fault in its own registered fixture.
+    git(repo, "worktree", "remove", "--force", created.worktreePath);
     const restored = await createWorktree({
       cwd: repo,
       paseoHome,

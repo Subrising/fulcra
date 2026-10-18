@@ -540,7 +540,7 @@ describe("archiveIfSafe", () => {
     expect(existsSync(worktree.worktreePath)).toBe(true);
   });
 
-  test("real outcome: removes directory when no sibling workspace remains", async () => {
+  test("real outcome: archives the last workspace and keeps its unproved directory", async () => {
     const { tempDir, repoDir } = createGitRepo();
     const paseoHome = path.join(tempDir, ".paseo");
     const worktree = await createPaseoOwnedWorktree(repoDir, paseoHome, "merged-last-ref");
@@ -563,7 +563,7 @@ describe("archiveIfSafe", () => {
     });
 
     expect(archivedWorkspaceIds.has(workspaceA)).toBe(true);
-    expect(existsSync(worktree.worktreePath)).toBe(false);
+    expect(existsSync(worktree.worktreePath)).toBe(true);
   });
 
   test("real outcome: an unarchived workspace is not archived again for the same merged PR", async () => {

@@ -1,3 +1,4 @@
+import { execGitCommand } from "@getpaseo/plugin/server/git";
 import { parseGitRemoteLocation, parseGitHubRemoteIdentity } from "@getpaseo/protocol/git-remote";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -15,7 +16,11 @@ export interface CommandReply {
   stderr: string;
 }
 export type CheckRunner = (command: string, args: string[], cwd: string) => Promise<CommandReply>;
-const execute = promisify(execFile);
+const executeFile = promisify(execFile);
+const execute = (command: string, args: string[], options: Parameters<typeof execGitCommand>[1]) =>
+  command === "git"
+    ? execGitCommand(args, options)
+    : executeFile(command, args, { ...options, windowsHide: true });
 export const runCheckCommand: CheckRunner = async (command, args, cwd) => {
   try {
     const executed = await execute(command, args, {

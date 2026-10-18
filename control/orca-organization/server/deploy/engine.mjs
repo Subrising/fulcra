@@ -586,6 +586,7 @@ export function createDeployEngine({
         cwd: repo,
         env: tools.env(),
         timeoutMs: 120_000,
+        retryFetch: true,
       });
       await git(repo, ["cat-file", "-e", `${pr.headRefOid}^{commit}`]).catch(() => {
         throw new Error(

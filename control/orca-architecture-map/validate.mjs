@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { execGitCommandSync } from "@getpaseo/plugin/server/git";
 // Validate a hand-authored Architecture IR v1 before it is handed off for review.
 //
 // Two layers: the renderer contract (the same limits Fulcra's map panel enforces, so a file that
@@ -9,7 +10,6 @@
 //
 // Usage: node validate.mjs <project-root> <.fulcra/architecture/NAME.ir.json>
 //        node validate.mjs <project-root> --since <base> [--threshold N]     (the ADW gate, SKILL "Keep the map current")
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -314,7 +314,7 @@ function checkBytes(bytes, readSource) {
 // that has fallen behind its sources is named, not silently trusted.
 export const SIGNIFICANT_FILES = 10;
 const git = (root) => (args) =>
-  execFileSync("git", args, {
+  execGitCommandSync(args, {
     cwd: root,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
@@ -322,7 +322,7 @@ const git = (root) => (args) =>
   });
 // Raw bytes of one blob (`<commit>:./<path>`, relative to the project root), for hashing exactly what was committed.
 const gitBytes = (root) => (args) =>
-  execFileSync("git", args, {
+  execGitCommandSync(args, {
     cwd: root,
     maxBuffer: 64 * 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],

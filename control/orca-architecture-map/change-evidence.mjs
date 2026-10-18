@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { execGitCommandSync } from "@getpaseo/plugin/server/git";
 // Evidence for a CHANGES decision packet (CONTRACTS §3.1, action "change"): what an orchestrator attaches
 // when it asks the operator to accept a pull request.
 //
@@ -13,7 +14,6 @@
 //
 // Usage: node change-evidence.mjs --root <repo> --pr <pr-ref> --base <rev> --head <rev>
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseRef, noPersonal } from "../orca-organization/shared/cc/refs.mjs";
@@ -25,7 +25,7 @@ import { SIGNIFICANT_FILES, citations } from "./validate.mjs";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MAX_EVIDENCE = 16;
 const git = (root) => (args) =>
-  execFileSync("git", args, {
+  execGitCommandSync(args, {
     cwd: root,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,

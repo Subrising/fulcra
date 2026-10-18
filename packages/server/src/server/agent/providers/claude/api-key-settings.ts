@@ -1,3 +1,4 @@
+import { execGitCommandSync } from "@getpaseo/plugin/server/git";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -86,7 +87,7 @@ export function assertSafeClaudeApiSettings(cwd: string, env: Record<string, str
     if (env[key]) childEnv[key] = env[key];
   // New native CLIs also load the main checkout's local file for a worktree.
   try {
-    const common = execFileSync("git", ["rev-parse", "--git-common-dir"], {
+    const common = execGitCommandSync(["rev-parse", "--git-common-dir"], {
       cwd,
       env: childEnv,
       encoding: "utf8",

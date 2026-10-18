@@ -1,6 +1,6 @@
+import { execGitCommandSync } from "@getpaseo/plugin/server/git";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
 // Test-only precondition. Not imported by any production module.
 //
 // The live controller hashes THIS worktree's src/control/admission-guard.mjs (activation.mjs, via
@@ -30,7 +30,7 @@ export function classifyGuard(working, head, historical) {
   return historical.includes(working) ? "pinned" : "editing";
 }
 const git = (root, args) =>
-  execFileSync("git", args, {
+  execGitCommandSync(args, {
     cwd: root,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
@@ -85,7 +85,7 @@ export function requireUnpinnedAdmissionGuard() {
   }
   let identity = `working copy sha256 ${digest(source).slice(0, 16)}…`;
   try {
-    const head = execFileSync("git", ["show", "HEAD:src/control/admission-guard.mjs"], {
+    const head = execGitCommandSync(["show", "HEAD:src/control/admission-guard.mjs"], {
       cwd: root,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],

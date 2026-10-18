@@ -1988,7 +1988,7 @@ describe("handlePaseoWorktreeArchiveRequest worktree scope", () => {
     }
   });
 
-  test("archives every active workspace on the directory and removes it", async () => {
+  test("archives every active workspace while cleanup keeps its unproved directory", async () => {
     const { tempDir, repoDir } = createGitRepo();
     cleanupPaths.push(tempDir);
 
@@ -2053,7 +2053,7 @@ describe("handlePaseoWorktreeArchiveRequest worktree scope", () => {
 
     expect(archivedWorkspaceRecords).toContain(workspaceA);
     expect(archivedWorkspaceRecords).toContain(workspaceB);
-    expect(existsSync(sharedCwd)).toBe(false);
+    expect(existsSync(sharedCwd)).toBe(true);
     expect(
       emitted.find((message) => message.type === "paseo_worktree_archive_response"),
     ).toMatchObject({
@@ -2064,7 +2064,7 @@ describe("handlePaseoWorktreeArchiveRequest worktree scope", () => {
     });
   });
 
-  test("default scope archives a single workspace record and removes the directory on last reference", async () => {
+  test("default scope archives the last workspace while cleanup keeps its unproved directory", async () => {
     const { tempDir, repoDir } = createGitRepo();
     cleanupPaths.push(tempDir);
 
@@ -2127,7 +2127,7 @@ describe("handlePaseoWorktreeArchiveRequest worktree scope", () => {
     );
 
     expect(archivedWorkspaceRecords).toEqual([workspaceId]);
-    expect(existsSync(created.worktreePath)).toBe(false);
+    expect(existsSync(created.worktreePath)).toBe(true);
     expect(
       emitted.find((message) => message.type === "paseo_worktree_archive_response"),
     ).toMatchObject({
@@ -2215,7 +2215,7 @@ describe("handlePaseoWorktreeArchiveRequest worktree scope", () => {
     });
   });
 
-  test("ignores deleteWorktreeFromDisk:true and derives directory removal from remaining references", async () => {
+  test("ignores deleteWorktreeFromDisk:true and keeps the directory without removal proof", async () => {
     const { tempDir, repoDir } = createGitRepo();
     cleanupPaths.push(tempDir);
 
@@ -2288,8 +2288,7 @@ describe("handlePaseoWorktreeArchiveRequest worktree scope", () => {
 
     archivedWorkspaceRecords.length = 0;
 
-    // Second archive: last reference, so removal is derived even though the flag
-    // is still ignored.
+    // The last workspace can archive. The request flag cannot prove safe removal.
     await handlePaseoWorktreeArchiveRequest(deps, {
       type: "paseo_worktree_archive_request",
       requestId: "req-delete-flag-second",
@@ -2301,7 +2300,7 @@ describe("handlePaseoWorktreeArchiveRequest worktree scope", () => {
     });
 
     expect(archivedWorkspaceRecords).toEqual([workspaceB]);
-    expect(existsSync(sharedCwd)).toBe(false);
+    expect(existsSync(sharedCwd)).toBe(true);
     expect(
       emitted.filter((message) => message.type === "paseo_worktree_archive_response"),
     ).toHaveLength(2);

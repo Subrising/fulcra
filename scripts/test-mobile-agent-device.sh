@@ -7,11 +7,18 @@ ARTIFACTS_DIR="${PASEO_MOBILE_E2E_ARTIFACTS_DIR:-${REPO_ROOT}/.dev/agent-device-
 METRO_PORT="${PASEO_MOBILE_E2E_METRO_PORT:-8081}"
 METRO_PID=0
 
+cleanup_step() {
+  if [ -r "$HOME/.local/share/fulcra-cleanup/cleanup_steps.py" ]; then
+    python3 -I -S "$HOME/.local/share/fulcra-cleanup/cleanup_steps.py" --require-policy-version 3 "$@" || true
+  else
+    printf '%s\n' 'KEEP: cleanup proof is unavailable; main work continues.' >&2
+  fi
+}
 cleanup() {
-  AGENT_DEVICE_STATE_DIR="${STATE_DIR}" agent-device daemon stop --clean >/dev/null 2>&1 || true
+  cleanup_step service-stop "${STATE_DIR}"
   if [[ "${METRO_PID}" -gt 0 ]]; then
-    pkill -TERM -P "${METRO_PID}" >/dev/null 2>&1 || true
-    kill -TERM "${METRO_PID}" >/dev/null 2>&1 || true
+    cleanup_step pkill -TERM -P "${METRO_PID}"
+    cleanup_step kill -TERM "${METRO_PID}"
   fi
 }
 
