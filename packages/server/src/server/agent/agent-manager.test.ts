@@ -15998,3 +15998,51 @@ test("FU-339: computer-use observations retain identity and distinguish eligibil
     await f.cleanup();
   }
 });
+
+test.each([false, true])(
+  "FU-360 archive refusal names owned rows and their repair with attention %s",
+  async (attention) => {
+    const workdir = mkdtempSync(join(tmpdir(), "archive-ledger-reason-"));
+    const ledger = join(workdir, "ledgers");
+    mkdirSync(join(ledger, "fixture"), { recursive: true });
+    const storage = new AgentStorage(join(workdir, "agents"), logger);
+    const client = new NativeArchiveRecordingClient();
+    const manager = new AgentManager({
+      clients: { codex: client },
+      registry: storage,
+      logger,
+      archiveLedgerDirectory: ledger,
+    });
+    registerArchiveReportCount(manager, () => 0);
+    try {
+      const agent = await manager.createAgent(
+        { provider: "codex", cwd: workdir, title: "Finished worker" },
+        undefined,
+        {},
+      );
+      writeFileSync(
+        join(ledger, "fixture", "OPEN-ITEMS.md"),
+        "| FX-1 | Work | FIX | Finished worker | OPEN | | |\n",
+      );
+      if (attention)
+        await storage.upsert({
+          ...(await storage.get(agent.id))!,
+          requiresAttention: true,
+          attentionReason: "finished",
+        });
+      const before = await storage.get(agent.id);
+      await expect(
+        archiveSafetyCommand({ agentManager: manager, agentStorage: storage, logger }, agent.id),
+      ).rejects.toThrow("ledger close fixture FX-1");
+      await expect(
+        archiveSafetyCommand({ agentManager: manager, agentStorage: storage, logger }, agent.id),
+      ).rejects.toThrow("ledger set fixture FX-1 --owner");
+      expect(await storage.get(agent.id)).toEqual(before);
+      expect(client.archivedHandles).toHaveLength(0);
+    } finally {
+      for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
+      await manager.flush();
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  },
+);

@@ -243,6 +243,7 @@ describe("AgentStorage", () => {
     const child = createManagedAgent({ id: "22222222-2222-4222-8222-222222222222" });
     child.labels = { "paseo.parent-agent-id": parentId };
     await storage.applySnapshot(child);
+    await storage.armFinishNotice(child, parentId, "native");
     const [first, second] = await Promise.all([
       storage.rearmFinishNotice(child.id, parentId, true),
       storage.rearmFinishNotice(child.id, parentId, true),
@@ -255,6 +256,72 @@ describe("AgentStorage", () => {
     });
     expect((await storage.getFinishNotice(child.id))?.messageId).toBe(first?.messageId);
     expect(await storage.rearmFinishNotice(child.id, child.id, true)).toBeNull();
+  });
+
+  test("FU-334 a finished reviewer retains its report when its parent sends another request", async () => {
+    const parentId = "11111111-1111-4111-8111-111111111111";
+    const child = createManagedAgent({ id: "22222222-2222-4222-8222-222222222222" });
+    child.labels = { "paseo.parent-agent-id": parentId };
+    await storage.applySnapshot(child);
+    const first = await storage.armFinishNotice(child, parentId, "report-up");
+    await storage.recordFinishNotice(child.id, "review-turn", "finished");
+    const next = await storage.rearmFinishNotice(child.id, parentId, true);
+    expect(next).toMatchObject({ status: "armed", parentId });
+    expect(next?.messageId).not.toBe(first.messageId);
+    await storage.applySnapshot(child);
+    const recovered = new AgentStorage(storagePath, logger);
+    expect(await recovered.getFinishNotice(child.id, first.messageId)).toMatchObject({
+      status: "pending",
+      turnId: "review-turn",
+    });
+    await recovered.markFinishNoticeSending(child.id, first.messageId);
+    await recovered.settleFinishNotice(child.id, first.messageId, "delivered", "report-up");
+    expect(await recovered.getFinishNotice(child.id)).toEqual(next);
+    expect(await recovered.getFinishNotice(child.id, first.messageId)).toMatchObject({
+      status: "delivered",
+      deliveredBy: "report-up",
+    });
+  });
+
+  test("FU-334 retained sending notices become unknown after restart without replacing the active notice", async () => {
+    const parentId = "11111111-1111-4111-8111-111111111111";
+    const child = createManagedAgent({ id: "22222222-2222-4222-8222-222222222222" });
+    child.labels = { "paseo.parent-agent-id": parentId };
+    await storage.applySnapshot(child);
+    const first = await storage.armFinishNotice(child, parentId, "report-up");
+    await storage.recordFinishNotice(child.id, "first-turn", "finished");
+    await storage.markFinishNoticeSending(child.id, first.messageId);
+    const next = await storage.rearmFinishNotice(child.id, parentId, true);
+    const recovered = new AgentStorage(storagePath, logger);
+    await recovered.markFinishNoticeUnknown(child.id, first.messageId);
+    expect(await recovered.getFinishNotice(child.id, first.messageId)).toMatchObject({
+      status: "unknown",
+    });
+    expect(await recovered.getFinishNotice(child.id)).toEqual(next);
+    await expect(
+      recovered.settleFinishNotice(child.id, first.messageId, "delivered", "report-up"),
+    ).rejects.toThrow("Finish notice already settled");
+  });
+
+  test("FU-334 a full result queue refuses new work without losing pending results", async () => {
+    const parentId = "11111111-1111-4111-8111-111111111111";
+    const child = createManagedAgent({ id: "22222222-2222-4222-8222-222222222222" });
+    child.labels = { "paseo.parent-agent-id": parentId };
+    await storage.applySnapshot(child);
+    const first = await storage.armFinishNotice(child, parentId, "report-up");
+    for (let index = 0; index < 50; index++) {
+      await storage.recordFinishNotice(child.id, `turn-${index}`, "finished");
+      if (index < 49) await storage.rearmFinishNotice(child.id, parentId, true);
+    }
+    const before = await storage.get(child.id);
+    await expect(storage.rearmFinishNotice(child.id, parentId, true)).rejects.toMatchObject({
+      code: "HELD_QUEUE_FULL",
+    });
+    expect(await storage.get(child.id)).toEqual(before);
+    await storage.settleFinishNotice(child.id, first.messageId, "delivered", "report-up");
+    expect(await storage.rearmFinishNotice(child.id, parentId, true)).toMatchObject({
+      status: "armed",
+    });
   });
 
   test("actual snapshot persistence omits live recorded usage across restart", async () => {

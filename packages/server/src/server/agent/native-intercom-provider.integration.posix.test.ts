@@ -1,3 +1,4 @@
+import { heldSendsFor } from "../held-sends.js";
 import { sessionPaseoToolPolicy } from "./paseo-tool-policy.js";
 import { Bindings } from "../../../../../control/src/control/bindings.mjs";
 import { RoleSessions } from "../../../../../control/src/control/role-sessions.mjs";
@@ -70,6 +71,12 @@ vi.mock("../../../../../control/src/control/client-sdk.mjs", () => ({
   },
 }));
 
+interface FixtureUserMessage {
+  threadId: string;
+  itemId: string;
+  text: string;
+}
+
 async function fixture(
   reply: "valid" | "malformed" = "valid",
   reports = false,
@@ -135,6 +142,23 @@ async function fixture(
   const server = Object.assign({}, first, {
     completeTurn(params: Parameters<typeof first.completeTurn>[0] = {}) {
       (threads.get(params.threadId ?? "thread-1") ?? first).completeTurn(params);
+    },
+    says(params: Parameters<typeof first.says>[0]) {
+      (threads.get(params.threadId ?? "thread-1") ?? first).says(params);
+    },
+    submits(params: FixtureUserMessage) {
+      const message = {
+        method: "item/completed",
+        params: {
+          threadId: params.threadId,
+          item: {
+            type: "userMessage",
+            id: params.itemId,
+            content: [{ type: "text", text: params.text }],
+          },
+        },
+      };
+      (threads.get(params.threadId) ?? first).child.stdout.write(`${JSON.stringify(message)}\n`);
     },
     startsTurn(params: Parameters<typeof first.startsTurn>[0]) {
       (threads.get(params.threadId) ?? first).startsTurn(params);
@@ -330,10 +354,12 @@ async function fixture(
     },
     async cleanup() {
       authorized = true;
-      server.completeTurn();
-      await manager.closeAgent(agent.id);
+      receipts.stop();
+      for (const active of manager.listAgents()) await manager.closeAgent(active.id);
+      await manager.flushForShutdown();
+      await agentStorage.flush();
       controlStore?.close();
-      await rm(directory, { recursive: true, force: true });
+      await rm(directory, { recursive: true, force: true, maxRetries: 3 });
     },
   };
 }
@@ -4483,6 +4509,144 @@ test("lead preset human RPC refresh preserves registered report ownership and ro
   } finally {
     owner.close();
     await f.manager.closeAgent(child.id);
+    await f.cleanup();
+  }
+});
+
+test("FU-346 an idle child starts its next MCP task while its parent is busy", async () => {
+  const { f, catalog, childId, childThread, offReportUp } = await defaultOwnedNoticeFixture();
+  let parentRun: Promise<void> | undefined;
+  try {
+    parentRun = (async () => {
+      for await (const event of f.manager.streamAgent(f.agent.id, "parent still works")) void event;
+    })();
+    await f.manager.waitForAgentRunStart(f.agent.id);
+    f.server.submits({
+      threadId: childThread,
+      itemId: "child-prompt-1",
+      text: "fixture child work",
+    });
+    f.server.says({ threadId: childThread, itemId: "child-result-1", text: "First child result" });
+    await vi.waitFor(async () =>
+      expect(await f.manager.getLastAssistantMessage(childId)).toBe("First child result"),
+    );
+    f.server.completeTurn({ threadId: childThread });
+    await vi.waitFor(async () =>
+      expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({
+        status: "pending",
+        reason: "finished",
+      }),
+    );
+    await vi.waitFor(() => expect(f.manager.hasInFlightRun(childId)).toBe(false));
+    const sent = await catalog.executeTool("send_agent_prompt", {
+      agentId: childId,
+      prompt: "second child task",
+      background: true,
+    });
+    expect(sent).toMatchObject({ structuredContent: { success: true } });
+    expect(
+      f.server
+        .requests()
+        .filter(
+          (request) =>
+            request.method === "turn/start" &&
+            JSON.stringify(request).includes("second child task"),
+        ),
+    ).toHaveLength(1);
+    f.server.submits({
+      threadId: childThread,
+      itemId: "child-prompt-2",
+      text: "second child task",
+    });
+    f.server.says({ threadId: childThread, itemId: "child-result-2", text: "Second child result" });
+    await vi.waitFor(async () =>
+      expect(await f.manager.getLastAssistantMessage(childId)).toBe("Second child result"),
+    );
+    f.server.completeTurn({ threadId: childThread });
+    await vi.waitFor(() => expect(f.manager.hasInFlightRun(childId)).toBe(false));
+    f.server.completeTurn({ threadId: f.agent.persistence!.sessionId });
+    await parentRun;
+    const notices = () =>
+      f.server
+        .requests()
+        .filter(
+          (request) => request.method === "turn/start" && JSON.stringify(request).includes(childId),
+        );
+    await vi.waitFor(() =>
+      expect(
+        notices().some((request) => JSON.stringify(request).includes("First child result")),
+      ).toBe(true),
+    );
+    f.server.completeTurn({ threadId: f.agent.persistence!.sessionId });
+    await vi.waitFor(() =>
+      expect(
+        notices().some((request) => JSON.stringify(request).includes("Second child result")),
+      ).toBe(true),
+    );
+  } finally {
+    offReportUp();
+    heldSendsFor(f.manager, createTestLogger()).close();
+    f.server.completeTurn({ threadId: childThread });
+    f.server.completeTurn({ threadId: f.agent.persistence!.sessionId });
+    await parentRun;
+    await f.manager.closeAgent(childId);
+    await f.manager.flushForShutdown();
+    await f.cleanup();
+  }
+}, 15000);
+
+test("FU-334 restart delivers each retained result once with its original text", async () => {
+  const { f, childId, childThread, offReportUp } = await defaultOwnedNoticeFixture(false);
+  const recovered = new AgentStorage(path.join(f.directory, "agents"), createTestLogger());
+  const prompts: string[] = [];
+  const service = new ReportUpService({
+    agentManager: f.manager,
+    agentStorage: recovered,
+    isEnabled: () => false,
+    isOtherEnabled: () => true,
+    isNudgeEnabled: () => false,
+    localServerId: null,
+    logger: createTestLogger(),
+    readLedger: () => [],
+    deliver: async (_parentId, prompt) => {
+      prompts.push(prompt);
+    },
+  });
+  try {
+    await f.agentStorage.recordFinishNotice(
+      childId,
+      "first-turn",
+      "finished",
+      undefined,
+      "Original first result",
+    );
+    const first = (await f.agentStorage.getFinishNotice(childId))!;
+    await f.agentStorage.rearmFinishNotice(childId, f.agent.id, true);
+    await f.agentStorage.recordFinishNotice(
+      childId,
+      "second-turn",
+      "finished",
+      undefined,
+      "Original second result",
+    );
+    const second = (await f.agentStorage.getFinishNotice(childId))!;
+    await service.recoverOwnedFinishes();
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).toContain("Original first result");
+    expect(prompts[0]).not.toContain("Original second result");
+    expect(prompts[1]).toContain("Original second result");
+    expect(await recovered.getFinishNotice(childId, first.messageId)).toMatchObject({
+      status: "delivered",
+    });
+    expect(await recovered.getFinishNotice(childId, second.messageId)).toMatchObject({
+      status: "delivered",
+    });
+    await service.recoverOwnedFinishes();
+    expect(prompts).toHaveLength(2);
+  } finally {
+    service.stop();
+    offReportUp();
+    f.server.completeTurn({ threadId: childThread });
     await f.cleanup();
   }
 });

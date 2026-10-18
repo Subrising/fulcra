@@ -37,6 +37,7 @@ import { FINAL_INPUT_CHECK } from "./agent/agent-sdk-types.js";
 import type { AgentManager, AgentManagerEvent } from "./agent/agent-manager.js";
 import {
   finishNoticeParentId,
+  storedFinishNotices,
   type AgentStorage,
   type FinishNotice,
 } from "./agent/agent-storage.js";
@@ -445,11 +446,16 @@ export class ReportUpService {
       if (currentParentId !== parentId) continue;
       this.finishRetriesOnIdle.delete(childId);
       void this.deps.agentStorage
-        .getFinishNotice(childId)
-        .then((notice) => {
-          if (notice?.status === "pending" && notice.retryAfterRefusal)
-            return this.deliverOwnedFinish(childId, notice, false);
-          return undefined;
+        .get(childId)
+        .then((record) => {
+          if (!record) return undefined;
+          return Promise.all(
+            storedFinishNotices(record).map((notice) => {
+              if (notice.status === "pending" && notice.retryAfterRefusal)
+                return this.deliverOwnedFinish(childId, notice, false);
+              return undefined;
+            }),
+          );
         })
         .catch((err: unknown) =>
           this.deps.logger.warn({ err, childId }, "Refused finish retry failed"),
@@ -654,17 +660,18 @@ export class ReportUpService {
   /** Reconcile a saved finish after native queue recovery has settled its old boot. */
   async recoverOwnedFinishes(): Promise<void> {
     await Promise.all(
-      (await this.deps.agentStorage.list()).map(async (record) => {
-        const notice = record.finishNotice;
-        if (notice?.status === "sending") {
-          await this.deps.agentStorage.markFinishNoticeUnknown(record.id, notice.messageId);
-          this.deps.logger.warn(
-            { childId: record.id, messageId: notice.messageId },
-            "Finish notice outcome unknown after restart",
-          );
-        }
-        if (notice?.status === "pending") await this.deliverOwnedFinish(record.id, notice, true);
-      }),
+      (await this.deps.agentStorage.list()).flatMap((record) =>
+        storedFinishNotices(record).map(async (notice) => {
+          if (notice.status === "sending") {
+            await this.deps.agentStorage.markFinishNoticeUnknown(record.id, notice.messageId);
+            this.deps.logger.warn(
+              { childId: record.id, messageId: notice.messageId },
+              "Finish notice outcome unknown after restart",
+            );
+          }
+          if (notice.status === "pending") await this.deliverOwnedFinish(record.id, notice, true);
+        }),
+      ),
     );
   }
 
@@ -822,10 +829,15 @@ export class ReportUpService {
       return formatSystemNotificationPrompt(
         `Agent ${worker.id} (${titleOf(worker)}) was closed.\n${spend}`,
       );
-    const lastMessage =
-      observedLast === undefined
-        ? await this.deps.agentManager.getLastAssistantMessage(worker.id).catch(() => null)
-        : observedLast;
+    const record = await this.deps.agentStorage.get(worker.id);
+    let lastMessage = record?.finishNoticeResults?.[notice.messageId];
+    if (lastMessage === undefined) {
+      lastMessage = observedLast;
+      if (lastMessage === undefined)
+        lastMessage = await this.deps.agentManager
+          .getLastAssistantMessage(worker.id)
+          .catch(() => null);
+    }
     const result =
       notice.reason === "finished" && this.deps.routing?.enabledForLead(notice.parentId)
         ? parseWorkerResult(lastMessage)
@@ -848,8 +860,8 @@ export class ReportUpService {
     observedLast?: string | null,
     reroutes = 0,
   ): Promise<void> {
-    if (this.stopped || this.processingOwned.has(childId)) return;
-    this.processingOwned.add(childId);
+    if (this.stopped || this.processingOwned.has(notice.messageId)) return;
+    this.processingOwned.add(notice.messageId);
     let retry: FinishNotice | null = null;
     let sending = false;
     let handoff: object | undefined;
@@ -929,7 +941,7 @@ export class ReportUpService {
         reroutes,
       });
     } finally {
-      this.processingOwned.delete(childId);
+      this.processingOwned.delete(notice.messageId);
       this.scheduleRetargetedFinish(childId, retry, observedLast, reroutes);
     }
   }

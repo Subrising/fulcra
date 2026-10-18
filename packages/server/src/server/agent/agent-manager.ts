@@ -4583,8 +4583,11 @@ export class AgentManager {
     const reasons: string[] = [];
     if (isArchiveLead(record)) reasons.push("This session is a lead or owner.");
     const rows = await readOpenLedgerRows(this.archiveLedgerDirectory ?? defaultLedgerDir(), true);
-    if (rowsOwnedBy(rows, { id: record.id, title: record.title ?? "" }).length)
-      reasons.push("This session owns open ledger items.");
+    const ownedRows = rowsOwnedBy(rows, { id: record.id, title: record.title ?? "" });
+    for (const row of ownedRows)
+      reasons.push(
+        `This session owns open ledger item ${row.id} in ${row.project}. Close it: ledger close ${row.project} ${row.id} --evidence <result>. Or transfer it: ledger set ${row.project} ${row.id} --owner <lead>. The --force option does not bypass ledger protection.`,
+      );
     return { confirmationRequired: reasons.length > 0, reasons };
   }
 
@@ -4656,15 +4659,26 @@ export class AgentManager {
       const messages = native === null || queued === null ? null : native + queued + held;
       if (reports === null || messages === null)
         throw new Error("Archive refused: report or message state is unavailable.");
-      if (
-        reports > 0 ||
-        messages > 0 ||
-        record.requiresAttention ||
-        this.listProviderSubagentActivity().some(
-          (child) => child.parentAgentId === agentId && child.status === "running",
-        )
-      )
-        throw new Error("Archive refused: this session has unread reports or pending messages.");
+      const blockers = [...protection.reasons];
+      if (reports > 0)
+        blockers.push(
+          `This session has ${reports} unread reports. Read and acknowledge them first.`,
+        );
+      if (messages > 0)
+        blockers.push(
+          `This session has ${messages} pending messages. Resolve them before archive.`,
+        );
+      if (record.requiresAttention)
+        blockers.push(
+          `This session needs attention (${record.attentionReason ?? "unspecified"}). Read its result or resolve its permission request.`,
+        );
+      const runningProviderChildren = this.listProviderSubagentActivity().filter(
+        (child) => child.parentAgentId === agentId && child.status === "running",
+      );
+      if (runningProviderChildren.length)
+        blockers.push("This session has running provider subagents. Wait for them to finish.");
+      if (blockers.length > protection.reasons.length)
+        throw new Error(`Archive refused: ${blockers.join(" ")}`);
       if (
         this.archiveConfirmations.getStore() !== agentId ||
         this.trustedPlugins.currentInputSource() !== "human"
@@ -8788,7 +8802,13 @@ export class AgentManager {
     }
     if (!notice || notice.status !== "armed") return null;
     return this.registry
-      .recordFinishNotice(agent.id, turnId, reason, sessionCost(agent.costRecords))
+      .recordFinishNotice(
+        agent.id,
+        turnId,
+        reason,
+        sessionCost(agent.costRecords),
+        this.getLastAssistantMessageFromTimeline(this.timelineStore.getItems(agent.id)),
+      )
       .then(() => undefined);
   }
 
