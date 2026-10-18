@@ -12,6 +12,8 @@ dotenv.config({ path: path.resolve(serverRoot, ".env.test"), override: true });
 dotenv.config({ path: path.resolve(serverRoot, "../.env") });
 
 process.env.PASEO_SUPERVISED = "0";
+// The start memory guard reads the real host. A test must not depend on the memory of the machine that runs it.
+process.env.PASEO_MEMORY_GUARD = "off";
 process.env.GIT_TERMINAL_PROMPT = "0";
 process.env.GIT_SSH_COMMAND = "ssh -oBatchMode=yes";
 process.env.SSH_ASKPASS = "/usr/bin/false";

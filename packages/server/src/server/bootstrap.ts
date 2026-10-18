@@ -1176,7 +1176,13 @@ export async function createPaseoDaemon(
     timelineRetention: config.timelineRetention,
     pluginLifecycle: pluginRuntime,
     startAdmission: createAgentStartMemoryGuard({
-      settings: () => ({ ...DEFAULT_MEMORY_GUARD_SETTINGS, ...config.memoryGuard }),
+      settings: () => ({
+        ...DEFAULT_MEMORY_GUARD_SETTINGS,
+        ...config.memoryGuard,
+        // PASEO_MEMORY_GUARD=off turns the guard off. The test setup uses it: a test must not depend on the memory of
+        // the machine that runs it.
+        ...(process.env.PASEO_MEMORY_GUARD === "off" ? { enabled: false } : {}),
+      }),
       logger,
     }),
     trustedPlugins,
