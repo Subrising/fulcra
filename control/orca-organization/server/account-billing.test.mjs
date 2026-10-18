@@ -88,8 +88,9 @@ test("existing recorded turns restore session totals without another paid turn",
   const { readSessionBilling } = await import("./account-billing.mjs");
   const root = world(t),
     id = randomUUID();
-  const a = await addAccount(root, { provider: "claude", name: "API A" });
-  const b = await addAccount(root, { provider: "claude", name: "API B" });
+  const created = Date.parse("2026-10-17T00:00:00Z");
+  const a = await addAccount(root, { provider: "claude", name: "API A" }, created);
+  const b = await addAccount(root, { provider: "claude", name: "API B" }, created);
   for (const account of [a, b])
     await setAccount(root, account.id, {
       credentialKind: "api-key",
