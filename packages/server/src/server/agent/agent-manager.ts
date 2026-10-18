@@ -124,6 +124,7 @@ import {
 import { TRUSTED_OPERATION, NATIVE_QUEUED_FINAL, FINAL_INPUT_CHECK } from "./agent-sdk-types.js";
 import type { AgentBackgroundWork } from "@getpaseo/protocol/agent-background-work";
 import { SessionResources } from "./session-resources.js";
+import { protectedSessionDirectory } from "./windows-resource-processes.js";
 import {
   BackgroundWorkSampler,
   type BackgroundWorkSamplerOptions,
@@ -146,7 +147,7 @@ import {
   type AgentMcpRefreshResult,
   type AgentMcpRefreshState,
 } from "@getpaseo/protocol/messages";
-import { basename, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { stat } from "node:fs/promises";
 import {
   AGENT_LIFECYCLE_STATUSES,
@@ -2353,8 +2354,10 @@ export class AgentManager {
     return new SessionResources({
       file,
       logger: this.logger,
+      windowsPolicyFile: join(dirname(file), "session-resource-policy.json"),
       roots: () =>
         [...this.agents.values()].flatMap((agent) => {
+          if (protectedSessionDirectory(agent.cwd, agent.title)) return [];
           const pid = agent.session.getProcessId?.();
           return pid && agent.instanceId
             ? [{ agentId: agent.id, instanceId: agent.instanceId, pid }]
@@ -2365,6 +2368,7 @@ export class AgentManager {
         if (this.agents.has(id)) return "live";
         const record = this.registry?.getCached(id);
         if (!record) return "unknown";
+        if (protectedSessionDirectory(record.cwd, record.title)) return "unknown";
         return record.archivedAt || record.lastStatus === "closed" ? "inactive" : "live";
       },
     });

@@ -6,6 +6,7 @@ import type { Logger } from "pino";
 import { readOwnedProcessTable, type OwnedProcessIdentity } from "../../utils/tree-kill.js";
 import { writeJsonFileAtomic } from "../atomic-file.js";
 import type { ToolCallTimelineItem } from "./agent-sdk-types.js";
+import { readWindowsResourceProcesses } from "./windows-resource-processes.js";
 
 const exec = promisify(execFile);
 export const ORPHAN_INTERVAL_MS = 30 * 60 * 1_000;
@@ -13,6 +14,8 @@ export interface ResourceProcess extends OwnedProcessIdentity {
   command: string;
   rssKiB: number;
   serviceLabel?: string;
+  privateMemoryBytes?: number;
+  protectionReason?: string;
 }
 interface Root {
   agentId: string;
@@ -28,6 +31,8 @@ const processSchema = z.object({
   observedAt: z.number().finite(),
   command: z.string(),
   rssKiB: z.number().nonnegative(),
+  privateMemoryBytes: z.number().nonnegative().optional(),
+  kind: z.enum(["process", "unbounded-log-tail", "powershell-over-2gb"]).default("process"),
 });
 const simulatorSchema = z.object({
   agentId: z.string().min(1),
@@ -47,6 +52,12 @@ type ProcessRecord = z.infer<typeof processSchema>;
 type SimulatorRecord = z.infer<typeof simulatorSchema>;
 type Ledger = z.infer<typeof ledgerSchema>;
 
+export function resourceKind(row: ResourceProcess, logTail: boolean): ProcessRecord["kind"] {
+  if (!/(?:^|[\\/])(?:powershell|pwsh)(?:\.exe)?$/i.test(row.command)) return "process";
+  if ((row.privateMemoryBytes ?? 0) > 2 * 1024 ** 3) return "powershell-over-2gb";
+  return logTail ? "unbounded-log-tail" : "process";
+}
+
 export interface SimulatorTable {
   inspect(udid: string): Promise<{ booted: boolean; pid: number | null; birth: string | null }>;
   shutdown(udid: string): Promise<void>;
@@ -62,10 +73,13 @@ interface Options {
   simulators?: SimulatorTable;
   now?: () => number;
   gracefulTimeoutMs?: number;
+  windowsPolicyFile?: string;
 }
 
 export function protectedSessionProcess(row: ResourceProcess): boolean {
   return (
+    Boolean(row.protectionReason) ||
+    /^(?:fulcra(?:[ ._-].*)?|chrome|msedge|spotify|discord|explorer|mail|chatgpt|codex|ollama|steam)(?:\.exe)?$/i.test(row.command) ||
     row.pid === process.pid ||
     !row.command ||
     /(?:^|\/)ollama(?:$|\s)/i.test(row.command) ||
@@ -79,9 +93,9 @@ export function protectedSessionProcess(row: ResourceProcess): boolean {
 }
 
 /** Read identities and program names only. Never collect arguments or environments. */
-export async function readResourceProcesses(): Promise<ResourceProcess[]> {
+export async function readResourceProcesses(windowsPolicyFile?: string): Promise<ResourceProcess[]> {
+  if (process.platform === "win32") return readWindowsResourceProcesses(windowsPolicyFile);
   const identities = await readOwnedProcessTable();
-  if (process.platform === "win32") return []; // Keep unsupported process identities.
   const { stdout } = await exec("ps", ["-axo", "pid=,ppid=,etime=,rss=,comm="], {
     timeout: 5_000,
     maxBuffer: 16 * 1024 * 1024,
@@ -165,6 +179,7 @@ export class SessionResources {
   private sampleTimer: ReturnType<typeof setInterval> | null = null;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
   private sampling = false;
+  private readonly logReaders = new Set<string>();
   private readonly boots = new Map<string, { root: Root; udid: string; shutdown: boolean }>();
   private readonly bootUsers = new Map<
     string,
@@ -173,7 +188,7 @@ export class SessionResources {
 
   constructor(options: Options) {
     this.options = options;
-    this.read = options.readProcesses ?? readResourceProcesses;
+    this.read = options.readProcesses ?? (() => readResourceProcesses(options.windowsPolicyFile));
     this.signal = options.signal ?? process.kill;
     this.now = options.now ?? Date.now;
     this.simulators = options.simulators ?? systemSimulators();
@@ -253,12 +268,16 @@ export class SessionResources {
           for (const row of rows) {
             if (row.ppid !== parent || seen.has(row.pid) || rootPids.has(row.pid)) continue;
             seen.add(row.pid);
-            if (row.zombie || protectedSessionProcess(row)) continue; // Do not follow a protected app's helpers.
+            if (row.zombie || protectedSessionProcess({ ...row, protectionReason: undefined })) continue;
             queue.push(row.pid);
             const existing = ledger.processes.find(
               (p) => p.pid === row.pid && p.birth === row.birth,
             );
-            if (existing) continue; // Never transfer recorded work to a new owner.
+            if (existing) {
+              // An external queue lease blocks stops, not ownership capture. Never transfer the owner.
+              existing.kind = resourceKind(row, existing.kind === "unbounded-log-tail");
+              continue;
+            }
             ledger.processes.push({
               agentId: root.agentId,
               instanceId: root.instanceId,
@@ -267,6 +286,8 @@ export class SessionResources {
               observedAt: this.now(),
               command: row.command,
               rssKiB: row.rssKiB,
+              privateMemoryBytes: row.privateMemoryBytes,
+              kind: resourceKind(row, this.logReaders.has(`${root.agentId}:${root.instanceId}`)),
             });
           }
         }
@@ -516,6 +537,10 @@ export class SessionResources {
   /** A successful, explicit UUID boot proves ownership. Pre-booted devices never become owned. */
   observeTool(root: Root, item: ToolCallTimelineItem): Promise<void> {
     return this.serial(async () => {
+      if (item.detail.type === "shell" && item.status === "running" &&
+        /\bGet-Content\b/i.test(item.detail.command) && /(?:^|\s)-Wait\b/i.test(item.detail.command)) {
+        this.logReaders.add(`${root.agentId}:${root.instanceId}`);
+      }
       const command = simulatorCommand(item);
       if (!command) return;
       const udid = command.udid.toUpperCase();
