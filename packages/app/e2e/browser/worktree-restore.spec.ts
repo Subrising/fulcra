@@ -8,7 +8,10 @@ import {
   expectCommittedFile,
   expectCommittedFileAfterReload,
 } from "../support/helpers/workspace-recovery";
-import { archiveWorkspaceFromSidebar } from "../support/helpers/sidebar";
+import {
+  archiveWorkspaceFromSidebar,
+  expectWorkspaceAbsentFromSidebar,
+} from "../support/helpers/sidebar";
 import { rename } from "node:fs/promises";
 import type { Page } from "@playwright/test";
 import { buildHostWorkspaceRoute } from "@/utils/host-routes";
@@ -538,6 +541,7 @@ async function archiveCommittedWorkspace(
   fixtureRepo: string,
 ): Promise<void> {
   await archiveWorkspaceFromSidebar(page, worktree.workspaceId);
+  await expectWorkspaceAbsentFromSidebar(page, worktree.workspaceId);
   removeArchivedWorktreeFixture(fixtureRepo, worktree.workspaceDirectory);
 }
 
