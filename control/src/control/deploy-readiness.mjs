@@ -1,3 +1,4 @@
+import { execGitCommandSync } from "@getpaseo/plugin/server/git";
 import { localJson } from "../local-machine.mjs";
 // Go/no-go for deploying the admission guard and controller, measured now rather than read.
 //
@@ -393,7 +394,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     ask = reader({ home, reads: READS });
   const git = (args) => {
     try {
-      return execFileSync("git", args, { encoding: "utf8" });
+      return execGitCommandSync(args, { encoding: "utf8" });
     } catch {
       return null;
     }

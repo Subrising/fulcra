@@ -1,17 +1,17 @@
 #!/usr/bin/env node
+import { execGitCommandSync } from "@getpaseo/plugin/server/git";
 // Lets a session prepare a deploy plan. It never deploys: the plan waits on Home under "Needs you" until a person
 // opens it in Fulcra and confirms. Run it from the project's folder:
 //   node deploy-plan.mjs --environment Test [--ref branch:main | commit:<sha> | pr:<number>] [--as "Release helper"]
 // It reads the Command Centre's state folder from PASEO_HOME (or ORCA_HOME), as every Fulcra session has it.
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { execFileSync } from "node:child_process";
 import { createDeployEngine } from "./engine.mjs";
 import { stateRoot } from "../config.mjs";
 
 function parseRef(value, repo) {
   if (!value) {
-    const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+    const branch = execGitCommandSync(["rev-parse", "--abbrev-ref", "HEAD"], {
       cwd: repo,
       encoding: "utf8",
     }).trim();
@@ -42,7 +42,7 @@ export async function main(
     },
   });
   if (!values.environment) throw new Error("Name the environment: --environment <name>");
-  const repo = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+  const repo = execGitCommandSync(["rev-parse", "--show-toplevel"], {
     cwd: path.resolve(values.project ?? process.cwd()),
     encoding: "utf8",
   }).trim();

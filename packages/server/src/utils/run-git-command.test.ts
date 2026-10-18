@@ -227,6 +227,16 @@ async function loadRunGitCommand(concurrency: number) {
   return import("./run-git-command.js");
 }
 
+vi.mock("@getpaseo/plugin/server/git", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@getpaseo/plugin/server/git")>();
+  return {
+    ...actual,
+    terminateGitProcess: async (child: { kill: (signal: string) => void }) => {
+      child.kill("SIGKILL");
+    },
+  };
+});
+
 describe("runGitCommand", () => {
   beforeEach(() => {
     fakeSpawnController.reset();
