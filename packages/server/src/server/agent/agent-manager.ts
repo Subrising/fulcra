@@ -2369,6 +2369,14 @@ export class AgentManager {
             ? [{ agentId: agent.id, instanceId: agent.instanceId, pid }]
             : [];
         }),
+      fixtureInUse: async (cwd) => {
+        if (!this.acceptingAgentRegistrations || !this.registry) return true;
+        const canonical = (value: string) => value.replace(/^\/private\/tmp\//, "/tmp/");
+        const matches = (value: string) => canonical(value) === canonical(cwd);
+        if ([...this.agents.values()].some((agent) => matches(agent.cwd))) return true;
+        return (await this.registry.list()).some((record) => matches(record.cwd) &&
+          !record.archivedAt && record.lastStatus !== "closed");
+      },
       ownerState: (id) => {
         if (!this.acceptingAgentRegistrations) return "unknown";
         if (this.agents.has(id)) return "live";

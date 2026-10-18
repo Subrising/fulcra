@@ -73,6 +73,55 @@ async function fixture() {
 }
 
 describe("session resource cleanup", () => {
+  test("sweeps only old unused orphan test fixtures", async () => {
+    const f = await fixture();
+    f.setLive(false);
+    f.setRows([{ ...child, ppid: 1, cwd: "/private/tmp/paseo-omp-agent-test", ageSeconds: 7201 }]);
+    const tracker = new SessionResources({ ...f.options, fixtureInUse: async () => false });
+    await tracker.sweep();
+    expect(f.stopped).toEqual([101]);
+    expect(await readFile(`${f.options.file}.stops.jsonl`, "utf8")).toContain('"kind":"test-fixture"');
+  });
+  test.each([
+    { ageSeconds: 7200 }, { cwd: "/tmp/paseo-omp-agent-test/subdir" },
+    { cwd: "/tmp/my-server" }, { command: "/bin/python" }, { ppid: 200 },
+    { serviceLabel: "dev.fulcra.fixture" }, { zombie: true },
+  ])("keeps a process outside the exact old fixture rule: %j", async (change) => {
+    const f = await fixture();
+    f.setLive(false);
+    f.setRows([{ ...child, ppid: 1, cwd: "/tmp/paseo-omp-agent-test", ageSeconds: 7201, ...change }]);
+    await new SessionResources({ ...f.options, fixtureInUse: async () => false }).sweep();
+    expect(f.stopped).toEqual([]);
+  });
+  test("keeps live and unknown fixture owners", async () => {
+    const f = await fixture();
+    f.setLive(false);
+    f.setRows([{ ...child, ppid: 1, cwd: "/tmp/paseo-omp-agent-test", ageSeconds: 7201 }]);
+    await new SessionResources({ ...f.options, fixtureInUse: async () => true }).sweep();
+    await new SessionResources(f.options).sweep();
+    expect(f.stopped).toEqual([]);
+  });
+  test("checks fixture use again immediately before a stop", async () => {
+    const f = await fixture();
+    f.setLive(false);
+    f.setRows([{ ...child, ppid: 1, cwd: "/tmp/paseo-omp-agent-test", ageSeconds: 7201 }]);
+    let inspections = 0;
+    await new SessionResources({ ...f.options, fixtureInUse: async () => ++inspections >= 3 }).sweep();
+    expect(f.stopped).toEqual([]);
+  });
+  test("keeps a fixture that changes cwd or native birth after admission", async () => {
+    for (const changed of [{ cwd: "/tmp/user-app" }, { birth: "new" }]) {
+      const f = await fixture();
+      f.setLive(false);
+      const row = { ...child, ppid: 1, cwd: "/tmp/paseo-omp-agent-test", ageSeconds: 7201 };
+      let reads = 0;
+      await new SessionResources({ ...f.options, fixtureInUse: async () => false,
+        readProcesses: async () => [++reads >= 3 ? { ...row, ...changed } : row],
+      }).sweep();
+      expect(f.stopped).toEqual([]);
+    }
+  });
+
   test("retains ownership during an open GPU receipt and stops only after it closes", async () => {
     const f = await fixture();
     f.setRows([root, { ...child, protectionReason: "queue-open" }]);

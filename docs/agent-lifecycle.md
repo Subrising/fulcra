@@ -568,3 +568,15 @@ Each agent is a single JSON file. Fields relevant to this doc:
 | `lastStatus`                                 | `AgentStatus` | `initializing` / `idle` / `running` / `error` / `closed`                           |
 
 See [`docs/data-model.md`](./data-model.md) for the full agent record.
+
+### Old test fixtures
+
+The sweep can also stop an old Node test fixture without a session ledger entry.
+It requires parent PID 1, age over two hours, and an exact `/tmp/paseo-*-test` directory.
+On macOS, `/private/tmp/paseo-*-test` is also accepted.
+Subdirectories, other program names, and processes with launchd labels are excluded.
+The sweep checks all stored and resident sessions for that directory before each signal.
+Live or unreadable session state prevents the stop.
+Each signal checks the native birth identity and current directory again.
+The scan inspects at most 128 old detached Node candidates. It never reads arguments or environments.
+OMP test harnesses register teardown before start. Teardown closes native helpers after failed assertions.

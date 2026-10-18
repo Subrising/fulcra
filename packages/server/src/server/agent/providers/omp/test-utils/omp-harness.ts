@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as waitForImmediate } from "node:timers/promises";
 import pino from "pino";
+import { onTestFinished } from "vitest";
 
 import type {
   AgentPersistenceHandle,
@@ -73,8 +74,10 @@ export class OmpHarness {
       usagePollScheduler?: OmpUsagePollScheduler;
       providerIdleDeadlineMs?: number;
       runtimeEnv?: Record<string, string>;
+      onFinished?: (cleanup: () => Promise<void>) => void;
     } = {},
   ) {
+    (options.onFinished ?? onTestFinished)(() => this.close());
     this.client = new OmpAgentClient({
       logger: pino({ level: "silent" }),
       runtimeSettings: { env: options.runtimeEnv },
@@ -604,7 +607,7 @@ export class OmpHarness {
   }
 
   async close(): Promise<void> {
-    await this.requireSession().close();
+    await this.session?.close();
     await waitForImmediate();
   }
 

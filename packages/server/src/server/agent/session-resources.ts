@@ -4,13 +4,25 @@ import { promisify } from "node:util";
 import { z } from "zod";
 import type { Logger } from "pino";
 import { readOwnedProcessTable, type OwnedProcessIdentity } from "../../utils/tree-kill.js";
+import { parseElapsed } from "./background-work/process-tree.js";
 import { writeJsonFileAtomic } from "../atomic-file.js";
 import type { ToolCallTimelineItem } from "./agent-sdk-types.js";
 import { readWindowsResourceProcesses } from "./windows-resource-processes.js";
 
 const exec = promisify(execFile);
 export const ORPHAN_INTERVAL_MS = 30 * 60 * 1_000;
+export const TEST_FIXTURE_MIN_AGE_SECONDS = 2 * 60 * 60;
+export function testFixtureDirectory(cwd: string): boolean {
+  return /^\/(?:private\/)?tmp\/paseo-[a-zA-Z0-9_-]+-test$/.test(cwd);
+}
+export function oldTestFixture(row: ResourceProcess): boolean {
+  return row.ppid === 1 && !row.zombie && !row.serviceLabel && !protectedSessionProcess(row) &&
+    /(?:^|\/)node$/.test(row.command) && (row.ageSeconds ?? 0) > TEST_FIXTURE_MIN_AGE_SECONDS &&
+    typeof row.cwd === "string" && testFixtureDirectory(row.cwd);
+}
 export interface ResourceProcess extends OwnedProcessIdentity {
+  cwd?: string;
+  ageSeconds?: number;
   command: string;
   rssKiB: number;
   serviceLabel?: string;
@@ -32,7 +44,8 @@ const processSchema = z.object({
   command: z.string(),
   rssKiB: z.number().nonnegative(),
   privateMemoryBytes: z.number().nonnegative().optional(),
-  kind: z.enum(["process", "unbounded-log-tail", "powershell-over-2gb"]).default("process"),
+  fixtureCwd: z.string().optional(),
+  kind: z.enum(["process", "unbounded-log-tail", "powershell-over-2gb", "test-fixture"]).default("process"),
 });
 const simulatorSchema = z.object({
   agentId: z.string().min(1),
@@ -68,6 +81,8 @@ interface Options {
   roots(): Root[];
   /** Must read the current resident map and initialized storage cache synchronously. */
   ownerState(agentId: string): OwnerState;
+  /** Unknown or unreadable session state must return true. */
+  fixtureInUse?: (cwd: string) => Promise<boolean>;
   readProcesses?: () => Promise<ResourceProcess[]>;
   signal?: (pid: number, signal: NodeJS.Signals) => unknown;
   simulators?: SimulatorTable;
@@ -104,10 +119,10 @@ export async function readResourceProcesses(
     timeout: 5_000,
     maxBuffer: 16 * 1024 * 1024,
   });
-  const names = new Map<number, { command: string; rssKiB: number }>();
+  const names = new Map<number, { command: string; rssKiB: number; ageSeconds?: number }>();
   for (const line of stdout.split("\n")) {
-    const match = /^\s*(\d+)\s+\d+\s+\S+\s+(\d+)\s+(.+?)\s*$/.exec(line);
-    if (match) names.set(Number(match[1]), { rssKiB: Number(match[2]), command: match[3]! });
+    const match = /^\s*(\d+)\s+\d+\s+(\S+)\s+(\d+)\s+(.+?)\s*$/.exec(line);
+    if (match) names.set(Number(match[1]), { ageSeconds: parseElapsed(match[2]!) ?? undefined, rssKiB: Number(match[3]), command: match[4]! });
   }
   const labels = new Map<number, string>();
   if (process.platform === "darwin") {
@@ -121,10 +136,34 @@ export async function readResourceProcesses(
       if (match) labels.set(Number(match[1]), match[2]!);
     }
   }
-  return identities.flatMap((identity) => {
+  const rows = identities.flatMap((identity) => {
     const name = names.get(identity.pid);
     return name ? [{ ...identity, ...name, serviceLabel: labels.get(identity.pid) }] : [];
   });
+  // Bound the fixture scan. Arguments and environments stay unread.
+  const candidates = rows.filter((row) => row.ppid === 1 && !row.serviceLabel &&
+    /(?:^|\/)node$/.test(row.command) && (row.ageSeconds ?? 0) > TEST_FIXTURE_MIN_AGE_SECONDS);
+  if (candidates.length > 0 && candidates.length <= 128) {
+    try {
+      if (process.platform === "darwin") {
+        const result = await exec("lsof", ["-a", "-p", candidates.map((row) => row.pid).join(","), "-d", "cwd", "-Fpn"], { timeout: 5_000, maxBuffer: 1024 * 1024 });
+        let pid: number | undefined;
+        for (const line of result.stdout.split("\n")) {
+          if (line.startsWith("p")) pid = Number(line.slice(1));
+          if (line.startsWith("n")) {
+            const row = candidates.find((candidate) => candidate.pid === pid);
+            if (row) (row as ResourceProcess).cwd = line.slice(1);
+          }
+        }
+      } else if (process.platform === "linux") {
+        await Promise.all(candidates.map(async (row) => {
+          try { (row as ResourceProcess).cwd = await fs.readlink(`/proc/${row.pid}/cwd`); }
+          catch { /* Missing cwd never admits a fixture. */ }
+        }));
+      }
+    } catch { /* Missing cwd never admits a fixture. */ }
+  }
+  return rows;
 }
 
 export function systemSimulators(): SimulatorTable {
@@ -172,7 +211,7 @@ function simulatorCommand(item: ToolCallTimelineItem): { action: string; udid: s
   return { action: match[1]!, udid: match[2]! };
 }
 
-/** Only observed descendants enter the ledger. Name scans never authorize a stop. */
+/** Observed descendants and narrowly admitted, unused test fixtures enter the ledger. */
 export class SessionResources {
   private readonly options: Options;
   private readonly read: () => Promise<ResourceProcess[]>;
@@ -317,6 +356,16 @@ export class SessionResources {
     admitted(): boolean;
   }): Promise<void> {
     const ledger = await this.load();
+    if (!close && this.options.fixtureInUse) {
+      for (const row of await this.read()) {
+        if (!oldTestFixture(row) || await this.options.fixtureInUse(row.cwd!)) continue;
+        if (ledger.processes.some((record) => record.pid === row.pid && record.birth === row.birth)) continue;
+        ledger.processes.push({ agentId: "fulcra-test-fixture", instanceId: row.birth,
+          pid: row.pid, birth: row.birth, observedAt: this.now() - row.ageSeconds! * 1_000,
+          command: row.command, rssKiB: row.rssKiB, kind: "test-fixture", fixtureCwd: row.cwd });
+      }
+      await this.save(ledger);
+    }
     const admitted = (record: ProcessRecord | SimulatorRecord): boolean => {
       if (close)
         return (
@@ -324,6 +373,8 @@ export class SessionResources {
           record.instanceId === close.instanceId &&
           close.admitted()
         );
+      if ("kind" in record && record.kind === "test-fixture")
+        return this.now() - record.observedAt > TEST_FIXTURE_MIN_AGE_SECONDS * 1_000;
       return (
         this.now() - record.observedAt > ORPHAN_INTERVAL_MS &&
         this.options.ownerState(record.agentId) === "inactive"
@@ -342,7 +393,7 @@ export class SessionResources {
     const row = rows.find((r) => r.pid === record.pid);
     if (!admitted(record)) return "kept";
     if (!row || row.zombie || row.birth !== record.birth) return "gone";
-    if (!this.canSignal(record, rows)) return "kept";
+    if (!await this.canSignal(record, rows)) return "kept";
     await this.log({
       action: signal === "SIGTERM" ? "stop-attempt" : "force-stop-attempt",
       ...record,
@@ -352,7 +403,7 @@ export class SessionResources {
     });
     const freshRows = await this.read();
     const fresh = freshRows.find((r) => r.pid === record.pid);
-    if (!fresh || !this.canSignal(record, freshRows) || !admitted(record)) return "kept";
+    if (!fresh || !await this.canSignal(record, freshRows) || !admitted(record)) return "kept";
     try {
       this.signal(fresh.pid, signal);
     } catch (error) {
@@ -432,10 +483,13 @@ export class SessionResources {
       await this.save(ledger);
     }
   }
-  private canSignal(record: ProcessRecord, rows: ResourceProcess[]): boolean {
+  private async canSignal(record: ProcessRecord, rows: ResourceProcess[]): Promise<boolean> {
     const byPid = new Map(rows.map((row) => [row.pid, row]));
     const target = byPid.get(record.pid);
     if (!target || target.birth !== record.birth || target.zombie) return false;
+    if (record.kind === "test-fixture" &&
+      (!oldTestFixture(target) || target.cwd !== record.fixtureCwd ||
+        !this.options.fixtureInUse || await this.options.fixtureInUse(target.cwd!))) return false;
     const roots = this.options.roots();
     const seen = new Set<number>();
     for (
