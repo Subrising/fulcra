@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import shutil
+import socket
 import tempfile
 import uuid
 
@@ -183,7 +184,7 @@ def parse_send(args):
             else:
                 message_id = value
             index += 2
-        elif token in ['--no-wait', '--wait', '--queue', '--steer', '--json', '--no-color', '--no-headers', '--quiet', '-q', '--native-queue']:
+        elif token in ['--no-wait', '--wait', '--queue', '--steer', '--json', '--no-color', '--no-headers', '--quiet', '-q', '--native-queue', '--no-notify-on-finish']:
             if token == '--native-queue': requires_plain = True
             index += 1
         elif token.startswith('-'):
@@ -200,6 +201,10 @@ def parse_send(args):
 
 
 class TargetUnavailableError(ValueError):
+    pass
+
+
+class TargetNotFoundError(TargetUnavailableError):
     pass
 
 
@@ -245,7 +250,7 @@ class Gate:
             matches = [row for row in rows if row['id'].startswith(identifier)]
         if len(matches) != 1:
             if not matches:
-                raise TargetUnavailableError('The target is absent from the selected daemon.'
+                raise TargetNotFoundError('The target is absent from the selected daemon on ' + socket.gethostname() + '.'
                                              + self.route_hint(identifier) + ' No notice was sent.')
             raise TargetUnavailableError('The notice target is ambiguous. Use its full session ID. No notice was sent.')
         row = matches[0]
@@ -295,25 +300,45 @@ class Gate:
             home = os.environ.get('PASEO_HOME') or read_policy(self.policy).get('defaultHome')
             if home: endpoint = ['--home', home]
         # Read-only target discovery never starts a provider or sends input.
-        target = self.target(cli, endpoint, identifier)
+        try:
+            target = self.target(cli, endpoint, identifier)
+        except TargetNotFoundError:
+            # Only the native CLI validates sender provenance and dispatches SSH routes.
+            # Display-only noticeRoutes never grant an automatic remote send.
+            policy = read_policy(self.policy)
+            if require_delivery:
+                raise ValueError('A required notice needs an explicit destination endpoint. No remote send was attempted.')
+            key = policy.get('roles', {}).get(identifier[5:]) if identifier.startswith('role:') else identifier
+            routes = policy.get('sshRoutes', {})
+            if not isinstance(routes, dict):
+                raise ValueError('Invalid SSH send routes. No notice was sent.')
+            matches = [key] if key in routes else [item for item in routes if key and item.startswith(key)]
+            if len(matches) != 1:
+                raise
+            bound = list(args)
+            bound[target_index] = matches[0]
+            if not supplied_endpoint: bound = [*endpoint, *bound]
+            return self.run(cli, bound).returncode
         with locked(self.store):
             if paused(read_policy(self.policy), target, self.parent_reader(cli, endpoint)):
                 if requires_plain or text.lstrip().startswith('/'):
                     raise ValueError('Paused notices require plain text. The original command was not sent or stored.')
                 if require_delivery:
                     raise ValueError('Provider paused. The required notice was not delivered.')
-                return self.hold(cli, endpoint, target, text, source, message_id)
+                return self.hold(cli, endpoint, target, text, source, message_id,
+                                 notify_on_finish='--no-notify-on-finish' not in args)
         bound = list(args)
         bound[target_index] = target['id']
         if not supplied_endpoint: bound = [*endpoint, *bound]
         return self.run(cli, bound).returncode
 
-    def hold(self, cli, endpoint, target, text, source, message_id):
+    def hold(self, cli, endpoint, target, text, source, message_id, notify_on_finish=True):
         identity = {'endpoint': endpoint, 'agentId': target['id']}
         # All launcher paths for this endpoint share one session record.
         key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         path = self.store / (key + '.json')
         sender = {'from': source, 'agent': os.environ.get('PASEO_AGENT_ID')}
+        if not notify_on_finish: sender['notifyOnFinish'] = False
         record = json.loads(path.read_text()) if path.exists() else {
             **identity, 'cli': str(Path(cli).absolute()), 'batches': []}
         if sum(len(batch['notices']) for batch in record['batches'] if batch['state'] == 'held') >= 1000:
@@ -385,6 +410,7 @@ class Gate:
                     atomic(path, record)
                     args = [*record['endpoint'], 'send', record['agentId'], '--queue', '--no-wait', '--json', '--prompt-file', str(prompt)]
                     if batch['sender']['from']: args.extend(['--from', batch['sender']['from']])
+                    if batch['sender'].get('notifyOnFinish') is False: args.append('--no-notify-on-finish')
                     env = dict(os.environ)
                     env.pop('PASEO_AGENT_ID', None)
                     if batch['sender']['agent']: env['PASEO_AGENT_ID'] = batch['sender']['agent']

@@ -327,8 +327,8 @@ test.each(["API queue", "API steer", "MCP", "CLI"])(
     for (const text of ["held one", "held two"]) {
       if (route === "MCP")
         await f.catalog.executeTool("send_agent_prompt", { agentId: f.child.id, prompt: text });
-      else if (route === "CLI")
-        await promisify(execFile)(
+      else if (route === "CLI") {
+        const result = await promisify(execFile)(
           process.execPath,
           [
             "--import",
@@ -353,7 +353,8 @@ test.each(["API queue", "API steer", "MCP", "CLI"])(
             },
           },
         );
-      else
+        expect(JSON.parse(result.stdout).status).toBe("held");
+      } else
         await f.client.sendAgentMessage(f.child.id, text, {
           sender: { agentId: f.parent.id },
           ...(route === "API steer" ? { activeTurnBehavior: "steer" as const } : {}),
@@ -387,6 +388,85 @@ test("a paused parent send keeps its explicit finish notice opt-out", async () =
   await f.manager.waitForAgentEvent(f.child.id);
   expect(await f.storage.getFinishNotice(f.child.id)).toBeNull();
   expect(f.notices()).toHaveLength(0);
+});
+
+test.each([{ flags: [] }, { flags: ["--no-wait"] }])(
+  "CLI owner pause returns held without waiting: %j",
+  async ({ flags }) => {
+    const f = await fixture(PARENT_AGENT_ID_LABEL, "Child", [], "claude");
+    await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+    const result = await promisify(execFile)(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        path.resolve("../cli/src/index.ts"),
+        "send",
+        f.child.id,
+        "owner held marker",
+        "--host",
+        `127.0.0.1:${f.daemon.port}`,
+        "--json",
+        ...flags,
+      ],
+      {
+        timeout: 15000,
+        env: {
+          ...process.env,
+          PASEO_HOME: f.daemon.paseoHome,
+          PASEO_AGENT_ID: "",
+          PASEO_WORKSPACE_ID: "",
+          PASEO_PASSWORD: "",
+        },
+      },
+    );
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      status: "held",
+      message: expect.stringContaining("No turn was started"),
+    });
+    expect(f.prompts).toEqual([]);
+    const records = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
+    expect(records).toEqual([
+      expect.objectContaining({
+        request: expect.objectContaining({ pauseNotice: true }),
+        state: "queued",
+      }),
+    ]);
+  },
+);
+
+test("CLI done hold refuses visibly without provider input", async () => {
+  const f = await fixture();
+  await f.manager.setLabels(f.child.id, { "fulcra.hold": "done" });
+  const result = await promisify(execFile)(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      path.resolve("../cli/src/index.ts"),
+      "send",
+      f.child.id,
+      "held worker marker",
+      "--host",
+      `127.0.0.1:${f.daemon.port}`,
+      "--json",
+      "--no-wait",
+    ],
+    {
+      timeout: 15000,
+      env: {
+        ...process.env,
+        PASEO_HOME: f.daemon.paseoHome,
+        PASEO_AGENT_ID: f.parent.id,
+        PASEO_WORKSPACE_ID: "",
+        PASEO_PASSWORD: "",
+      },
+    },
+  ).catch((error: unknown) => error as { stdout: string; stderr: string });
+  expect(JSON.parse(result.stderr)).toMatchObject({
+    error: { message: expect.stringContaining("held as done") },
+  });
+  expect(f.prompts).toEqual([]);
 });
 
 test.each([false, true])(

@@ -513,7 +513,7 @@ export interface SendMessageOptions {
   notifyOnFinish?: boolean;
   queue?: boolean;
   /** Reports queue admission or a steering fallback. This is not task completion. */
-  onDelivery?: (note: string) => void;
+  onDelivery?: (note: string, state?: "held") => void;
   messageId?: string;
   /** Human input steers while busy. Agent input queues unless steering is requested. */
   activeTurnBehavior?: ActiveTurnBehavior;
@@ -3961,8 +3961,12 @@ export class DaemonClient {
   private notifyMessageDelivery(
     options: SendMessageOptions | undefined,
     note: string | undefined,
+    state?: "held",
   ): void {
-    if (note) options?.onDelivery?.(note);
+    if (note) {
+      if (state) options?.onDelivery?.(note, state);
+      else options?.onDelivery?.(note);
+    }
   }
 
   async sendAgentMessage(
@@ -4001,9 +4005,12 @@ export class DaemonClient {
       },
     });
     if (!payload.accepted) {
-      throw new Error(payload.error ?? "sendAgentMessage rejected");
+      throw Object.assign(
+        new Error(payload.error ?? "sendAgentMessage rejected"),
+        payload.errorCode ? { code: payload.errorCode } : {},
+      );
     }
-    this.notifyMessageDelivery(options, payload.deliveryNote);
+    this.notifyMessageDelivery(options, payload.deliveryNote, payload.deliveryState);
   }
 
   /** Explicit host-owner metadata read. Capability advertisement never grants read authority. */

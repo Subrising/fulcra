@@ -8091,6 +8091,51 @@ test("agent message queue reports the daemon delivery note", async () => {
   expect(onDelivery).toHaveBeenCalledExactlyOnceWith("Message queued for combined delivery.");
 });
 
+test("agent send preserves a structured held receipt", async () => {
+  const { client, mock } = await nativeQueueClient(false);
+  const onDelivery = vi.fn();
+  const pending = client.sendAgentMessage("target", "draft", { onDelivery });
+  const request = nativeQueueRequests(mock)[0];
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "send_agent_message_response",
+      payload: {
+        requestId: request.requestId,
+        agentId: "target",
+        accepted: true,
+        error: null,
+        deliveryNote: "Provider paused. Notice saved. No turn was started.",
+        deliveryState: "held",
+      },
+    }),
+  );
+  await pending;
+  expect(onDelivery).toHaveBeenCalledExactlyOnceWith(
+    "Provider paused. Notice saved. No turn was started.",
+    "held",
+  );
+});
+
+test("agent send preserves a machine-readable target miss", async () => {
+  const { client, mock } = await nativeQueueClient(false);
+  const pending = client.sendAgentMessage("missing", "draft");
+  const assertion = expect(pending).rejects.toMatchObject({ code: "AGENT_NOT_FOUND" });
+  const request = nativeQueueRequests(mock)[0];
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "send_agent_message_response",
+      payload: {
+        requestId: request.requestId,
+        agentId: "missing",
+        accepted: false,
+        error: "Agent not found: missing",
+        errorCode: "AGENT_NOT_FOUND",
+      },
+    }),
+  );
+  await assertion;
+});
+
 test("native queue client does not queue across reconnect or reuse the old host feature", async () => {
   const { client, mock } = await nativeQueueClient();
   mock.triggerClose({ code: 1006 });

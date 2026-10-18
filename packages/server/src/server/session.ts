@@ -161,7 +161,13 @@ import { releaseWorkspaceServicePortPlan } from "./workspace-service-port-regist
 import { getErrorMessage, getErrorMessageOr } from "@getpaseo/protocol/error-utils";
 import { getAgentStatusPriority } from "@getpaseo/protocol/agent-state-bucket";
 import { getParentAgentIdFromLabels } from "@getpaseo/protocol/agent-labels";
-import { decideSend, lineStoreOf, resolveRoleTarget, type LineStore } from "./reporting-lines.js";
+import {
+  decideSend,
+  lineStoreOf,
+  resolveRoleTarget,
+  NO_MAIN_ASSISTANT,
+  type LineStore,
+} from "./reporting-lines.js";
 import { noteAgentMessage } from "./agent-message-log.js";
 import { heldSendsFor, ProvenanceRefusedError } from "./held-sends.js";
 import {
@@ -9883,7 +9889,9 @@ export class Session {
   ): Promise<{ ok: true; agentId: string } | { ok: false; notFound: boolean; error: string }> {
     const role = await resolveRoleTarget(this.lineStore(), identifier);
     if (!role) return this.resolveAgentIdentifier(identifier);
-    return role.ok ? role : { ok: false, notFound: true, error: role.error };
+    return role.ok
+      ? role
+      : { ok: false, notFound: role.error === NO_MAIN_ASSISTANT, error: role.error };
   }
 
   /**
@@ -9893,7 +9901,7 @@ export class Session {
     msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
     agentId: string,
     prompt: ReturnType<typeof buildAgentPrompt>,
-    deliveryNote: (note: string) => void,
+    deliveryNote: (note: string, state?: "held") => void,
   ): () => Promise<void> {
     // FULCRA(orchestration): The owner, 10 Oct: "human messages should steer". Nothing changes for an idle target.
     // - Stamped sends combine after the current turn. Explicit steers use the native turn and queue on refusal.
@@ -9966,7 +9974,7 @@ export class Session {
           messageId: msg.messageId,
           pauseNotice: true,
         });
-        deliveryNote("Provider paused. Notice saved. No turn was started.");
+        deliveryNote("Provider paused. Notice saved. No turn was started.", "held");
       }
     };
     const held = heldSendsFor(this.agentManager, this.sessionLogger);
@@ -10163,6 +10171,7 @@ export class Session {
     requestId: string,
     agentId: string,
     deliveryNote?: string,
+    deliveryState?: "held",
   ): void {
     this.emit({
       type: "send_agent_message_response",
@@ -10171,6 +10180,7 @@ export class Session {
         agentId,
         accepted: true,
         ...(deliveryNote ? { deliveryNote } : {}),
+        ...(deliveryState ? { deliveryState } : {}),
         error: null,
       },
     });
@@ -10262,6 +10272,7 @@ export class Session {
         msg.requestId,
         agentId,
         "Provider paused. Notice saved. No turn was started.",
+        "held",
       );
       return true;
     }
@@ -10315,6 +10326,22 @@ export class Session {
     }
   }
 
+  private emitUnresolvedAgentMessage(
+    msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
+    resolution: { error: string; notFound: boolean },
+  ): void {
+    this.emit({
+      type: "send_agent_message_response",
+      payload: {
+        requestId: msg.requestId,
+        agentId: msg.agentId,
+        accepted: false,
+        error: resolution.error,
+        ...(resolution.notFound ? { errorCode: "AGENT_NOT_FOUND" } : {}),
+      },
+    });
+  }
+
   private async handleSendAgentMessageRequest(
     msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
   ): Promise<void> {
@@ -10328,15 +10355,7 @@ export class Session {
     // FULCRA(orchestration): a send to the main assistant role reaches the chat that holds it now.
     const resolved = await this.resolveSendTarget(msg.agentId);
     if (!resolved.ok) {
-      this.emit({
-        type: "send_agent_message_response",
-        payload: {
-          requestId: msg.requestId,
-          agentId: msg.agentId,
-          accepted: false,
-          error: resolved.error,
-        },
-      });
+      this.emitUnresolvedAgentMessage(msg, resolved);
       return;
     }
 
@@ -10391,15 +10410,17 @@ export class Session {
         "agent.session.send_agent_message",
       );
       let deliveryNote: string | undefined;
+      let deliveryState: "held" | undefined;
       const queuedSessionId = await this.queuedMessageSessionId(msg, agentId);
-      const send = this.agentMessageSender(msg, agentId, prompt, (note) => {
+      const send = this.agentMessageSender(msg, agentId, prompt, (note, state) => {
         deliveryNote = note;
+        deliveryState = state;
       });
       await this.sendAgentMessageWithReceipt(msg, agentId, prompt, send, async () => {
         await this.prepareAgentMessage(agentId, msg.text, queuedSessionId);
       });
 
-      this.emitAgentMessageAccepted(msg.requestId, agentId, deliveryNote);
+      this.emitAgentMessageAccepted(msg.requestId, agentId, deliveryNote, deliveryState);
     } catch (error) {
       if (admissionOutcome(error)) throw error;
       if (this.delivery.requestSignal.aborted) return;

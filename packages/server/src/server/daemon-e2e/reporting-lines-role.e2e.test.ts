@@ -100,6 +100,12 @@ test("a lead's send to the main assistant role reaches the chat that holds the r
     await expect(client.sendAgentMessage(oldMain.id, "report three", fromLead)).rejects.toThrow(
       "Send this to the main assistant, Main assistant",
     );
+    await manager.setLabels(oldMain.id, { [SEAT_LABEL]: "main-assistant" });
+    const refusal = await client
+      .sendAgentMessage(MAIN_ASSISTANT_REF, "ambiguous role", fromLead)
+      .catch((error: unknown) => error);
+    expect(refusal).toMatchObject({ message: expect.stringContaining("Two chats are marked") });
+    expect(refusal).not.toHaveProperty("code");
   } finally {
     await client?.close();
     await daemon?.close();

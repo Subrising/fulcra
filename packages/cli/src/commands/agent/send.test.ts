@@ -4,6 +4,8 @@ import { addSendOptions, runSendCommand } from "./send";
 
 const connection = vi.hoisted(() => vi.fn());
 vi.mock("../../utils/client.js", () => ({ connectToDaemon: connection }));
+const routes = vi.hoisted(() => ({ readSendRoute: vi.fn(), sshSend: vi.fn() }));
+vi.mock("../../utils/send-route.js", () => routes);
 const senderStamp = vi.hoisted(() => vi.fn((): { agentId: string } | null => null));
 vi.mock("../../utils/send-sender.js", () => ({ resolveSender: senderStamp }));
 const daemonTarget = { kind: "endpoint" as const, host: "fixture.test:1234" };
@@ -12,6 +14,10 @@ let client: ReturnType<typeof fakeClient>;
 function fakeClient() {
   return {
     close: vi.fn().mockResolvedValue(undefined),
+    getLastServerInfoMessage: vi.fn(() => ({
+      serverId: "source-host",
+      features: { agentSendReceipts: true },
+    })),
     sendAgentMessage: vi.fn().mockResolvedValue(undefined),
     sendNativeQueuedMessage: vi
       .fn()
@@ -34,13 +40,27 @@ async function parsedSend(flags: string[]) {
 beforeEach(() => {
   client = fakeClient();
   connection.mockResolvedValue(client);
+  routes.readSendRoute.mockResolvedValue(null);
 });
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.clearAllMocks();
   senderStamp.mockReturnValue(null);
 });
 
 describe("agent queue and steer", () => {
+  it.each([{ flags: [] }, { flags: ["--no-wait"] }, { flags: ["--steer"] }])(
+    "returns held without waiting for a paused receiver: %j",
+    async ({ flags }) => {
+      client.sendAgentMessage.mockImplementation(async (_id, _prompt, options) => {
+        options.onDelivery("Provider paused. Notice saved. No turn was started.", "held");
+      });
+      const result = await parsedSend(["target", "draft", ...flags]);
+      expect(result.data.status).toBe("held");
+      expect(result.data.message).toContain("No turn was started");
+      expect(client.waitForFinish).not.toHaveBeenCalled();
+    },
+  );
   it.each(["accepted; delivered after the current turn", "accepted; delivered now"])(
     "prints the daemon receipt: %s",
     async (receipt) => {
@@ -100,6 +120,87 @@ describe("agent queue and steer", () => {
   });
 });
 
+describe("configured SSH sends", () => {
+  const selected = { agentId: "remote-target", route: { host: "remote host" } };
+  const missing = { code: "AGENT_NOT_FOUND", message: "Agent not found: target" };
+  it("keeps a local hit on the local daemon", async () => {
+    routes.readSendRoute.mockResolvedValue(selected);
+    await parsedSend(["target", "draft", "--no-wait"]);
+    expect(routes.readSendRoute).not.toHaveBeenCalled();
+    expect(routes.sshSend).not.toHaveBeenCalled();
+  });
+  it("uses the configured route only after a local AGENT_NOT_FOUND", async () => {
+    client.sendAgentMessage.mockRejectedValue(missing);
+    senderStamp.mockReturnValue({ agentId: "sender" });
+    routes.readSendRoute.mockResolvedValue(selected);
+    routes.sshSend.mockResolvedValue({
+      agentId: "remote-target",
+      status: "held",
+      message: "Paused.",
+    });
+    const result = await parsedSend(["target", "draft", "--no-wait"]);
+    expect(routes.sshSend).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        ...selected,
+        sender: { agentId: "sender" },
+        localServerId: "source-host",
+        prompt: "draft",
+      }),
+    );
+    expect(result.data.status).toBe("held");
+    expect(client.waitForFinish).not.toHaveBeenCalled();
+  });
+  it("reports a local miss without a route", async () => {
+    client.sendAgentMessage.mockRejectedValue(missing);
+    await expect(parsedSend(["target", "draft"])).rejects.toMatchObject({
+      code: "AGENT_NOT_FOUND",
+      message: expect.stringContaining("local daemon"),
+    });
+    expect(routes.sshSend).not.toHaveBeenCalled();
+  });
+  it("requires the source receipt capability before using a route", async () => {
+    client.sendAgentMessage.mockRejectedValue(missing);
+    routes.readSendRoute.mockResolvedValue(selected);
+    client.getLastServerInfoMessage.mockReturnValue({
+      serverId: "source-host",
+      features: { agentSendReceipts: false },
+    });
+    await expect(parsedSend(["target", "draft"])).rejects.toThrow("Update the source host");
+    expect(routes.sshSend).not.toHaveBeenCalled();
+  });
+  it("never starts another SSH route from the destination", async () => {
+    vi.stubEnv("FULCRA_SEND_RELAYED", "1");
+    client.sendAgentMessage.mockRejectedValue(missing);
+    routes.readSendRoute.mockResolvedValue(selected);
+    await expect(parsedSend(["target", "draft"])).rejects.toMatchObject({
+      code: "AGENT_NOT_FOUND",
+    });
+    expect(routes.readSendRoute).not.toHaveBeenCalled();
+    expect(routes.sshSend).not.toHaveBeenCalled();
+  });
+  it.each([new Error("disconnected"), { code: "REFUSED", message: "Wrong reporting line" }])(
+    "never routes a transport or reporting refusal: %j",
+    async (error) => {
+      client.sendAgentMessage.mockRejectedValue(error);
+      await expect(parsedSend(["target", "draft"])).rejects.toBeDefined();
+      expect(routes.readSendRoute).not.toHaveBeenCalled();
+      expect(routes.sshSend).not.toHaveBeenCalled();
+    },
+  );
+  it("keeps the remote identity refusal visible", async () => {
+    client.sendAgentMessage.mockRejectedValue(missing);
+    routes.readSendRoute.mockResolvedValue(selected);
+    routes.sshSend.mockRejectedValue({
+      code: "SEND_FAILED",
+      message: "Remote reporting line refused.",
+    });
+    await expect(parsedSend(["target", "draft"])).rejects.toMatchObject({
+      message: "Remote reporting line refused.",
+    });
+    expect(client.sendAgentMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("send slash commands", () => {
   it.each(["/Volumes/x", "/Volumes/work/repo/foo.ts fix this", "/tmp/x.log why did this fail"])(
     "sends leading absolute paths as ordinary prompts: %s",
@@ -107,6 +208,7 @@ describe("send slash commands", () => {
       await parsedSend(["target", prompt, "--no-wait"]);
       expect(client.sendAgentMessage).toHaveBeenCalledExactlyOnceWith("target", prompt, {
         images: undefined,
+        onDelivery: expect.any(Function),
       });
       expect(client.listCommands).not.toHaveBeenCalled();
       expect(client.invokePluginRpc).not.toHaveBeenCalled();
@@ -192,6 +294,7 @@ describe("send explicit native queue", () => {
     const result = await parsedSend(["target", "ordinary", "--no-wait"]);
     expect(client.sendAgentMessage).toHaveBeenCalledExactlyOnceWith("target", "ordinary", {
       images: undefined,
+      onDelivery: expect.any(Function),
     });
     expect(client.sendNativeQueuedMessage).not.toHaveBeenCalled();
     expect(client.waitForFinish).not.toHaveBeenCalled();
@@ -300,6 +403,7 @@ describe("send reporting lines", () => {
     await parsedSend(["target", "hello", "--no-wait"]);
     expect(client.sendAgentMessage).toHaveBeenLastCalledWith("target", "hello", {
       images: undefined,
+      onDelivery: expect.any(Function),
     });
   });
 

@@ -278,6 +278,41 @@ class NoticePauseTests(unittest.TestCase):
             self.send('missing')
         self.assertEqual(self.sends(), [])
 
+    def test_structured_route_defers_a_local_miss_to_native_sender_checks(self):
+        self.policy([], sshRoutes={'remote-main': {
+            'host': 'remote host', 'sshTarget': 'remote',
+            'cli': '/opt/fulcra/bin/fulcra', 'home': '/srv/fulcra'}})
+        self.send('remote-main')
+        self.assertEqual(len(self.sends()), 1)
+        self.assertIn('remote-main', self.sends()[0][1])
+
+    def test_structured_route_never_replaces_a_local_hit(self):
+        self.policy([], sshRoutes={'codex-owner': {
+            'host': 'remote host', 'sshTarget': 'remote',
+            'cli': '/opt/fulcra/bin/fulcra', 'home': '/srv/fulcra'}})
+        self.send('codex-owner')
+        self.assertEqual(len(self.sends()), 1)
+        self.assertIn('codex-owner', self.sends()[0][1])
+
+    def test_required_notice_cannot_defer_through_a_route(self):
+        self.policy([], sshRoutes={'remote-main': {
+            'host': 'remote host', 'sshTarget': 'remote',
+            'cli': '/opt/fulcra/bin/fulcra', 'home': '/srv/fulcra'}})
+        with self.assertRaisesRegex(ValueError, 'explicit destination'):
+            self.gate.send('/native/cli', ['send', 'remote-main', '--prompt', 'warning'], require_delivery=True)
+        self.assertEqual(self.sends(), [])
+
+    def test_remote_opt_out_reaches_the_native_sender_check(self):
+        self.policy([])
+        self.gate.send('/native/cli', ['send', 'codex-owner', '--prompt', 'quiet', '--no-notify-on-finish'])
+        self.assertIn('--no-notify-on-finish', self.sends()[0][1])
+
+    def test_paused_remote_opt_out_survives_resume(self):
+        self.gate.send('/native/cli', ['send', 'claude-owner', '--prompt', 'quiet', '--no-notify-on-finish'])
+        self.policy([])
+        self.gate.drain()
+        self.assertIn('--no-notify-on-finish', self.sends()[0][1])
+
     def test_target_binding_preserves_an_identical_endpoint_value(self):
         self.gate.send('/native/cli', ['--home', 'codex', 'send', 'codex', '--prompt', 'receipt'])
         self.assertEqual(self.sends()[0][1][1], 'codex')

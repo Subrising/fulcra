@@ -9,7 +9,50 @@ import {
   WorkspaceSetupSnapshotSchema,
   WorkspaceSetupProgressMessageSchema,
   AgentTimelineEntryPayloadSchema,
+  SendAgentMessageResponseMessageSchema,
 } from "./messages.js";
+
+test("send receipts retain legacy parsing while adding held and target-miss fields", () => {
+  const legacy = z.object({
+    type: z.literal("send_agent_message_response"),
+    payload: z.object({
+      requestId: z.string(),
+      agentId: z.string(),
+      accepted: z.boolean(),
+      deliveryNote: z.string().optional(),
+      error: z.string().nullable(),
+    }),
+  });
+  const oldMessage = {
+    type: "send_agent_message_response",
+    payload: {
+      requestId: "request",
+      agentId: "target",
+      accepted: true,
+      error: null,
+    },
+  };
+  expect(SendAgentMessageResponseMessageSchema.parse(oldMessage)).toEqual(oldMessage);
+  const held = {
+    ...oldMessage,
+    payload: { ...oldMessage.payload, deliveryState: "held", deliveryNote: "Paused." },
+  };
+  expect(SendAgentMessageResponseMessageSchema.parse(held).payload.deliveryState).toBe("held");
+  expect(legacy.parse(held).payload.accepted).toBe(true);
+  const missing = {
+    ...oldMessage,
+    payload: {
+      ...oldMessage.payload,
+      accepted: false,
+      error: "Agent not found",
+      errorCode: "AGENT_NOT_FOUND",
+    },
+  };
+  expect(SendAgentMessageResponseMessageSchema.parse(missing).payload.errorCode).toBe(
+    "AGENT_NOT_FOUND",
+  );
+  expect(legacy.parse(missing).payload.accepted).toBe(false);
+});
 
 test("terminal listings accept older rows and retain new per-terminal directories", () => {
   const response = {

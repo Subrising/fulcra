@@ -16,7 +16,7 @@ Run the changed trust suite through the project slot wrapper:
 ```sh
 npm exec --workspace=@getpaseo/server -- vitest run src/server/held-sends.trust.test.ts --maxWorkers=1
 npm exec --workspace=@getpaseo/server -- vitest run src/server/daemon-e2e/send-finish-notice.e2e.test.ts src/server/daemon-e2e/reporting-lines-role.e2e.test.ts --maxWorkers=1
-npm exec --workspace=@getpaseo/cli -- vitest run src/commands/agent/send.test.ts --maxWorkers=1
+npm exec --workspace=@getpaseo/cli -- vitest run src/commands/agent/send.test.ts src/utils/send-route.test.ts --bail=1 --maxWorkers=1
 python3 -m unittest discover -s scripts -p test_notice_pause.py
 npm run typecheck --workspace=@getpaseo/server
 ```
@@ -63,3 +63,21 @@ Check Windows batch transport on the real host.
 Require working CLI output and hidden process creation.
 Use the native parser for changed PowerShell callbacks.
 Keep backups outside the app bundle.
+
+## Configured SSH send check
+
+Use two isolated daemon homes and fake providers on the actual source and destination hosts.
+Keep all live daemon homes and provider pause files unchanged.
+Create one paused role holder and one receiver outside the source sender's reporting line.
+Bind a temporary destination CLI to the isolated home and endpoint. Refuse any other home.
+Set `sshRoutes` only in the source test's `FULCRA_NOTICE_CONFIG` directory.
+Use an existing trusted SSH key. Never put a password in the route or command.
+
+Require a local hit without SSH, a remote `held` receipt, and a remote reporting-line refusal.
+Require an absent receiver to name both checked hosts.
+Require zero provider inputs and exactly one retained paused marker on the destination.
+Do not repeat an uncertain send. Inspect its original queue and receipt first.
+Archive the test sessions and close the isolated daemons after the check.
+
+Run `packages/protocol/src/messages.wire-compat.test.ts` for the optional receipt fields.
+Require the CLI stderr transport test to preserve the remote refusal.

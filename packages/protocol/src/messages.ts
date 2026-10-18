@@ -4280,6 +4280,7 @@ export const ServerInfoStatusPayloadSchema = z
         agentRequestReceipts: z.boolean().optional(),
         nativeQueuedMessages: z.boolean().optional(),
         agentMessageQueue: z.boolean().optional(),
+        agentSendReceipts: z.boolean().optional(),
         messageCompletionWait: z.boolean().optional(),
         // Absent on older hosts means the usage-limit resume setting is unsupported.
         autoResumeOnLimit: z.boolean().optional(),
@@ -5791,6 +5792,8 @@ export const SendAgentMessageResponseMessageSchema = z.object({
     agentId: z.string(),
     accepted: z.boolean(),
     deliveryNote: z.string().optional(),
+    deliveryState: z.literal("held").optional(),
+    errorCode: z.string().optional(),
     nativeReceipt: NativeQueuedMessageReceiptSchema.optional(),
     error: z.string().nullable(),
   }),

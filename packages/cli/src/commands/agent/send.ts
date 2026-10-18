@@ -13,12 +13,14 @@ import { readFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import { listAccounts, switchAccountSession } from "../account.js";
 import { resolveSender } from "../../utils/send-sender.js";
+import { readSendRoute, sshSend } from "../../utils/send-route.js";
 
 /** Result type for agent send command */
 export interface AgentSendResult {
   agentId: string;
   status:
     | "sent"
+    | "held"
     | "completed"
     | "timeout"
     | "permission"
@@ -289,7 +291,7 @@ function sendOptions(
   options: AgentSendOptions,
   sender: ReturnType<typeof resolveSender>,
   images: Awaited<ReturnType<typeof readImageFiles>> | undefined,
-  onDelivery: (note: string) => void,
+  onDelivery: (note: string, state?: "held") => void,
 ): PaseoAgentSendOptions {
   return {
     images,
@@ -297,7 +299,7 @@ function sendOptions(
     ...(sender ? { sender } : {}),
     ...(options.queue || (sender && !options.steer) ? { queue: true } : {}),
     ...(options.steer ? { activeTurnBehavior: "steer" as const } : {}),
-    ...(sender || options.steer || options.queue ? { onDelivery } : {}),
+    onDelivery,
   };
 }
 
@@ -311,6 +313,45 @@ function completionPolicy(
     background: options.wait === false || remote,
     messageId: options.wait === false && !remote ? undefined : randomUUID(),
   };
+}
+
+async function routeMissingSend(
+  error: unknown,
+  client: Awaited<ReturnType<typeof connectToDaemon>>,
+  agentId: string,
+  prompt: string,
+  sender: ReturnType<typeof resolveSender>,
+  options: AgentSendOptions,
+): Promise<AgentSendResult | null> {
+  if (!error || typeof error !== "object" || !("code" in error) || error.code !== "AGENT_NOT_FOUND")
+    return null;
+  const selected = process.env.FULCRA_SEND_RELAYED === "1" ? null : await readSendRoute(agentId);
+  const info = client.getLastServerInfoMessage();
+  const localHost = info?.hostname || "the selected host";
+  if (!selected)
+    throw {
+      code: "AGENT_NOT_FOUND",
+      message: `Session not found on ${localHost} (local daemon). No configured SSH route was used.`,
+    } satisfies CommandError;
+  if (info?.features?.agentSendReceipts !== true)
+    throw new Error("Update the source host to use configured SSH send routes.");
+  return sshSend({
+    ...selected,
+    prompt,
+    sender,
+    localServerId: info?.serverId,
+    localHost,
+    options,
+  });
+}
+
+function throwSendFailure(error: unknown): never {
+  if (error && typeof error === "object" && "code" in error) throw error;
+  const message = error instanceof Error ? error.message : String(error);
+  throw {
+    code: "SEND_FAILED",
+    message: `Failed to send message: ${message}`,
+  } satisfies CommandError;
 }
 
 export async function runSendCommand(
@@ -373,14 +414,27 @@ export async function runSendCommand(
 
     // Send the message
     let deliveryNote: string | undefined;
+    let deliveryState: "held" | undefined;
     const policy = completionPolicy(options, sender, agentIdArg);
     const completionMessageId = policy.messageId;
     await client.sendAgentMessage(agentIdArg, promptInput, {
-      ...sendOptions(options, sender, images, (note) => {
+      ...sendOptions(options, sender, images, (note, state) => {
         deliveryNote = note;
+        // COMPAT(sendDeliveryState): added in v0.2.26; remove after 2027-04-19 once daemon floor >= v0.2.26.
+        deliveryState =
+          state ??
+          (note === "Provider paused. Notice saved. No turn was started." ? "held" : undefined);
       }),
       ...(completionMessageId ? { messageId: completionMessageId } : {}),
     });
+
+    if (deliveryState === "held") {
+      return {
+        type: "single",
+        data: { agentId: agentIdArg, status: "held", message: deliveryNote! },
+        schema: agentSendSchema,
+      };
+    }
 
     // If --no-wait, return immediately
     if (policy.background) {
@@ -406,17 +460,9 @@ export async function runSendCommand(
       schema: agentSendSchema,
     };
   } catch (err) {
-    // Re-throw CommandError as-is
-    if (err && typeof err === "object" && "code" in err) {
-      throw err;
-    }
-
-    const message = err instanceof Error ? err.message : String(err);
-    const error: CommandError = {
-      code: "SEND_FAILED",
-      message: `Failed to send message: ${message}`,
-    };
-    throw error;
+    const routed = await routeMissingSend(err, client, agentIdArg, promptInput, sender, options);
+    if (routed) return { type: "single", data: routed, schema: agentSendSchema };
+    throwSendFailure(err);
   } finally {
     await client.close().catch(() => {});
   }
