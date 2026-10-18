@@ -536,3 +536,30 @@ test("design 9 (daemon): direct and cascading lifecycle actions cannot mark unap
   expect(f.store.get("FU-1")).toMatchObject({ state: "RUNNING" });
   expect(f.store.get("FU-1")?.cancelled).toBeUndefined();
 });
+
+test("loop guard (daemon): 3 no-tool Stop-hook repeats set WAITING with the job id, and the completion event resumes", async () => {
+  const f = await fixture();
+  await f.assign();
+  await f.asWorker.executeTool("work_wait", { jobId: "ci-run-1" });
+  for (let i = 0; i < 3; i += 1)
+    await f.manager
+      .runAgent(f.worker.id, "Stop hook feedback: goal not met")
+      .catch(() => undefined);
+  await vi.waitFor(() => expect(f.store.get("FU-1")?.state).toBe("WAITING"));
+  expect(f.store.get("FU-1")).toMatchObject({ waitingFor: { jobId: "ci-run-1" }, loopTrips: 1 });
+
+  // Waiting starts no model turn.
+  const before = f.prompts.length;
+  await expect(f.manager.runAgent(f.worker.id, "Stop hook feedback: goal not met")).rejects.toThrow(
+    /WAITING for job ci-run-1/,
+  );
+  expect(f.prompts).toHaveLength(before);
+
+  // The job's completion event resumes the worker with one turn. A repeated event does nothing more.
+  await f.asLead.executeTool("work_job_done", { jobId: "ci-run-1", message: "CI passed." });
+  await vi.waitFor(() => expect(f.prompts.some((p) => p.includes("CI passed."))).toBe(true));
+  expect(f.store.get("FU-1")).toMatchObject({ state: "RUNNING", waitingFor: undefined });
+  const after = f.prompts.length;
+  await f.asLead.executeTool("work_job_done", { jobId: "ci-run-1", message: "CI passed." });
+  expect(f.prompts).toHaveLength(after);
+});

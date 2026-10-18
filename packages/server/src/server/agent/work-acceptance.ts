@@ -12,6 +12,7 @@ export type WorkState =
   | "RUNNING"
   | "AWAITING_APPROVAL"
   | "APPROVED"
+  | "WAITING"
   | "CLOSING"
   | "CLOSED"
   | "CANCELLED";
@@ -48,6 +49,8 @@ export interface ApprovalRecord {
   evidenceDigest: string;
   milestone: string;
   at: string;
+  /** Stop-hook or goal loops the host stopped before this approval. */
+  loopsStopped: number;
 }
 export interface Assignment {
   item: string;
@@ -65,6 +68,14 @@ export interface Assignment {
   /** Model turns allowed in the current round. Enforced by the host, not by the model. */
   turnLimit: number;
   roundTurns: number;
+  /** Job the worker declared it waits for (a CI run, a PC job). Used when a loop trips. */
+  pendingJob?: string;
+  /** Set while WAITING. The worker starts no turns until this job completes. */
+  waitingFor?: { jobId: string; since: string };
+  /** Consecutive Stop-hook or goal turns with no tool action. */
+  noToolRepeats: number;
+  /** Loops the host stopped. Copied into the approval record. */
+  loopTrips: number;
   candidate?: Candidate;
   verification?: VerificationRecord;
   approval?: ApprovalRecord;
@@ -88,6 +99,7 @@ export class WorkAcceptanceError extends Error {
       | "unauthorised"
       | "self-approval"
       | "turn-limit"
+      | "waiting"
       | "awaiting-approval"
       | "duplicate-assignment",
     message: string,
@@ -103,11 +115,19 @@ export function digest(text: string): string {
 
 const OPEN: ReadonlySet<WorkState> = new Set([
   "RUNNING",
+  "WAITING",
   "AWAITING_APPROVAL",
   "APPROVED",
   "CLOSING",
 ]);
 export const DEFAULT_TURN_LIMIT = 25;
+/** Consecutive Stop-hook or goal turns with no tool action that trip the guard. */
+export const STOP_REPEAT_LIMIT = 3;
+
+/** The Stop-hook or goal prompts the provider sends back to a worker. */
+export function isStopHookPrompt(text: string): boolean {
+  return /^\s*(stop hook feedback|<stop-hook|goal (check|not met))/i.test(text);
+}
 
 export interface WorkAcceptanceOptions {
   file: string;
@@ -233,6 +253,8 @@ export class WorkAcceptanceStore {
         state: "RUNNING",
         turnLimit: input.turnLimit ?? DEFAULT_TURN_LIMIT,
         roundTurns: 0,
+        noToolRepeats: 0,
+        loopTrips: 0,
         rejections: [],
         revision: 1,
         createdAt: at,
@@ -253,6 +275,11 @@ export class WorkAcceptanceStore {
   // --- turns ------------------------------------------------------------------------------------------
 
   private turnRefusal(a: Assignment): WorkAcceptanceError | undefined {
+    if (a.state === "WAITING")
+      return new WorkAcceptanceError(
+        "waiting",
+        `${a.item} is WAITING for job ${a.waitingFor?.jobId ?? "unknown"}; no model turn starts until it completes.`,
+      );
     if (a.state === "AWAITING_APPROVAL" || a.state === "APPROVED" || a.state === "CLOSING")
       return new WorkAcceptanceError(
         "awaiting-approval",
@@ -289,6 +316,75 @@ export class WorkAcceptanceStore {
     this.assignments = next;
     void this.serial(() => this.persist()).catch(() => undefined);
     return undefined;
+  }
+
+  // --- waiting loops ----------------------------------------------------------------------------------
+
+  private mutateNow(index: number, change: (a: Assignment) => Assignment): Assignment {
+    const next = [...this.assignments];
+    next[index] = change(this.assignments[index]);
+    this.assignments = next;
+    void this.serial(() => this.persist()).catch(() => undefined);
+    return next[index];
+  }
+
+  /** The worker says what it waits for. The host uses it when a loop trips. */
+  declareJob(workerId: string, jobId: string): void {
+    const index = this.assignments.findIndex((x) => x.workerId === workerId && OPEN.has(x.state));
+    if (index < 0)
+      throw new WorkAcceptanceError("no-assignment", `No open assignment for ${workerId}`);
+    this.mutateNow(index, (a) => ({ ...a, pendingJob: jobId, revision: a.revision + 1 }));
+  }
+
+  /**
+   * One finished turn that answered a Stop hook or goal prompt. A repeat with no tool action counts. A repeat
+   * with a tool action, or an ordinary turn, resets the count. At the limit the worker goes to WAITING with its
+   * job id: no model turn starts until the job completes. Returns true when this call tripped the guard.
+   */
+  recordStopRepeat(workerId: string, turn: { stopHook: boolean; toolAction: boolean }): boolean {
+    const index = this.assignments.findIndex((x) => x.workerId === workerId && OPEN.has(x.state));
+    if (index < 0) return false;
+    const a = this.assignments[index];
+    if (a.state !== "RUNNING") return false;
+    if (!turn.stopHook || turn.toolAction) {
+      if (a.noToolRepeats > 0)
+        this.mutateNow(index, (x) => ({ ...x, noToolRepeats: 0, revision: x.revision + 1 }));
+      return false;
+    }
+    const repeats = a.noToolRepeats + 1;
+    if (repeats < STOP_REPEAT_LIMIT) {
+      this.mutateNow(index, (x) => ({ ...x, noToolRepeats: repeats, revision: x.revision + 1 }));
+      return false;
+    }
+    this.mutateNow(index, (x) => ({
+      ...x,
+      state: "WAITING",
+      noToolRepeats: 0,
+      loopTrips: x.loopTrips + 1,
+      waitingFor: { jobId: x.pendingJob ?? "unknown", since: this.now().toISOString() },
+      revision: x.revision + 1,
+      updatedAt: this.now().toISOString(),
+    }));
+    return true;
+  }
+
+  /** The job's completion event. Returns the resumed items. Repeating the event changes nothing. */
+  resumeFromJob(jobId: string): string[] {
+    const resumed: string[] = [];
+    this.assignments.forEach((a, index) => {
+      if (a.state !== "WAITING" || a.waitingFor?.jobId !== jobId) return;
+      this.mutateNow(index, (x) => ({
+        ...x,
+        state: "RUNNING",
+        waitingFor: undefined,
+        pendingJob: undefined,
+        noToolRepeats: 0,
+        revision: x.revision + 1,
+        updatedAt: this.now().toISOString(),
+      }));
+      resumed.push(a.item);
+    });
+    return resumed;
   }
 
   raiseTurnLimit(item: string, by: Approver, turnLimit: number): Promise<Assignment> {
@@ -345,6 +441,7 @@ export class WorkAcceptanceStore {
             evidenceDigest,
             milestone: "routine",
             at: record.at,
+            loopsStopped: d.loopTrips,
           };
           d.state = "APPROVED";
         } else d.state = "AWAITING_APPROVAL";
@@ -417,7 +514,12 @@ export class WorkAcceptanceStore {
           "Approval names a different result or evidence than the submitted one.",
         );
       return this.commit(item, (d) => {
-        d.approval = { approver: by, ...bound, at: this.now().toISOString() };
+        d.approval = {
+          approver: by,
+          ...bound,
+          at: this.now().toISOString(),
+          loopsStopped: d.loopTrips,
+        };
         d.state = "APPROVED";
       });
     });

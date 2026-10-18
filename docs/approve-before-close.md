@@ -44,9 +44,20 @@ A turn past the round limit is refused or cancelled.
 While a result waits for approval, no model turn starts.
 The lead raises the limit or rejects with findings.
 
+## Loop guard
+
+A Stop hook or goal can send a worker the same prompt again and again while it waits for a job.
+The host counts consecutive finished turns that answered such a prompt with no tool action.
+Three in a row set the worker to `WAITING` with the job id it declared (`work_wait`), or `unknown`.
+A repeat with a tool action, or an ordinary turn, resets the count.
+While `WAITING`, no model turn starts. The host cancels any turn the provider starts itself.
+`work_job_done` is the job's completion event. It resumes the worker and sends it one turn.
+The number of stopped loops is stored in the approval record (`loopsStopped`).
+
 ## MCP tools
 
 `work_assign` opens an assignment. `work_submit` sends the result and check evidence.
+`work_wait` names the job a worker waits for. `work_job_done` reports that the job finished.
 `work_review` approves or rejects. `work_cancel` cancels.
 Rejection sends the findings to the same worker with a new finish notice for the lead.
 The owner reviews over the app connection with `agent.work.owner_review.request` (client method `reviewWorkAsOwner`).
@@ -62,4 +73,5 @@ After a restart, a `CLOSING` assignment finishes when its worker is archived.
 - A session with no assignment keeps the old behaviour. Open an assignment before work starts.
 - The app has no cancel button yet. A lead cancels with `work_cancel`.
 - Provider-internal `/goal` checks inside one provider turn are not counted until the provider reports a new turn.
+- The guard sees a Stop-hook prompt by its text, from the prompt the host sent or the provider's user message. Whether the real Claude provider records hook feedback as a user message is not verified.
 - Automatic next-item dispatch stays off.

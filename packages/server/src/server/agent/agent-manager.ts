@@ -8,7 +8,12 @@ import { recordSessionCost, sessionCost, type SessionCostRecords } from "./sessi
 import { queuedAgentMessagesFor } from "../queued-agent-messages.js";
 import { heldSendsFor } from "../held-sends.js";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { WorkAcceptanceError, type Approver, type WorkAcceptanceStore } from "./work-acceptance.js";
+import {
+  WorkAcceptanceError,
+  isStopHookPrompt,
+  type Approver,
+  type WorkAcceptanceStore,
+} from "./work-acceptance.js";
 import { isArchiveLead, isArchiveChild, reportsToArchiveParent } from "./archive-policy.js";
 import { defaultLedgerDir, readOpenLedgerRows, rowsOwnedBy } from "../ledger-items.js";
 import { archiveReportCount } from "../archive-observation.js";
@@ -2207,6 +2212,8 @@ export class AgentManager {
   private readonly archiveServerId?: string;
   private readonly archiveLedgerDirectory?: string;
   readonly workAcceptance?: WorkAcceptanceStore;
+  /** Text of the last prompt the host sent per agent. Read once when that turn ends (FU-349 loop guard). */
+  private readonly hostPromptText = new Map<string, string>();
   private acceptingAgentRegistrations = true;
   private readonly automaticInputLimits: AutomaticInputLimits;
   private readonly costOutbox: SessionCostOutbox;
@@ -4407,6 +4414,38 @@ export class AgentManager {
     return assignment.item;
   }
 
+  /**
+   * FU-349: a finished turn that answered a Stop hook or goal prompt with no tool action is a repeat. Three in a row
+   * stop the loop: the worker goes to WAITING with its job id and the host cancels any turn the provider starts
+   * next. The job's completion event resumes it.
+   */
+  private observeStopRepeat(agentId: string): void {
+    const store = this.workAcceptance;
+    const hostPrompt = this.hostPromptText.get(agentId);
+    this.hostPromptText.delete(agentId);
+    if (!store?.forWorker(agentId)) return;
+    const items = this.timelineStore.getItems(agentId);
+    const promptIndex = items.findLastIndex((item) => item.type === "user_message");
+    const prompt = promptIndex >= 0 ? items[promptIndex] : undefined;
+    // Two signals: the prompt the host sent, and the user message the provider put in the timeline.
+    const stopHook =
+      (hostPrompt !== undefined && isStopHookPrompt(hostPrompt)) ||
+      (prompt?.type === "user_message" && isStopHookPrompt(prompt.text));
+    const toolAction = items.slice(promptIndex + 1).some((item) => item.type === "tool_call");
+    if (!store.recordStopRepeat(agentId, { stopHook, toolAction })) return;
+    const waiting = store.forWorker(agentId)?.waitingFor;
+    this.logger.warn(
+      { agentId, jobId: waiting?.jobId },
+      "Work acceptance stopped a Stop-hook loop with no tool action",
+    );
+    void this.trustedPlugins.daemon(() => this.cancelAgentRun(agentId)).catch(() => undefined);
+  }
+
+  /** FU-349: the job's completion event resumes the workers that wait for it. */
+  resumeWorkFromJob(jobId: string): string[] {
+    return this.workAcceptance?.resumeFromJob(jobId) ?? [];
+  }
+
   /** FU-349: the host, not the model, stops a turn past the round limit or started while review is pending. */
   private enforceWorkTurnLimit(agentId: string): void {
     const refusal = this.workAcceptance?.recordTurn(agentId);
@@ -6019,6 +6058,7 @@ export class AgentManager {
           });
         }
         this.workAcceptance?.assertTurnAllowed(agentId);
+        this.hostPromptText.set(agentId, typeof prompt === "string" ? prompt : "");
         const existingAgent = this.requireSessionAgent(agentId);
         const eventCause = currentLeadEvent(
           this.trustedPlugins.currentInputSource(),
@@ -9711,11 +9751,13 @@ export class AgentManager {
         failed: [event.error, event.code, event.diagnostic].filter(Boolean).join(" "),
         account: this.automaticLimitAccount(agentId),
       });
-    else if (event.type === "turn_completed")
+    else if (event.type === "turn_completed") {
       this.automaticInputLimits.observe(agentId, {
         assistant: this.getLastAssistantMessageFromTimeline(this.timelineStore.getItems(agentId)),
         account: this.automaticLimitAccount(agentId),
       });
+      this.observeStopRepeat(agentId);
+    }
     this.logger.trace(
       {
         agentId,

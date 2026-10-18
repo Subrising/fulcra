@@ -2567,6 +2567,48 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
   );
 
   registerTool(
+    "work_wait",
+    {
+      title: "Declare the job a worker waits for",
+      description:
+        "The worker names the job it waits for (a CI run id or PC job id). If a Stop hook or goal repeats three times with no tool action, the host stops the loop and sets the worker to WAITING with this job id.",
+      inputSchema: { jobId: z.string().min(1) },
+      outputSchema: workOutput,
+    },
+    async ({ jobId }) => {
+      if (!callerAgentId) throw new Error("Only the assigned worker can declare its job.");
+      workStore().declareJob(callerAgentId, jobId);
+      return workResult({ jobId });
+    },
+  );
+
+  registerTool(
+    "work_job_done",
+    {
+      title: "Job completion event",
+      description:
+        "Report that a job finished. Workers waiting for it resume, and each gets the message as its next turn. Repeating the event changes nothing.",
+      inputSchema: { jobId: z.string().min(1), message: z.string().optional() },
+      outputSchema: workOutput,
+    },
+    async ({ jobId, message }) => {
+      const items = agentManager.resumeWorkFromJob(jobId);
+      for (const item of items) {
+        const worker = workStore().get(item)?.workerId;
+        if (worker)
+          await sendPromptToAgent({
+            agentManager,
+            agentStorage,
+            agentId: worker,
+            prompt: message ?? `Job ${jobId} finished. Continue ${item}.`,
+            logger: childLogger,
+          });
+      }
+      return workResult({ resumed: items });
+    },
+  );
+
+  registerTool(
     "work_cancel",
     {
       title: "Cancel work assignment",

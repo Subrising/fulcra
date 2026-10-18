@@ -38,11 +38,16 @@ function home(): string {
   return dir;
 }
 
+const storeDirs = new WeakMap<WorkAcceptanceStore, string>();
+const dirOf = (store: WorkAcceptanceStore) => storeDirs.get(store)!;
+
 function newStore(dir: string, resolveCandidate?: (a: never) => Promise<string | null>) {
-  return new WorkAcceptanceStore({
+  const store = new WorkAcceptanceStore({
     file: join(dir, "work-acceptance", "assignments.json"),
     resolveCandidate: resolveCandidate as never,
   });
+  storeDirs.set(store, dir);
+  return store;
 }
 
 async function openFor(
@@ -505,4 +510,72 @@ test("a failed write leaves memory and disk unchanged", async () => {
   await expect(store.submit("w1", { kind: "commit", id: "sha-1" }, GOOD)).rejects.toThrow();
   expect(store.get("FU-1")?.state).toBe("RUNNING");
   expect(store.get("FU-1")?.candidate).toBeUndefined();
+});
+
+// --- FU-349 addition: stop the Stop-hook and goal loop outside the model ------------------------------
+
+const STOP = { stopHook: true, toolAction: false };
+
+test("loop guard: 3 no-tool Stop-hook repeats set WAITING with the job id and start no turns", async () => {
+  const store = newStore(home());
+  await openFor(store, "w1", { turnLimit: 100 });
+  store.declareJob("w1", "ci-run-39100229458");
+  expect(store.recordStopRepeat("w1", STOP)).toBe(false);
+  expect(store.recordStopRepeat("w1", STOP)).toBe(false);
+  expect(store.get("FU-1")?.state).toBe("RUNNING");
+  expect(store.recordStopRepeat("w1", STOP)).toBe(true);
+
+  const waiting = store.get("FU-1")!;
+  expect(waiting.state).toBe("WAITING");
+  expect(waiting.waitingFor?.jobId).toBe("ci-run-39100229458");
+  expect(waiting.loopTrips).toBe(1);
+  // No model turn starts while WAITING, and the provider-started turn is refused so the host cancels it.
+  expect(() => store.assertTurnAllowed("w1")).toThrow(/WAITING for job ci-run-39100229458/);
+  expect(store.recordTurn("w1")).toMatchObject({ code: "waiting" });
+  // WAITING is not acceptance.
+  await expect(store.assertCanClose("w1")).rejects.toMatchObject({ code: "unverified" });
+});
+
+test("loop guard: without a declared job the id is recorded as unknown", async () => {
+  const store = newStore(home());
+  await openFor(store, "w1");
+  for (let i = 0; i < 3; i += 1) store.recordStopRepeat("w1", STOP);
+  expect(store.get("FU-1")?.waitingFor?.jobId).toBe("unknown");
+});
+
+test("loop guard: the job completion event resumes the worker once and the count is in the approval record", async () => {
+  const store = newStore(home());
+  await openFor(store, "w1");
+  store.declareJob("w1", "job-7");
+  for (let i = 0; i < 3; i += 1) store.recordStopRepeat("w1", STOP);
+  expect(store.resumeFromJob("other-job")).toEqual([]);
+  expect(store.get("FU-1")?.state).toBe("WAITING");
+  expect(store.resumeFromJob("job-7")).toEqual(["FU-1"]);
+  expect(store.resumeFromJob("job-7")).toEqual([]); // a repeated event changes nothing
+  expect(store.get("FU-1")).toMatchObject({ state: "RUNNING", waitingFor: undefined });
+  expect(() => store.assertTurnAllowed("w1")).not.toThrow();
+
+  const { assignment } = await store.submit("w1", { kind: "commit", id: "sha-1" }, GOOD);
+  const approvedRecord = await store.approve("FU-1", LEAD, {
+    candidateId: "sha-1",
+    evidenceDigest: assignment.verification!.evidenceDigest,
+    milestone: "M1",
+  });
+  expect(approvedRecord.approval?.loopsStopped).toBe(1);
+  // The state survives a restart.
+  expect(newStore(dirOf(store)).get("FU-1")?.approval?.loopsStopped).toBe(1);
+});
+
+test("loop guard: a repeat WITH a tool action does not trip, and an ordinary turn resets the count", async () => {
+  const store = newStore(home());
+  await openFor(store, "w1");
+  const toolRepeat = { stopHook: true, toolAction: true };
+  const ordinary = { stopHook: false, toolAction: false };
+  for (const turn of [STOP, STOP, toolRepeat, STOP, STOP, ordinary, STOP, STOP]) {
+    expect(store.recordStopRepeat("w1", turn)).toBe(false);
+  }
+  expect(store.get("FU-1")).toMatchObject({ state: "RUNNING", loopTrips: 0 });
+  expect(store.get("FU-1")?.noToolRepeats).toBe(2);
+  // The third in a row after the reset does trip.
+  expect(store.recordStopRepeat("w1", STOP)).toBe(true);
 });
