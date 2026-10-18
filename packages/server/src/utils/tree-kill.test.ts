@@ -1,5 +1,6 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
+import { fileURLToPath } from "node:url";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +13,24 @@ import {
 } from "./tree-kill.js";
 
 describe("retained provider children", () => {
+  test("loads through the native terminal TypeScript loader", () => {
+    const loader = fileURLToPath(new URL("../terminal/terminal-ts-loader.mjs", import.meta.url));
+    const moduleUrl = new URL("./tree-kill.ts", import.meta.url).href;
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--experimental-strip-types",
+        "--experimental-loader",
+        loader,
+        "--input-type=module",
+        "-e",
+        `await import(${JSON.stringify(moduleUrl)})`,
+      ],
+      { encoding: "utf8", timeout: 10_000 },
+    );
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   test("keeps child ownership after root exit and refuses a reused PID", async () => {
     const root: OwnedProcessIdentity = {
       pid: 100,

@@ -230,11 +230,19 @@ async function readOwnedProcessTable(): Promise<OwnedProcessIdentity[]> {
 }
 
 export class OwnedProcessTree {
+  private readonly identities: readonly OwnedProcessIdentity[];
+  private readonly read: () => Promise<OwnedProcessIdentity[]>;
+  private readonly sendSignal: (pid: number, signal: NodeJS.Signals) => unknown;
+
   constructor(
-    private readonly identities: readonly OwnedProcessIdentity[],
-    private readonly read = readOwnedProcessTable,
-    private readonly sendSignal: (pid: number, signal: NodeJS.Signals) => unknown = process.kill,
-  ) {}
+    identities: readonly OwnedProcessIdentity[],
+    read = readOwnedProcessTable,
+    sendSignal: (pid: number, signal: NodeJS.Signals) => unknown = process.kill,
+  ) {
+    this.identities = identities;
+    this.read = read;
+    this.sendSignal = sendSignal;
+  }
 
   private async survivors(): Promise<OwnedProcessIdentity[]> {
     const current = new Map((await this.read()).map((row) => [row.pid, row]));
