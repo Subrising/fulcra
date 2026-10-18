@@ -12,7 +12,11 @@ The daemon reads `pause.json` beside its agent storage directory, normally `$PAS
 }
 ```
 
-Exceptions use complete session IDs. A Claude pause leaves Codex delivery active.
+Exceptions use complete session IDs. An exception also includes its children and later descendants.
+The guard reads each parent through `inspect`; list rows do not include parent labels.
+The daemon reads live labels or its initialized storage cache at admission and final handoff.
+Each check caches parent reads. A failed read, missing ancestor, or parent cycle keeps the notice paused.
+A Claude pause leaves Codex delivery active.
 Missing policy files mean no pause. Invalid policy files stop delivery.
 
 Plain sends enter the existing durable message queue during a pause.
@@ -62,6 +66,15 @@ Use `--require-delivery` before `--cli` for a required restart warning.
 A paused target causes a refusal. The warning is not stored for later delivery.
 The host transaction must stop before its mutation boundary.
 Completion notices use the default durable hold.
+
+The host guard does not replace the daemon pause gate.
+An older installed daemon can still hold a descendant that the guard permits.
+Its native CLI can return `status: sent` with `Provider paused. Notice saved. No turn was started.`
+That receipt confirms a saved notice, not provider input.
+A Python hold has `status: held` and a record in `paused-notices`.
+A daemon hold has a record with `pauseNotice: true` in `held-messages.json`.
+Check the installed daemon version and both stores when a descendant stays paused.
+Keep the current direct exceptions until the daemon inheritance fix ships.
 
 The guard reserves an attempt before calling the native CLI.
 An uncertain attempt stays retained and is not replayed automatically.

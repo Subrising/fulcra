@@ -75,7 +75,7 @@ interface Deps {
 function closedReceiverReason(target: { archivedAt?: unknown } | null): string {
   return target?.archivedAt
     ? "The receiver is archived. Restore it first."
-    : "The receiver is closed or archived";
+    : "session closed: reload it or start a new worker";
 }
 
 /** Plain agent input and paused owner notices. Plugin capabilities never enter this queue. */
@@ -566,7 +566,13 @@ export class QueuedAgentMessages {
   private async holdPausedDelivery(agentId: string): Promise<boolean> {
     const target =
       this.deps.agentManager.getAgent(agentId) ?? (await this.deps.agentStorage.get(agentId));
-    if (noticePaused(this.deps.agentStorage.noticePausePath, target)) {
+    if (
+      noticePaused(
+        this.deps.agentStorage.noticePausePath,
+        target,
+        (id) => this.deps.agentManager.getAgent(id) ?? this.deps.agentStorage.getCached(id),
+      )
+    ) {
       const held = this.records.filter(
         (record) => record.agentId === agentId && record.state === "queued",
       );
@@ -645,7 +651,11 @@ export class QueuedAgentMessages {
           () => this.stopped,
           () => {
             if (
-              noticePaused(this.deps.agentStorage.noticePausePath, agentManager.getAgent(agentId))
+              noticePaused(
+                this.deps.agentStorage.noticePausePath,
+                agentManager.getAgent(agentId),
+                (id) => this.deps.agentManager.getAgent(id) ?? this.deps.agentStorage.getCached(id),
+              )
             )
               throw new NoticePausedError();
             const refused = eligible.flatMap((record) => {
@@ -835,7 +845,7 @@ export function queuedReceiverCheck(
     () => {
       checkLines();
       const current = agentManager.getAgent(agentId);
-      if (!current || current.archivedAt)
+      if (!current || current.archivedAt || current.lifecycle === "closed")
         throw Object.assign(new Error(closedReceiverReason(current)), {
           code: "QUEUED_RECEIVER_CLOSED",
         });

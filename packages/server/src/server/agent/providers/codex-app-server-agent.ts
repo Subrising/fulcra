@@ -8089,11 +8089,20 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   private auditComputerUse(input: {
+    request: AgentPermissionRequest;
+    source: "listed" | "remembered";
     app: string;
     bundleId: string;
     serverName: string;
     action: "accept" | "decline";
   }): void {
+    this.deps.computerUsePolicy?.decision?.(this, input.request, {
+      action: input.action,
+      source: input.source,
+      app: input.app,
+      bundleId: input.bundleId,
+      serverName: input.serverName,
+    });
     const timestamp = new Date().toISOString();
     const action = input.action === "accept" ? "auto-accepted" : "remembered decline";
     this.emitEvent({
@@ -8160,7 +8169,7 @@ export class CodexAppServerAgentSession implements AgentSession {
         if (this.computerUseAllowed({ ...input, source: "remembered" })) {
           const action = toObjectRecord(answer)?.action;
           if (action === "accept" || action === "decline")
-            this.auditComputerUse({ ...input, action });
+            this.auditComputerUse({ ...input, action, source: "remembered" });
           resolve(answer);
         } else {
           resolve(this.requestMcpElicitationPermission(input));
@@ -8219,7 +8228,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     const consent = { request, app, bundleId, serverName: parsed.serverName };
     const prior = this.computerUseDecisions.get(key);
     if (prior && this.computerUseAllowed({ ...consent, source: "remembered" })) {
-      this.auditComputerUse({ ...consent, action: prior.action });
+      this.auditComputerUse({ ...consent, action: prior.action, source: "remembered" });
       return Promise.resolve(prior);
     }
     const pending = this.computerUsePending.get(key);
@@ -8233,7 +8242,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       const decision: ComputerUseDecision = { action: "accept", content: {}, _meta: null };
       this.computerUseDecisions.set(key, decision);
       this.deps.computerUsePolicy?.changed(this);
-      this.auditComputerUse({ ...consent, action: "accept" });
+      this.auditComputerUse({ ...consent, action: "accept", source: "listed" });
       return Promise.resolve(decision);
     }
     return this.requestMcpElicitationPermission({ request, serverRequestId, key });

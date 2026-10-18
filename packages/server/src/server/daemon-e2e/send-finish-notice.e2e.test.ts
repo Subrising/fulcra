@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile, readdir, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
@@ -451,7 +451,6 @@ test("a paused follow-up keeps prior spend and reports the resumed cumulative to
     f.storage.noticePausePath,
     JSON.stringify({
       pausedProviders: ["codex"],
-      exceptSessions: [f.parent.id],
     }),
   );
   const arm = vi.spyOn(f.storage, "rearmFinishNotice");
@@ -470,4 +469,110 @@ test("a paused follow-up keeps prior spend and reports the resumed cumulative to
     }),
   );
   expect(f.notices()[1]).toContain("Session total spend: US$4.000000.");
+});
+
+test("CLI --no-wait refuses a closed receiver", async () => {
+  const f = await fixture();
+  await f.manager.trustedPlugins.daemon(() => f.manager.closeAgent(f.child.id));
+  expect((await f.storage.get(f.child.id))?.lastStatus).toBe("closed");
+  const before = await f.storage.get(f.child.id);
+  const failure = await promisify(execFile)(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      path.resolve("../cli/src/index.ts"),
+      "send",
+      f.child.id,
+      "Do not queue",
+      "--queue",
+      "--no-wait",
+      "--host",
+      `127.0.0.1:${f.daemon.port}`,
+      "--json",
+    ],
+    {
+      timeout: 15000,
+      env: {
+        ...process.env,
+        PASEO_HOME: f.daemon.paseoHome,
+        PASEO_AGENT_ID: f.parent.id,
+        PASEO_WORKSPACE_ID: "",
+        PASEO_PASSWORD: "",
+      },
+    },
+  ).then(
+    () => null,
+    (error: unknown) => error,
+  );
+  expect(failure).toMatchObject({ code: 1 });
+  expect(JSON.stringify(failure)).toContain("session closed: reload it or start a new worker");
+  expect(f.prompts).toEqual([]);
+  expect(await f.storage.get(f.child.id)).toEqual(before);
+});
+
+test("the host guard and daemon inherit the same parent exception for CLI steer", async () => {
+  const f = await fixture();
+  const workspace = await f.client.createWorkspace({
+    source: { kind: "directory", path: f.child.cwd },
+  });
+  if (!workspace.workspace) throw new Error("Cannot create the test workspace");
+  const child = await f.manager.createAgent(
+    { provider: "claude", cwd: f.child.cwd, title: "Fresh inherited pause target" },
+    undefined,
+    { workspaceId: workspace.workspace.id, labels: { [PARENT_AGENT_ID_LABEL]: f.parent.id } },
+  );
+  const guard = path.join(f.child.cwd, "guard");
+  const nativeCli = path.join(
+    f.child.cwd,
+    process.platform === "win32" ? "native-cli.cmd" : "native-cli",
+  );
+  const cliEntry = path.resolve("../cli/src/index.ts");
+  const quoteShell = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+  const launcher =
+    process.platform === "win32"
+      ? `@echo off\r\n"${process.execPath}" --import tsx "${cliEntry}" %*\r\nexit /b %ERRORLEVEL%\r\n`
+      : `#!/bin/sh\nexec ${quoteShell(process.execPath)} --import tsx ${quoteShell(cliEntry)} "$@"\n`;
+  await writeFile(nativeCli, launcher, { mode: 0o700 });
+  const policy = { pausedProviders: ["claude"], exceptSessions: [f.parent.id] };
+  await mkdir(guard);
+  await writeFile(path.join(guard, "pause.json"), JSON.stringify(policy));
+  await writeFile(f.storage.noticePausePath, JSON.stringify(policy));
+  const marker = "Inherited CLI steer reaches the fresh child";
+  const result = await promisify(execFile)(
+    process.env.FULCRA_TEST_PYTHON ?? "python3",
+    [
+      path.resolve("../../scripts/notice-pause.py"),
+      "--cli",
+      nativeCli,
+      "--host",
+      `127.0.0.1:${f.daemon.port}`,
+      "send",
+      child.id,
+      "--steer",
+      "--no-wait",
+      "--json",
+      "--prompt",
+      marker,
+    ],
+    {
+      timeout: 30000,
+      env: {
+        ...process.env,
+        FULCRA_NOTICE_CONFIG: guard,
+        PASEO_HOME: f.daemon.paseoHome,
+        PASEO_AGENT_ID: f.parent.id,
+        PASEO_AGENT_CALLER_WITNESS: "",
+        PASEO_WORKSPACE_ID: "",
+        PASEO_PASSWORD: "",
+      },
+    },
+  );
+  const receipt = JSON.parse(result.stdout);
+  expect(receipt.status).toBe("sent");
+  expect(receipt.message).not.toContain("Provider paused");
+  await vi.waitFor(() => expect(f.prompts.filter((prompt) => prompt === marker)).toHaveLength(1));
+  expect(
+    (await readdir(path.join(guard, "paused-notices"))).filter((file) => file.endsWith(".json")),
+  ).toEqual([]);
 });

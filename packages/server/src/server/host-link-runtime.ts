@@ -135,7 +135,11 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
         delivery.check();
         if (
           !notice &&
-          noticePaused(agentStorage.noticePausePath, agentManager.getAgent(delivery.agentId))
+          noticePaused(
+            agentStorage.noticePausePath,
+            agentManager.getAgent(delivery.agentId),
+            (id) => agentManager.getAgent(id) ?? agentStorage.getCached(id),
+          )
         )
           throw new NoticePausedError();
       };

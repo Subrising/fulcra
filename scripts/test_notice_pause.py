@@ -23,6 +23,8 @@ class NoticePauseTests(unittest.TestCase):
         self.calls = []
         self.rows = [{'id': 'claude-owner', 'provider': 'claude/model', 'status': 'idle'},
                      {'id': 'codex-owner', 'provider': 'codex/model', 'status': 'idle'}]
+        self.parents = {}
+        self.inspect_error = False
         self.transport_fail = False
         self.gate = m.Gate(self.root, self.run_native)
         self.policy(['claude'])
@@ -32,7 +34,14 @@ class NoticePauseTests(unittest.TestCase):
 
     def run_native(self, cli, args, **kwargs):
         self.calls.append((cli, args, kwargs))
+        if 'inspect' in args:
+            if self.inspect_error:
+                return subprocess.CompletedProcess(args, 1, '', 'read error')
+            identifier = args[args.index('inspect') + 1]
+            return subprocess.CompletedProcess(args, 0, json.dumps({
+                'Id': identifier, 'ParentAgentId': self.parents.get(identifier)}), '')
         if 'ls' in args:
+
             return subprocess.CompletedProcess(args, 0, json.dumps(self.rows), '')
         return subprocess.CompletedProcess(args, int(self.transport_fail), 'receipt', '')
 
@@ -70,6 +79,77 @@ class NoticePauseTests(unittest.TestCase):
         self.policy(['claude'], exceptSessions=['claude-owner'])
         self.send()
         self.assertEqual(len(self.sends()), 1)
+
+    def test_excepted_leads_child_is_delivered(self):
+        self.policy(['claude'], exceptSessions=['lead'])
+        self.parents['claude-owner'] = 'lead'
+        self.send()
+        self.assertEqual(len(self.sends()), 1)
+
+    def test_excepted_leads_grandchild_is_delivered(self):
+        self.policy(['claude'], exceptSessions=['lead'])
+        self.parents.update({'claude-owner': 'child', 'child': 'lead'})
+        self.send()
+        self.assertEqual(len(self.sends()), 1)
+
+    def test_label_read_error_is_held(self):
+        self.policy(['claude'], exceptSessions=['lead'])
+        self.inspect_error = True
+        self.send()
+        self.assertEqual(self.sends(), [])
+        self.assertEqual(self.records()[0]['state'], 'held')
+
+    def test_cycle_is_held(self):
+        self.policy(['claude'], exceptSessions=['lead'])
+        self.parents.update({'claude-owner': 'child', 'child': 'claude-owner'})
+        self.send()
+        self.assertEqual(self.sends(), [])
+        inspected = [call[1] for call in self.calls if 'inspect' in call[1]]
+        self.assertEqual(len(inspected), 2)
+
+    def test_inspect_schema_and_transport_errors_stay_held(self):
+        for output in ['[]', '{}', '{', '{"Id":"wrong","ParentAgentId":"lead"}',
+                       '{"Id":"claude-owner","ParentAgentId":42}']:
+            with self.subTest(output=output):
+                original = self.gate.run
+                def run(cli, args, **kwargs):
+                    if 'inspect' in args:
+                        return subprocess.CompletedProcess(args, 0, output, '')
+                    return original(cli, args, **kwargs)
+                self.gate.run = run
+                try:
+                    self.send()
+                    self.assertEqual(self.sends(), [])
+                finally:
+                    self.gate.run = original
+
+    def test_drain_caches_ancestors_for_one_call_only(self):
+        with patch.dict(os.environ, {'PASEO_AGENT_ID': 'source-a'}): self.send(text='one')
+        with patch.dict(os.environ, {'PASEO_AGENT_ID': 'source-b'}): self.send(text='two')
+        self.policy(['claude'], exceptSessions=['lead'])
+        self.parents['claude-owner'] = 'lead'
+        self.calls.clear()
+        self.gate.drain()
+        self.assertEqual(len(self.sends()), 2)
+        self.assertEqual(len([c for c in self.calls if 'inspect' in c[1]]), 1)
+        self.parents.clear()
+        self.send(text='new')
+        self.assertEqual(len(self.sends()), 2)
+        self.assertEqual(self.records()[-1]['state'], 'held')
+
+    def test_closed_paused_session_refuses_before_hold(self):
+        self.rows[0]['status'] = 'closed'
+        with self.assertRaisesRegex(ValueError, 'session closed: reload it or start a new worker'):
+            self.send()
+        self.assertEqual(self.records(), [])
+        self.assertEqual(self.sends(), [])
+
+    def test_closed_held_session_is_refused_during_pause(self):
+        self.send()
+        self.rows[0]['status'] = 'closed'
+        self.gate.drain()
+        self.assertEqual(self.records()[0]['state'], 'refused')
+        self.assertEqual(self.sends(), [])
 
     def test_prefix_is_not_an_exception(self):
         self.policy(['claude'], exceptSessions=['claude'])

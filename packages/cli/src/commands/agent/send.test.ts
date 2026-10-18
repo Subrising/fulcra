@@ -345,3 +345,18 @@ it("waits for local titles containing @", async () => {
   expect(result.data.status).toBe("completed");
   expect(client.waitForFinish).toHaveBeenCalledOnce();
 });
+
+describe("closed receiver refusal", () => {
+  it.each([{ flags: [] }, { flags: ["--queue"] }, { flags: ["--steer"] }])(
+    "returns the daemon error with --no-wait: %j",
+    async ({ flags }) => {
+      client.sendAgentMessage.mockRejectedValue(
+        new Error("session closed: reload it or start a new worker"),
+      );
+      await expect(parsedSend(["target", "draft", "--no-wait", ...flags])).rejects.toMatchObject({
+        message: expect.stringContaining("session closed: reload it or start a new worker"),
+      });
+      expect(client.waitForFinish).not.toHaveBeenCalled();
+    },
+  );
+});

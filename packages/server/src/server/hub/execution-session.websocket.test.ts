@@ -213,7 +213,10 @@ test("ordinary Hub workspace recovery preserves its worker archive after daemon 
     payload: { agentId },
   });
   expect(await hub.requestOrdinary({ ...message, requestId: "replayed-send" })).toMatchObject({
-    payload: { accepted: true },
+    payload: {
+      accepted: false,
+      error: "session closed: reload it or start a new worker",
+    },
   });
   expect(hub.providerPromptTexts().filter((text) => text === "hello")).toHaveLength(1);
   expect(

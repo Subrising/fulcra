@@ -91,7 +91,12 @@ test("a crash after billing commit restores the cursor before the next cumulativ
     await import("../../../../../control/orca-organization/server/account-billing.mjs");
   const dir = await mkdtemp(join(tmpdir(), "cost-crash-checkpoint-"));
   try {
-    const account = await addAccount(dir, { provider: "claude", name: "Fixture" });
+    // Keep the account within the fixture's billing window, including after the UTC day changes.
+    const account = await addAccount(
+      dir,
+      { provider: "claude", name: "Fixture" },
+      Date.parse("2026-10-17T00:00:00Z"),
+    );
     await setAccount(dir, account.id, {
       credentialKind: "api-key",
       budget: { limitUsd: 200, startAt: "2026-10-01T00:00:00Z" },
