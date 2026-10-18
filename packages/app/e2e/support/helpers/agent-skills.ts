@@ -62,10 +62,10 @@ export async function startAgentSkillsSandbox(): Promise<AgentSkillsSandbox> {
   });
   const available = (await client.getAgentSkillsStatus()).available;
   const targets = {
-    agents: path.join(home, ".agents", "skills"),
-    claude: path.join(home, ".claude", "skills"),
+    agents: path.join(daemon.skillsHome, ".agents", "skills"),
+    claude: path.join(daemon.skillsHome, ".claude", "skills"),
   };
-  const codexSkillsDir = path.join(home, ".codex", "skills");
+  const codexSkillsDir = path.join(daemon.skillsHome, ".codex", "skills");
 
   return {
     available,

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -16,6 +17,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { relative as relativePath } from "node:path";
 import test from "node:test";
 import { requiresFullSuite } from "./ci-shared-changes.mjs";
+import { selectPassedCI } from "../.github/scripts/ci-check.mjs";
 import { proveMerge, complete } from "../.github/scripts/ci-finished.mjs";
 import { balanceTests, testListPath, BROWSER_SHARDS } from "../.github/scripts/browser-shards.mjs";
 import { startStaticWeb } from "../.github/scripts/static-e2e-web.mjs";
@@ -477,9 +479,11 @@ function proofFixture() {
     },
     head: { commit: { tree: { sha: tree } } },
     checks: {
+      total_count: 1,
       check_runs: [
         {
           name: "ci-passed",
+          id: 100,
           app: { id: 15368 },
           head_sha: sha,
           status: "completed",
@@ -518,6 +522,20 @@ function proofFixture() {
   };
   return { run, data, api, writes };
 }
+
+test("tested-tree proof retains successful CI provenance beside a cancelled run", async () => {
+  const fixture = proofFixture();
+  fixture.data.checks.check_runs.push({
+    ...fixture.data.checks.check_runs[0],
+    id: 101,
+    conclusion: "cancelled",
+    details_url: "https://github.com/Subrising/fulcra/actions/runs/999/job/123",
+  });
+  fixture.data.checks.total_count = 2;
+  const proof = await proveMerge(fixture.run, fixture.api);
+  assert.equal(proof.ciRunId, 456);
+  assert.equal(proof.ciAttempt, 1);
+});
 
 test("merge proof refuses changed trees, identities, workflows and stale checks", async () => {
   const good = proofFixture();
@@ -915,7 +933,7 @@ test("merge workflow limits writes and authenticates check reads", () => {
   const source = mergeWorkflow();
   assert.match(
     source,
-    /permissions:\n  contents: write\n  pull-requests: write\n  checks: read\n\n/,
+    /permissions:\n  contents: write\n  pull-requests: write\n  checks: read\n  actions: read\n\n/,
   );
   assert.equal((source.match(/permissions:/g) ?? []).length, 1);
   assert.match(source, /persist-credentials: false/);
@@ -943,6 +961,11 @@ test("merge workflow rejects unsafe callers, PRs, CI results, and identities", (
     const bin = join(root, "bin");
     mkdirSync(bin);
     mkdirSync(join(root, "scripts"));
+    mkdirSync(join(root, ".github", "scripts"), { recursive: true });
+    writeFileSync(
+      join(root, ".github", "scripts", "ci-check.mjs"),
+      readFileSync(new URL(".github/scripts/ci-check.mjs", repoRoot)),
+    );
     writeFileSync(
       join(root, "scripts/check-machine-data.mjs"),
       readFileSync(new URL("scripts/check-machine-data.mjs", repoRoot)),
@@ -954,7 +977,7 @@ test("merge workflow rejects unsafe callers, PRs, CI results, and identities", (
       `#!/usr/bin/env node
 const fs=require('node:fs'); const f=JSON.parse(fs.readFileSync(process.env.FIXTURE)); const a=process.argv.slice(2);
 fs.appendFileSync(process.env.CALLS,JSON.stringify(a)+'\\n');
-console.log(JSON.stringify(a.includes('PUT') ? f.merged : a.some(x=>x.includes('/check-runs')) ? f.checks : a.some(x=>x.includes('/commits/')) ? f.commit : f.pr));
+console.log(JSON.stringify(a.includes('PUT') ? f.merged : a.some(x=>x.includes('/check-runs')) ? f.checks : a.some(x=>x.includes('/actions/runs/')) ? (f.runs?.[a.at(-1).split('/').at(-1)] ?? f.ci) : a.some(x=>x.includes('/commits/')) ? f.commit : f.pr));
 `,
     );
     const sha = "a".repeat(40);
@@ -967,15 +990,28 @@ console.log(JSON.stringify(a.includes('PUT') ? f.merged : a.some(x=>x.includes('
         title: "Safe title",
       },
       checks: {
+        total_count: 1,
         check_runs: [
           {
             name: "ci-passed",
+            id: 100,
             app: { id: 15368 },
             head_sha: sha,
             status: "completed",
             conclusion: "success",
+            details_url: "https://github.com/Subrising/fulcra/actions/runs/456/job/789",
           },
         ],
+      },
+      ci: {
+        id: 456,
+        run_attempt: 1,
+        status: "completed",
+        conclusion: "success",
+        path: ".github/workflows/ci.yml",
+        event: "pull_request",
+        head_sha: sha,
+        repository: { full_name: "Subrising/fulcra" },
       },
       merged: { merged: true, sha: "b".repeat(40) },
       commit: {
@@ -1044,7 +1080,37 @@ console.log(JSON.stringify(a.includes('PUT') ? f.merged : a.some(x=>x.includes('
         0,
       );
     assert.equal(run("Check the PR, tested SHA, and merge title"), 0);
+    const superseded = structuredClone(base);
+    superseded.checks.check_runs.push({
+      ...base.checks.check_runs[0],
+      id: 101,
+      conclusion: "cancelled",
+    });
+    superseded.checks.total_count = 2;
+    assert.equal(run("Check the PR, tested SHA, and merge title", superseded), 0);
+    const otherApp = structuredClone(base);
+    otherApp.checks.check_runs.push({
+      ...base.checks.check_runs[0],
+      id: 101,
+      app: { id: 1 },
+      conclusion: "failure",
+    });
+    otherApp.checks.total_count = 2;
+    assert.equal(run("Check the PR, tested SHA, and merge title", otherApp), 0);
+    for (const event of ["workflow_dispatch", "push"]) {
+      const dispatched = structuredClone(superseded);
+      dispatched.checks.check_runs[0].conclusion = "cancelled";
+      dispatched.checks.check_runs[1].conclusion = "success";
+      dispatched.ci.event = event;
+      assert.notEqual(run("Check the PR, tested SHA, and merge title", dispatched), 0);
+    }
     for (const change of [
+      (f) => (f.ci.path = ".github/workflows/other.yml"),
+      (f) => (f.ci.head_sha = "c".repeat(40)),
+      (f) => (f.ci.event = "workflow_dispatch"),
+      (f) => delete f.checks.total_count,
+      (f) => (f.checks.check_runs[0].app = null),
+      (f) => (f.checks.check_runs[0].conclusion = "skipped"),
       (f) => (f.pr.draft = true),
       (f) => (f.pr.base.ref = "next"),
       (f) => (f.pr.head.sha = "c".repeat(40)),
@@ -1634,6 +1700,124 @@ test("prebuilt web server serves SPA routes without masking missing bundle asset
     assert.match((await fetch(`${origin}/app.js`)).headers.get("content-type"), /javascript/);
   } finally {
     await server.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("CI selection ignores cancelled runs and refuses failures or incomplete checks", async () => {
+  const fixture = proofFixture();
+  const sha = fixture.data.pr.head.sha;
+  const success = fixture.data.checks.check_runs[0];
+  const select = (check_runs, extra = {}) =>
+    selectPassedCI({ total_count: check_runs.length, check_runs, ...extra }, sha, fixture.api);
+  const cancelled = { ...success, id: 101, conclusion: "cancelled" };
+  assert.equal((await select([success, cancelled])).gate, success);
+  const latest = { ...success, id: 102 };
+  assert.equal((await select([success, latest, cancelled])).gate, latest);
+  for (const other of [
+    { ...cancelled, conclusion: "failure" },
+    { ...cancelled, status: "in_progress", conclusion: null },
+    { ...cancelled, conclusion: "timed_out" },
+    { ...cancelled, conclusion: "neutral" },
+    { ...cancelled, conclusion: "skipped" },
+    { ...cancelled, head_sha: "b".repeat(40) },
+    { ...cancelled, id: undefined },
+    success,
+  ])
+    await assert.rejects(select([success, other]));
+  await assert.rejects(select([]));
+  await assert.rejects(select([cancelled]));
+  await assert.rejects(select([{ ...success, app: { id: 1 } }]));
+  await assert.rejects(select([{ ...success, app: null }]), /Missing CI check app identity/);
+  for (const total_count of [undefined, null, -1, 0, 101])
+    await assert.rejects(select([success], { total_count }), /Incomplete CI check results/);
+});
+
+test("merge admission and tested-tree proof enforce the same PR CI provenance", async () => {
+  for (const scenario of [
+    "cancelled-dispatch",
+    "cancelled-other-workflow",
+    "real-newer-dispatch",
+    "skipped",
+    "stale-check",
+    "stale-run",
+    "other-app-failure",
+  ]) {
+    const fixture = proofFixture();
+    const real = fixture.data.checks.check_runs[0];
+    const other = {
+      ...real,
+      id: 101,
+      details_url: "https://github.com/Subrising/fulcra/actions/runs/999/job/888",
+    };
+    const otherRun = { ...fixture.data.ci, id: 999, event: "workflow_dispatch" };
+    fixture.data.checks.check_runs = [real, other];
+    if (scenario.startsWith("cancelled-")) real.conclusion = "cancelled";
+    if (scenario === "cancelled-other-workflow") {
+      otherRun.event = "pull_request";
+      otherRun.path = ".github/workflows/other.yml";
+    }
+    if (scenario === "skipped") real.conclusion = "skipped";
+    if (scenario === "stale-check") real.head_sha = "e".repeat(40);
+    if (scenario === "stale-run") fixture.data.ci.head_sha = "e".repeat(40);
+    if (["skipped", "stale-check", "stale-run"].includes(scenario))
+      fixture.data.checks.check_runs = [real];
+    if (scenario === "other-app-failure") {
+      other.app = { id: 1 };
+      other.conclusion = "failure";
+    }
+    fixture.data.checks.total_count = fixture.data.checks.check_runs.length;
+    const api = async (route) => (route === "/actions/runs/999" ? otherRun : fixture.api(route));
+    const admission = () => selectPassedCI(fixture.data.checks, fixture.data.pr.head.sha, api);
+    if (scenario === "other-app-failure") {
+      assert.equal((await admission()).run.id, 456);
+      assert.equal((await proveMerge(fixture.run, api)).ciRunId, 456);
+    } else {
+      await assert.rejects(admission(), undefined, scenario);
+      await assert.rejects(proveMerge(fixture.run, api), undefined, scenario);
+    }
+  }
+});
+
+test("bundled skill bytes stay unchanged with Windows checkout conversion", () => {
+  const root = mkdtempSync(join(tmpdir(), "fulcra-skill-eol-"));
+  try {
+    const git = (...args) =>
+      execFileSync("git", ["-c", "core.autocrlf=true", ...args], { cwd: root, stdio: "pipe" });
+    git("init", "--quiet");
+    cpSync(new URL(".gitattributes", repoRoot), join(root, ".gitattributes"));
+    cpSync(new URL("skills/", repoRoot), join(root, "skills"), { recursive: true });
+    git("add", ".");
+    rmSync(join(root, "skills"), { recursive: true });
+    git("checkout-index", "--all", "--force");
+    mkdirSync(join(root, "scripts"));
+    cpSync(
+      new URL("scripts/record-bundled-skill-hashes.mjs", repoRoot),
+      join(root, "scripts", "record-bundled-skill-hashes.mjs"),
+    );
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/record-bundled-skill-hashes.mjs", "--check"],
+      { cwd: root, encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(
+      readFileSync(join(root, "skills", ".bundled-skill-hashes.json")).includes(13),
+      false,
+    );
+    // Prove that this Git checkout exercises conversion when the rule is absent.
+    writeFileSync(join(root, ".gitattributes"), "");
+    git("add", ".gitattributes");
+    rmSync(join(root, "skills"), { recursive: true });
+    git("checkout-index", "--all", "--force");
+    const converted = spawnSync(
+      process.execPath,
+      ["scripts/record-bundled-skill-hashes.mjs", "--check"],
+      { cwd: root, encoding: "utf8" },
+    );
+    assert.notEqual(converted.status, 0);
+    assert.match(converted.stderr, /Record the current bundled skill hashes/);
+  } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });

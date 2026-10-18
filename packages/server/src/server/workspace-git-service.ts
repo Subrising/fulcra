@@ -1139,7 +1139,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     if (targetCwd) {
       const existingTarget = this.workingTreeWatchTargets.get(targetCwd);
       if (existingTarget) {
-        return Promise.resolve(existingTarget);
+        return this.workingTreeWatchSetups.get(targetCwd) ?? Promise.resolve(existingTarget);
       }
       this.workingTreeWatchAliases.delete(cwd);
     }
@@ -1161,17 +1161,19 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
   private async resolveWorkingTreeWatchTarget(cwd: string): Promise<WorkingTreeWatchTarget> {
     const repoRoot = await this.resolveCheckoutWatchRoot(cwd);
     const targetCwd = repoRoot ?? cwd;
-    const existingTarget = this.workingTreeWatchTargets.get(targetCwd);
-    if (existingTarget) {
-      this.rememberWorkingTreeWatchAlias(existingTarget, cwd);
-      return existingTarget;
-    }
-
+    // createWorkingTreeWatchTarget publishes the target before its inventory is ready.
+    // Every consumer must join that startup, including callers through an alias.
     const existingSetup = this.workingTreeWatchSetups.get(targetCwd);
     if (existingSetup) {
       const target = await existingSetup;
       this.rememberWorkingTreeWatchAlias(target, cwd);
       return target;
+    }
+
+    const existingTarget = this.workingTreeWatchTargets.get(targetCwd);
+    if (existingTarget) {
+      this.rememberWorkingTreeWatchAlias(existingTarget, cwd);
+      return existingTarget;
     }
 
     const watchPath = repoRoot && createRealpathAwarePathMatcher(repoRoot)(cwd) ? cwd : targetCwd;

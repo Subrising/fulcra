@@ -117,7 +117,8 @@ export default defineConfig((): UserConfig => {
     },
     plugins: [
       cloudflare({ viteEnvironment: { name: "ssr" } }),
-      tsConfigPaths(),
+      // Generated workspace outputs can contain incomplete package-local configs.
+      tsConfigPaths({ projects: [path.join(__dirname, "tsconfig.json")] }),
       tanstackStart({
         router: {
           quoteStyle: "double",

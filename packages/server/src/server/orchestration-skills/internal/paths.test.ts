@@ -3,13 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { resolveBundledSkillsDir, resolveSkillTargets } from "./paths.js";
 
 const roots: string[] = [];
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -42,6 +43,7 @@ describe("orchestration skill paths", () => {
   });
 
   it("keeps the original fixed managed directories under the daemon user's home", () => {
+    vi.stubEnv("PASEO_SKILLS_HOME", undefined);
     const home = os.homedir();
 
     expect(resolveSkillTargets()).toMatchObject({
@@ -50,4 +52,16 @@ describe("orchestration skill paths", () => {
       codexDir: path.join(home, ".codex", "skills"),
     });
   });
+});
+
+it("keeps scratch daemon skill targets inside its selected user home", () => {
+  const home = path.join(os.tmpdir(), "scratch-skills-home");
+  vi.stubEnv("PASEO_SKILLS_HOME", home);
+  expect(resolveSkillTargets()).toMatchObject({
+    agentsDir: path.join(home, ".agents", "skills"),
+    claudeDir: path.join(home, ".claude", "skills"),
+    codexDir: path.join(home, ".codex", "skills"),
+  });
+  const explicit = path.join(home, "explicit");
+  expect(resolveSkillTargets(explicit).agentsDir).toBe(path.join(explicit, ".agents", "skills"));
 });
