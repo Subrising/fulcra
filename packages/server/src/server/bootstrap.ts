@@ -1,11 +1,21 @@
 // FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
+import {
+  createAgentStartMemoryGuard,
+  DEFAULT_MEMORY_GUARD_SETTINGS,
+  type MemoryGuardSettings,
+} from "./host-memory-guard.js";
 import { startSyncIoMeter } from "./sync-io-meter.js";
 import { checkNativeReportOriginPublication, requireNativeReportOrigin } from "./report-origin.js";
 import type { NativeReportOrigin } from "./report-origin.js";
 import { startInsightsRecorder } from "../utils/insights/recorder.js";
 import { startLimitResume } from "./limit-resume/start.js";
 import { startReportUp } from "./report-up.js";
-import { recordOpenSessions, reviveAfterRestart, sealStopRecord } from "./revive-on-restart.js";
+import {
+  recordOpenSessions,
+  reviveAfterRestart,
+  sealStopRecord,
+  startLiveRecorder,
+} from "./revive-on-restart.js";
 import { heldSendsFor } from "./held-sends.js";
 import { queuedAgentMessagesFor } from "./queued-agent-messages.js";
 import { mountHostLinkRoutes } from "./host-link-routes.js";
@@ -456,12 +466,15 @@ export interface PaseoDaemonConfig {
   reportUpOnTurnEnd?: boolean;
   nativeFinishNotices?: boolean;
   receiptRetentionMs?: number;
+  memoryGuard?: Partial<MemoryGuardSettings>;
   ledgerDispatchEnabled?: boolean;
   projectDispatch?: MutableDaemonConfig["projectDispatch"];
   idleLeadNudge?: boolean;
   idleLeadNudgeSkipOwners?: string[];
   idleLeadNudgeMinIntervalMinutes?: number;
   reviveOnRestart?: boolean;
+  idleSleepMinutes?: number;
+  idleSleepProviders?: string[];
   autoResumeOnLimit?: boolean;
   appendSystemPrompt?: string;
   terminalProfiles?: TerminalProfile[];
@@ -1162,6 +1175,16 @@ export async function createPaseoDaemon(
     durableTimelineStore,
     timelineRetention: config.timelineRetention,
     pluginLifecycle: pluginRuntime,
+    startAdmission: createAgentStartMemoryGuard({
+      settings: () => ({
+        ...DEFAULT_MEMORY_GUARD_SETTINGS,
+        ...config.memoryGuard,
+        // PASEO_MEMORY_GUARD=off turns the guard off. The test setup uses it: a test must not depend on the memory of
+        // the machine that runs it.
+        ...(process.env.PASEO_MEMORY_GUARD === "off" ? { enabled: false } : {}),
+      }),
+      logger,
+    }),
     trustedPlugins,
     mcpRefreshAdmission: (agent) => trustedPlugins.mcpRefresh(agent),
     clients: initialAgentManagerState.clients,
@@ -1630,6 +1653,14 @@ export async function createPaseoDaemon(
     logger,
     deferStart: true,
   });
+  // FU-362: an idle session stops its provider process after this many minutes; a held or queued message wakes it.
+  agentManager.configureIdleSleep({
+    minutes: () => config.idleSleepMinutes ?? 20,
+    // config.ts sets the default provider list; a config built without it sleeps nothing.
+    providers: () => config.idleSleepProviders ?? [],
+    deliveryPending: (agentId) =>
+      heldSends.pending(agentId) > 0 || queuedAgentMessages.pending(agentId) > 0,
+  });
   // FULCRA(orchestration): a worker's finished turn reaches its lead as one notice (report-up.ts).
   const stopReportUp = startReportUp({
     createAgent,
@@ -1937,6 +1968,7 @@ export async function createPaseoDaemon(
 
   logger.info({ elapsed: elapsed() }, "Bootstrap complete, ready to start listening");
 
+  let liveRecorder: ReturnType<typeof startLiveRecorder> | undefined;
   const start = async () => {
     let mainStarted = false;
     try {
@@ -2212,6 +2244,12 @@ export async function createPaseoDaemon(
           logger,
           isEnabled: () => daemonConfigStore.get().reviveOnRestart !== false,
           onSessionsReady: () => {
+            // The boot has read and removed the previous records: keep a crash-safe copy from now on.
+            liveRecorder ??= startLiveRecorder({
+              paseoHome: config.paseoHome,
+              listAgents: () => agentManager.listAgents(),
+              logger,
+            });
             // The final recovery chain below owns error reporting.
             void startQueuedMessages().catch(() => undefined);
           },
@@ -2266,6 +2304,11 @@ export async function createPaseoDaemon(
       paseoHome: config.paseoHome,
       agents: agentManager.listAgents(),
     }).catch((err) => logger.warn({ err }, "Could not record the open sessions for the next boot"));
+    // The clean record is on disk: now remove the crash-safe copy. A crash between the two writes still leaves a
+    // record, and boot prefers the clean one.
+    await liveRecorder
+      ?.stop()
+      .catch((err) => logger.warn({ err }, "Could not stop the live record"));
     await withDetachedJobsPreserved(() =>
       trustedPlugins.shutdownClosure(() => closeAllAgents(logger, agentManager, agentStorage)),
     );

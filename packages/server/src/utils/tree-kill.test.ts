@@ -8,6 +8,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import {
   OwnedProcessTree,
   type OwnedProcessIdentity,
+  readProcessTreeBirths,
   terminateWithTreeKill,
   withDetachedJobsPreserved,
 } from "./tree-kill.js";
@@ -345,5 +346,42 @@ describe.runIf(process.platform !== "win32")("daemon shutdown", () => {
     );
     expect(result).toBe("killed");
     await expectOwnerAndDescendantStopped("attached process survived daemon shutdown");
+  });
+});
+
+describe("readProcessTreeBirths", () => {
+  const row = (pid: number, ppid: number, birth: string) => ({
+    pid,
+    ppid,
+    birth,
+    groupId: pid,
+    detached: false,
+    zombie: false,
+  });
+
+  test("returns the descendants of the root with birth times, in ms", async () => {
+    const tree = await readProcessTreeBirths({ pid: 10 } as never, async () => [
+      row(10, 1, "Sun Oct 18 22:00:00 2026"),
+      row(11, 10, "Sun Oct 18 22:00:05 2026"),
+      row(12, 11, "Sun Oct 18 22:05:00 2026"),
+      row(99, 1, "Sun Oct 18 22:06:00 2026"),
+    ]);
+    expect(tree?.descendants.map((entry) => entry.pid)).toEqual([11, 12]);
+    expect(tree!.descendants[0]!.bornMs - tree!.rootBornMs).toBe(5_000);
+    expect(tree!.descendants[1]!.bornMs - tree!.rootBornMs).toBe(300_000);
+  });
+
+  test("is null without a pid, without the root row, with a bad birth time or on a read error", async () => {
+    const ok = async () => [row(10, 1, "Sun Oct 18 22:00:00 2026")];
+    expect(await readProcessTreeBirths({} as never, ok)).toBeNull();
+    expect(await readProcessTreeBirths({ pid: 77 } as never, ok)).toBeNull();
+    expect(
+      await readProcessTreeBirths({ pid: 10 } as never, async () => [row(10, 1, "garbage")]),
+    ).toBeNull();
+    expect(
+      await readProcessTreeBirths({ pid: 10 } as never, async () => {
+        throw new Error("ps failed");
+      }),
+    ).toBeNull();
   });
 });

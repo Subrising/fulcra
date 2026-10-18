@@ -89,6 +89,7 @@ export function Activity({
     queryKey: ["orca-activity-history-messages", host?.id, node.task, node.id, cursor],
     queryFn: () => read({ taskId: node.task, sessionId: node.id, cursor, includeMessages: true }),
     refetchInterval: frozen || cursor ? false : 15000,
+    refetchIntervalInBackground: false,
     refetchOnWindowFocus: !frozen && !cursor,
     retry: false,
     gcTime: 0,

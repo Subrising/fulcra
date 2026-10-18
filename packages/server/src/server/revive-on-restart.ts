@@ -43,8 +43,19 @@ import { lineStoreOf } from "./reporting-lines.js";
 //
 // A clean stop saves every open session as "closed", so the stop first records them in $PASEO_HOME/revive-at-boot.json.
 // After a crash the records still say "idle"/"running". daemon.reviveOnRestart = false turns it off.
+//
+// A crash (a watchdog SIGKILL) writes no stop record. While the daemon runs, startLiveRecorder() therefore keeps a
+// crash-safe copy of the same record in $PASEO_HOME/revive-live.json. Boot uses it only when revive-at-boot.json is
+// missing, and deletes it either way. A clean stop deletes it too, so it exists only after an unclean stop.
 
 export const REVIVE_FILE = "revive-at-boot.json";
+export const REVIVE_LIVE_FILE = "revive-live.json";
+const LIVE_CHECK_MS = 30_000;
+const LIVE_REFRESH_MS = 5 * 60_000;
+// A live record is written at most LIVE_REFRESH_MS before the crash, so a session of that run can have `updatedAt`
+// later than its `stoppedAt`. Allow that gap plus one check interval and some slack. A longer gap means an older
+// build used the session after the record was written, and the record no longer describes it.
+const LIVE_TOLERANCE_MS = LIVE_REFRESH_MS + LIVE_CHECK_MS + 30_000;
 const REVIVE_CONCURRENCY = 2;
 
 const ReviveFileSchema = z.object({
@@ -66,15 +77,81 @@ export async function recordOpenSessions(input: {
   agents: readonly LiveAgent[];
   now?: Date;
 }): Promise<void> {
-  const open = input.agents.filter((agent) => !agent.internal && agent.lifecycle !== "closed");
-  await writeJsonFileAtomic(path.join(input.paseoHome, REVIVE_FILE), {
-    v: 1,
-    stoppedAt: (input.now ?? new Date()).toISOString(),
+  await writeJsonFileAtomic(
+    path.join(input.paseoHome, REVIVE_FILE),
+    openSessionsRecord(input.agents, input.now ?? new Date()),
+  );
+}
+
+function openSessionsRecord(agents: readonly LiveAgent[], now: Date) {
+  const open = agents.filter((agent) => !agent.internal && agent.lifecycle !== "closed");
+  return {
+    v: 1 as const,
+    stoppedAt: now.toISOString(),
     openIds: open.map((agent) => agent.id),
     interruptedIds: open
       .filter((agent) => agent.lifecycle === "running" || agent.lifecycle === "initializing")
       .map((agent) => agent.id),
-  });
+  };
+}
+
+/**
+ * While the daemon runs: keeps the crash-safe copy of the open-session record. Checks every 30 s and writes only when
+ * the open sessions or the running turns changed, so a burst of changes costs one write, and also every 5 min when
+ * nothing changed, so `stoppedAt` stays near the crash. The first check runs at once.
+ */
+export function startLiveRecorder(input: {
+  paseoHome: string;
+  listAgents: () => readonly LiveAgent[];
+  logger: Logger;
+  now?: () => Date;
+  checkMs?: number;
+  refreshMs?: number;
+}): { stop(): Promise<void> } {
+  const file = path.join(input.paseoHome, REVIVE_LIVE_FILE);
+  const now = input.now ?? (() => new Date());
+  const refreshMs = input.refreshMs ?? LIVE_REFRESH_MS;
+  let lastSignature: string | null = null;
+  let lastWriteAt = 0;
+  let writing: Promise<void> = Promise.resolve();
+  let stopped = false;
+  const check = () => {
+    if (stopped) return;
+    const at = now();
+    let record: ReturnType<typeof openSessionsRecord>;
+    try {
+      record = openSessionsRecord(input.listAgents(), at);
+    } catch (error) {
+      input.logger.warn({ err: error }, "Revive on restart: the live record could not be built");
+      return;
+    }
+    const signature = JSON.stringify([
+      [...record.openIds].sort(),
+      [...record.interruptedIds].sort(),
+    ]);
+    if (signature === lastSignature && at.getTime() - lastWriteAt < refreshMs) return;
+    lastSignature = signature;
+    lastWriteAt = at.getTime();
+    writing = writing
+      .then(() => (stopped ? undefined : writeJsonFileAtomic(file, record)))
+      .catch((error: unknown) =>
+        input.logger.warn(
+          { err: error },
+          "Revive on restart: the live record could not be written",
+        ),
+      );
+  };
+  check();
+  const timer = setInterval(check, input.checkMs ?? LIVE_CHECK_MS);
+  timer.unref();
+  return {
+    async stop() {
+      stopped = true;
+      clearInterval(timer);
+      await writing;
+      await fs.rm(file, { force: true });
+    },
+  };
 }
 
 /**
@@ -206,14 +283,20 @@ export async function reviveAfterRestart(
   const { agentManager, agentStorage, logger } = deps;
   const now = deps.now ?? (() => new Date());
   const file = path.join(deps.paseoHome, REVIVE_FILE);
-  const stopRecord = await readReviveFile(file, logger);
+  const liveFile = path.join(deps.paseoHome, REVIVE_LIVE_FILE);
+  const cleanRecord = await readReviveFile(file, logger);
+  // No clean-stop record means an unclean stop: use the crash-safe copy of the running daemon.
+  const liveRecord = cleanRecord ? null : await readReviveFile(liveFile, logger);
+  const stopRecord = cleanRecord ?? liveRecord;
+  if (liveRecord) logger.info("Revive on restart: unclean stop, using the live record");
   const result: ReviveResult = { reopened: [], continued: [], closed: [] };
   if (!deps.isEnabled()) {
     await fs.rm(file, { force: true });
+    await fs.rm(liveFile, { force: true });
     deps.onSessionsReady?.();
     return result;
   }
-  const restartedAt = stopRecord ? new Date(stopRecord.stoppedAt) : now();
+  const restartedAt = cleanRecord ? new Date(cleanRecord.stoppedAt) : now();
   const byId = new Map(input.records.map((record) => [record.id, record]));
   const eligible = (id: string) => {
     const record = byId.get(id);
@@ -223,7 +306,9 @@ export async function reviveAfterRestart(
   const stoppedAtMs = stopRecord ? Date.parse(stopRecord.stoppedAt) : NaN;
   const notLaterThanStop = (id: string) => {
     const updatedMs = Date.parse(byId.get(id)?.updatedAt ?? "");
-    const later = updatedMs > stoppedAtMs;
+    // The live record is up to LIVE_TOLERANCE_MS older than the crash, and the sessions it lists kept running until
+    // then, so their `updatedAt` is later. Without the gap the sessions that most need to reopen would be dropped.
+    const later = updatedMs > stoppedAtMs + (liveRecord ? LIVE_TOLERANCE_MS : 0);
     if (later) logger.info({ agentId: id }, "Revive on restart: used after the stop, not revived");
     return !later;
   };
@@ -234,10 +319,13 @@ export async function reviveAfterRestart(
     isLoaded,
   );
   await fs.rm(file, { force: true });
+  await fs.rm(liveFile, { force: true });
   deps.onSessionsReady?.();
   const interrupted = [
     ...new Set([
-      ...(stopRecord?.interruptedIds ?? []).filter(notLaterThanStop),
+      // The live record can be older than the crash: a turn it lists may have ended since. Only the boot's own
+      // reading of turns still running (crashInterrupted) is current.
+      ...(liveRecord ? [] : (stopRecord?.interruptedIds ?? [])).filter(notLaterThanStop),
       ...input.crashInterrupted,
     ]),
   ].filter(eligible);

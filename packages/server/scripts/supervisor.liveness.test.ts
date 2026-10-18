@@ -8,11 +8,12 @@ import { expect, test } from "vitest";
 // FU-74: on 11 Oct the daemon worker's main thread blocked. It answered nothing and ignored SIGTERM, and the
 // supervisor kept it, because its heartbeat went one way only. The worker now answers each heartbeat; a worker that
 // stops answering is restarted, with a forced kill when it does not exit in time.
-async function runSupervised(worker: string, finish: string) {
+async function runSupervised(worker: string, finish: string, timings = "") {
   const home = await mkdtemp(path.join(tmpdir(), "paseo-liveness-"));
   const workerPath = path.join(home, "worker.mjs");
   const runnerPath = path.join(home, "runner.mjs");
   const eventsPath = path.join(home, "events.jsonl");
+  const logPath = path.join(home, "lifecycle.log");
   const supervisor = new URL("./supervisor.ts", import.meta.url).href;
   await writeFile(workerPath, worker);
   await writeFile(
@@ -23,8 +24,9 @@ async function runSupervised(worker: string, finish: string) {
     const record = (event) => appendFile(${JSON.stringify(eventsPath)}, JSON.stringify(event) + "\\n");
     const controller = runSupervisor({
       name: "LivenessTest", startupMessage: "starting", restartOnCrash: true,
+      logFile: { path: ${JSON.stringify(logPath)}, rotate: { maxSize: "10m", maxFiles: 2 } },
       resolveWorkerEntry: () => ${JSON.stringify(workerPath)}, workerArgs: [], workerExecArgv: [],
-      timings: { heartbeatIntervalMs: 50, unresponsiveMs: 400, terminationGraceMs: 300 },
+      timings: { heartbeatIntervalMs: 50, unresponsiveMs: 400, terminationGraceMs: 300${timings ? ", " + timings : ""} },
       onWorkerReady: async ({ listen }) => {
         await record(listen);
         ${finish}
@@ -57,9 +59,11 @@ async function runSupervised(worker: string, finish: string) {
       });
     });
     const events = await readFile(eventsPath, "utf8").catch(() => "");
+    const log = await readFile(logPath, "utf8").catch(() => "");
     return {
       code,
       output,
+      log,
       events: events
         .trim()
         .split("\n")
@@ -133,6 +137,82 @@ test("a worker that never answers heartbeats (an older build) is not restarted f
   `,
     `setTimeout(() => controller.requestShutdown("test_done"), 1000);`,
   );
+  expect(result.output).not.toContain("worker_unresponsive");
+  expect(result.events, result.output).toEqual(["only", null]);
+  expect(result.code).toBe(0);
+}, 30_000);
+
+// FU-362: on 18 Oct a host out of memory starved a healthy worker of heartbeat answers, and the restart made it
+// worse. Under warn or critical memory pressure the restart waits; unknown pressure keeps the old behaviour.
+const DEFER_LOG = "Worker unresponsive under host memory pressure; deferring restart";
+const SECOND_THEN_STOP = `if (listen === "second") controller.requestShutdown("test_done");`;
+const pressure = (body: string) => `readMemoryPressure: async () => { ${body} }`;
+const FOR_ONE_SECOND = `globalThis.__t0 ??= Date.now(); return Date.now() - globalThis.__t0 < 1000 ? "critical" : "normal";`;
+
+test("a restart is deferred under critical memory pressure and done once pressure clears", async () => {
+  const result = await runSupervised(
+    ANSWERING_WORKER,
+    SECOND_THEN_STOP,
+    `unresponsiveHardCapMs: 60000, ${pressure(FOR_ONE_SECOND)}`,
+  );
+  expect(result.log).toContain(DEFER_LOG);
+  expect(result.log.split(DEFER_LOG).length - 1).toBe(1);
+  expect(result.log).toContain('"level":"critical"');
+  expect(result.log.indexOf(DEFER_LOG)).toBeLessThan(
+    result.log.indexOf("Worker answered no heartbeat; restarting it"),
+  );
+  expect(result.events, result.output).toEqual(["first", null, "second", null]);
+}, 30_000);
+
+test("a restart is deferred under warn memory pressure", async () => {
+  const result = await runSupervised(
+    ANSWERING_WORKER,
+    SECOND_THEN_STOP,
+    `unresponsiveHardCapMs: 60000, ${pressure(FOR_ONE_SECOND.replace("critical", "warn"))}`,
+  );
+  expect(result.log).toContain('"level":"warn"');
+  expect(result.events, result.output).toEqual(["first", null, "second", null]);
+}, 30_000);
+
+test("the hard cap restarts a worker even when memory pressure never clears", async () => {
+  const result = await runSupervised(
+    ANSWERING_WORKER,
+    SECOND_THEN_STOP,
+    `unresponsiveHardCapMs: 1500, ${pressure('return "critical";')}`,
+  );
+  expect(result.log).toContain(DEFER_LOG);
+  expect(result.log).toContain("hard_cap");
+  expect(result.events, result.output).toEqual(["first", null, "second", null]);
+}, 30_000);
+
+test("unknown memory pressure restarts at once, as before", async () => {
+  for (const reader of [pressure('return "unknown";'), pressure('throw new Error("no sysctl");')]) {
+    const result = await runSupervised(
+      ANSWERING_WORKER,
+      SECOND_THEN_STOP,
+      `unresponsiveHardCapMs: 60000, ${reader}`,
+    );
+    expect(result.log).not.toContain(DEFER_LOG);
+    expect(result.log).toContain("Worker answered no heartbeat; restarting it");
+    expect(result.events, result.output).toEqual(["first", null, "second", null]);
+  }
+}, 60_000);
+
+test("an answered heartbeat ends a deferral without a restart", async () => {
+  const result = await runSupervised(
+    `
+    process.on("message", (message) => {
+      if (message.type === "paseo:supervisor-heartbeat") process.send({ type: "paseo:worker-heartbeat" });
+      if (message.type === "paseo:graceful-shutdown") process.exit(0);
+    });
+    process.send({ type: "paseo:ready", listen: "only", serverId: "srv_test" });
+    // The main thread blocks for 1 s (the limit is 400 ms), then answers again.
+    setTimeout(() => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000), 300);
+  `,
+    `setTimeout(() => controller.requestShutdown("test_done"), 3000);`,
+    `unresponsiveHardCapMs: 60000, ${pressure('return "critical";')}`,
+  );
+  expect(result.log).toContain(DEFER_LOG);
   expect(result.output).not.toContain("worker_unresponsive");
   expect(result.events, result.output).toEqual(["only", null]);
   expect(result.code).toBe(0);

@@ -184,7 +184,7 @@ import {
   type ResolvedProviderLaunch,
 } from "../../provider-launch-config.js";
 import { withTimeout } from "../../../../utils/promise-timeout.js";
-import { terminateWithTreeKill } from "../../../../utils/tree-kill.js";
+import { readProcessTreeBirths, terminateWithTreeKill } from "../../../../utils/tree-kill.js";
 import { execCommand } from "../../../../utils/spawn.js";
 import { composeSystemPromptParts } from "../../system-prompt.js";
 
@@ -1575,6 +1575,9 @@ export function readEventIdentifiers(message: SDKMessage): EventIdentifiers {
   };
 }
 
+// A child born this long after the Claude process itself is work started during the session.
+const SLEEP_CHILD_GRACE_MS = 30_000;
+
 export class ClaudeAgentClient implements AgentClient {
   // Update-7 W3: a new session without a mode takes Claude's own default, never its caller's.
   readonly resolveCreateConfig = resolveOwnDefaultCreateConfig;
@@ -2221,6 +2224,12 @@ class ClaudeAgentSession implements AgentSession {
   private readonly harnessEnvironment: Record<string, string>;
   private readonly usageSessionKey = randomUUID();
   private childProcess: ChildProcess | null = null;
+  // Every Claude process this session spawned and that has not exited. Normally it holds the current child only.
+  private readonly liveChildren = new Set<ChildProcess>();
+  // The in-flight query start. Concurrent ensureQuery() callers share it, so one session never spawns two processes.
+  private queryStarting: Promise<Query> | null = null;
+  // Set by sleep(); the next query start logs the wake and clears it.
+  private sleptAt: number | null = null;
   private input: AsyncMessageInput<SDKUserMessage> | null = null;
   private readonly queryInputs = new WeakMap<Query, AsyncMessageInput<SDKUserMessage>>();
   /** The exact SDK query/input pair that owns the current foreground turn. */
@@ -3097,18 +3106,12 @@ class ClaudeAgentSession implements AgentSession {
     // orphan accumulation. The SDK's internal cleanup may only kill the
     // direct child process.
     if (this.childProcess) {
-      const result = await terminateWithTreeKill(this.childProcess, {
-        gracefulTimeoutMs: 2_000,
-        forceTimeoutMs: 2_000,
-      });
-      if (result === "kill-timeout") {
-        this.logger.warn(
-          { pid: this.childProcess.pid, agentId: this.agentId },
-          "Claude process tree did not report exit after SIGKILL",
-        );
-      }
+      const child = this.childProcess;
+      await this.endProcessTree(child);
       this.childProcess = null;
     }
+    // Reload and refresh end the old session through close(), so this also ends a leaked extra process.
+    await this.endLeftoverChildren();
     if (this.persistSession === false && this.claudeSessionId) {
       // Claude Code currently ignores --no-session-persistence outside --print mode
       // (see `claude --help`), so the SDK's persistSession=false is silently dropped
@@ -3134,6 +3137,143 @@ class ClaudeAgentSession implements AgentSession {
         turnState: this.turnState,
       },
       "provider.claude.session_close.complete",
+    );
+  }
+
+  // agent.wake: how long a sleeping session took to bring its process back, until the CLI answered its init.
+  private logWakeWhenReady(query: Query, startedAt: number): void {
+    const sleptAt = this.sleptAt;
+    if (sleptAt === null) return;
+    this.sleptAt = null;
+    const ready = query.initializationResult?.();
+    if (!ready) return;
+    void ready.then(
+      () =>
+        this.logger.info(
+          {
+            agentId: this.agentId,
+            provider: "claude",
+            sleptMinutes: Math.round(((startedAt - sleptAt) / 60_000) * 10) / 10,
+            wakeMs: Date.now() - startedAt,
+            pid: this.childProcess?.pid,
+          },
+          "agent.wake",
+        ),
+      () => undefined,
+    );
+  }
+
+  isSleeping(): boolean {
+    return this.sleptAt !== null && !this.query;
+  }
+
+  // Every process this session spawned that is still alive, with its MCP children. close() and sleep() both call it.
+  private async endLeftoverChildren(): Promise<void> {
+    const leftover = [...this.liveChildren];
+    this.liveChildren.clear();
+    await Promise.all(
+      leftover.map((child) =>
+        this.endProcessTree(child).catch(() => {
+          /* process may already be dead */
+        }),
+      ),
+    );
+  }
+
+  // The one place a Claude process tree (claude + MCP children) ends. close() and sleep() both use it.
+  private async endProcessTree(child: ChildProcess): Promise<void> {
+    const result = await terminateWithTreeKill(child, {
+      gracefulTimeoutMs: 2_000,
+      forceTimeoutMs: 2_000,
+    });
+    if (result === "kill-timeout") {
+      this.logger.warn(
+        { pid: child.pid, agentId: this.agentId },
+        "Claude process tree did not report exit after SIGKILL",
+      );
+    }
+  }
+
+  /**
+   * Idle sleep: end the Claude process tree but keep this session object. The next ensureQuery() starts
+   * `claude --resume` with the same Claude session id, as it does for a resumed session that has not
+   * queried yet. Returns false, and changes nothing, when the session is not idle.
+   */
+  async sleep(): Promise<boolean> {
+    if (this.sleepBlocked()) return false;
+    const oldQuery = this.query!;
+    // Claude Monitor watches, nohup children and other tasks that Fulcra does not track live in the process tree.
+    // A process born well after Claude itself is such work: do not stop it. An unreadable tree is not safe either.
+    const tree = this.currentChild ? await readProcessTreeBirths(this.currentChild) : null;
+    // The reads above awaited: the session may have taken work or slept meanwhile.
+    if (this.sleepBlocked() || this.query !== oldQuery) return false;
+    if (!tree) {
+      this.logger.info(
+        { agentId: this.agentId, reason: "process tree unreadable" },
+        "agent.sleep.skipped",
+      );
+      return false;
+    }
+    const late = tree.descendants.filter(
+      (entry) => entry.bornMs - tree.rootBornMs > SLEEP_CHILD_GRACE_MS,
+    );
+    if (late.length > 0) {
+      this.logger.info(
+        { agentId: this.agentId, reason: "child process running", pids: late.map((e) => e.pid) },
+        "agent.sleep.skipped",
+      );
+      return false;
+    }
+    const oldInput = this.input;
+    const retiredChild = this.childProcess;
+    // Only the processes that exist now belong to this sleep. A process that starts while the awaits below run is
+    // the session waking up and must stay.
+    const retiring = new Set(this.liveChildren);
+    if (retiredChild) retiring.add(retiredChild);
+    for (const child of retiring) this.liveChildren.delete(child);
+    // Detach first, as the restart path in ensureQuery does: the pump and the exit handler must see a
+    // retired query, not a crash.
+    this.query = null;
+    this.input = null;
+    this.queryPumpPromise = null;
+    this.childProcess = null;
+    this.sleptAt = Date.now();
+    oldInput?.end();
+    oldQuery.close?.();
+    await this.awaitWithTimeout(oldQuery.return?.(), "sleep query return");
+    await Promise.all(
+      [...retiring].map((child) =>
+        this.endProcessTree(child).catch(() => {
+          /* process may already be dead */
+        }),
+      ),
+    );
+    // A message, listCommands() or a held send started a new process while the old one ended: the session is awake.
+    if (this.query || this.queryStarting) {
+      this.sleptAt = null;
+      return false;
+    }
+    return true;
+  }
+
+  private get currentChild(): ChildProcess | null {
+    return this.childProcess;
+  }
+
+  // The session is idle with a live query and nothing in flight.
+  private sleepBlocked(): boolean {
+    return (
+      this.closed ||
+      !this.query ||
+      Boolean(this.queryStarting) ||
+      this.turnState !== "idle" ||
+      Boolean(this.activeForegroundTurnId) ||
+      Boolean(this.autonomousTurn) ||
+      Boolean(this.cancelCurrentTurn) ||
+      this.pendingPermissions.size > 0 ||
+      this.backgroundWork.snapshot() !== null ||
+      this.taskProtocolSource.hasRunningTasks() ||
+      this.queryRestartNeeded
     );
   }
 
@@ -3502,11 +3642,22 @@ class ClaudeAgentSession implements AgentSession {
     return { kind: "fresh-session" };
   }
 
-  private async ensureQuery(launchMode: PermissionMode = this.currentMode): Promise<Query> {
+  // Single-flight: building the options awaits, and during that await this.query is still null. Without
+  // a shared promise every concurrent caller (listCommands, setMode, held-message delivery, startTurn)
+  // spawned its own `claude --resume` process and only the last one was kept. A restart also runs once.
+  private ensureQuery(launchMode: PermissionMode = this.currentMode): Promise<Query> {
     if (this.query && !this.queryRestartNeeded) {
-      return this.query;
+      return Promise.resolve(this.query);
     }
+    if (this.queryStarting) return this.queryStarting;
+    const starting: Promise<Query> = this.startQuery(launchMode).finally(() => {
+      if (this.queryStarting === starting) this.queryStarting = null;
+    });
+    this.queryStarting = starting;
+    return starting;
+  }
 
+  private async startQuery(launchMode: PermissionMode): Promise<Query> {
     if (this.queryRestartNeeded && !this.query) {
       // The flag can be set while no query exists — changing thinking or model on a resumed
       // runtime that has not queried yet. There is nothing to retire, and the query built
@@ -3555,8 +3706,10 @@ class ClaudeAgentSession implements AgentSession {
     // resume: sessionId and the new query continues the existing conversation.
     this.persistence = null;
 
+    const wakeStartedAt = Date.now();
     const input = createAsyncMessageInput<SDKUserMessage>();
     const options = await this.buildOptions(launchMode);
+    if (this.closed) throw new Error("Claude session closed");
     this.logger.debug({ options: summarizeClaudeOptionsForLog(options) }, "claude query");
     this.input = input;
     // A fresh Claude process has no turn of its own in flight.
@@ -3572,12 +3725,18 @@ class ClaudeAgentSession implements AgentSession {
         queryFactory: this.queryFactory,
         onChildProcess: (child) => {
           this.childProcess = child;
-          child.once("exit", (code, signal) => this.handleRuntimeExit(child, code, signal));
+          this.liveChildren.add(child);
+          child.once("exit", (code, signal) => {
+            this.liveChildren.delete(child);
+            this.handleRuntimeExit(child, code, signal);
+          });
+          this.terminateExtraChildren(child);
         },
       },
     );
     const preparedQuery = this.query;
     this.queryInputs.set(preparedQuery, input);
+    this.logWakeWhenReady(preparedQuery, wakeStartedAt);
     const fastMode = this.resolveFastModeSetting();
     if (fastMode !== null) {
       await preparedQuery.applyFlagSettings({ fastMode });
@@ -3587,6 +3746,29 @@ class ClaudeAgentSession implements AgentSession {
     // ensureQuery() (for listCommands()/setMode()), and sharing the same query
     // control plane can cause those calls to wait behind supportedModels().
     return preparedQuery;
+  }
+
+  // Defence in depth: a second live process for one session is a leak. Keep the newest and end the rest,
+  // with their MCP children.
+  private terminateExtraChildren(keep: ChildProcess | null): void {
+    const extras = [...this.liveChildren].filter((child) => child !== keep);
+    if (extras.length === 0) return;
+    this.logger.warn(
+      {
+        agentId: this.agentId,
+        count: this.liveChildren.size,
+        pids: [...this.liveChildren].map((child) => child.pid),
+      },
+      "provider.claude.extra_process",
+    );
+    for (const extra of extras) {
+      this.liveChildren.delete(extra);
+      void terminateWithTreeKill(extra, { gracefulTimeoutMs: 2_000, forceTimeoutMs: 2_000 }).catch(
+        () => {
+          /* process may already be dead */
+        },
+      );
+    }
   }
 
   private async awaitWithTimeout(

@@ -46,6 +46,26 @@ describe("server config", () => {
     ).toEqual({ "fulcra.mcp": "on" });
   });
 
+  test("idle sleep defaults to 20 minutes, is read from the file, and 0 turns it off", async () => {
+    const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-idle-sleep-config-"));
+    roots.push(paseoHome);
+    expect(loadConfig(paseoHome, { env: {} }).idleSleepMinutes).toBe(20);
+    expect(loadConfig(paseoHome, { env: {} }).idleSleepProviders).toEqual(["claude"]);
+    // The default is code only: loading must not write the key, because older readers reject unknown keys.
+    expect(loadPersistedConfig(paseoHome).daemon?.idleSleepMinutes).toBeUndefined();
+    expect(loadPersistedConfig(paseoHome).daemon?.idleSleepProviders).toBeUndefined();
+    await writeFile(
+      path.join(paseoHome, "config.json"),
+      JSON.stringify({ daemon: { idleSleepMinutes: 0 } }),
+    );
+    expect(loadConfig(paseoHome, { env: {} }).idleSleepMinutes).toBe(0);
+    await writeFile(
+      path.join(paseoHome, "config.json"),
+      JSON.stringify({ daemon: { idleSleepMinutes: 45 } }),
+    );
+    expect(loadConfig(paseoHome, { env: {} }).idleSleepMinutes).toBe(45);
+  });
+
   test("loads the independent idle-lead nudge setting", async () => {
     const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-nudge-config-"));
     roots.push(paseoHome);

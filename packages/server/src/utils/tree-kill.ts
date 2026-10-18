@@ -270,6 +270,51 @@ export class OwnedProcessTree {
   }
 }
 
+export interface ProcessTreeBirths {
+  rootBornMs: number;
+  descendants: Array<{ pid: number; bornMs: number }>;
+}
+
+/** Birth time in ms from a process-table `birth` value: `ps lstart` text (UTC) on POSIX, .NET ticks on Windows. */
+function birthMs(birth: string): number {
+  if (/^\d+$/.test(birth)) return (Number(birth) - 621355968000000000) / 10_000;
+  return Date.parse(`${birth} UTC`);
+}
+
+/**
+ * Pids and birth times of everything below `child` (never arguments or environment). Null when the tree cannot be
+ * read: no pid, root not in the table, or a birth time that does not parse.
+ */
+export async function readProcessTreeBirths(
+  child: TreeKillTarget,
+  read: () => Promise<OwnedProcessIdentity[]> = readOwnedProcessTable,
+): Promise<ProcessTreeBirths | null> {
+  if (!child.pid) return null;
+  try {
+    const rows = await read();
+    const root = rows.find((row) => row.pid === child.pid);
+    if (!root) return null;
+    const rootBornMs = birthMs(root.birth);
+    if (!Number.isFinite(rootBornMs)) return null;
+    const descendants: ProcessTreeBirths["descendants"] = [];
+    const seen = new Set<number>([root.pid]);
+    const queue = [root.pid];
+    for (let parent = queue.shift(); parent !== undefined; parent = queue.shift()) {
+      for (const row of rows) {
+        if (row.ppid !== parent || seen.has(row.pid)) continue;
+        seen.add(row.pid);
+        const bornMs = birthMs(row.birth);
+        if (!Number.isFinite(bornMs)) return null;
+        descendants.push({ pid: row.pid, bornMs });
+        queue.push(row.pid);
+      }
+    }
+    return { rootBornMs, descendants };
+  } catch {
+    return null;
+  }
+}
+
 async function captureOwnedProcessTree(child: TreeKillTarget): Promise<OwnedProcessTree | null> {
   const rows = await readOwnedProcessTable();
   // A child exit during enumeration cannot authorize a new process with the same PID.

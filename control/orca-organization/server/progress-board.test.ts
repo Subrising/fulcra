@@ -565,10 +565,11 @@ test("explicit close records are retained while no screen is mounted", async (t)
   assert.ok(Number.isFinite(Date.parse(saved.rows["fixture:FU-1"].completedAt)));
 });
 
-test("running activity uses readable updates instead of raw commands", async (t) => {
+function activityFixture(t: { after: (fn: () => void) => void }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "board-activity-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const board = createProgressBoard({ on: () => () => {} }, { root });
+  const clock = { at: 1_000_000 };
+  const board = createProgressBoard({ on: () => () => {} }, { root, now: () => clock.at });
   t.after(() => board.close());
   const tool = {
     item: {
@@ -577,17 +578,77 @@ test("running activity uses readable updates instead of raw commands", async (t)
       detail: { type: "shell", command: "npm run test -- --long-private-option" },
     },
   };
-  let timeline: unknown[] = [tool];
+  const state = {
+    timeline: [tool] as unknown[],
+    agent: boardLead as PaseoAgent,
+    refetches: 0,
+  };
   const api = {
     agents: {
-      list: async () => ({ entries: [{ agent: boardLead }], pageInfo: { hasMore: false } }),
-      ref: () => ({ timeline: { refetch: async () => ({ entries: timeline }) } }),
+      list: async () => ({ entries: [{ agent: state.agent }], pageInfo: { hasMore: false } }),
+      ref: () => ({
+        timeline: {
+          refetch: async () => {
+            state.refetches += 1;
+            return { entries: state.timeline };
+          },
+        },
+      }),
     },
     workspaces: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
   } as unknown as PaseoApi;
-  assert.equal((await board.read(api)).projects[0]!.jobs[0]!.result, "Running checks");
-  timeline = [{ item: { type: "assistant_message", text: "Checking the phone layout." } }, tool];
-  assert.equal((await board.read(api)).projects[0]!.jobs[0]!.result, "Checking the phone layout.");
+  const touch = () => {
+    state.agent = { ...state.agent, updatedAt: `${state.agent.updatedAt}+` } as PaseoAgent;
+  };
+  const result = async () => (await board.read(api)).projects[0]!.jobs[0]!.result;
+  return { clock, tool, state, touch, result, board, api };
+}
+
+test("running activity uses readable updates instead of raw commands", async (t) => {
+  const f = activityFixture(t);
+  assert.equal(await f.result(), "Running checks");
+  f.state.timeline = [
+    { item: { type: "assistant_message", text: "Checking the phone layout." } },
+    f.tool,
+  ];
+  f.touch();
+  f.clock.at += 61_000;
+  assert.equal(await f.result(), "Checking the phone layout.");
+});
+
+test("activity is not read again while the session is unchanged", async (t) => {
+  const f = activityFixture(t);
+  assert.equal(await f.result(), "Running checks");
+  f.clock.at += 10 * 60_000;
+  f.state.timeline = [{ item: { type: "assistant_message", text: "Hidden change." } }];
+  assert.equal(await f.result(), "Running checks");
+  assert.equal(f.state.refetches, 1);
+});
+
+test("activity is read at most once a minute for a changed session", async (t) => {
+  const f = activityFixture(t);
+  await f.result();
+  f.touch();
+  f.clock.at += 30_000;
+  f.state.timeline = [{ item: { type: "assistant_message", text: "New update." } }];
+  assert.equal(await f.result(), "Running checks");
+  assert.equal(f.state.refetches, 1);
+  f.clock.at += 31_000;
+  assert.equal(await f.result(), "New update.");
+  assert.equal(f.state.refetches, 2);
+});
+
+test("activity cache entries are dropped when a session stops running", async (t) => {
+  const f = activityFixture(t);
+  await f.result();
+  const running = f.state.agent;
+  f.state.agent = { ...boardLead, status: "idle" } as PaseoAgent;
+  await f.board.read(f.api);
+  // Same snapshot marker as the first read. Only a dropped entry makes this read the timeline again.
+  f.state.agent = running;
+  f.clock.at += 1000;
+  await f.result();
+  assert.equal(f.state.refetches, 2);
 });
 
 test("ledger close proxy loads only the selected canonical source", async (t) => {

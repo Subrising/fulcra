@@ -672,7 +672,9 @@ export class LedgerRoutingService {
       this.save();
       return true;
     } catch (err) {
-      const unknown = claim.stage === "sending" || claim.stage === "creating";
+      // A start refused for memory pressure created nothing and sent nothing: the slot is free, not uncertain.
+      const refused = (err as { code?: unknown } | null)?.code === "memory_pressure";
+      const unknown = !refused && (claim.stage === "sending" || claim.stage === "creating");
       await this.settle(
         claim,
         unknown ? "uncertain" : "abandoned",

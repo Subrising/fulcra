@@ -202,6 +202,18 @@ test("4: a lost creation response with no session becomes visible BLOCKED and fr
   expect(parseDispatchRows(await readFile(f.file, "utf8"))[0].status).toMatch(/^BLOCKED/);
   expect(f.createAgent).toHaveBeenCalledTimes(1);
 });
+test("4: a start refused for memory pressure frees its slot at once, not as uncertain", async () => {
+  const f = await setup();
+  f.createAgent.mockRejectedValue(
+    Object.assign(new Error("Not started"), { code: "memory_pressure" }),
+  );
+  const line = row();
+  await f.approve(line);
+  await f.ledger([line]);
+  await f.routing.changed();
+  expect((await f.state()).claims[0].stage).toBe("abandoned");
+  expect(f.createAgent).toHaveBeenCalledTimes(1);
+});
 test("4: a crash after creation but before onCreated reconciles by the reserved session ID without replay", async () => {
   const f = await setup();
   const create = f.createAgent.getMockImplementation()!;

@@ -1,5 +1,6 @@
 import { fork, spawn, type ChildProcess } from "child_process";
 import path from "node:path";
+import { readHostMemoryPressure, type MemoryPressureLevel } from "./memory-pressure.js";
 import {
   createStream as createRotatingFileStream,
   type RotatingFileStream,
@@ -14,6 +15,10 @@ const WORKER_TERMINATION_GRACE_MS = 30_000;
 // 0.2.16.1: counted as missed heartbeat ticks, not wall time. After a sleep the interval fires once, so a
 // healthy worker misses at most one tick and is not restarted.
 const WORKER_UNRESPONSIVE_MS = 180_000;
+// FU-362: a host short of memory can starve a healthy worker of heartbeat answers. Under warn or critical memory
+// pressure the restart is deferred, up to this total unresponsive time. A restart under pressure adds load.
+const WORKER_UNRESPONSIVE_HARD_CAP_MS = 900_000;
+const PRESSURE_DEFER_LOG_INTERVAL_MS = 60_000;
 
 interface SupervisorLogFileOptions {
   path: string;
@@ -75,7 +80,14 @@ interface SupervisorOptions {
   onSupervisorExit?: () => Promise<void> | void;
   logFile?: SupervisorLogFileOptions;
   /** Tests only: shorter liveness and termination times. */
-  timings?: { heartbeatIntervalMs?: number; terminationGraceMs?: number; unresponsiveMs?: number };
+  timings?: {
+    heartbeatIntervalMs?: number;
+    terminationGraceMs?: number;
+    unresponsiveMs?: number;
+    unresponsiveHardCapMs?: number;
+    /** Tests only: replaces the host memory pressure reader. */
+    readMemoryPressure?: () => Promise<MemoryPressureLevel>;
+  };
 }
 
 export interface SupervisorController {
@@ -219,6 +231,14 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
   const terminationGraceMs = options.timings?.terminationGraceMs ?? WORKER_TERMINATION_GRACE_MS;
   const unresponsiveMs = options.timings?.unresponsiveMs ?? WORKER_UNRESPONSIVE_MS;
   const maxMissedTicks = Math.max(1, Math.ceil(unresponsiveMs / heartbeatIntervalMs));
+  const hardCapMissedTicks = Math.max(
+    maxMissedTicks,
+    Math.ceil(
+      (options.timings?.unresponsiveHardCapMs ?? WORKER_UNRESPONSIVE_HARD_CAP_MS) /
+        heartbeatIntervalMs,
+    ),
+  );
+  const readMemoryPressure = options.timings?.readMemoryPressure ?? readHostMemoryPressure;
 
   let child: ChildProcess | null = null;
   let ownedDetachedPids = new Set<number>();
@@ -346,20 +366,63 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
     let answering = false;
     let answeredSinceTick = false;
     let missedTicks = 0;
+    let pressureCheckPending = false;
+    let lastPressureDeferLogAt = 0;
     // Serialize endpoint writes with exit/clear before allowing another worker to spawn.
     const heartbeat = setInterval(() => {
       if (answering && child === currentChild && !restarting && !shuttingDown) {
         missedTicks = answeredSinceTick ? 0 : missedTicks + 1;
         answeredSinceTick = false;
         if (missedTicks >= maxMissedTicks) {
-          writeLifecycleLog("Worker answered no heartbeat; restarting it", {
-            missedTicks,
-            workerPid: currentChild.pid ?? null,
-          });
-          answering = false;
-          missedTicks = 0;
-          requestRestart("worker_unresponsive");
-          return;
+          const restartUnresponsive = (extra: Record<string, unknown> = {}) => {
+            writeLifecycleLog("Worker answered no heartbeat; restarting it", {
+              missedTicks,
+              workerPid: currentChild.pid ?? null,
+              ...extra,
+            });
+            answering = false;
+            missedTicks = 0;
+            requestRestart("worker_unresponsive");
+          };
+          if (missedTicks >= hardCapMissedTicks) {
+            restartUnresponsive({ reason: "hard_cap" });
+            return;
+          }
+          if (!pressureCheckPending) {
+            pressureCheckPending = true;
+            void (async () => {
+              let level: MemoryPressureLevel = "unknown";
+              try {
+                level = await readMemoryPressure();
+              } catch {
+                level = "unknown";
+              }
+              pressureCheckPending = false;
+              // The worker may have answered, exited or been replaced while the read ran.
+              if (
+                !answering ||
+                answeredSinceTick ||
+                child !== currentChild ||
+                restarting ||
+                shuttingDown ||
+                missedTicks < maxMissedTicks
+              ) {
+                return;
+              }
+              if (level === "warn" || level === "critical") {
+                const at = Date.now();
+                if (at - lastPressureDeferLogAt >= PRESSURE_DEFER_LOG_INTERVAL_MS) {
+                  lastPressureDeferLogAt = at;
+                  writeLifecycleLog(
+                    "Worker unresponsive under host memory pressure; deferring restart",
+                    { missedTicks, level },
+                  );
+                }
+                return;
+              }
+              restartUnresponsive();
+            })();
+          }
         }
       }
       const message: SupervisorHeartbeatMessage = { type: "paseo:supervisor-heartbeat" };

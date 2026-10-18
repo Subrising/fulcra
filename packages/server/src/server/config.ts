@@ -638,12 +638,15 @@ export function resolveConfigFromPersisted(
     reportUpOnTurnEnd: persistedSettings.reportUpOnTurnEnd,
     nativeFinishNotices: persistedSettings.nativeFinishNotices,
     receiptRetentionMs: persisted.daemon?.receiptRetentionMs,
+    memoryGuard: persisted.daemon?.memoryGuard,
     ledgerDispatchEnabled: persistedSettings.ledgerDispatchEnabled,
     projectDispatch: persistedSettings.projectDispatch,
     idleLeadNudge: persistedSettings.idleLeadNudge,
     idleLeadNudgeSkipOwners: persistedSettings.idleLeadNudgeSkipOwners,
     idleLeadNudgeMinIntervalMinutes: persistedSettings.idleLeadNudgeMinIntervalMinutes,
     reviveOnRestart: persistedSettings.reviveOnRestart,
+    idleSleepMinutes: persistedSettings.idleSleepMinutes,
+    idleSleepProviders: persistedSettings.idleSleepProviders,
     autoResumeOnLimit: persistedSettings.autoResumeOnLimit,
     appendSystemPrompt,
     terminalProfiles,
@@ -706,6 +709,8 @@ function orchestrationSettings(persisted: PersistedConfig) {
     idleLeadNudgeSkipOwners: daemon?.idleLeadNudgeSkipOwners ?? [],
     idleLeadNudgeMinIntervalMinutes: daemon?.idleLeadNudgeMinIntervalMinutes ?? 60,
     reviveOnRestart: daemon?.reviveOnRestart ?? true,
+    idleSleepMinutes: daemon?.idleSleepMinutes ?? 20,
+    idleSleepProviders: daemon?.idleSleepProviders ?? ["claude"],
   };
 }
 

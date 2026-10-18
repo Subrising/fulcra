@@ -266,6 +266,16 @@ export const PersistedConfigSchema = z
           })
           .strict()
           .optional(),
+        // FU-362: refuse a new agent start while this host is under memory pressure. Never written by default:
+        // an older reader rejects an unknown daemon key, so a host writes this only when its owner sets it.
+        memoryGuard: z
+          .object({
+            enabled: z.boolean().optional(),
+            swapUsedPercent: z.number().min(1).max(100).optional(),
+            freeMemoryPercent: z.number().min(1).max(100).optional(),
+          })
+          .strict()
+          .optional(),
         autoArchiveAfterMerge: z.boolean().optional(),
         explainDailyLimit: z.number().int().min(0).max(1000).optional(),
         notificationMode: z.enum(["all", "primes", "off"]).optional(),
@@ -280,6 +290,10 @@ export const PersistedConfigSchema = z
         idleLeadNudgeSkipOwners: z.array(z.string()).optional(),
         idleLeadNudgeMinIntervalMinutes: z.number().int().positive().optional(),
         reviveOnRestart: z.boolean().optional(),
+        // FU-362: minutes an idle session waits before its provider process stops; 0 turns it off. Read-only default 20.
+        idleSleepMinutes: z.number().int().min(0).max(10_080).optional(),
+        // FU-362: providers whose idle sessions may sleep. Read-only default ["claude"]; Codex is off (background terminals).
+        idleSleepProviders: z.array(z.string()).optional(),
         // Transitional input only: migrate this introduced key to a sidecar before saving.
         autoResumeOnLimit: z.boolean().optional(),
         appendSystemPrompt: z.string().optional(),
