@@ -80,7 +80,9 @@ describe("paseo worktree manager", () => {
 
     mkdirSync(repoDir, { recursive: true });
     execFileSync("git", ["init", "-b", "main"], { cwd: repoDir });
-    execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: repoDir });
+    execFileSync("git", ["config", "user.email", "fulcra@users.noreply.github.com"], {
+      cwd: repoDir,
+    });
     execFileSync("git", ["config", "user.name", "Test"], { cwd: repoDir });
     writeFileSync(join(repoDir, "file.txt"), "hello\n");
     execFileSync("git", ["add", "."], { cwd: repoDir });
@@ -298,7 +300,7 @@ describe("paseo worktree manager", () => {
 
       const pusherDir = join(tempDir, "pusher");
       git(["clone", "-q", remoteDir, pusherDir], tempDir);
-      git(["config", "user.email", "test@test.com"], pusherDir);
+      git(["config", "user.email", "fulcra@users.noreply.github.com"], pusherDir);
       git(["config", "user.name", "Test"], pusherDir);
       writeFileSync(join(pusherDir, "file.txt"), "pushed after the last fetch\n");
       git(["commit", "-q", "-am", "remote ahead"], pusherDir);

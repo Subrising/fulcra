@@ -1,7 +1,7 @@
+import { execGitCommandSync } from "@getpaseo/plugin/server/git";
 import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 // What a reviewer needs before approving a change, computed from this repository alone.
 //
 // Not an Archify or Radius integration: those are external tools and this is the question they were
@@ -218,7 +218,7 @@ export function report({ range, changed, graph }) {
   );
 }
 export function changedFiles(range, root) {
-  return execFileSync("git", ["diff", "--name-only", range], { cwd: root, encoding: "utf8" })
+  return execGitCommandSync(["diff", "--name-only", range], { cwd: root, encoding: "utf8" })
     .split("\n")
     .filter(Boolean);
 }
@@ -347,7 +347,7 @@ export function aliasesFrom(tsconfigs) {
 }
 function gitRunner(root) {
   return (args, input) =>
-    execFileSync("git", args, {
+    execGitCommandSync(args, {
       cwd: root,
       input,
       maxBuffer: 1024 * 1024 * 1024,

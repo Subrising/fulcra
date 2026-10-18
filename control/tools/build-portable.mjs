@@ -54,7 +54,12 @@ for (const entry of entries) {
     },
   });
   const forbidden = Object.keys(result.metafile.inputs).filter(
-    (p) => !p.startsWith("node_modules/") && !inScope(p),
+    (p) =>
+      !p.startsWith("node_modules/") &&
+      !/^\.\.\/packages\/plugin\/dist\/server\/(?:git|git-process|git-guardian-windows)\.js$/.test(
+        p,
+      ) &&
+      !inScope(p),
   );
   if (forbidden.length)
     throw Error(`Portable bundle imports excluded input: ${forbidden.join(", ")}`);

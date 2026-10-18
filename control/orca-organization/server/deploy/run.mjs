@@ -1,5 +1,6 @@
 // Runs one deploy tool (rad, bicep, k3d, git, gh, docker) without a shell, with a time limit, and hands back each
 // output line as it arrives. Arguments are an array; nothing here ever builds a command string.
+import { execGitCommand } from "@getpaseo/plugin/server/git";
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -45,15 +46,38 @@ export class ToolError extends Error {
 /**
  * @param {string} file
  * @param {string[]} args
- * @param {{ env?: Record<string,string>, cwd?: string, timeoutMs?: number, onLine?: (line: string) => void, input?: string, signal?: AbortSignal }} [options]
+ * @param {{ env?: Record<string,string>, cwd?: string, timeoutMs?: number, onLine?: (line: string) => void, input?: string, signal?: AbortSignal, retryFetch?: boolean }} [options]
  * @returns {Promise<{ code: number, stdout: string, stderr: string }>}
  */
 export function runTool(file, args, options = {}) {
   const { env = toolEnvironment(), cwd, timeoutMs = 120_000, onLine, input, signal } = options;
+  if (file === "git")
+    return execGitCommand(args, {
+      cwd,
+      env,
+      timeout: timeoutMs,
+      input,
+      signal,
+      onLine,
+      retryFetch: options.retryFetch,
+    }).then(
+      (result) => ({ code: 0, ...result }),
+      (error) => ({
+        code: typeof error.code === "number" ? error.code : 1,
+        stdout: error.stdout ?? "",
+        stderr: error.stderr || error.message,
+      }),
+    );
   return new Promise((resolve, reject) => {
     let child;
     try {
-      child = spawn(file, args, { env, cwd, stdio: ["pipe", "pipe", "pipe"], signal });
+      child = spawn(file, args, {
+        env,
+        cwd,
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+        signal,
+      });
     } catch (error) {
       reject(new ToolError(`Could not start ${path.basename(file)}: ${error.message}`));
       return;

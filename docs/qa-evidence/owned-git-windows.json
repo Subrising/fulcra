@@ -1,0 +1,674 @@
+{
+  "date": "2026-10-18",
+  "sourceBase": "1ee55c99",
+  "platform": "Windows desktop session 1",
+  "longObservation": {
+    "session": 1,
+    "durationSeconds": 305.08770369999996,
+    "newPromptOrConsoleWindows": 0,
+    "gitPeak": 10,
+    "gcmPeak": 12,
+    "workerPrivateFirst": 65048576,
+    "workerPrivateLast": 68812800,
+    "cFreeGB": 12.17
+  },
+  "longResult": {
+    "pass": true,
+    "durationMs": 301251,
+    "firstFailureMs": 1236,
+    "failures": 3150,
+    "requests": 3,
+    "firstError": "Git command failed: git fetch origin (exit code: 128, signal: none)\nfatal: Cannot prompt because user interactivity has been disabled.\nfatal: unable to get password from user",
+    "rssBytes": 34582528
+  },
+  "samples": [
+    {
+      "seconds": 0.12,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 60833792,
+      "workerWorkingSet": 46231552,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 5.05,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 65048576,
+      "workerWorkingSet": 59498496,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 10.12,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 68579328,
+      "workerWorkingSet": 62685184,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 15.17,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 61644800,
+      "workerWorkingSet": 55566336,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 20.1,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 61583360,
+      "workerWorkingSet": 55943168,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 25.15,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 63266816,
+      "workerWorkingSet": 56012800,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 30.18,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 63746048,
+      "workerWorkingSet": 57012224,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 35.04,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 65122304,
+      "workerWorkingSet": 57049088,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 40.05,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 64880640,
+      "workerWorkingSet": 57536512,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 45.07,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010380800,
+      "workerPrivateBytes": 64241664,
+      "workerWorkingSet": 57540608,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 50.1,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010380800,
+      "workerPrivateBytes": 63913984,
+      "workerWorkingSet": 57610240,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 55.1,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 64557056,
+      "workerWorkingSet": 57896960,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 60.14,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 64585728,
+      "workerWorkingSet": 57937920,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 65.17,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 64299008,
+      "workerWorkingSet": 57782272,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 70.03,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 64126976,
+      "workerWorkingSet": 57733120,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 75.01,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 63631360,
+      "workerWorkingSet": 57491456,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 80.03,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 63606784,
+      "workerWorkingSet": 57540608,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 85.09,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 64176128,
+      "workerWorkingSet": 57651200,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 90.11,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 63660032,
+      "workerWorkingSet": 57888768,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 95.13,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 63631360,
+      "workerWorkingSet": 58015744,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 100.16,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 64163840,
+      "workerWorkingSet": 58466304,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 105.03,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 66924544,
+      "workerWorkingSet": 60850176,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 110.04,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 64450560,
+      "workerWorkingSet": 57700352,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 115.09,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 64274432,
+      "workerWorkingSet": 57126912,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 120.09,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 64053248,
+      "workerWorkingSet": 54841344,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 125.12,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 66699264,
+      "workerWorkingSet": 53772288,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 130.15,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010380800,
+      "workerPrivateBytes": 66777088,
+      "workerWorkingSet": 52736000,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 135.18,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010380800,
+      "workerPrivateBytes": 67018752,
+      "workerWorkingSet": 51884032,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 140.16,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010380800,
+      "workerPrivateBytes": 67416064,
+      "workerWorkingSet": 51159040,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 145.13,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 70082560,
+      "workerWorkingSet": 53473280,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 150.22,
+      "git": 10,
+      "gcm": 12,
+      "gitPrivateBytes": 11890688,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 70082560,
+      "workerWorkingSet": 52428800,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 155.09,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 66457600,
+      "workerWorkingSet": 48562176,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 160.1,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 67190784,
+      "workerWorkingSet": 47607808,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 165.09,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 66478080,
+      "workerWorkingSet": 46075904,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 170.1,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 66523136,
+      "workerWorkingSet": 44519424,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 175.05,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 67084288,
+      "workerWorkingSet": 44056576,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 180.07,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 67031040,
+      "workerWorkingSet": 43003904,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 185.13,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 66957312,
+      "workerWorkingSet": 41029632,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 190.16,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 67813376,
+      "workerWorkingSet": 38993920,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 195.18,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 67796992,
+      "workerWorkingSet": 37330944,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 200.05,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 67973120,
+      "workerWorkingSet": 36360192,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 205.06,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 69931008,
+      "workerWorkingSet": 40349696,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 210.01,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 68616192,
+      "workerWorkingSet": 39116800,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 215.17,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 68141056,
+      "workerWorkingSet": 37154816,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 220.25,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 68739072,
+      "workerWorkingSet": 35569664,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 225.17,
+      "git": 1,
+      "gcm": 12,
+      "gitPrivateBytes": 655360,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 68632576,
+      "workerWorkingSet": 35614720,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 230.1,
+      "git": 4,
+      "gcm": 12,
+      "gitPrivateBytes": 75120640,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 68300800,
+      "workerWorkingSet": 34582528,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 235.04,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 68571136,
+      "workerWorkingSet": 34066432,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 240.13,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 68616192,
+      "workerWorkingSet": 33906688,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 245.16,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 68866048,
+      "workerWorkingSet": 33906688,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 250.19,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 68214784,
+      "workerWorkingSet": 33968128,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 255.16,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 68653056,
+      "workerWorkingSet": 33906688,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 260.12,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 68497408,
+      "workerWorkingSet": 34054144,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 265.01,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 68628480,
+      "workerWorkingSet": 34091008,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 270.11,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 68296704,
+      "workerWorkingSet": 34013184,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 275.1,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 68263936,
+      "workerWorkingSet": 33910784,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 280.06,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 68562944,
+      "workerWorkingSet": 33951744,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 285.04,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 68636672,
+      "workerWorkingSet": 33927168,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 290.02,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 68644864,
+      "workerWorkingSet": 33931264,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 295.17,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 68812800,
+      "workerWorkingSet": 33910784,
+      "newPromptOrConsoleWindows": 0
+    },
+    {
+      "seconds": 300.14,
+      "git": 0,
+      "gcm": 12,
+      "gitPrivateBytes": null,
+      "gcmPrivateBytes": 1010458624,
+      "workerPrivateBytes": 68694016,
+      "workerWorkingSet": 34426880,
+      "newPromptOrConsoleWindows": 0
+    }
+  ],
+  "finalBoundary": {
+    "pass": true,
+    "durationMs": 11298,
+    "firstFailureMs": 1284,
+    "treeEvidence": {
+      "deadlineMs": 1800,
+      "elapsedMs": 2427,
+      "descendantAliveAfterParentExit": true,
+      "descendantStopped": true,
+      "error": "Git command timed out after 1800ms: git fu350orphan"
+    },
+    "syncEvidence": {
+      "outputBytes": 2097152,
+      "elapsedMs": 2551,
+      "descendantStopped": true
+    },
+    "failures": 250,
+    "requests": 3,
+    "firstError": "Git command failed: git fetch origin (exit code: 128, signal: none)\nfatal: Cannot prompt because user interactivity has been disabled.\nfatal: unable to get password from user",
+    "rssBytes": 73162752
+  },
+  "finalWindowObservation": {
+    "session": 1,
+    "durationSeconds": 30.1630634,
+    "newPromptOrConsoleWindows": 0,
+    "gitPeak": 8,
+    "gcmPeak": 12,
+    "workerPrivateFirst": 63426560,
+    "workerPrivateLast": null,
+    "cFreeGB": 12.16
+  },
+  "finalBundleSha256": "49abf5ca92b4a139190869623799882842d936346a6e9ab9f3ce7b8f6edd12d5",
+  "publishedSdkEntry": {
+    "pass": true,
+    "asyncVersion": "git version 2.52.0.windows.1",
+    "syncVersion": "git version 2.52.0.windows.1",
+    "entry": "@getpaseo/plugin/server/git"
+  }
+}

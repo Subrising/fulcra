@@ -1,3 +1,4 @@
+import { execGitCommandSync } from "@getpaseo/plugin/server/git";
 import { localJson } from "../local-machine.mjs";
 import fs from "node:fs";
 import { privateOwned } from "../../orca-organization/server/owned.mjs";
@@ -261,19 +262,19 @@ export function stageNativeTurn({
   const selection = resolveStageSelection({ layout, nativeSource, portableSourceHead });
   const pin = selection.selectedHead ? null : resolveNativeSource(selection.nativeSource);
   const destinations = stageDestinations({ outputRoot, controllerHome, layout: selection.layout });
-  const head = execFileSync("git", ["rev-parse", "HEAD"], {
+  const head = execGitCommandSync(["rev-parse", "HEAD"], {
     cwd: sourceRoot,
     encoding: "utf8",
   }).trim();
   const controllerSource = {
-    head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: control, encoding: "utf8" }).trim(),
+    head: execGitCommandSync(["rev-parse", "HEAD"], { cwd: control, encoding: "utf8" }).trim(),
     dirty: Boolean(
-      execFileSync("git", ["status", "--porcelain"], { cwd: control, encoding: "utf8" }).trim(),
+      execGitCommandSync(["status", "--porcelain"], { cwd: control, encoding: "utf8" }).trim(),
     ),
   };
   if (
     head !== (pin?.head ?? selection.selectedHead) ||
-    execFileSync("git", ["status", "--porcelain"], { cwd: sourceRoot, encoding: "utf8" }).trim()
+    execGitCommandSync(["status", "--porcelain"], { cwd: sourceRoot, encoding: "utf8" }).trim()
   )
     throw Error("Exact clean selected durable native source required");
   // A pinned selection must match its reviewed hashes; a selected commit records the hashes of

@@ -1,4 +1,17 @@
 #!/usr/bin/env node
+import { execGitCommandSync } from "@getpaseo/plugin/server/git";
+function spawnGitSync(args, options) {
+  try {
+    return { status: 0, stdout: execGitCommandSync(args, options), stderr: "" };
+  } catch (error) {
+    return {
+      status: error.status ?? 1,
+      stdout: error.stdout ?? "",
+      stderr: error.stderr ?? "",
+      error,
+    };
+  }
+}
 // Generate a project's architecture map from its code at one commit (CHANGES, automatic maps).
 //
 // The rules are deliberately simple so a reader can predict them (GENERATOR_RULES):
@@ -17,7 +30,6 @@
 // Everything is read from git objects (`git ls-tree`, `git cat-file --batch`) at a full commit id: the working
 // copy, uncommitted edits and the network are never used. The output is Architecture IR v1 (validate.mjs) plus
 // two fields the renderer ignores: `generated` (commit, rules, plan) and `ownership` (part -> folder prefixes).
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -61,7 +73,7 @@ const under = (file, dir) => dir === "" || file === dir || file.startsWith(`${di
 // ---- Reading a commit ------------------------------------------------------------------------------------------
 
 const git = (root, args, input) => {
-  const out = spawnSync("git", args, {
+  const out = spawnGitSync(args, {
     cwd: root,
     input,
     maxBuffer: 512 * 1024 * 1024,

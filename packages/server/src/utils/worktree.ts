@@ -1481,6 +1481,8 @@ async function fetchWorktreeCheckoutRefs(options: {
         cwd: options.cwd,
         timeout: 120_000,
         acceptExitCodes: [0, 1, 128],
+        retryFetch: checkoutRef === options.checkoutRefs[0],
+        allowFetchRefFallback: true,
       },
     );
     if (lastResult.exitCode === 0) {
@@ -1510,6 +1512,7 @@ async function tryFetchWorktreeTrackingRemote(options: {
       cwd: options.cwd,
       timeout: 120_000,
       acceptExitCodes: [0, 1, 128],
+      retryFetch: true,
     },
   );
   if (result.exitCode !== 0) {
@@ -1656,6 +1659,7 @@ async function refreshRemoteTrackingBaseRef(cwd: string, baseRef: string): Promi
     // No refspec is added to remote.<name>.fetch: one left behind breaks later fetches once the
     // branch is deleted on the remote.
     await runGitCommand(["fetch", remoteName, `+refs/heads/${remoteBranch}:${baseRef}`], {
+      retryFetch: true,
       cwd,
       envOverlay: { GIT_TERMINAL_PROMPT: "0" },
       timeout: REMOTE_BASE_REFRESH_TIMEOUT_MS,
@@ -1672,6 +1676,7 @@ async function ensureLocalBranch(cwd: string, branchName: string): Promise<void>
   }
   try {
     await runGitCommand(["fetch", "origin", `${branchName}:${branchName}`], {
+      retryFetch: true,
       cwd,
       timeout: 120_000,
     });

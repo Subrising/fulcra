@@ -1,3 +1,4 @@
+import { execGitCommand } from "@getpaseo/plugin/server/git";
 // Fulcra J8: the only code that executes anything for Environments (CONTRACTS §6.2 #1).
 // - Clean checkouts in a Fulcra-owned folder, removed afterwards: one of the environment's `definitionCommit` (the
 //   version its approved definition pinned), whose scripts run, and one of the candidate commit, which is only data
@@ -8,7 +9,7 @@
 // Nothing here knows about hosts: what a script deploys to is the script's business, and the tests use fake scripts.
 import fs from "node:fs";
 import path from "node:path";
-import { spawn, execFile, execFileSync } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   relpath,
@@ -26,19 +27,16 @@ const GIT_ENV = {
   LANG: "C",
 };
 const git = (args, cwd, timeout = 120000) =>
-  new Promise((resolve, reject) =>
-    execFile(
-      "git",
-      args,
-      {
-        cwd,
-        env: { ...GIT_ENV, HOME: cwd ?? "/nonexistent" },
-        timeout,
-        maxBuffer: 4 * 1024 * 1024,
-      },
-      (error, stdout) => (error ? reject(new Error(`git ${args[0]} failed`)) : resolve(stdout)),
-    ),
-  );
+  execGitCommand(args, {
+    cwd,
+    env: { ...GIT_ENV, HOME: cwd ?? "/nonexistent" },
+    timeout,
+    maxBuffer: 4 * 1024 * 1024,
+  })
+    .then((result) => result.stdout)
+    .catch(() => {
+      throw new Error(`git ${args[0]} failed`);
+    });
 
 /** A clean, detached checkout of `sha` from the local repository `source`, under the Fulcra-owned `root`. */
 export async function cleanCheckout({ source, sha, root }) {

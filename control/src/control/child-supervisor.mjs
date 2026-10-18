@@ -5,8 +5,8 @@ export function createChildSupervisor({
   spawn,
   createChannel,
   recover,
-  // Fulcra 0.2.9: clears controller files that provably belong to no running controller (a lock from before the last
-  // restart). Returns true when it cleared them. Used only by an explicit Retry after a refused recovery.
+  // Clears files for a proved dead controller owner. Returns true after recovery.
+  // Both the slow retry and explicit Retry use this after a refused exit recovery.
   recoverStale = () => false,
   onReady = () => {},
   schedule = (fn, ms) => {

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-// Never recover a stale lock automatically: the host supervisor must establish that the prior child exited.
+// Only the trusted host may recover a stale lock after it proves the prior owner is gone.
 export function acquireProcessLock(home, { epoch } = {}) {
   if (
     epoch !== undefined &&

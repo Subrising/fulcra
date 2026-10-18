@@ -9,7 +9,7 @@ import { inheritLoginShellEnv } from "./login-shell-env.js";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { existsSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execGitCommandSync } from "@getpaseo/plugin/server/git";
 import {
   app,
   autoUpdater as electronAutoUpdater,
@@ -310,21 +310,21 @@ if (forcedUserDataDir) {
   log.info("[dev-user-data] forced userData dir:", forcedUserDataDir);
 } else if (!app.isPackaged) {
   try {
-    const topLevel = execFileSync("git", ["rev-parse", "--show-toplevel"], {
-      encoding: "utf-8",
+    const topLevel = execGitCommandSync(["rev-parse", "--show-toplevel"], {
       timeout: 3000,
-      windowsHide: true,
-    }).trim();
+    })
+      .toString()
+      .trim();
     devWorktreeName = path.basename(topLevel);
     // Main checkout (e.g. "paseo") gets default userData — only worktrees diverge.
     const commonDir = path.resolve(
       topLevel,
-      execFileSync("git", ["rev-parse", "--git-common-dir"], {
+      execGitCommandSync(["rev-parse", "--git-common-dir"], {
         cwd: topLevel,
-        encoding: "utf-8",
         timeout: 3000,
-        windowsHide: true,
-      }).trim(),
+      })
+        .toString()
+        .trim(),
     );
     const isWorktree = path.resolve(topLevel, ".git") !== commonDir;
     if (isWorktree) {

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { execFile } from "node:child_process";
+import { execGitCommand } from "@getpaseo/plugin/server/git";
 // DESIGN-R §3.2. What a human needs before resuming a session: which branch it was on and whether it left work
 // uncommitted. Read-only and bounded, because it runs from an operator read on a disk that stalls under load:
 //
@@ -22,19 +22,12 @@ const MAX_REPOS = 4,
   TIMEOUT = 2000,
   MAX_BUFFER = 262144;
 const defaultRun = (dir, args, env) =>
-  new Promise((resolve, reject) => {
-    execFile(
-      "git",
-      ["-C", dir, ...args],
-      {
-        env: { ...process.env, ...env },
-        timeout: TIMEOUT,
-        maxBuffer: MAX_BUFFER,
-        encoding: "utf8",
-      },
-      (error, stdout) => (error ? reject(error) : resolve(stdout)),
-    );
-  });
+  execGitCommand(args, {
+    cwd: dir,
+    env: { ...process.env, ...env },
+    timeout: TIMEOUT,
+    maxBuffer: MAX_BUFFER,
+  }).then((result) => result.stdout);
 export function parseStatus(text) {
   const out = {
     branch: null,

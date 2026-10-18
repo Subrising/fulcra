@@ -1,7 +1,7 @@
+import { execGitCommandSync } from "@getpaseo/plugin/server/git";
 // Applies only to permission requests actually received by Fulcra. Provider modes
 // are host facts, never request metadata. Questions remain questions, not grants.
 import fs from "node:fs";
-import { execFileSync } from "node:child_process";
 import path from "node:path";
 export const automaticMode = (provider, mode) =>
   (provider === "claude" && mode === "auto") || (provider === "codex" && mode === "full-access");
@@ -99,8 +99,7 @@ export function escalationReason(request, cwd) {
         let targetCwd = request.input?.cwd ?? cwd;
         for (const change of changes)
           targetCwd = path.resolve(targetCwd, change[1] ?? change[2] ?? change[3]);
-        destination = execFileSync(
-          "git",
+        destination = execGitCommandSync(
           ["-C", targetCwd, "symbolic-ref", "--quiet", "--short", "HEAD"],
           {
             encoding: "utf8",

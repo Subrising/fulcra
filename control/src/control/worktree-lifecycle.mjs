@@ -1,10 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { execGitCommand } from "@getpaseo/plugin/server/git";
 import { randomUUID } from "node:crypto";
 import { assertColumns } from "./schema.mjs";
-const exec = promisify(execFile);
 const outputNames = new Set([
   "node_modules",
   "dist",
@@ -28,7 +26,8 @@ const preserveEvidence = (p) => !p.split(path.sep).includes("node_modules") && k
 const inside = (root, p) => p !== root && p.startsWith(root + path.sep);
 const git = async (cwd, ...args) =>
   (
-    await exec("git", ["-C", cwd, ...args], {
+    await execGitCommand(args, {
+      cwd,
       timeout: 30000,
       maxBuffer: 8 * 1024 * 1024,
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
