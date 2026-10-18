@@ -6,7 +6,7 @@ Each `permission.decision` log entry has these fields:
 
 | Field                                 | Meaning                                                                |
 | ------------------------------------- | ---------------------------------------------------------------------- |
-| `time`                                | UTC record time                                                        |
+| `recordedAt`                          | UTC record time                                                        |
 | `agentId`, `sessionId`, `sessionName` | Job identity and native session identity                               |
 | `requestId`, `tool`                   | Exact permission request and tool                                      |
 | `target.cwd`, `target.inputSha256`    | Work folder and digest of the tool input                               |

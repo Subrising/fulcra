@@ -13188,8 +13188,31 @@ test("trusted permission rewrite reaches provider and emits resolved event", asy
         manager.respondToPermission(agent.id, "alias-again", { behavior: "allow" }),
       ),
     ).rejects.toThrow("not pending on this agent");
+    const failedLive = manager.getAgent(agent.id)!;
     expect(respond).toHaveBeenCalledTimes(1);
     expect(trustedPlugins.sequence(agent.id).humanAt).toBe(2);
+    failedLive.pendingPermissions.set("alias", {
+      id: "alias",
+      provider: "codex",
+      kind: "tool",
+      name: "WrongTool",
+    });
+    failedLive.pendingPermissions.set("canonical", {
+      id: "canonical",
+      provider: "codex",
+      kind: "tool",
+      name: "CorrectTool",
+    });
+    respond.mockRejectedValueOnce(new Error("Fixture provider failure"));
+    await expect(
+      trustedPlugins.rpc(undefined, () =>
+        manager.respondToPermission(agent.id, "alias", { behavior: "deny" }),
+      ),
+    ).rejects.toThrow("Fixture provider failure");
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: "canonical", tool: "CorrectTool", decision: "failed" }),
+      "Permission response failed",
+    );
   } finally {
     unsubscribe();
     await manager.closeAgent(agent.id);

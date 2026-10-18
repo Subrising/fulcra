@@ -6577,6 +6577,10 @@ export class AgentManager {
     });
   }
 
+  private permissionAuditName(agent: ActiveManagedAgent): string | null {
+    return this.registry?.getCached(agent.id)?.title ?? agent.config.title ?? null;
+  }
+
   async respondToPermission(
     agentId: string,
     requestId: string,
@@ -6605,7 +6609,7 @@ export class AgentManager {
               "deny",
               "trusted-permission-guard",
               auditSource,
-              this.registry?.getCached(agent.id)?.title ?? agent.config.title,
+              this.permissionAuditName(agent),
             ),
             "Permission response refused",
           );
@@ -6627,12 +6631,12 @@ export class AgentManager {
             this.logger.info(
               permissionAudit(
                 agent,
-                auditRequest,
+                deliveredRequest,
                 requestId,
                 "failed",
                 "permission-response",
                 auditSource,
-                this.registry?.getCached(agent.id)?.title ?? agent.config.title,
+                this.permissionAuditName(agent),
               ),
               "Permission response failed",
             );
@@ -6648,7 +6652,7 @@ export class AgentManager {
               response.behavior === "deny" ? "deny" : "allow",
               "permission-response",
               auditSource,
-              this.registry?.getCached(agent.id)?.title ?? agent.config.title,
+              this.permissionAuditName(agent),
             ),
             "Permission response delivered",
           );
@@ -9039,7 +9043,7 @@ export class AgentManager {
           decision,
           "trusted-automatic-permission",
           "daemon",
-          this.registry?.getCached(agent.id)?.title ?? agent.config.title,
+          this.permissionAuditName(agent),
         ),
         "Automatic permission decision",
       );
@@ -10056,7 +10060,7 @@ export class AgentManager {
             decision.action === "accept" ? "allow" : "deny",
             "computer-use-" + decision.source,
             "daemon",
-            this.registry?.getCached(agent.id)?.title ?? agent.config.title,
+            this.permissionAuditName(agent),
           );
           this.logger.info(
             {
@@ -10085,7 +10089,7 @@ export class AgentManager {
                 "defer",
                 "computer-use-policy",
                 "daemon",
-                this.registry?.getCached(agent.id)?.title ?? agent.config.title,
+                this.permissionAuditName(agent),
               ),
               "Computer Use automatic approval refused",
             );

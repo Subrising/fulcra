@@ -18,7 +18,7 @@ export function permissionAudit(
 ) {
   return {
     event: "permission.decision",
-    time: new Date().toISOString(),
+    recordedAt: new Date().toISOString(),
     agentId: agent.id,
     sessionId: agent.runtimeInfo?.sessionId ?? null,
     sessionName: sessionName ?? agent.title ?? null,

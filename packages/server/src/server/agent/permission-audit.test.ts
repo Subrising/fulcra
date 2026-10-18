@@ -28,7 +28,7 @@ test("permission records identify the session, rule, tool, target, and outcome w
       source: "daemon",
     });
     expect(record.target.inputSha256).toMatch(/^[a-f0-9]{64}$/);
-    expect(Number.isNaN(Date.parse(record.time))).toBe(false);
+    expect(Number.isNaN(Date.parse(record.recordedAt))).toBe(false);
     expect(JSON.stringify(record)).not.toContain("secret-marker");
   }
   expect(
