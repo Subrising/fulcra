@@ -56,6 +56,17 @@ if (!runtime.exitCleanupRegistered) {
   });
 }
 
+function publishGitOwnership(message: { action: "add" | "remove"; pid: number }): void {
+  if (
+    process.platform !== "win32" &&
+    process.env.PASEO_SUPERVISED === "1" &&
+    process.connected &&
+    process.send
+  ) {
+    process.send({ type: "paseo:owned-process", ...message }, () => {});
+  }
+}
+
 function collectUnixGitDescendants(input: {
   rows: number[][];
   root: number;
@@ -77,12 +88,18 @@ async function stopUnixGitTree(root: number): Promise<void> {
   const signal = (pid: number, kind: NodeJS.Signals) => {
     try {
       process.kill(pid, kind);
+      return true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      return false;
     }
   };
   // Freeze the parent before enumerating. Shell aliases can create another process group.
-  signal(-root, "SIGSTOP");
+  if (!signal(-root, "SIGSTOP")) {
+    liveGroups.delete(root);
+    publishGitOwnership({ action: "remove", pid: root });
+    return;
+  }
   const owned = new Set([root]);
   const errors: unknown[] = [];
   try {
@@ -213,22 +230,11 @@ export function spawnGitProcess(args: string[], options: SpawnOptions = {}): Chi
     windowsHide: true,
   });
   // The daemon preserves user detached jobs during shutdown. Register these groups as owned.
-  const publishOwnership = (action: "add" | "remove") => {
-    if (
-      process.platform !== "win32" &&
-      child.pid &&
-      process.env.PASEO_SUPERVISED === "1" &&
-      process.connected &&
-      process.send
-    ) {
-      process.send({ type: "paseo:owned-process", action, pid: child.pid }, () => {});
-    }
-  };
   if (process.platform !== "win32" && child.pid) liveGroups.add(child.pid);
-  publishOwnership("add");
+  if (child.pid) publishGitOwnership({ action: "add", pid: child.pid });
   child.once("close", () => {
     if (child.pid) liveGroups.delete(child.pid);
-    publishOwnership("remove");
+    if (child.pid) publishGitOwnership({ action: "remove", pid: child.pid });
   });
   children.add(child);
   let cleanupFailed = false;

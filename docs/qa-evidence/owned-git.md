@@ -11,12 +11,13 @@ Windows uses a retained Job Object with a separate deadline. Git starts suspende
 The job closes on completion or timeout. It also contains descendants whose Git parent exits first.
 Each process admits at most eight owned Git trees. Bundled copies share this limit.
 Unix Git groups also register with the existing supervisor, so daemon shutdown can remove them.
+A missing group never authorizes signals to a positive PID. Runner test doubles bypass real process timers.
 Fetches share one repository key across worktrees. Failures cause exponential delays; authentication failures require an explicit user retry.
 Missing-ref fallback remains available within a requested checkout. Different stdin blob requests remain separate.
 
 ## Checks
 
-- Thirteen focused policy tests passed, including environment, single-flight, backoff, cancellation, cap, and tree cleanup.
+- Fourteen focused policy and signal-guard tests passed, including environment, single-flight, backoff, cancellation, cap, and tree cleanup.
 - Forty-five daemon and worktree tests passed.
 - All 141 selected controller, architecture, connector, and deploy tests passed.
 - Workspace type checks, changed-file lint, and formatting passed.
