@@ -242,6 +242,7 @@ import {
 } from "./provider-subagents/store.js";
 import { withTimeout } from "../../utils/promise-timeout.js";
 import { extractAttention } from "../persistence-hooks.js";
+import { readOwnedProcessTable, type OwnedProcessIdentity } from "../../utils/tree-kill.js";
 import { IdleSleep } from "./agent-idle-sleep.js";
 
 const RELOAD_SESSION_CLOSE_TIMEOUT_MS = 3_000;
@@ -2166,6 +2167,8 @@ export class AgentManager {
   private idleSleepProviders: () => readonly string[] = () => ["claude"];
   private idleSleepDeliveryPending: (agentId: string) => boolean = () => false;
   private readonly idleSleep: IdleSleep;
+  // FU-362: the sessions with background work at the last good process table read (listAgentsForRevive).
+  private lastBackgroundWorkIds = new Set<string>();
   private readonly agentsAwaitingInitialSnapshotPersist = new Set<string>();
   private readonly sessionEventTails = new Map<string, Promise<void>>();
   private readonly steerEventBarriers = new Map<string, SteerEventBarrier>();
@@ -2417,6 +2420,65 @@ export class AgentManager {
     return Boolean(agent?.session?.isSleeping?.());
   }
 
+  private hasPendingDeliveryOrSubagent(agentId: string): boolean {
+    return (
+      this.idleSleepDeliveryPending(agentId) ||
+      this.providerSubagents.list(agentId).some((subagent) => subagent.status === "running")
+    );
+  }
+
+  /**
+   * FU-362: an idle session that waits for background work a restart would stop. The signals are the ones that refuse
+   * idle sleep: a held or queued message, running subagents, and the provider's own check (tracked shells, workflows,
+   * agents and tasks, or a process born well after the provider process). Any other session is not waiting.
+   */
+  async hasLiveBackgroundWork(
+    agentId: string,
+    readProcessTable?: () => Promise<OwnedProcessIdentity[]>,
+  ): Promise<boolean> {
+    const agent = this.agents.get(agentId);
+    if (!agent || agent.internal || agent.lifecycle !== "idle") return false;
+    if (this.hasPendingDeliveryOrSubagent(agentId)) return true;
+    return (await agent.session?.hasBackgroundWork?.(readProcessTable)) ?? false;
+  }
+
+  /**
+   * Every session as the restart record needs it, with `hasBackgroundWork` set. One process table read serves all.
+   * When that read fails, the process-tree signal is unknown: a session that had background work at the last good
+   * read keeps it, and no other session gets it from the tree. The failure is logged.
+   */
+  async listAgentsForRevive(): Promise<
+    Array<{ id: string; lifecycle: string; internal?: boolean; hasBackgroundWork: boolean }>
+  > {
+    let table: Promise<OwnedProcessIdentity[]> | null = null;
+    let tableFailed = false;
+    const read = () =>
+      (table ??= readOwnedProcessTable().catch((error: unknown) => {
+        tableFailed = true;
+        throw error;
+      }));
+    const listed = await Promise.all(
+      this.listAgents().map(async (agent) => ({
+        id: agent.id,
+        lifecycle: agent.lifecycle,
+        internal: agent.internal,
+        hasBackgroundWork: await this.hasLiveBackgroundWork(agent.id, read).catch(() => false),
+      })),
+    );
+    if (tableFailed) {
+      this.logger.warn(
+        "Process table unreadable: the restart record keeps the previous background work for the process-tree signal",
+      );
+      for (const entry of listed)
+        entry.hasBackgroundWork ||= this.lastBackgroundWorkIds.has(entry.id);
+    } else {
+      this.lastBackgroundWorkIds = new Set(
+        listed.filter((entry) => entry.hasBackgroundWork).map((entry) => entry.id),
+      );
+    }
+    return listed;
+  }
+
   private async trySleepAgent(
     agentId: string,
     idleMinutes: number,
@@ -2438,8 +2500,7 @@ export class AgentManager {
       agent.pendingPermissions.size > 0 ||
       agent.activeTurnId !== null ||
       this.lifecycleMutationTails.has(agentId) ||
-      this.idleSleepDeliveryPending(agentId) ||
-      this.providerSubagents.list(agentId).some((subagent) => subagent.status === "running")
+      this.hasPendingDeliveryOrSubagent(agentId)
     ) {
       return "busy";
     }

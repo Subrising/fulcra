@@ -18,6 +18,7 @@ import type {
 } from "@getpaseo/protocol/agent-types";
 import type { AgentAttachment, AgentQuotaSnapshot } from "@getpaseo/protocol/messages";
 import type { AgentBackgroundWork } from "@getpaseo/protocol/agent-background-work";
+import type { OwnedProcessIdentity } from "../../utils/tree-kill.js";
 import type { PaseoToolCatalog } from "./tools/types.js";
 
 export type {
@@ -808,6 +809,11 @@ export interface AgentSession {
   sleep?(): Promise<boolean>;
   /** True between sleep() and the next process start. */
   isSleeping?(): boolean;
+  /**
+   * FU-362: the idle session has background work (shells, watches, children) that a daemon restart would stop. Uses
+   * the signals that refuse sleep. `read` replaces the process table read, so a caller can share one read.
+   */
+  hasBackgroundWork?(read?: () => Promise<OwnedProcessIdentity[]>): Promise<boolean>;
   listCommands?(): Promise<AgentSlashCommand[]>;
   setModel?(modelId: string | null): Promise<void>;
   setThinkingOption?(thinkingOptionId: string | null): Promise<void | AgentProviderNotice>;

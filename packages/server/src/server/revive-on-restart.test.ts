@@ -4,10 +4,13 @@ import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { REPORTS_TO_LABEL } from "@getpaseo/protocol/agent-labels";
 import type { AgentManager } from "./agent/agent-manager.js";
+import { FINAL_INPUT_CHECK } from "./agent/agent-sdk-types.js";
+import { assertFinalInputCheck, recordFinalInputHandoff } from "./agent/final-input-check.js";
 import { AgentStorage, type StoredAgentRecord } from "./agent/agent-storage.js";
 import { createTestLogger } from "../test-utils/test-logger.js";
 import { readFile, writeFile } from "node:fs/promises";
 import {
+  backgroundIdsForStop,
   defaultSessions,
   formatRestartNotice,
   recordOpenSessions,
@@ -29,6 +32,7 @@ const LIMITED = "66666666-6666-4666-8666-666666666666";
 const NO_PROVIDER = "77777777-7777-4777-8777-777777777777";
 const POOL = "88888888-8888-4888-8888-888888888888";
 const INTERNAL = "99999999-9999-4999-8999-999999999999";
+const BACKGROUND = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
 const cleanup: string[] = [];
 afterEach(async () => {
@@ -77,6 +81,7 @@ async function fixture(input: {
   } as unknown as AgentStorage;
   const loads: string[] = [];
   const prompts: string[] = [];
+  const wakes: string[] = [];
   const reads: string[] = [];
   const notices: Array<{ leadId: string; prompt: string }> = [];
   const sessions: ReviveSessions = {
@@ -98,6 +103,9 @@ async function fixture(input: {
     },
     sendContinue: async (id) => {
       prompts.push(id);
+    },
+    sendBackgroundWake: async (id, prompt) => {
+      wakes.push(`${id}:${prompt}`);
     },
   };
   const run = (crashInterrupted: string[] = []) =>
@@ -121,7 +129,7 @@ async function fixture(input: {
       { records, crashInterrupted },
     );
   const status = (id: string) => byId.get(id)?.lastStatus;
-  return { home, run, loads, prompts, notices, status, reads };
+  return { home, run, loads, prompts, wakes, notices, status, reads };
 }
 
 describe("revive on restart", () => {
@@ -191,6 +199,34 @@ describe("revive on restart", () => {
     expect(f.prompts).toEqual([RUNNING]);
     expect(result.closed).toEqual([]);
     await expect(stat(path.join(f.home, REVIVE_FILE))).rejects.toThrow();
+  });
+
+  test("after a clean stop, an idle session with background work gets one wake prompt; a plain idle session gets none", async () => {
+    const f = await fixture({
+      records: [{ id: IDLE }, { id: RUNNING }, { id: BACKGROUND }],
+    });
+    await recordOpenSessions({
+      paseoHome: f.home,
+      agents: [
+        { id: IDLE, lifecycle: "idle" },
+        { id: RUNNING, lifecycle: "running" },
+        { id: BACKGROUND, lifecycle: "idle", hasBackgroundWork: true },
+      ],
+    });
+    const record = JSON.parse(await readFile(path.join(f.home, REVIVE_FILE), "utf8"));
+    expect(record.openIds).toEqual([IDLE, RUNNING, BACKGROUND]);
+    expect(record.interruptedIds).toEqual([RUNNING]);
+    expect(record.backgroundIds).toEqual([BACKGROUND]);
+
+    const result = await f.run();
+
+    expect(result.reopened.sort()).toEqual([IDLE, RUNNING, BACKGROUND].sort());
+    expect(f.prompts).toEqual([RUNNING]);
+    expect(f.wakes).toHaveLength(1);
+    expect(f.wakes[0]).toContain(`${BACKGROUND}:The Fulcra daemon restarted at `);
+    expect(f.wakes[0]).toContain("Do not repeat finished steps.");
+    expect(f.loads.sort()).toEqual([RUNNING, BACKGROUND].sort());
+    expect(result.woken).toEqual([BACKGROUND]);
   });
 
   test("after a crash, the turns boot found still running are continued; idle sessions are not loaded", async () => {
@@ -384,6 +420,7 @@ describe("revive on restart", () => {
       v: 1,
       stoppedAt: "2026-10-11T09:40:03.000Z",
       openIds: [RUNNING],
+      backgroundIds: [],
       interruptedIds: [RUNNING],
     });
     // No stop record (a crash, or a broken file): nothing is written.
@@ -422,7 +459,7 @@ describe("revive on restart", () => {
 
     const result = await f.run();
 
-    expect(result).toEqual({ reopened: [], continued: [], closed: [] });
+    expect(result).toEqual({ reopened: [], continued: [], woken: [], closed: [] });
     expect(f.loads).toEqual([]);
     expect(f.status(RUNNING)).toBe("closed");
     await expect(stat(path.join(f.home, REVIVE_FILE))).rejects.toThrow();
@@ -609,6 +646,118 @@ describe("live record after an unclean stop", () => {
     await expect(stat(path.join(f.home, REVIVE_LIVE_FILE))).rejects.toThrow();
   });
 
+  test("an unclean stop wakes the idle session with background work from the live record", async () => {
+    const f = await fixture({
+      records: [
+        { id: IDLE, updatedAt: "2026-10-11T09:20:00Z" },
+        { id: RUNNING, updatedAt: "2026-10-11T09:30:00Z" },
+        { id: BACKGROUND, updatedAt: "2026-10-11T09:20:00Z" },
+      ],
+    });
+    await writeFile(
+      path.join(f.home, REVIVE_LIVE_FILE),
+      JSON.stringify({
+        v: 1,
+        stoppedAt: "2026-10-11T09:28:00Z",
+        openIds: [IDLE, RUNNING, BACKGROUND],
+        interruptedIds: [RUNNING],
+        backgroundIds: [BACKGROUND],
+      }),
+    );
+    const result = await f.run([RUNNING]);
+    expect(result.reopened.sort()).toEqual([IDLE, RUNNING, BACKGROUND].sort());
+    expect(f.prompts).toEqual([RUNNING]);
+    expect(result.woken).toEqual([BACKGROUND]);
+    expect(f.wakes).toHaveLength(1);
+    expect(f.wakes[0]).toMatch(new RegExp(`^${BACKGROUND}:The Fulcra daemon restarted at `));
+  });
+
+  test("a revive file from an older build, without backgroundIds, still works", async () => {
+    const f = await fixture({
+      records: [
+        { id: IDLE, updatedAt: "2026-10-11T09:20:00Z" },
+        { id: RUNNING, updatedAt: "2026-10-11T09:20:00Z" },
+      ],
+    });
+    await writeLive(f.home, "2026-10-11T09:28:00Z");
+    const result = await f.run([RUNNING]);
+    expect(result.reopened.sort()).toEqual([IDLE, RUNNING].sort());
+    expect(result.continued).toEqual([RUNNING]);
+    expect(result.woken).toEqual([]);
+    expect(f.wakes).toEqual([]);
+  });
+
+  test("a session with background work and no update time is still woken", async () => {
+    const f = await fixture({
+      records: [{ id: BACKGROUND, updatedAt: null as unknown as string }],
+    });
+    await writeFile(
+      path.join(f.home, REVIVE_FILE),
+      JSON.stringify({
+        v: 1,
+        stoppedAt: "2026-10-11T09:28:00Z",
+        openIds: [BACKGROUND],
+        interruptedIds: [],
+        backgroundIds: [BACKGROUND],
+      }),
+    );
+    const result = await f.run();
+    expect(result.woken).toEqual([BACKGROUND]);
+  });
+
+  test("a session that got a new message since the restart is not woken, and one listed twice is woken once", async () => {
+    const f = await fixture({
+      records: [{ id: BACKGROUND }, { id: IDLE }],
+      changes: { [IDLE]: ["a new message arrived since the restart"] },
+    });
+    await writeFile(
+      path.join(f.home, REVIVE_FILE),
+      JSON.stringify({
+        v: 1,
+        stoppedAt: "2026-10-11T09:28:00Z",
+        openIds: [BACKGROUND, IDLE],
+        interruptedIds: [],
+        backgroundIds: [BACKGROUND, IDLE, BACKGROUND],
+      }),
+    );
+    const result = await f.run();
+    expect(result.woken).toEqual([BACKGROUND]);
+    expect(f.wakes).toHaveLength(1);
+  });
+
+  test("a woken session that cannot load is logged, not named as closed to its lead", async () => {
+    const f = await fixture({
+      records: [{ id: BACKGROUND }],
+      failLoad: { [BACKGROUND]: "spawn claude ENOENT" },
+    });
+    await recordOpenSessions({
+      paseoHome: f.home,
+      agents: [{ id: BACKGROUND, lifecycle: "idle", hasBackgroundWork: true }],
+    });
+    const result = await f.run();
+    expect(result.woken).toEqual([]);
+    expect(result.closed).toEqual([]);
+    expect(f.notices).toEqual([]);
+  });
+
+  test("the recorder lists a session with background work, also from an async list", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "revive-live-"));
+    cleanup.push(home);
+    const recorder = startLiveRecorder({
+      paseoHome: home,
+      listAgents: async () => [
+        { id: IDLE, lifecycle: "idle" },
+        { id: BACKGROUND, lifecycle: "idle", hasBackgroundWork: true },
+      ],
+      logger: createTestLogger(),
+    });
+    const file = path.join(home, REVIVE_LIVE_FILE);
+    await vi.waitFor(async () =>
+      expect(JSON.parse(await readFile(file, "utf8")).backgroundIds).toEqual([BACKGROUND]),
+    );
+    await recorder.stop();
+  });
+
   test("the live record's own list of running turns is not used", async () => {
     const f = await fixture({
       records: [
@@ -699,5 +848,125 @@ describe("live record after an unclean stop", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("clean stop: background work read (FU-362)", () => {
+  test("the stop record takes the ids read earlier, not the agents' own flags", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "revive-stop-"));
+    cleanup.push(home);
+    await recordOpenSessions({
+      paseoHome: home,
+      agents: [
+        { id: IDLE, lifecycle: "idle", hasBackgroundWork: true },
+        { id: BACKGROUND, lifecycle: "idle" },
+        { id: RUNNING, lifecycle: "running" },
+      ],
+      backgroundIds: new Set([BACKGROUND, RUNNING]),
+    });
+    const record = JSON.parse(await readFile(path.join(home, REVIVE_FILE), "utf8"));
+    // A running session is cut off, never "background".
+    expect(record.backgroundIds).toEqual([BACKGROUND]);
+    expect(record.interruptedIds).toEqual([RUNNING]);
+  });
+
+  test("a read that finishes gives the ids of the sessions with work", async () => {
+    const ids = await backgroundIdsForStop({
+      paseoHome: "/nonexistent",
+      list: async () => [
+        { id: IDLE, hasBackgroundWork: false },
+        { id: BACKGROUND, hasBackgroundWork: true },
+      ],
+      logger: createTestLogger(),
+    });
+    expect([...ids]).toEqual([BACKGROUND]);
+  });
+
+  test("a read that times out or fails falls back to the ids in the live record", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "revive-stop-"));
+    cleanup.push(home);
+    await writeFile(
+      path.join(home, REVIVE_LIVE_FILE),
+      JSON.stringify({
+        v: 1,
+        stoppedAt: "2026-10-11T09:28:00Z",
+        openIds: [BACKGROUND, IDLE],
+        interruptedIds: [],
+        backgroundIds: [BACKGROUND],
+      }),
+    );
+    const slow = await backgroundIdsForStop({
+      paseoHome: home,
+      list: () => new Promise(() => undefined),
+      logger: createTestLogger(),
+      timeoutMs: 20,
+    });
+    expect([...slow]).toEqual([BACKGROUND]);
+    const failed = await backgroundIdsForStop({
+      paseoHome: home,
+      list: async () => {
+        throw new Error("spawn ps EAGAIN");
+      },
+      logger: createTestLogger(),
+    });
+    expect([...failed]).toEqual([BACKGROUND]);
+    // No live record either: an empty list, and the stop goes on.
+    const none = await backgroundIdsForStop({
+      paseoHome: path.join(home, "missing"),
+      list: async () => {
+        throw new Error("x");
+      },
+      logger: createTestLogger(),
+    });
+    expect([...none]).toEqual([]);
+  });
+});
+
+describe("background wake on the real send path (FU-362)", () => {
+  function wakeSessions() {
+    const runs: Array<{ id: string; prompt: string }> = [];
+    const live = { instanceId: "i1", labels: {}, lastUserMessageAt: null as Date | null };
+    const manager = {
+      getAgent: () => live,
+      hasInFlightRun: () => false,
+      getLimitResumeBinding: () => ({ account: "pool" }),
+      canRunUnscopedLimitResume: () => true,
+      runAgent: async (id: string, prompt: string, options: Record<symbol, unknown>) => {
+        const check = options[FINAL_INPUT_CHECK] as object;
+        // The provider handoff: the final check runs, then the handoff is confirmed.
+        assertFinalInputCheck(check);
+        runs.push({ id, prompt });
+        recordFinalInputHandoff(check);
+      },
+    } as unknown as AgentManager;
+    const sessions = defaultSessions({
+      agentManager: manager,
+      agentStorage: {} as AgentStorage,
+      paseoHome: "",
+      localServerId: null,
+      logger: createTestLogger(),
+      isEnabled: () => true,
+    });
+    return { sessions, runs, live };
+  }
+
+  test("the wake prompt goes through runAgent and the final input check, also for a pool-account session", async () => {
+    const f = wakeSessions();
+    await f.sessions.sendBackgroundWake(BACKGROUND, "wake text", null);
+    expect(f.runs).toEqual([{ id: BACKGROUND, prompt: "wake text" }]);
+    // The continue prompt still leaves a pool-account session to limit-resume.
+    expect(f.sessions.refusal(BACKGROUND, "continue")).toBe(
+      "pool account: limit-resume continues it",
+    );
+    expect(f.sessions.refusal(BACKGROUND, "wake")).toBeNull();
+  });
+
+  test("a message that arrived after the cut-off refuses the wake at the final check", async () => {
+    const f = wakeSessions();
+    f.live.lastUserMessageAt = new Date("2026-10-11T09:50:00Z");
+    await expect(f.sessions.sendBackgroundWake(BACKGROUND, "wake text", null)).rejects.toThrow(
+      "Continue after restart refused",
+    );
+    expect(f.runs).toEqual([]);
   });
 });

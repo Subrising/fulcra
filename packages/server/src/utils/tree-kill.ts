@@ -176,7 +176,7 @@ export interface OwnedProcessIdentity {
 }
 
 /** Read identities only. Do not request command arguments or environment variables. */
-async function readOwnedProcessTable(): Promise<OwnedProcessIdentity[]> {
+export async function readOwnedProcessTable(): Promise<OwnedProcessIdentity[]> {
   if (process.platform === "win32") {
     const { stdout } = await execFileAsync(
       "powershell.exe",
@@ -313,6 +313,29 @@ export async function readProcessTreeBirths(
   } catch {
     return null;
   }
+}
+
+/** A process born more than this after its provider process is work the provider started: a watch, a terminal. */
+export const SLEEP_CHILD_GRACE_MS = 30_000;
+
+export type ChildWork =
+  | { kind: "unreadable" }
+  | { kind: "running"; pids: number[] }
+  | { kind: "none" };
+
+/**
+ * The one reading of a provider process tree, for idle sleep and for the restart record. Idle sleep refuses on
+ * "unreadable" and "running" (fail closed). The restart record counts only "running": an unreadable tree is no
+ * evidence of work, and a failed read must not wake every session.
+ */
+export function classifyChildWork(tree: ProcessTreeBirths | null): ChildWork {
+  if (!tree) return { kind: "unreadable" };
+  const late = tree.descendants.filter(
+    (entry) => entry.bornMs - tree.rootBornMs > SLEEP_CHILD_GRACE_MS,
+  );
+  return late.length > 0
+    ? { kind: "running", pids: late.map((entry) => entry.pid) }
+    : { kind: "none" };
 }
 
 async function captureOwnedProcessTree(child: TreeKillTarget): Promise<OwnedProcessTree | null> {
