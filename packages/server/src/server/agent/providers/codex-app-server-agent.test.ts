@@ -1759,6 +1759,7 @@ describe("Codex app-server provider", () => {
   test("computer use accepts listed apps without a permission event and logs each accept", async () => {
     const appServer = createFakeCodexAppServer();
     const changed = vi.fn();
+    const decision = vi.fn();
     const session = new CodexAppServerAgentSession(
       createConfig({
         modeId: "full-access",
@@ -1767,7 +1768,7 @@ describe("Codex app-server provider", () => {
       { sessionId: "thread-1" },
       createTestLogger(),
       async () => appServer.child,
-      { computerUsePolicy: { approve: () => true, changed } },
+      { computerUsePolicy: { approve: () => true, changed, decision } },
     );
     await session.connect();
     const events: AgentStreamEvent[] = [];
@@ -1784,6 +1785,19 @@ describe("Codex app-server provider", () => {
       expect(events.filter((event) => event.type === "permission_requested")).toEqual([]);
       expect(session.getPendingPermissions()).toEqual([]);
       expect(changed).toHaveBeenCalledTimes(2);
+      expect(decision).toHaveBeenCalledTimes(3);
+      expect(decision).toHaveBeenNthCalledWith(
+        1,
+        session,
+        expect.objectContaining({ name: "CodexMcpElicitation", id: expect.any(String) }),
+        expect.objectContaining({ app: "VRoid Studio", action: "accept", source: "listed" }),
+      );
+      expect(decision).toHaveBeenNthCalledWith(
+        2,
+        session,
+        expect.anything(),
+        expect.objectContaining({ action: "accept", source: "remembered" }),
+      );
       expect(events.filter((event) => event.type === "timeline")).toEqual(
         ["VRoid Studio", "VRoid Studio", "Simulator"].map((app) => ({
           type: "timeline",
@@ -1806,11 +1820,13 @@ describe("Codex app-server provider", () => {
     "computer use remembers an unlisted app %s once per session",
     async (behavior) => {
       const appServer = createFakeCodexAppServer();
+      const observed = vi.fn();
       const session = new CodexAppServerAgentSession(
         createConfig({ modeId: "full-access" }),
         { sessionId: "thread-1" },
         createTestLogger(),
         async () => appServer.child,
+        { computerUsePolicy: { approve: () => true, changed: () => {}, decision: observed } },
       );
       await session.connect();
       const events: AgentStreamEvent[] = [];
@@ -1830,6 +1846,15 @@ describe("Codex app-server provider", () => {
         request("Simulator");
         await expect(appServer.waitForMcpElicitationDecision()).resolves.toEqual(decision);
         expect(events.filter((event) => event.type === "permission_requested")).toHaveLength(1);
+        expect(observed).toHaveBeenCalledWith(
+          session,
+          expect.objectContaining({ name: "CodexMcpElicitation" }),
+          expect.objectContaining({
+            action: decision.action,
+            source: "remembered",
+            app: "Simulator",
+          }),
+        );
         expect(session.describePersistence()?.metadata.computerUseDecisions).toEqual({
           [JSON.stringify(["Simulator", "test.simulator"])]: decision.action,
         });

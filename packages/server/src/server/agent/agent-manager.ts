@@ -19,6 +19,7 @@ import {
 } from "./host-public-baseline.js";
 import type { SessionInboundMessage } from "@getpaseo/protocol/messages";
 import { PermissionAttentionError } from "./permission-attention-error.js";
+import { permissionAudit } from "./permission-audit.js";
 import { retainRecordedUsage } from "./usage-recording.js";
 import { fingerprintLimitResumeBinding } from "../limit-resume/binding.js";
 import { registerOwnerArtifactContent } from "../owner-report-read.js";
@@ -6588,7 +6589,27 @@ export class AgentManager {
       async () => {
         const agent = this.requireAgent(agentId);
         const originalRequestId = requestId;
-        requestId = this.trustedPlugins.permission(agent, requestId, response);
+        const auditRequest = agent.pendingPermissions.get(requestId);
+        const auditSource =
+          this.trustedPlugins.captureOperation()?.operation.pluginId ??
+          this.trustedPlugins.currentInputSource() ??
+          "unattributed";
+        try {
+          requestId = this.trustedPlugins.permission(agent, requestId, response);
+        } catch (error) {
+          this.logger.info(
+            permissionAudit(
+              agent,
+              auditRequest,
+              requestId,
+              "deny",
+              "trusted-permission-guard",
+              auditSource,
+            ),
+            "Permission response refused",
+          );
+          throw error;
+        }
         if (requestId !== originalRequestId && !agent.pendingPermissions.has(requestId)) {
           throw new Error("Rewritten permission request is not pending on this agent");
         }
@@ -6596,10 +6617,37 @@ export class AgentManager {
           throw new Error("A response to this permission request is already being submitted");
         }
         agent.inFlightPermissionResponses.add(requestId);
+        const deliveredRequest = agent.pendingPermissions.get(requestId) ?? auditRequest;
 
         try {
           const result = await nativeDispatch(() =>
             agent.session.respondToPermission(requestId, response),
+          ).catch((error: unknown) => {
+            this.logger.info(
+              permissionAudit(
+                agent,
+                auditRequest,
+                requestId,
+                "failed",
+                "permission-response",
+                auditSource,
+              ),
+              "Permission response failed",
+            );
+            throw error;
+          });
+          this.logger.info(
+            permissionAudit(
+              agent,
+              deliveredRequest && response.behavior === "allow" && response.updatedInput
+                ? { ...deliveredRequest, input: response.updatedInput }
+                : deliveredRequest,
+              requestId,
+              response.behavior === "deny" ? "deny" : "allow",
+              "permission-response",
+              auditSource,
+            ),
+            "Permission response delivered",
           );
           agent.pendingPermissions.delete(requestId);
 
@@ -8978,8 +9026,23 @@ export class AgentManager {
       !agent.archivedAt &&
       !this.inFlightAgentCloses.has(agent.id) &&
       !this.mcpRefreshes.has(agent.id);
-    if (agent.internal || !this.trustedPlugins.automaticPermission(agent, event.request))
+    if (agent.internal) return false;
+    const audit = (decision: "allow" | "defer" | "failed") =>
+      this.logger.info(
+        permissionAudit(
+          agent,
+          event.request,
+          event.request.id,
+          decision,
+          "trusted-automatic-permission",
+          "daemon",
+        ),
+        "Automatic permission decision",
+      );
+    if (!this.trustedPlugins.automaticPermission(agent, event.request)) {
+      audit("defer");
       return false;
+    }
     let pending = this.automaticPermissions.get(agent.id);
     if (!pending) this.automaticPermissions.set(agent.id, (pending = new Map()));
     const automatic = { current, completed: false };
@@ -8995,6 +9058,7 @@ export class AgentManager {
           return;
         }
         if (!this.trustedPlugins.automaticPermission(agent, event.request)) {
+          audit("defer");
           this.forgetAutomaticPermission(agent.id, event.request.id, automatic);
           this.onStreamPermissionRequested(agent, event);
           return;
@@ -9002,11 +9066,13 @@ export class AgentManager {
         return Promise.resolve(
           session.respondToPermission(event.request.id, { behavior: "allow" }),
         ).then(() => {
+          audit("allow");
           this.completeAutomaticPermission(agent, event.request.id, automatic, false);
           return undefined;
         });
       })
       .catch((error: unknown) => {
+        audit("failed");
         const owns = this.forgetAutomaticPermission(agent.id, event.request.id, automatic);
         this.logger.warn(
           { err: error, agentId: agent.id },
@@ -9976,11 +10042,41 @@ export class AgentManager {
     const context: AgentLaunchContext = {
       agentId,
       computerUsePolicy: {
+        decision: (session, request, decision) => {
+          const agent = this.currentComputerUseSession(agentId, session);
+          if (!agent || request.metadata?.threadId !== session.id) return;
+          const record = permissionAudit(
+            agent,
+            request,
+            request.id,
+            decision.action === "accept" ? "allow" : "deny",
+            "computer-use-" + decision.source,
+            "daemon",
+          );
+          this.logger.info(
+            {
+              ...record,
+              target: {
+                ...record.target,
+                app: decision.app,
+                bundleId: decision.bundleId,
+                serverName: decision.serverName,
+              },
+            },
+            "Computer Use consent decision",
+          );
+        },
         approve: (session, request) => {
           const agent = this.currentComputerUseSession(agentId, session);
           if (!agent || request.metadata?.threadId !== session.id) return false;
           const allowed = this.trustedPlugins.automaticPermission(agent, request, true);
-          return allowed && this.currentComputerUseSession(agentId, session) === agent;
+          const eligible = allowed && this.currentComputerUseSession(agentId, session) === agent;
+          if (!eligible)
+            this.logger.info(
+              permissionAudit(agent, request, request.id, "defer", "computer-use-policy", "daemon"),
+              "Computer Use automatic approval refused",
+            );
+          return eligible;
         },
         changed: (session) => {
           const agent = this.currentComputerUseSession(agentId, session);

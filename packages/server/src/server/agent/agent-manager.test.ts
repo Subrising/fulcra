@@ -4394,7 +4394,11 @@ test("createAgent passes daemon launch env through the provider launch context",
   });
   expect(client.lastLaunchContext).toEqual({
     agentId: snapshot.id,
-    computerUsePolicy: { approve: expect.any(Function), changed: expect.any(Function) },
+    computerUsePolicy: {
+      approve: expect.any(Function),
+      changed: expect.any(Function),
+      decision: expect.any(Function),
+    },
     env: {
       PASEO_AGENT_ID: snapshot.id,
       PASEO_AGENT_CWD: workdir,
@@ -5725,7 +5729,11 @@ test("resumeAgentFromPersistence keeps metadata config, applies overrides, and p
   expect(client.lastResumeOverrides).not.toHaveProperty("modeId");
   expect(client.lastResumeLaunchContext).toEqual({
     agentId: resumed.id,
-    computerUsePolicy: { approve: expect.any(Function), changed: expect.any(Function) },
+    computerUsePolicy: {
+      approve: expect.any(Function),
+      changed: expect.any(Function),
+      decision: expect.any(Function),
+    },
     env: {
       PASEO_AGENT_ID: resumed.id,
       PASEO_AGENT_CWD: workdir,
@@ -5834,7 +5842,11 @@ test("importProviderSession imports the selected session without listing and pub
   expect(client.importInput).toEqual({ providerHandleId: "thread-selected", cwd: workdir });
   expect(client.importLaunchContext).toEqual({
     agentId: imported.id,
-    computerUsePolicy: { approve: expect.any(Function), changed: expect.any(Function) },
+    computerUsePolicy: {
+      approve: expect.any(Function),
+      changed: expect.any(Function),
+      decision: expect.any(Function),
+    },
     env: {
       PASEO_AGENT_ID: imported.id,
       PASEO_AGENT_CWD: workdir,
@@ -5938,7 +5950,11 @@ test("reloadAgentSession passes daemon launch env through the provider launch co
 
   expect(client.lastCreateLaunchContext).toEqual({
     agentId: snapshot.id,
-    computerUsePolicy: { approve: expect.any(Function), changed: expect.any(Function) },
+    computerUsePolicy: {
+      approve: expect.any(Function),
+      changed: expect.any(Function),
+      decision: expect.any(Function),
+    },
     env: {
       PASEO_AGENT_ID: snapshot.id,
       PASEO_AGENT_CWD: workdir,
@@ -5951,7 +5967,11 @@ test("reloadAgentSession passes daemon launch env through the provider launch co
 
   expect(client.lastResumeLaunchContext).toEqual({
     agentId: snapshot.id,
-    computerUsePolicy: { approve: expect.any(Function), changed: expect.any(Function) },
+    computerUsePolicy: {
+      approve: expect.any(Function),
+      changed: expect.any(Function),
+      decision: expect.any(Function),
+    },
     env: {
       PASEO_AGENT_ID: snapshot.id,
       PASEO_AGENT_CWD: workdir,
@@ -13119,9 +13139,12 @@ test("trusted permission rewrite reaches provider and emits resolved event", asy
   const respond = vi.spyOn(session, "respondToPermission");
   const client = new TestAgentClient();
   vi.spyOn(client, "createSession").mockResolvedValue(session);
+  const auditLogger = createTestLogger();
+  vi.spyOn(auditLogger, "child").mockReturnValue(auditLogger);
+  const audit = vi.spyOn(auditLogger, "info");
   const manager = new AgentManager({
     clients: { codex: client },
-    logger: createTestLogger(),
+    logger: auditLogger,
     trustedPlugins,
   });
   const events: AgentManagerEvent[] = [];
@@ -13129,11 +13152,28 @@ test("trusted permission rewrite reaches provider and emits resolved event", asy
   const agent = await manager.createAgent(config, undefined, { workspaceId: undefined });
   try {
     const live = manager.getAgent(agent.id)!;
-    live.pendingPermissions.set("canonical", { id: "canonical" } as never);
+    live.pendingPermissions.set("alias", {
+      id: "alias",
+      provider: "codex",
+      kind: "tool",
+      name: "WrongTool",
+      input: { command: "wrong" },
+    });
+    live.pendingPermissions.set("canonical", {
+      id: "canonical",
+      provider: "codex",
+      kind: "tool",
+      name: "CorrectTool",
+      input: { command: "correct" },
+    });
     await trustedPlugins.rpc(undefined, () =>
       manager.respondToPermission(agent.id, "alias", { behavior: "deny" }),
     );
     expect(respond).toHaveBeenCalledWith("canonical", { behavior: "deny" });
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: "canonical", tool: "CorrectTool", decision: "deny" }),
+      "Permission response delivered",
+    );
     expect(
       events.filter(
         (event) => event.type === "agent_stream" && event.event.type === "permission_resolved",
@@ -13569,10 +13609,13 @@ async function automaticPermissionRun(
     }
   }
   const attention: string[] = [];
+  const auditLogger = logger.child({});
+  vi.spyOn(auditLogger, "child").mockReturnValue(auditLogger);
+  const audit = vi.spyOn(auditLogger, "info");
   const manager = new AgentManager({
     clients: { codex: new AutoClient() },
     registry: storage,
-    logger,
+    logger: auditLogger,
     onAgentAttention: ({ reason }) => attention.push(reason),
   });
   const replaceSession = (id: string) => {
@@ -13619,6 +13662,9 @@ async function automaticPermissionRun(
   } else await vi.waitFor(() => expect(allow ? responses.length : maxPending).toBe(1));
   unsubscribe();
   return {
+    manager,
+    agentId: agent.id,
+    audit,
     responses,
     attention,
     seen,
@@ -13632,6 +13678,16 @@ async function automaticPermissionRun(
 test("FIX-8 Z: a permission a trusted plugin allows is answered before it is surfaced", async () => {
   const run = await automaticPermissionRun(true);
   expect(run.asked).toHaveLength(2);
+  expect(run.audit).toHaveBeenCalledWith(
+    expect.objectContaining({
+      event: "permission.decision",
+      agentId: run.agentId,
+      tool: "mcp__docs__search",
+      decision: "allow",
+      rule: "trusted-automatic-permission",
+    }),
+    "Automatic permission decision",
+  );
   expect(run.responses).toEqual([["perm-auto", { behavior: "allow" }]]);
   expect(run.maxPending).toBe(0);
   expect(run.attention).not.toContain("permission");
@@ -13667,6 +13723,28 @@ test("FIX-8 Z: a permission the trusted plugin does not allow is surfaced as bef
   expect(run.responses).toEqual([]);
   expect(run.pending).toBe(1);
   expect(run.seen).toContain("permission_requested");
+  expect(run.audit).toHaveBeenCalledWith(
+    expect.objectContaining({ decision: "defer" }),
+    "Automatic permission decision",
+  );
+});
+test("FU-339: a delivered deny writes a session and rule record", async () => {
+  const run = await automaticPermissionRun(false);
+  await run.manager.trustedPlugins.rpc(undefined, () =>
+    run.manager.respondToPermission(run.agentId, "perm-auto", { behavior: "deny" }),
+  );
+  expect(run.audit).toHaveBeenCalledWith(
+    expect.objectContaining({
+      event: "permission.decision",
+      agentId: run.agentId,
+      requestId: "perm-auto",
+      tool: "mcp__docs__search",
+      decision: "deny",
+      rule: "permission-response",
+      source: "human",
+    }),
+    "Permission response delivered",
+  );
 });
 test("failed startup history closes the session without registering an agent", async () => {
   let closed = false;
@@ -15838,5 +15916,53 @@ test("waitForAgentEvent waits through pending admission and removes its subscrip
     await manager.flush();
     await storage.flush();
     rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("FU-339: computer-use observations retain identity and distinguish eligibility from consent", async () => {
+  const f = await quietMcpFixture();
+  try {
+    const audit = vi.spyOn(
+      (f.manager as unknown as { logger: ReturnType<typeof createTestLogger> }).logger,
+      "info",
+    );
+    const policy = f.client.launchContexts[0]!.computerUsePolicy!;
+    const session = f.client.sessions[0];
+    const request = {
+      id: "app-request",
+      provider: "codex",
+      name: "CodexMcpElicitation",
+      kind: "tool" as const,
+      metadata: { threadId: session.id },
+    };
+    for (const action of ["accept", "decline"] as const) {
+      policy.decision!(session, request, {
+        action,
+        source: "remembered",
+        app: "Example App",
+        bundleId: "example.app",
+        serverName: "cua_repl",
+      });
+      expect(audit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: f.created.id,
+          sessionId: session.id,
+          requestId: "app-request",
+          tool: "CodexMcpElicitation",
+          decision: action === "accept" ? "allow" : "deny",
+          rule: "computer-use-remembered",
+          target: expect.objectContaining({ app: "Example App", bundleId: "example.app" }),
+        }),
+        "Computer Use consent decision",
+      );
+    }
+    vi.spyOn(f.manager.trustedPlugins, "automaticPermission").mockReturnValue(false);
+    expect(policy.approve(session, request)).toBe(false);
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({ decision: "defer", rule: "computer-use-policy" }),
+      "Computer Use automatic approval refused",
+    );
+  } finally {
+    await f.cleanup();
   }
 });

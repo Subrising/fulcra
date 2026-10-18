@@ -674,6 +674,18 @@ export interface AgentSessionConfig {
 }
 
 export interface AgentComputerUsePolicy {
+  /** Observation only. This callback grants no authority. */
+  decision?(
+    session: AgentSession,
+    request: AgentPermissionRequest,
+    decision: {
+      action: "accept" | "decline";
+      source: "listed" | "remembered";
+      app: string;
+      bundleId: string;
+      serverName: string;
+    },
+  ): void;
   approve(session: AgentSession, request: AgentPermissionRequest): boolean;
   changed(session: AgentSession): void;
 }
