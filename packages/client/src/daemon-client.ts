@@ -3259,11 +3259,17 @@ export class DaemonClient {
 
   async archiveAgent(
     agentId: string,
-    options?: { confirmed?: boolean },
-  ): Promise<{ archivedAt: string }> {
+    options?: { confirmed?: boolean; transferLedgerOwnership?: boolean },
+  ): Promise<{ archivedAt: string; transferredLedgerItems?: string[] }> {
+    if (
+      options?.transferLedgerOwnership &&
+      this.lastServerInfoMessage?.features?.agentArchiveLedgerTransfer !== true
+    )
+      throw new Error("Update the host to transfer ledger ownership at archive.");
     const requestId = this.createRequestId();
     const message = SessionInboundMessageSchema.parse({
       type: "archive_agent_request",
+      ...(options?.transferLedgerOwnership ? { transferLedgerOwnership: true } : {}),
       ...(options?.confirmed ? { confirmed: true } : {}),
       agentId,
       requestId,
@@ -3282,7 +3288,12 @@ export class DaemonClient {
         return msg.payload;
       },
     });
-    return { archivedAt: result.archivedAt };
+    return {
+      archivedAt: result.archivedAt,
+      ...(result.transferredLedgerItems
+        ? { transferredLedgerItems: result.transferredLedgerItems }
+        : {}),
+    };
   }
 
   /** Native owner-only parent adoption; this changes core parent metadata, not role authority. */

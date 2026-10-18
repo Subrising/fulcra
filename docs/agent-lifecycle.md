@@ -402,6 +402,18 @@ Provider session connection owns every process it spawns until the session is re
 `connect()` must dispose that process before rethrowing; the manager cannot clean up a session it never
 received.
 
+### Ledger ownership at archive
+
+An open ledger item blocks normal archive. The refusal names each item and its close or transfer command.
+A worker's DONE report offers a transfer when open items remain.
+
+The worker's current lead can request `fulcra archive <worker-id> --force`.
+This transfers each open item to the lead before archive. The ledger keeps the former owner and date in the status.
+The result lists the transferred items. A failed transfer leaves the worker unarchived; completed transfers remain with the lead.
+
+Forced archive still refuses project leads, whole-project ledger owners, unread reports, and pending messages.
+It also keeps the work acceptance checks. Transfer uses the same project lock as the ledger CLI and checks the previous owner and status.
+
 ## Tabs vs archive
 
 These are two distinct concepts that used to be conflated:

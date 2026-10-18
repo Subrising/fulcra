@@ -44,7 +44,7 @@ def receipt_store(root):
     return database
 
 def main(data):
-    if data['action'] not in ('inspect', 'ready', 'claim', 'receipt', 'abandon'): raise ValueError('Unknown ledger action')
+    if data['action'] not in ('inspect', 'ready', 'claim', 'receipt', 'abandon', 'archive-transfer'): raise ValueError('Unknown ledger action')
     root = os.path.realpath(data['root'])
     if '/ledger/mirror' in root or root.endswith('/mirror'): raise ValueError('Ledger mirrors cannot dispatch')
     project = data['project']
@@ -62,7 +62,15 @@ def main(data):
             found = receipts.execute('SELECT sessionId, generation FROM consumed WHERE project=? AND item=? AND operationId=?', (project, row[0], data['operationId'])).fetchone()
             return dict(ok=bool(found and found[0]), sessionId=found[0] if found else None, generation=found[1] if found else None)
         if data['action'] == 'inspect': return dict(ok=True, digest=digest(row))
-        if data['action'] == 'ready':
+        if data['action'] == 'archive-transfer':
+            if row[3] != data['expectedOwner'] or row[4] != data['expectedStatus'] or re.match(r'^(DONE|MOVED)\b', row[4], re.I):
+                return dict(ok=False, reason='ledger ownership or status changed')
+            owner, note = data['owner'], data['note']
+            if not owner.strip() or any(c in owner+note for c in '|\r\n'):
+                raise ValueError('Invalid transfer text')
+            row[3] = owner
+            row[4] += '; '+note
+        elif data['action'] == 'ready':
             if digest(row) != data['digest']: return dict(ok=False, reason='item admission changed')
             row[4] = 'READY'
         elif data['action'] == 'claim':

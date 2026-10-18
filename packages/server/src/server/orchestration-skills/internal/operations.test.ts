@@ -568,6 +568,36 @@ describe("installSkills / updateSkills", () => {
     ).toBe("untracked skill");
   });
 
+  it.each(["root", "skill"])(
+    "FU-335: maintenance keeps an external linked Codex %s",
+    async (shape) => {
+      await writeCurrentBundle(sandbox.targets.sourceDir);
+      await installSkills(sandbox.targets, ALL_SKILLS);
+      const external = path.join(sandbox.root, "external");
+      const content = "paseo-v1";
+      const manifest = JSON.stringify({
+        version: 1,
+        files: { "SKILL.md": createHash("sha256").update(content).digest("hex") },
+      });
+      const skill = shape === "root" ? path.join(external, "paseo") : external;
+      await writeFiles(skill, { "SKILL.md": content, ".paseo-managed-files.json": manifest });
+      const link =
+        shape === "root" ? sandbox.targets.codexDir : path.join(sandbox.targets.codexDir, "paseo");
+      await fs.mkdir(path.dirname(link), { recursive: true });
+      await fs.symlink(external, link, "dir");
+      for (let pass = 0; pass < 2; pass++) {
+        const status = await autoUpdateInstalledSkills(sandbox.targets, ALL_SKILLS);
+        expect(status.state).toBe("up-to-date");
+        expect(status.ops).toEqual([]);
+        expect(await fs.readFile(path.join(skill, "SKILL.md"), "utf8")).toBe(content);
+        expect(await fs.readFile(path.join(skill, ".paseo-managed-files.json"), "utf8")).toBe(
+          manifest,
+        );
+        expect((await fs.lstat(link)).isSymbolicLink()).toBe(true);
+      }
+    },
+  );
+
   it("offers an update when the edited Codex copy links to shared skills", async () => {
     await writeCurrentBundle(sandbox.targets.sourceDir);
     await installSkills(sandbox.targets, ALL_SKILLS);

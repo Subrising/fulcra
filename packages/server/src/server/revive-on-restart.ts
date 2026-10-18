@@ -447,7 +447,11 @@ export function defaultSessions(deps: ReviveDeps): ReviveSessions {
       if (!stored || stored.archivedAt) return "archived or removed since the restart";
       // Boot set every open session back to idle: "closed" now means a user closed it during the settle time.
       if (stored.lastStatus === "closed") return "closed by hand since the restart";
-      if ((stored.lastUserMessageAt ?? null) !== cutAt || liveMessageAt(id) !== cutAt)
+      const live = agentManager.getAgent(id);
+      if (
+        (stored.lastUserMessageAt ?? null) !== cutAt ||
+        (live && (live.lastUserMessageAt?.toISOString() ?? null) !== cutAt)
+      )
         return "a new message arrived since the restart";
       return null;
     },

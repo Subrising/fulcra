@@ -984,8 +984,8 @@ console.log(JSON.stringify(a.includes('PUT') ? f.merged : a.some(x=>x.includes('
     const base = {
       pr: {
         state: "open",
-        base: { ref: "main" },
-        head: { sha },
+        base: { ref: "main", repo: { full_name: "Subrising/fulcra" } },
+        head: { sha, repo: { full_name: "Subrising/fulcra" } },
         draft: false,
         title: "Safe title",
       },
@@ -1105,6 +1105,10 @@ console.log(JSON.stringify(a.includes('PUT') ? f.merged : a.some(x=>x.includes('
       assert.notEqual(run("Check the PR, tested SHA, and merge title", dispatched), 0);
     }
     for (const change of [
+      (f) => (f.pr.head.repo.full_name = "outside/fork"),
+      (f) => (f.pr.head.repo = null),
+      (f) => delete f.pr.head.repo,
+      (f) => (f.pr.base.repo.full_name = "outside/fork"),
       (f) => (f.ci.path = ".github/workflows/other.yml"),
       (f) => (f.ci.head_sha = "c".repeat(40)),
       (f) => (f.ci.event = "workflow_dispatch"),
@@ -1702,6 +1706,19 @@ test("prebuilt web server serves SPA routes without masking missing bundle asset
     await server.close();
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("FU-371: shared merge admission rejects a fork PR even with the tested SHA", async () => {
+  const { assertPRHead } = await import("../.github/scripts/ci-check.mjs");
+  const { pr } = proofFixture().data;
+  assert.doesNotThrow(() => assertPRHead(pr, pr.head.sha));
+  for (const repo of [{ full_name: "outside/fork" }, null, undefined]) {
+    assert.throws(() => assertPRHead({ ...pr, head: { ...pr.head, repo } }, pr.head.sha));
+  }
+  assert.throws(() =>
+    assertPRHead({ ...pr, base: { ...pr.base, repo: { full_name: "outside/fork" } } }, pr.head.sha),
+  );
+  assert.throws(() => assertPRHead(pr, "f".repeat(40)));
 });
 
 test("CI selection ignores cancelled runs and refuses failures or incomplete checks", async () => {

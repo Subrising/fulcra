@@ -1,4 +1,5 @@
 import { agentMcpToken } from "./agent-mcp-token.js";
+import { heldSendsFor } from "../held-sends.js";
 import { registerArchiveReportCount } from "../archive-observation.js";
 import { archiveAgentCommand as archiveSafetyCommand } from "./lifecycle-command.js";
 import { mkdirSync } from "node:fs";
@@ -15328,7 +15329,8 @@ test.each([
           manager.withArchiveConfirmation(agent.id, run),
         ),
       ).rejects.toThrow("confirmation");
-    } else await expect(run()).rejects.toThrow("Confirm in the app");
+    } else if (kind === "ledger") await expect(run()).rejects.toThrow("ledger close fixture FX-1");
+    else await expect(run()).rejects.toThrow("Confirm in the app");
     expect(await storage.get(agent.id)).toEqual(before);
     expect(cancel).not.toHaveBeenCalled();
     expect(client.archivedHandles).toHaveLength(0);
@@ -16046,3 +16048,103 @@ test.each([false, true])(
     }
   },
 );
+
+test.each([
+  "normal",
+  "confirmed",
+  "transfer",
+  "wrong-lead",
+  "lead",
+  "project-owner",
+  "report",
+  "message",
+  "failure",
+])("FU-370 archive ledger ownership: %s", async (mode) => {
+  const workdir = mkdtempSync(join(tmpdir(), "archive-ledger-transfer-"));
+  const ledger = join(workdir, "ledgers");
+  mkdirSync(join(ledger, "fixture"), { recursive: true });
+  const file = join(ledger, "fixture", "OPEN-ITEMS.md");
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const client = new NativeArchiveRecordingClient();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: storage,
+    logger,
+    archiveLedgerDirectory: ledger,
+  });
+  registerArchiveReportCount(manager, () => (mode === "report" ? 1 : 0));
+  let releaseMessage: (() => void) | undefined;
+  try {
+    const lead = await manager.createAgent(
+      { provider: "codex", cwd: workdir, title: "Fixture lead" },
+      undefined,
+      { labels: { "fulcra.role": "orchestration" } },
+    );
+    const worker = await manager.createAgent(
+      {
+        provider: "codex",
+        cwd: workdir,
+        title: mode === "project-owner" ? "fixture" : "Finished worker",
+      },
+      undefined,
+      {
+        labels: {
+          "fulcra.reports-to": mode === "wrong-lead" ? "another-lead" : lead.id,
+          ...(mode === "lead" ? { "fulcra.role": "orchestration" } : {}),
+        },
+      },
+    );
+    const original = `| FX-1 | Work | FIX | ${mode === "project-owner" ? "fixture" : "Finished worker"} | OPEN | retained evidence | retained source |\n`;
+    writeFileSync(file, original);
+    if (mode === "message")
+      heldSendsFor(manager, logger).hold(
+        worker.id,
+        () =>
+          new Promise<void>((resolve) => {
+            releaseMessage = resolve;
+          }),
+      );
+    if (mode === "failure") mkdirSync(`${file}.lock`);
+    const run = () =>
+      archiveSafetyCommand({ agentManager: manager, agentStorage: storage, logger }, worker.id);
+    if (mode === "normal" || mode === "transfer") {
+      const offer = await manager.archiveLedgerTransferOffer(worker.id);
+      expect(offer).toContain("FX-1");
+      expect(offer).toContain(`fulcra archive ${worker.id} --force`);
+      expect(readFileSync(file, "utf8")).toBe(original);
+    }
+    if (mode === "normal") await expect(run()).rejects.toThrow("ledger close fixture FX-1");
+    else if (mode === "confirmed") {
+      await expect(
+        manager.trustedPlugins.rpc(undefined, () =>
+          manager.withArchiveConfirmation(worker.id, run),
+        ),
+      ).rejects.toThrow("ledger close fixture FX-1");
+      expect((await storage.get(worker.id))?.archivedAt).toBeFalsy();
+      expect(readFileSync(file, "utf8")).toBe(original);
+    } else if (mode === "transfer") {
+      const result = await manager.withAgentCaller(lead.id, () =>
+        manager.withArchiveLedgerTransfer(worker.id, run),
+      );
+      expect(result.transferredLedgerItems).toEqual(["fixture/FX-1"]);
+      expect((await storage.get(worker.id))?.archivedAt).toEqual(expect.any(String));
+      const text = readFileSync(file, "utf8");
+      expect(text).toContain(`Fixture lead (${lead.id.slice(0, 8)})`);
+      expect(text).toContain(`moved from Finished worker (${worker.id.slice(0, 8)}) at archive`);
+      expect(text).toContain("retained evidence | retained source");
+    } else {
+      await expect(
+        manager.withAgentCaller(lead.id, () => manager.withArchiveLedgerTransfer(worker.id, run)),
+      ).rejects.toThrow();
+      expect((await storage.get(worker.id))?.archivedAt).toBeFalsy();
+      expect(readFileSync(file, "utf8")).toBe(original);
+      expect(client.archivedHandles).toHaveLength(0);
+    }
+  } finally {
+    releaseMessage?.();
+    heldSendsFor(manager, logger).close();
+    for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
+    await manager.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});

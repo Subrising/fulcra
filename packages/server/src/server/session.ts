@@ -3710,7 +3710,12 @@ export class Session {
           purgeHistory: msg.purgeHistory === true,
         });
       case "archive_agent_request":
-        return this.handleArchiveAgentRequest(msg.agentId, msg.requestId, msg.confirmed);
+        return this.handleArchiveAgentRequest(
+          msg.agentId,
+          msg.requestId,
+          msg.confirmed,
+          msg.transferLedgerOwnership,
+        );
       case "close_items_request":
         return this.handleCloseItemsRequest(msg);
       case "update_agent_request":
@@ -4491,20 +4496,29 @@ export class Session {
     agentId: string,
     requestId: string,
     confirmed?: boolean,
+    transferLedgerOwnership?: boolean,
   ): Promise<void> {
     this.sessionLogger.info({ agentId }, `Archiving agent ${agentId}`);
 
     if (confirmed && !this.supports(CLIENT_CAPS.archiveConfirmation))
       throw new Error("Protected archive requires confirmation from the app.");
-    const { archivedAt } = confirmed
-      ? await this.agentManager.withArchiveConfirmation(agentId, () =>
+    const transfer = transferLedgerOwnership
+      ? await this.agentManager.withArchiveLedgerTransfer(agentId, () =>
           this.archiveAgentForClose(agentId),
         )
-      : await this.archiveAgentForClose(agentId);
+      : undefined;
+    let archivedAt: string;
+    if (transfer) archivedAt = transfer.result.archivedAt;
+    else if (confirmed) {
+      ({ archivedAt } = await this.agentManager.withArchiveConfirmation(agentId, () =>
+        this.archiveAgentForClose(agentId),
+      ));
+    } else ({ archivedAt } = await this.archiveAgentForClose(agentId));
 
     this.emit({
       type: "agent_archived",
       payload: {
+        ...(transfer ? { transferredLedgerItems: transfer.transferredLedgerItems } : {}),
         agentId,
         archivedAt,
         requestId,

@@ -778,3 +778,26 @@ test("observation usage RPC remains additive and explicitly gated", () => {
     }).payload.sessionAccount,
   ).toBeNull();
 });
+
+test("FU-370: archive transfer fields remain optional on legacy messages", () => {
+  const request = { type: "archive_agent_request", requestId: "r", agentId: "worker" };
+  expect(SessionInboundMessageSchema.parse(request)).toEqual(request);
+  expect(SessionInboundMessageSchema.parse({ ...request, transferLedgerOwnership: true })).toEqual({
+    ...request,
+    transferLedgerOwnership: true,
+  });
+  const response = {
+    type: "agent_archived",
+    payload: { agentId: "worker", requestId: "r", archivedAt: "2026-10-19T00:00:00Z" },
+  };
+  expect(SessionOutboundMessageSchema.parse(response)).toEqual(response);
+  expect(
+    SessionOutboundMessageSchema.parse({
+      ...response,
+      payload: { ...response.payload, transferredLedgerItems: ["fixture/FX-1"] },
+    }),
+  ).toEqual({
+    ...response,
+    payload: { ...response.payload, transferredLedgerItems: ["fixture/FX-1"] },
+  });
+});

@@ -12,6 +12,7 @@ export interface AgentArchiveResult {
   agentId: string;
   status: "archived";
   archivedAt: string;
+  transferredLedgerItems?: string[];
 }
 
 /** Schema for archive command output */
@@ -21,6 +22,7 @@ export const archiveSchema: OutputSchema<AgentArchiveResult> = {
     { header: "AGENT ID", field: "agentId" },
     { header: "STATUS", field: "status" },
     { header: "ARCHIVED AT", field: "archivedAt" },
+    { header: "TRANSFERRED LEDGER ITEMS", field: "transferredLedgerItems" },
   ],
 };
 
@@ -28,7 +30,10 @@ export function addArchiveOptions(cmd: Command): Command {
   return cmd
     .description("Archive an agent (soft-delete)")
     .argument("<id>", "Agent ID, prefix, or name")
-    .option("--force", "Force archive running agent (interrupts active run first)");
+    .option(
+      "--force",
+      "Transfer open ledger items to the calling lead, then archive (interrupts an active run)",
+    );
 }
 
 export interface AgentArchiveOptions extends CommandOptions {
@@ -113,7 +118,10 @@ export async function runArchiveCommand(
     }
 
     // Archive the agent
-    const result = await client.archiveAgent(agentId);
+    const result = await client.archiveAgent(
+      agentId,
+      options.force ? { transferLedgerOwnership: true } : undefined,
+    );
 
     await client.close();
 
@@ -123,6 +131,9 @@ export async function runArchiveCommand(
         agentId,
         status: "archived",
         archivedAt: result.archivedAt,
+        ...(result.transferredLedgerItems
+          ? { transferredLedgerItems: result.transferredLedgerItems }
+          : {}),
       },
       schema: archiveSchema,
     };

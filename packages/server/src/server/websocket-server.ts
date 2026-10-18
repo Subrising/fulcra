@@ -2193,6 +2193,7 @@ export class VoiceAssistantWebSocketServer {
         pooledAccountUsageList: true,
         agentQuotaRead: true,
         agentArchiveSafety: true,
+        agentArchiveLedgerTransfer: true,
         agentMcpRefresh: true,
         agentMcpReconnect: true,
         agentContextRotation: true,

@@ -5666,7 +5666,7 @@ export class CodexAppServerAgentSession implements AgentSession {
         this.recordPlanOutcome(requestId, "canceled");
       }
       pending.resolve(
-        pending.computerUseKey
+        pending.kind === "mcp_elicitation"
           ? { action: "cancel", content: null, _meta: null }
           : { decision: "cancel" },
       );
