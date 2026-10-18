@@ -221,14 +221,28 @@ describe("managed process registry", () => {
 
 test("an old receipt cannot adopt a foreign process with the same command and no birth time", async () => {
   tempHome = await mkdtemp(path.join(tmpdir(), "fu340-foreign-process-"));
-  const child = spawnProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  const child = spawnProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: "ignore",
+  });
   if (!child.pid) throw new Error("The fixture process did not start.");
   try {
-    const processTable = new FakeProcessTable([{ pid: child.pid, commandLine: "same-name --fixture", startedAt: null }]);
+    const processTable = new FakeProcessTable([
+      { pid: child.pid, commandLine: "same-name --fixture", startedAt: null },
+    ]);
     const terminator = new FakeProcessTerminator();
-    const options = { paseoHome: tempHome, processTable, terminateProcess: terminator.terminate, logger: createTestLogger() };
+    const options = {
+      paseoHome: tempHome,
+      processTable,
+      terminateProcess: terminator.terminate,
+      logger: createTestLogger(),
+    };
     const first = createManagedProcessRegistry(options);
-    await first.record({ owner: { provider: "fixture", kind: "helper" }, pid: child.pid, command: "same-name", args: ["--fixture"] });
+    await first.record({
+      owner: { provider: "fixture", kind: "helper" },
+      pid: child.pid,
+      command: "same-name",
+      args: ["--fixture"],
+    });
     const result = await createManagedProcessRegistry(options).reapStale();
     expect(result.terminated).toBe(0);
     expect(terminator.terminatedPids).toEqual([]);

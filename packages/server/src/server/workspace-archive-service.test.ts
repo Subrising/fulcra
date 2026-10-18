@@ -203,13 +203,10 @@ describe("archiveByScope", () => {
       activeWorkspaces: [{ workspaceId, cwd: worktree.worktreePath, kind: "worktree" }],
     });
     const invalidate = vi.spyOn(dependencies.github, "invalidate");
-    const result = await archiveByScope(
-      dependencies,
-      {
-        scope: { kind: "workspace", workspaceId },
-        requestId: "req-last-ref-workspace",
-      },
-    );
+    const result = await archiveByScope(dependencies, {
+      scope: { kind: "workspace", workspaceId },
+      requestId: "req-last-ref-workspace",
+    });
 
     assertArchiveResult(result, {
       archivedWorkspaceIds: [workspaceId],

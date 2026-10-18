@@ -1,13 +1,7 @@
 import { removeWithCleanupGuard } from "./cleanup-guard.js";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import {
-  constants as fsConstants,
-  existsSync,
-  mkdirSync,
-  realpathSync,
-  statSync,
-} from "fs";
+import { constants as fsConstants, existsSync, mkdirSync, realpathSync, statSync } from "fs";
 import { copyFile } from "fs/promises";
 import { join, basename, dirname, isAbsolute, resolve, sep } from "path";
 import net from "node:net";
@@ -1084,7 +1078,9 @@ export async function deletePaseoWorktree({
     throw new Error("worktreePath or worktreeSlug is required");
   }
   if (
-    [worktreePath, worktreeSlug, worktreesRoot].some((value) => value?.split(/[\\/]/).includes(".."))
+    [worktreePath, worktreeSlug, worktreesRoot].some((value) =>
+      value?.split(/[\\/]/).includes(".."),
+    )
   ) {
     console.warn("KEEP cleanup: The original path has parent traversal.");
     return false;

@@ -19,14 +19,21 @@ test("an active deletion refuses import before the provider can start", async ()
   try {
     mkdirSync(join(root, ".config/fulcra/cleanup-v1/deletion"), { recursive: true });
     const clients = createTestAgentClients();
-    const provider = vi.fn(async () => { throw new Error("The provider must not start."); });
+    const provider = vi.fn(async () => {
+      throw new Error("The provider must not start.");
+    });
     clients.codex!.importSession = provider;
     const logger = createTestLogger();
     const storage = new AgentStorage(join(root, "agents"), logger);
     const manager = new AgentManager({ clients, registry: storage, logger });
-    await expect(manager.importProviderSession({
-      provider: "codex", providerHandleId: "fixture-session", cwd: root, workspaceId: "fixture-workspace",
-    })).rejects.toThrow("Cleanup is in progress");
+    await expect(
+      manager.importProviderSession({
+        provider: "codex",
+        providerHandleId: "fixture-session",
+        cwd: root,
+        workspaceId: "fixture-workspace",
+      }),
+    ).rejects.toThrow("Cleanup is in progress");
     expect(provider).not.toHaveBeenCalled();
     expect(await storage.list()).toEqual([]);
   } finally {
