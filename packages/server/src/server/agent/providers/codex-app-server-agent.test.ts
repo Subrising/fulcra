@@ -8100,3 +8100,24 @@ test.for(
     await session.close();
   },
 );
+
+test("failed process discovery keeps the Codex session and writer available for close retry", async () => {
+  const session = createSession();
+  const dispose = vi
+    .fn<() => Promise<void>>()
+    .mockRejectedValueOnce(new Error("process discovery failed"))
+    .mockResolvedValueOnce(undefined);
+  const client = createStub<CodexClientLike & { dispose: () => Promise<void> }>({ dispose });
+  session.client = client;
+  const state = { connectionState: session.connectionState, threadId: session.currentThreadId };
+  await expect(session.close()).rejects.toThrow("process discovery failed");
+  expect(session.client).toBe(client);
+  expect(session.connectionState).toBe(state.connectionState);
+  expect(session.currentThreadId).toBe(state.threadId);
+  expect(Reflect.get(session, "closed")).toBe(false);
+  await session.close();
+  expect(dispose).toHaveBeenCalledTimes(2);
+  expect(session.client).toBeNull();
+  expect(session.currentThreadId).toBeNull();
+  expect(Reflect.get(session, "closed")).toBe(true);
+});
