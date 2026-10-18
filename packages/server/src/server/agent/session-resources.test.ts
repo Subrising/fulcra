@@ -1,9 +1,12 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { afterEach, describe, expect, test } from "vitest";
-import { SessionResources, type ResourceProcess } from "./session-resources.js";
-import { createRootLogger } from "../../logger.js";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { SessionResources, ORPHAN_INTERVAL_MS, type ResourceProcess, type SimulatorTable } from "./session-resources.js";
+import { terminateWithTreeKill } from "../../utils/tree-kill.js";
+import { createTestLogger } from "../../test-utils/test-logger.js";
 
 const root: ResourceProcess = {
   pid: 100, ppid: 1, birth: "root", groupId: 100, detached: true, zombie: false,
@@ -21,12 +24,13 @@ async function fixture() {
   let now = 0;
   const stopped: number[] = [];
   const options = {
-    file: join(directory, "resources.json"), logger: createRootLogger({ level: "silent" }),
+    file: join(directory, "resources.json"), logger: createTestLogger(),
     roots: () => live ? [{ agentId: "owner", instanceId: "generation", pid: 100 }] : [],
     ownerState: () => live ? "live" as const : "inactive" as const,
     readProcesses: async () => rows,
     signal: (pid: number) => { stopped.push(pid); rows = rows.filter((row) => row.pid !== pid); },
     now: () => now,
+    gracefulTimeoutMs: 0,
   };
   const tracker = new SessionResources(options);
   return { tracker, options, stopped,
@@ -82,4 +86,109 @@ describe("session resource cleanup", () => {
     } });
     await tracker.sweep(); expect(f.stopped).toEqual([]);
   });
+
+  test("keeps unknown owners and a replaced close generation", async () => {
+    const f = await fixture(); await f.tracker.sample(); f.setLive(false); f.setNow(ORPHAN_INTERVAL_MS + 1);
+    await new SessionResources({ ...f.options, ownerState: () => "unknown" }).sweep();
+    await f.tracker.closeOwner("owner", "replacement-generation", () => true);
+    await f.tracker.closeOwner("owner", "generation", () => false);
+    expect(f.stopped).toEqual([]);
+  });
+
+  test("keeps a child adopted by another live session", async () => {
+    const f = await fixture(); await f.tracker.sample(); f.setLive(false); f.setNow(ORPHAN_INTERVAL_MS + 1);
+    f.setRows([{ ...root, pid: 200 }, { ...child, ppid: 200 }]);
+    await new SessionResources({ ...f.options, roots: () => [{ agentId: "other", instanceId: "other", pid: 200 }] }).sweep();
+    expect(f.stopped).toEqual([]);
+  });
+
+  test("refuses corrupt ownership and a failed stop journal", async () => {
+    const f = await fixture(); await f.tracker.sample(); f.setLive(false); f.setNow(ORPHAN_INTERVAL_MS + 1);
+    await mkdir(`${f.options.file}.stops.jsonl`);
+    await expect(f.tracker.sweep()).rejects.toThrow(); expect(f.stopped).toEqual([]);
+    await writeFile(f.options.file, "invalid ledger");
+    await expect(f.tracker.sweep()).rejects.toThrow(); expect(f.stopped).toEqual([]);
+  });
+
+  test("runs the orphan sweep every 30 minutes and stops both timers", async () => {
+    const f = await fixture(); await f.tracker.sample(); f.setLive(false);
+    vi.useFakeTimers();
+    try {
+      f.tracker.start(); f.setNow(ORPHAN_INTERVAL_MS); await vi.advanceTimersByTimeAsync(ORPHAN_INTERVAL_MS);
+      expect(f.stopped).toEqual([]);
+      f.setNow(2 * ORPHAN_INTERVAL_MS); await vi.advanceTimersByTimeAsync(ORPHAN_INTERVAL_MS);
+      await vi.runOnlyPendingTimersAsync();
+      await f.tracker.stop(); expect(f.stopped).toEqual([101]); expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); await f.tracker.stop(); }
+  });
 });
+
+const udid = "00000000-0000-4000-8000-000000000001";
+function bootItem(status: "running" | "completed", command = `xcrun simctl boot ${udid}`) {
+  return { type: "tool_call" as const, callId: "boot", name: "Bash", status, error: null,
+    detail: { type: "shell" as const, command, exitCode: status === "completed" ? 0 : null } };
+}
+describe("owned simulators", () => {
+  async function simulatorFixture(initiallyBooted = false) {
+    const f = await fixture(); let booted = initiallyBooted; let birth = "sim-birth";
+    const stopped: string[] = [];
+    const simulators: SimulatorTable = {
+      inspect: async () => ({ booted, pid: booted ? 500 : null, birth: booted ? birth : null }),
+      shutdown: async (id) => { stopped.push(id); booted = false; },
+    };
+    const tracker = new SessionResources({ ...f.options, simulators });
+    const owner = { agentId: "owner", instanceId: "generation", pid: 100 };
+    return { ...f, tracker, stopped, simulators, owner,
+      setBooted: (value: boolean) => { booted = value; }, setBirth: (value: string) => { birth = value; } };
+  }
+  test("shuts down only the device this session successfully booted", async () => {
+    const f = await simulatorFixture(); await f.tracker.observeTool(f.owner, bootItem("running"));
+    f.setBooted(true); await f.tracker.observeTool(f.owner, bootItem("completed"));
+    await f.tracker.closeOwner("owner", "generation", () => true);
+    expect(f.stopped).toEqual([udid.toUpperCase()]);
+  });
+  test("keeps a pre-booted simulator and rejects compound boot commands", async () => {
+    const f = await simulatorFixture(true); await f.tracker.observeTool(f.owner, bootItem("running"));
+    await f.tracker.observeTool(f.owner, bootItem("completed"));
+    f.setBooted(false); await f.tracker.observeTool(f.owner, bootItem("running", `xcrun simctl boot ${udid}; echo ok`));
+    f.setBooted(true); await f.tracker.observeTool(f.owner, bootItem("completed", `xcrun simctl boot ${udid}; echo ok`));
+    await f.tracker.closeOwner("owner", "generation", () => true); expect(f.stopped).toEqual([]);
+  });
+  test("keeps a device another live session used and a rebooted device", async () => {
+    const f = await simulatorFixture(); await f.tracker.observeTool(f.owner, bootItem("running"));
+    f.setBooted(true); await f.tracker.observeTool(f.owner, bootItem("completed"));
+    await f.tracker.observeTool({ ...f.owner, agentId: "other" }, bootItem("running", `xcrun simctl io ${udid} screenshot shot.png`));
+    await f.tracker.closeOwner("owner", "generation", () => true); expect(f.stopped).toEqual([]);
+    f.setBirth("new-boot"); f.setLive(false); f.setNow(ORPHAN_INTERVAL_MS + 1);
+    await f.tracker.sweep(); expect(f.stopped).toEqual([]);
+  });
+});
+
+test.skipIf(process.platform === "win32")("native persisted cleanup kills the retained job and preserves an unrelated process", async () => {
+  const helper = `process.on('SIGTERM',()=>{}); process.send('ready'); setInterval(()=>{},1000)`;
+  const script = `const {spawn}=require('node:child_process'); const c=spawn(process.execPath,['-e',${JSON.stringify(helper)}],{detached:true,stdio:['ignore','ignore','ignore','ipc']}); c.once('message',()=>process.send(c.pid));setInterval(()=>{},1000)`;
+  const owner = spawn(process.execPath, ["-e", script], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+  const unrelated = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore" });
+  const f = await fixture(); let childPid: number | undefined; let live = true;
+  try {
+    [childPid] = await once(owner, "message") as [number];
+    const options = { file: f.options.file, logger: f.options.logger,
+      roots: () => live ? [{ agentId: "native-owner", instanceId: "native-generation", pid: owner.pid! }] : [],
+      ownerState: () => live ? "live" as const : "inactive" as const,
+      now: () => live ? 0 : ORPHAN_INTERVAL_MS + 1, gracefulTimeoutMs: 20 };
+    await new SessionResources(options).sample();
+    const exited = once(owner, "exit"); owner.kill("SIGKILL"); await exited; live = false;
+    const tracker = new SessionResources(options); await tracker.sweep();
+    const receipt = await readFile(`${options.file}.stops.jsonl`, "utf8");
+    expect(receipt).toContain('"action":"SIGKILL"');
+    expect(receipt).toContain(`"pid":${childPid}`);
+    expect(() => process.kill(unrelated.pid!, 0)).not.toThrow();
+    // A second sweep verifies actual exit and removes the old receipt, including a possible zombie.
+    await tracker.sweep();
+    expect(JSON.parse(await readFile(options.file, "utf8")).processes).toEqual([]);
+  } finally {
+    if (childPid) { try { process.kill(childPid, "SIGKILL"); } catch { /* exited */ } }
+    await terminateWithTreeKill(owner, { gracefulTimeoutMs: 100, forceTimeoutMs: 100 });
+    await terminateWithTreeKill(unrelated, { gracefulTimeoutMs: 100, forceTimeoutMs: 100 });
+  }
+}, 20_000);

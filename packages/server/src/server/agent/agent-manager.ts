@@ -123,6 +123,7 @@ import {
 } from "./native-queued-dispatch.js";
 import { TRUSTED_OPERATION, NATIVE_QUEUED_FINAL, FINAL_INPUT_CHECK } from "./agent-sdk-types.js";
 import type { AgentBackgroundWork } from "@getpaseo/protocol/agent-background-work";
+import { SessionResources } from "./session-resources.js";
 import {
   BackgroundWorkSampler,
   type BackgroundWorkSamplerOptions,
@@ -528,6 +529,7 @@ export interface CreateAgentOptions {
 }
 
 export interface AgentManagerOptions {
+  sessionResourcesFile?: string;
   costOutboxFile?: string;
   archiveServerId?: string;
   archiveLedgerDirectory?: string;
@@ -2182,6 +2184,7 @@ export class AgentManager {
   private readonly foregroundMutationTails = new Map<string, Promise<void>>();
   private readonly runs = new AgentRunState();
   private backgroundWorkSampler: BackgroundWorkSampler | null = null;
+  private readonly sessionResources?: SessionResources;
   private readonly subscribers = new Set<SubscriptionRecord>();
   private readonly idFactory: () => string;
   private readonly registry?: AgentStorage;
@@ -2304,6 +2307,21 @@ export class AgentManager {
     this.resolvePaseoToolPolicy = options.resolvePaseoToolPolicy ?? (() => undefined);
     this.appendSystemPrompt = options.appendSystemPrompt ?? "";
     this.logger = options.logger.child({ module: "agent", component: "agent-manager" });
+    if (options.sessionResourcesFile) {
+      this.sessionResources = new SessionResources({
+        file: options.sessionResourcesFile, logger: this.logger,
+        roots: () => [...this.agents.values()].flatMap((agent) => {
+          const pid = agent.session.getProcessId?.();
+          return pid && agent.instanceId ? [{ agentId: agent.id, instanceId: agent.instanceId, pid }] : [];
+        }),
+        ownerState: (id) => {
+          if (this.agents.has(id)) return "live";
+          const record = this.registry?.getCached(id);
+          if (!record) return "unknown";
+          return record.archivedAt || record.lastStatus === "closed" ? "inactive" : "live";
+        },
+      });
+    }
     this.idleSleep = new IdleSleep({
       logger: this.logger,
       minutes: () => this.idleSleepMinutes(),
@@ -4514,7 +4532,14 @@ export class AgentManager {
     // Retain ownership until shutdown succeeds. A failed close may still own a
     // native writer, so publishing a resumable closed snapshot would orphan it.
     this.invokeReportRelaunchGuard(requireRetiringIdentity);
+    // Capture before the provider closes stdin or releases its root process.
+    if (this.acceptingAgentRegistrations) await this.sessionResources?.sample();
+    this.invokeReportRelaunchGuard(requireRetiringIdentity);
     await nativeDispatch(() => agent.session.close());
+    if (this.acceptingAgentRegistrations && agent.instanceId) {
+      await this.sessionResources?.closeOwner(agentId, agent.instanceId,
+        () => this.agents.get(agentId) === agent);
+    }
     this.cancelRunningProviderSubagents(agentId);
     const closedAgent = await this.prepareAgentForClosure(agent, "agent closed");
 
@@ -8386,6 +8411,13 @@ export class AgentManager {
     agent: ActiveManagedAgent,
     event: AgentStreamEvent,
   ): Promise<void> {
+    if (event.type === "timeline" && event.item.type === "tool_call" && agent.instanceId) {
+      const pid = agent.session.getProcessId?.();
+      if (pid) {
+        try { await this.sessionResources?.observeTool({ agentId: agent.id, instanceId: agent.instanceId, pid }, event.item); }
+        catch { this.logger.warn({ agentId: agent.id }, "Could not record session simulator ownership"); }
+      }
+    }
     if (event.type === "provider_subagent") {
       const update = this.providerSubagents.apply(agent.id, event.provider, event.event);
       this.dispatch({ type: "provider_subagent", event: update });
@@ -9879,6 +9911,7 @@ export class AgentManager {
    * without it.
    */
   startBackgroundWorkSampling(options?: Partial<BackgroundWorkSamplerOptions>): void {
+    this.sessionResources?.start();
     if (this.backgroundWorkSampler) return;
     this.backgroundWorkSampler = new BackgroundWorkSampler({
       listTargets: () =>
@@ -10030,6 +10063,7 @@ export class AgentManager {
    */
   async flushForShutdown(): Promise<void> {
     this.stopBackgroundWorkSampling();
+    await this.sessionResources?.stop();
     await this.flushTasks({ includeAgentRegistrations: true });
   }
 

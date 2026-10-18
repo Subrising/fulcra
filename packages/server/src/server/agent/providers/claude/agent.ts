@@ -3260,6 +3260,11 @@ class ClaudeAgentSession implements AgentSession {
     return this.childProcess;
   }
 
+  getProcessId(): number | null {
+    const child = this.currentChild;
+    return child && child.exitCode === null && child.signalCode === null ? child.pid ?? null : null;
+  }
+
   /**
    * FU-362: true when this session, idle, still has background work that a restart would stop: work Fulcra tracks
    * (shells, workflows, agents, tasks) or a process born well after Claude (Monitor watches, nohup children). The
