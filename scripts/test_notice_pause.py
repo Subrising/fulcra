@@ -288,6 +288,30 @@ class NoticePauseTests(unittest.TestCase):
         self.send('role:main-assistant')
         self.assertEqual(self.sends()[0][1][1], 'claude-owner')
 
+    def test_remote_target_names_the_host_and_route_without_sending(self):
+        self.policy([], roles={'main-assistant': 'remote-main', 'fulcra-lead': 'remote-lead'},
+                    noticeRoutes={key: {'host': 'Mac mini', 'route': 'ssh mini using ~/.local/bin/fulcra'}
+                                  for key in ['remote-main', 'remote-lead']})
+        for identifier in ['role:main-assistant', 'role:fulcra-lead', 'remote-m', 'remote-lead']:
+            with self.assertRaisesRegex(m.TargetUnavailableError, 'Mac mini.*ssh mini'):
+                self.send(identifier)
+        self.assertEqual(self.sends(), [])
+
+    def test_failed_discovery_names_the_route_without_exposing_transport_output(self):
+        self.policy([], roles={'main-assistant': 'remote-main'}, noticeRoutes={
+            'remote-main': {'host': 'Mac mini', 'route': 'ssh mini using ~/.local/bin/fulcra'}})
+        self.gate.run = lambda *args, **kw: subprocess.CompletedProcess(args, 7, '', 'private transport output')
+        with self.assertRaisesRegex(RuntimeError, 'selected daemon.*exit 7.*Mac mini.*ssh mini') as error:
+            self.send('role:main-assistant')
+        self.assertNotIn('private transport output', str(error.exception))
+        self.assertEqual(self.sends(), [])
+
+    def test_configured_route_does_not_override_an_explicit_local_target(self):
+        self.policy([], roles={'fulcra-lead': 'codex-owner'}, noticeRoutes={
+            'codex-owner': {'host': 'other host', 'route': 'ssh other'}})
+        self.gate.send('/native/cli', ['--host', 'selected', 'send', 'role:fulcra-lead', '--prompt', 'test'])
+        self.assertEqual(self.sends()[0][1][:4], ['--host', 'selected', 'send', 'codex-owner'])
+
     def test_prompt_file_is_frozen_before_hold(self):
         path = self.root / 'input.txt'
         path.write_text('original')

@@ -1,9 +1,107 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
+import { fileURLToPath } from "node:url";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import { terminateWithTreeKill, withDetachedJobsPreserved } from "./tree-kill.js";
+import {
+  OwnedProcessTree,
+  type OwnedProcessIdentity,
+  terminateWithTreeKill,
+  withDetachedJobsPreserved,
+} from "./tree-kill.js";
+
+describe("retained provider children", () => {
+  test("loads through the native terminal TypeScript loader", () => {
+    const loader = fileURLToPath(new URL("../terminal/terminal-ts-loader.mjs", import.meta.url));
+    const moduleUrl = new URL("./tree-kill.ts", import.meta.url).href;
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--experimental-strip-types",
+        "--experimental-loader",
+        loader,
+        "--input-type=module",
+        "-e",
+        `await import(${JSON.stringify(moduleUrl)})`,
+      ],
+      { encoding: "utf8", timeout: 10_000 },
+    );
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  test("keeps child ownership after root exit and refuses a reused PID", async () => {
+    const root: OwnedProcessIdentity = {
+      pid: 100,
+      ppid: 1,
+      birth: "root-birth",
+      groupId: 100,
+      detached: true,
+      zombie: false,
+    };
+    const helper: OwnedProcessIdentity = {
+      ...root,
+      pid: 101,
+      ppid: 100,
+      birth: "helper-birth",
+      detached: false,
+    };
+    const unrelated = { ...root, pid: 102, birth: "other-owner" };
+    let live = [{ ...helper, ppid: 1 }, unrelated];
+    const signals: number[] = [];
+    const tree = new OwnedProcessTree(
+      [root, helper],
+      async () => live,
+      (pid) => signals.push(pid),
+    );
+    await tree.signal("SIGKILL");
+    expect(signals).toEqual([101]);
+    expect(await tree.hasSurvivors()).toBe(true);
+    live = [{ ...helper, birth: "new-process-birth" }, unrelated];
+    await tree.signal("SIGKILL");
+    expect(signals).toEqual([101]);
+    expect(await tree.hasSurvivors()).toBe(false);
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "stops an uncooperative helper after its wrapper exits on stdin close",
+    async () => {
+      const helperCode = `process.on('SIGTERM', () => {}); process.send('ready'); setInterval(() => {}, 1000);`;
+      const ownerCode = `
+      const {spawn} = require('node:child_process');
+      const child = spawn(process.execPath, ['-e', ${JSON.stringify(helperCode)}], {stdio:['ignore','ignore','ignore','ipc']});
+      child.once('message', () => process.send({pid:child.pid}));
+      process.stdin.resume();
+      process.stdin.on('end', () => process.exit(0));
+    `;
+      const owner = spawn(process.execPath, ["-e", ownerCode], {
+        stdio: ["pipe", "pipe", "pipe", "ipc"],
+      });
+      ownerProcess = owner;
+      const bystander = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        stdio: "ignore",
+      });
+      try {
+        const [ready] = await once(owner, "message");
+        descendantPid = (ready as { pid: number }).pid;
+        expect(isProcessRunning(descendantPid)).toBe(true);
+        const result = await terminateWithTreeKill(owner, {
+          retainDescendants: true,
+          beforeSignal: () => owner.stdin!.end(),
+          gracefulTimeoutMs: 200,
+          forceTimeoutMs: 1000,
+        });
+        expect(result).toBe("killed");
+        expect(isProcessRunning(descendantPid)).toBe(false);
+        expect(isProcessRunning(bystander.pid!)).toBe(true);
+      } finally {
+        killIfRunning(bystander.pid);
+      }
+    },
+    10_000,
+  );
+});
 
 const pollIntervalMs = 50;
 

@@ -33,6 +33,21 @@ describe("Codex app-server transport", () => {
     await expect(request).rejects.toThrow("Codex app-server client is closed");
   });
 
+  test("failed child discovery leaves the transport available for a close retry", async () => {
+    const child = createCodexAppServerChildProcess();
+    Object.defineProperty(child, "pid", { value: 2_147_483_647, configurable: true });
+    const client = new CodexAppServerClient(child, createTestLogger());
+    const request = client.request("initialize", {});
+    await expect(client.dispose()).rejects.toThrow(
+      "Cannot capture the owned process tree before close",
+    );
+    expect(child.stdin.writable).toBe(true);
+    child.stdout.write('{"id":1,"result":{"ready":true}}\n');
+    await expect(request).resolves.toEqual({ ready: true });
+    Object.defineProperty(child, "pid", { value: undefined });
+    await client.dispose();
+  });
+
   test("dispose rejects until the child has actually exited", async () => {
     vi.useFakeTimers();
     const child = createCodexAppServerChildProcess();

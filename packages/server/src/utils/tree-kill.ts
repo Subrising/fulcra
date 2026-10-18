@@ -6,6 +6,7 @@ import treeKill from "tree-kill";
 const execFileAsync = promisify(execFile);
 const ownedDetachedProcesses = new Set<number>();
 const preserveDetached = new AsyncLocalStorage<ReadonlySet<number>>();
+const retainedProcessTrees = new WeakMap<TreeKillTarget, OwnedProcessTree>();
 
 // Detached provider transports belong to the daemon; detached tool jobs belong to their caller.
 export function trackOwnedDetachedProcess(child: ChildProcess): void {
@@ -80,6 +81,9 @@ export interface TreeKillTarget {
 }
 
 export interface TerminateWithTreeKillOptions {
+  /** Capture child identities before closing stdin. Retain them after their parent exits. */
+  retainDescendants?: boolean;
+  beforeSignal?: () => void;
   gracefulSignal?: NodeJS.Signals;
   forceSignal?: NodeJS.Signals;
   gracefulTimeoutMs: number;
@@ -104,6 +108,15 @@ export async function terminateWithTreeKill(
   child: TreeKillTarget,
   options: TerminateWithTreeKillOptions,
 ): Promise<TerminateWithTreeKillResult> {
+  if (options.retainDescendants && child.pid) {
+    const tree =
+      retainedProcessTrees.get(child) ??
+      (isProcessExited(child) ? null : await captureOwnedProcessTree(child));
+    if (tree) {
+      return terminateRetainedProcessTree(child, tree, options);
+    }
+  }
+  options.beforeSignal?.();
   if (isProcessExited(child)) {
     return "already-exited";
   }
@@ -122,6 +135,165 @@ export async function terminateWithTreeKill(
   return (await waitForExitOrTimeout(exitPromise, options.forceTimeoutMs))
     ? "killed"
     : "kill-timeout";
+}
+
+async function terminateRetainedProcessTree(
+  child: TreeKillTarget,
+  tree: OwnedProcessTree,
+  options: TerminateWithTreeKillOptions,
+): Promise<TerminateWithTreeKillResult> {
+  retainedProcessTrees.set(child, tree);
+  const exitPromise = waitForProcessExit(child);
+  options.beforeSignal?.();
+  await tree.signal(options.gracefulSignal ?? "SIGTERM");
+  await waitForExitOrTimeout(exitPromise, options.gracefulTimeoutMs);
+  if (!(await tree.hasSurvivors())) {
+    retainedProcessTrees.delete(child);
+    return "terminated";
+  }
+  options.onForceSignal?.();
+  await tree.signal(options.forceSignal ?? "SIGKILL");
+  if (options.forceTimeoutMs === undefined) return "killed";
+  await waitForExitOrTimeout(exitPromise, options.forceTimeoutMs);
+  if (!(await tree.hasSurvivors())) {
+    retainedProcessTrees.delete(child);
+    return "killed";
+  }
+  // The root can exit before its children. Give those children one bounded exit interval.
+  await new Promise((resolve) => setTimeout(resolve, options.forceTimeoutMs));
+  if (await tree.hasSurvivors()) return "kill-timeout";
+  retainedProcessTrees.delete(child);
+  return "killed";
+}
+
+export interface OwnedProcessIdentity {
+  pid: number;
+  ppid: number;
+  birth: string;
+  groupId: number;
+  detached: boolean;
+  zombie: boolean;
+}
+
+/** Read identities only. Do not request command arguments or environment variables. */
+async function readOwnedProcessTable(): Promise<OwnedProcessIdentity[]> {
+  if (process.platform === "win32") {
+    const { stdout } = await execFileAsync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "@(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,@{n='Birth';e={$_.CreationDate.ToUniversalTime().Ticks.ToString()}}) | ConvertTo-Json -Compress",
+      ],
+      { timeout: 5000, maxBuffer: 16 * 1024 * 1024 },
+    );
+    const rows: Array<{ ProcessId: number; ParentProcessId: number; Birth: string }> =
+      JSON.parse(stdout);
+    return rows.map((row) => ({
+      pid: row.ProcessId,
+      ppid: row.ParentProcessId,
+      birth: row.Birth,
+      groupId: 0,
+      detached: false,
+      zombie: false,
+    }));
+  }
+  const { stdout } = await execFileAsync(
+    "/bin/ps",
+    ["-axo", "pid=,ppid=,lstart=,pgid=,tty=,stat="],
+    {
+      timeout: 5000,
+      maxBuffer: 16 * 1024 * 1024,
+      env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+    },
+  );
+  return stdout.split("\n").flatMap((line) => {
+    const match =
+      /^\s*(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+[\d:]+\s+\d{4})\s+(\d+)\s+(\S+)\s+(\S+)\s*$/.exec(
+        line,
+      );
+    if (!match) return [];
+    const pid = Number(match[1]);
+    const groupId = Number(match[4]);
+    return [
+      {
+        pid,
+        ppid: Number(match[2]),
+        birth: match[3]!.replace(/\s+/g, " "),
+        groupId,
+        detached: pid === groupId && /^\?+$/.test(match[5]!),
+        zombie: match[6]!.startsWith("Z"),
+      },
+    ];
+  });
+}
+
+export class OwnedProcessTree {
+  private readonly identities: readonly OwnedProcessIdentity[];
+  private readonly read: () => Promise<OwnedProcessIdentity[]>;
+  private readonly sendSignal: (pid: number, signal: NodeJS.Signals) => unknown;
+
+  constructor(
+    identities: readonly OwnedProcessIdentity[],
+    read = readOwnedProcessTable,
+    sendSignal: (pid: number, signal: NodeJS.Signals) => unknown = process.kill,
+  ) {
+    this.identities = identities;
+    this.read = read;
+    this.sendSignal = sendSignal;
+  }
+
+  private async survivors(): Promise<OwnedProcessIdentity[]> {
+    const current = new Map((await this.read()).map((row) => [row.pid, row]));
+    return this.identities.filter((row) => {
+      const live = current.get(row.pid);
+      return live && !live.zombie && live.birth === row.birth;
+    });
+  }
+
+  async signal(signal: NodeJS.Signals): Promise<void> {
+    // Children first. A later phase uses the retained birth time even after reparenting.
+    const survivors = await this.survivors();
+    for (let index = survivors.length - 1; index >= 0; index -= 1) {
+      const row = survivors[index]!;
+      try {
+        this.sendSignal(row.pid, signal);
+      } catch (error) {
+        if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) throw error;
+      }
+    }
+  }
+
+  async hasSurvivors(): Promise<boolean> {
+    return (await this.survivors()).length > 0;
+  }
+}
+
+async function captureOwnedProcessTree(child: TreeKillTarget): Promise<OwnedProcessTree | null> {
+  const rows = await readOwnedProcessTable();
+  // A child exit during enumeration cannot authorize a new process with the same PID.
+  if (isProcessExited(child)) return null;
+  const root = rows.find((row) => row.pid === child.pid);
+  if (!root) throw new Error("Cannot capture the owned process tree before close");
+  const owned: OwnedProcessIdentity[] = [];
+  const seen = new Set<number>();
+  function visit(row: OwnedProcessIdentity): void {
+    if (seen.has(row.pid)) return;
+    seen.add(row.pid);
+    owned.push(row);
+    for (const descendant of rows.filter((candidate) => candidate.ppid === row.pid)) {
+      if (
+        preserveDetached.getStore() &&
+        descendant.detached &&
+        !preserveDetached.getStore()!.has(descendant.pid)
+      )
+        continue;
+      visit(descendant);
+    }
+  }
+  visit(root);
+  return new OwnedProcessTree(owned);
 }
 
 export function signalProcessTree(child: TreeKillTarget, signal: NodeJS.Signals): Promise<void> {
