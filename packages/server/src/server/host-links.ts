@@ -213,11 +213,6 @@ export class HostLinks {
     return cfg;
   }
   private requiredConfig(): HostLinkConfig {
-    if (process.platform === "win32")
-      throw new HostLinkError(
-        "unavailable",
-        "Durable host-link operations are unavailable on Windows.",
-      );
     const cfg = this.config();
     if (!cfg) throw new HostLinkError("unavailable", "Host links are not configured.");
     if (!this.deps.protected())
@@ -948,8 +943,7 @@ export class HostLinks {
   }
 
   startNotifications(): void {
-    if (process.platform === "win32" || this.notificationsClosed || !this.notificationsStopped)
-      return;
+    if (this.notificationsClosed || !this.notificationsStopped) return;
     this.notificationsStopped = false;
     this.scheduleNotifications(0);
   }
