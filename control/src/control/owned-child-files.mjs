@@ -1,9 +1,8 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { socketLocation, validateSocketDirectory } from "./socket-location.mjs";
-import { privateOwned } from "../../orca-organization/server/owned.mjs";
+import { privateOwned, powershellExe } from "../../orca-organization/server/owned.mjs";
 const same = (a, b) => a.dev === b.dev && a.ino === b.ino;
 const owners = new WeakSet();
 function stat(file) {
@@ -88,45 +87,55 @@ export function recoverOwnedFiles(owner, { exited }) {
   owners.delete(owner);
 }
 
-/** When this computer last started, in ms. */
-export const systemBootMs = () => Date.now() - os.uptime() * 1000;
-/** True when a process with this pid exists. EPERM means it exists but belongs to another user. */
-export function pidIsAlive(pid) {
+/** Only ESRCH proves absence. Access failures and unknown errors preserve the lock. */
+export function pidIsAlive(pid, { kill = process.kill } = {}) {
   try {
-    process.kill(pid, 0);
+    kill(pid, 0);
     return true;
   } catch (e) {
-    return e.code === "EPERM";
+    return e.code !== "ESRCH";
   }
 }
 /** When the process with this pid started, in ms; null when it cannot be read. Resolution is one second. */
-export function pidStartMs(pid) {
+export function pidStartMs(pid, { platform = process.platform, run = execFileSync } = {}) {
+  if (!Number.isSafeInteger(pid) || pid < 1) return null;
   try {
-    const text = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
+    const windows = platform === "win32";
+    const command = windows ? powershellExe() : "ps";
+    const args = windows
+      ? [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          "$ErrorActionPreference='Stop';$lockProcess=Get-CimInstance Win32_Process -Filter ('ProcessId='+$env:FULCRA_LOCK_PID);if($lockProcess){([DateTimeOffset]$lockProcess.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds()}",
+        ]
+      : ["-o", "lstart=", "-p", String(pid)];
+    const text = run(command, args, {
       encoding: "utf8",
-      env: { ...process.env, LC_ALL: "C" },
+      env: { ...process.env, LC_ALL: "C", ...(windows ? { FULCRA_LOCK_PID: String(pid) } : {}) },
+      timeout: 5000,
+      windowsHide: true,
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
-    const ms = Date.parse(text);
-    return Number.isFinite(ms) ? ms : null;
+    const ms = windows && /^\d+$/.test(text) ? Number(text) : windows ? NaN : Date.parse(text);
+    return Number.isFinite(ms) && ms > 0 ? ms : null;
   } catch {
     return null;
   }
 }
 /**
- * Fulcra 0.2.9: a controller lock written before this computer last started cannot belong to a running controller, so
- * the host may recover it. After a restart, the lock of the killed controller stayed and every new controller refused
- * to start. A lock written since the start is never touched here. The margin covers the rounding of the boot time.
- * Returns true when it removed the lock (and the lock's socket).
+ * Recover a proved dead or reused PID, including a crash during the current OS boot.
+ * A live owner or unreadable process identity stays protected. The margin covers start-time resolution.
+ * File ownership and captured identity checks still apply before any runtime file is removed.
  */
-export function recoverPreBootLock(
+export function recoverStaleProcessLock(
   home,
-  { bootMs = systemBootMs(), marginMs = 5000, isAlive = pidIsAlive, startMs = pidStartMs } = {},
+  { marginMs = 5000, isAlive = pidIsAlive, startMs = pidStartMs } = {},
 ) {
   const lock = path.join(home, "process.lock");
   const found = stat(lock);
   if (!found) return false;
-  if (!found.isFile() || found.size > 1024 || found.mtimeMs >= bootMs - marginMs) return false;
+  if (!found.isFile() || found.size > 1024) return false;
   let value;
   try {
     const fd = fs.openSync(lock, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
@@ -136,14 +145,16 @@ export function recoverPreBootLock(
       fs.closeSync(fd);
     }
   } catch {
-    throw Error("Unreadable controller lock from before the restart");
+    throw Error("Unreadable controller lock");
   }
+  if (!Number.isSafeInteger(value?.pid) || value.pid < 1)
+    throw Error("Invalid controller lock owner");
   // The wall clock can be wrong. A live pid in the lock means the controller may still run: refuse.
-  // After a restart the system can give the same pid to another process. That process started after the
+  // The system can give the same pid to another process. That process started after the
   // lock was written, so it is not the controller. If its start time is unknown, refuse (fail closed).
-  if (Number.isSafeInteger(value?.pid) && value.pid > 0 && isAlive(value.pid)) {
+  if (isAlive(value.pid) !== false) {
     const started = startMs(value.pid);
-    if (started === null || started <= found.mtimeMs + marginMs)
+    if (!Number.isFinite(started) || started <= found.mtimeMs + marginMs)
       throw Error("Controller lock pid is still running");
   }
   // The same identity and file checks as a recovery after an observed exit.
@@ -151,6 +162,7 @@ export function recoverPreBootLock(
     pid: value?.pid,
     epoch: value?.epoch,
   });
+  if (!same(found, owner.held)) throw Error("Lock ownership changed during recovery");
   recoverOwnedFiles(owner, { exited: true });
   return true;
 }
