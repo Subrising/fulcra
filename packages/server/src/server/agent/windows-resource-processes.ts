@@ -55,12 +55,6 @@ const snapshotSchema = z.object({
   ),
 });
 
-function windowsProtection(name: string, state: "clear" | "open" | "unknown"): string | undefined {
-  if (state !== "clear") return `queue-${state}`;
-  // Queue-managed Python engines remain the queue owner's service. A new receipt may start at any time.
-  return /^(?:python(?:w|[0-9.]*)?|comfyui)(?:\.exe)?$/i.test(name) ? "queue-engine" : undefined;
-}
-
 export function parseWindowsResourceSnapshot(output: string): ResourceProcess[] {
   const snapshot = snapshotSchema.parse(JSON.parse(output.trim().replace(/^\uFEFF/, "")));
   return snapshot.processes.flatMap((row) => {
@@ -76,7 +70,7 @@ export function parseWindowsResourceSnapshot(output: string): ResourceProcess[] 
         command: row.Name,
         rssKiB: row.WorkingSet64 / 1024,
         privateMemoryBytes: row.PrivateMemorySize64,
-        protectionReason: windowsProtection(row.Name, snapshot.queueState),
+        protectionReason: snapshot.queueState === "clear" ? undefined : `queue-${snapshot.queueState}`,
       },
     ];
   });

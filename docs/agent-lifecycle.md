@@ -78,8 +78,8 @@ memory. It reads no process arguments or environments. A private
 ```
 
 Missing or unreadable queue proof keeps processes. An open queue job blocks Windows stops.
-Queue-managed Python engines remain owned by the queue, including between jobs. The queue controls
-their shutdown. User apps and protected studio directories stay protected. Log-tail observations
+Independent queue engines never enter a session ledger through process-name matching. The queue
+controls their shutdown. User apps and protected studio directories stay protected. Log-tail observations
 and PowerShell private memory above 2 GiB add cleanup reasons. They never override live owners,
 process birth checks, or queue protection. Queue metadata reads have size limits.
 

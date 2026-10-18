@@ -83,11 +83,11 @@ describe("Windows resource identities", () => {
     expect(protectedSessionDirectory("E:\\Games-old")).toBe(false);
     expect(protectedSessionDirectory("D:\\studio\\song-chat", "Song Studio chat")).toBe(true);
   });
-  test("keeps queue-managed Python engines even between receipts", () => {
+  test("does not adopt an unrelated Python process as a queue service by name", () => {
     const [row] = parseWindowsResourceSnapshot(
       JSON.stringify({ queueState: "clear", processes: [{ ...powershell, Name: "python" }] }),
     );
-    expect(row?.protectionReason).toBe("queue-engine");
-    expect(protectedSessionProcess(row!)).toBe(true);
+    expect(row?.protectionReason).toBeUndefined();
+    expect(protectedSessionProcess(row!)).toBe(false);
   });
 });
