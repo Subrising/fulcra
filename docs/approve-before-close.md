@@ -73,6 +73,7 @@ A request with the daemon-wide token, a password, or another agent's token is re
 ### Where the token travels, and the limit
 
 The token never appears in a process's arguments.
+
 - Claude: the SDK passes the MCP config as inline JSON in the command line. The daemon moves that JSON to a file only the owner can read (mode 0600, in a directory with mode 0700) and passes the path. The file is removed when the process exits.
 - Codex and ACP agents get the config over their own RPC channel. OpenCode gets it through its API. Pi writes it to a 0600 file and removes it on close. OMP reads it inside the daemon.
 

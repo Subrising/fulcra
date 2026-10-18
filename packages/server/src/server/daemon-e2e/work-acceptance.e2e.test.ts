@@ -816,7 +816,11 @@ test("rejection findings are kept when the send fails, and repeating the rejecti
   ]);
 
   // Repeating the rejection resends the saved findings. It does not add a second rejection.
-  await f.asLead.executeTool("work_review", { item: "FU-1", decision: "reject", findings: "ignored" });
+  await f.asLead.executeTool("work_review", {
+    item: "FU-1",
+    decision: "reject",
+    findings: "ignored",
+  });
   await vi.waitFor(() =>
     expect(f.prompts.filter((p) => p.includes("Cover the failure path"))).toHaveLength(1),
   );
@@ -826,6 +830,10 @@ test("rejection findings are kept when the send fails, and repeating the rejecti
   // Once delivered, a new rejection is a new rejection.
   await vi.waitFor(() => expect(f.manager.getAgent(f.worker.id)?.lifecycle).toBe("idle"));
   await f.submit("sha-2");
-  await f.asLead.executeTool("work_review", { item: "FU-1", decision: "reject", findings: "Second round" });
+  await f.asLead.executeTool("work_review", {
+    item: "FU-1",
+    decision: "reject",
+    findings: "Second round",
+  });
   expect(f.store.get("FU-1")?.rejections).toHaveLength(2);
 });
