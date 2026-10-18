@@ -451,7 +451,6 @@ test("a paused follow-up keeps prior spend and reports the resumed cumulative to
     f.storage.noticePausePath,
     JSON.stringify({
       pausedProviders: ["codex"],
-      exceptSessions: [f.parent.id],
     }),
   );
   const arm = vi.spyOn(f.storage, "rearmFinishNotice");
@@ -470,4 +469,45 @@ test("a paused follow-up keeps prior spend and reports the resumed cumulative to
     }),
   );
   expect(f.notices()[1]).toContain("Session total spend: US$4.000000.");
+});
+
+test("CLI --no-wait refuses a closed receiver", async () => {
+  const f = await fixture();
+  await f.manager.trustedPlugins.daemon(() => f.manager.closeAgent(f.child.id));
+  const stored = (await f.storage.get(f.child.id))!;
+  await f.storage.upsert({ ...stored, lastStatus: "idle" });
+  const before = await f.storage.get(f.child.id);
+  const failure = await promisify(execFile)(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      path.resolve("../cli/src/index.ts"),
+      "send",
+      f.child.id,
+      "Do not queue",
+      "--queue",
+      "--no-wait",
+      "--host",
+      `127.0.0.1:${f.daemon.port}`,
+      "--json",
+    ],
+    {
+      timeout: 15000,
+      env: {
+        ...process.env,
+        PASEO_HOME: f.daemon.paseoHome,
+        PASEO_AGENT_ID: f.parent.id,
+        PASEO_WORKSPACE_ID: "",
+        PASEO_PASSWORD: "",
+      },
+    },
+  ).then(
+    () => null,
+    (error: unknown) => error,
+  );
+  expect(failure).toMatchObject({ code: 1 });
+  expect(JSON.stringify(failure)).toContain("session closed: reload it or start a new worker");
+  expect(f.prompts).toEqual([]);
+  expect(await f.storage.get(f.child.id)).toEqual(before);
 });

@@ -16,7 +16,7 @@ Each live agent in `AgentManager` carries a `lastStatus` of `initializing`, `idl
 
 An unarchived agent may be `closed` without being deleted or archived. Closing releases its provider
 processes and subscriptions while retaining its Paseo identity, persistence handle, timeline,
-workspace, labels, title, usage, attention, timestamps, and parent relationship. Opening or prompting
+workspace, labels, title, usage, attention, timestamps, and parent relationship. Opening or reloading
 the agent runs through `ensureAgentLoaded()`, which resumes the durable provider session under the
 same Paseo agent ID. Provider history is not appended again when the canonical timeline is already
 primed.
@@ -24,6 +24,8 @@ primed.
 Reload releases the old runtime before resuming its durable session: an idle provider process can
 still own an exclusive writer. A close failure retains that runtime for cleanup and blocks the
 replacement. Once closure succeeds, a failed resume leaves the durable agent closed and retryable.
+
+CLI sends refuse a closed receiver. Reload it or start a new worker before sending another task.
 
 Idle agents remain resident indefinitely. Runtime closure happens only through an explicit lifecycle
 action such as archive, replacement, reload, workspace teardown, or daemon shutdown.

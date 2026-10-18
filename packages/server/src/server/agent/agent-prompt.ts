@@ -622,7 +622,14 @@ export async function armPromptFinishNotification(
   const target =
     params.agentManager.getAgent(params.childAgentId) ??
     (await params.agentStorage.get(params.childAgentId));
-  if (noticePaused(params.agentStorage.noticePausePath, target)) throw new NoticePausedError();
+  if (
+    noticePaused(
+      params.agentStorage.noticePausePath,
+      target,
+      (id) => params.agentManager.getAgent(id) ?? params.agentStorage.getCached(id),
+    )
+  )
+    throw new NoticePausedError();
   let notice;
   try {
     notice = await params.agentStorage.rearmFinishNotice(

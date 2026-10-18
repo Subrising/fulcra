@@ -381,7 +381,7 @@ test("a queued message to a closed receiver records a refusal and tells its send
   await f.queue.close();
   expect(JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"))[0]).toMatchObject({
     state: "refused",
-    reason: "The receiver is closed or archived",
+    reason: "session closed: reload it or start a new worker",
   });
   expect(f.prompts).not.toContain("do not reopen");
   await vi.waitFor(() =>
@@ -490,7 +490,7 @@ test("an agent send to an already closed receiver refuses without reopening it",
   await f.host.daemon(() => f.manager.closeAgent(f.target.id));
   await f.send("do not reopen", f.sender.id);
   expect(f.messages.findLast((m) => m.type === "send_agent_message_response")).toMatchObject({
-    payload: { accepted: false, error: "The receiver is closed or archived" },
+    payload: { accepted: false, error: "session closed: reload it or start a new worker" },
   });
   expect(f.pending()).toBe(0);
   expect(f.prompts).toEqual([]);
@@ -531,7 +531,7 @@ test("closing the receiver during dispatch preparation refuses the batch before 
   expect(f.prompts).not.toContain("do not reopen during dispatch");
   expect(JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"))[0]).toMatchObject({
     state: "refused",
-    reason: "The receiver is closed or archived",
+    reason: "session closed: reload it or start a new worker",
   });
 });
 
@@ -1091,3 +1091,59 @@ test.each([false, true])(
     expect(await f.storage.get(f.target.id)).toEqual(before);
   },
 );
+
+test.each([false, true])(
+  "closed owner sends refuse before queue or pause (queue: %s)",
+  async (queueOwner) => {
+    const f = await fixture();
+    await f.host.daemon(() => f.manager.closeAgent(f.target.id));
+    // A durable idle status does not mean that a provider runtime is open.
+    const stored = (await f.storage.get(f.target.id))!;
+    await f.storage.upsert({ ...stored, lastStatus: "idle" });
+    await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+    const before = await f.storage.get(f.target.id);
+    await f.send("Do not queue", undefined, false, undefined, queueOwner);
+    expect(f.messages.findLast((m) => m.type === "send_agent_message_response")).toMatchObject({
+      payload: { accepted: false, error: "session closed: reload it or start a new worker" },
+    });
+    expect(f.pending()).toBe(0);
+    expect(f.prompts).toEqual([]);
+    expect(await f.storage.get(f.target.id)).toEqual(before);
+  },
+);
+
+test.each([false, true])(
+  "excepted parent chain permits Claude input (grandchild: %s)",
+  async (grandchild) => {
+    const f = await fixture();
+    const lead = "excepted-lead";
+    const labels = { "paseo.parent-agent-id": grandchild ? f.sender.id : lead };
+    Object.assign(f.target.labels, labels);
+    Object.assign(f.sender.labels, { "paseo.parent-agent-id": lead });
+    await writeFile(
+      f.storage.noticePausePath,
+      JSON.stringify({ pausedProviders: ["claude"], exceptSessions: [lead] }),
+    );
+    await f.send("Allowed child input");
+    expect(f.messages.findLast((m) => m.type === "send_agent_message_response")).toMatchObject({
+      payload: { accepted: true },
+    });
+    expect(f.prompts).toEqual(["Allowed child input"]);
+    expect(f.pending()).toBe(0);
+  },
+);
+
+test("an ancestor label read error holds Claude input", async () => {
+  const f = await fixture();
+  Object.assign(f.target.labels, { "paseo.parent-agent-id": "unreadable" });
+  vi.spyOn(f.storage, "getCached").mockImplementation(() => {
+    throw new Error("read error");
+  });
+  await writeFile(
+    f.storage.noticePausePath,
+    JSON.stringify({ pausedProviders: ["claude"], exceptSessions: ["lead"] }),
+  );
+  await f.send("Hold input");
+  expect(f.pending()).toBe(1);
+  expect(f.prompts).toEqual([]);
+});

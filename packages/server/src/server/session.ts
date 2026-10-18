@@ -9851,7 +9851,13 @@ export class Session {
       const check = createFinalInputCheck(
         () => {
           assertNoticeFinalCheck(finalCheck);
-          if (noticePaused(this.agentStorage.noticePausePath, this.agentManager.getAgent(agentId)))
+          if (
+            noticePaused(
+              this.agentStorage.noticePausePath,
+              this.agentManager.getAgent(agentId),
+              (id) => this.agentManager.getAgent(id) ?? this.agentStorage.getCached(id),
+            )
+          )
             throw new NoticePausedError();
         },
         undefined,
@@ -9925,6 +9931,7 @@ export class Session {
         await dispatch("steer", undefined, check);
       });
     const holdOwnerMessage = () => {
+      assertFinalInputCheck(queuedReceiverCheck(this.agentManager, agentId, heldSessionId));
       const deliver = whenIdle((run) => trusted.rpc(undefined, run));
       held.hold(agentId, async () => {
         try {
@@ -10049,10 +10056,15 @@ export class Session {
     return true;
   }
 
-  private async assertSendReceiverUnarchived(agentId: string): Promise<void> {
-    const target = await this.agentStorage.get(agentId);
-    if (target?.archivedAt)
+  private async assertSendReceiverOpen(agentId: string): Promise<void> {
+    const stored = await this.agentStorage.get(agentId);
+    const live = this.agentManager.getAgent(agentId);
+    if (stored?.archivedAt || live?.archivedAt)
       throw Object.assign(new Error("The receiver is archived. Restore it first."), {
+        code: "QUEUED_RECEIVER_CLOSED",
+      });
+    if (stored && (!live || live.lifecycle === "closed"))
+      throw Object.assign(new Error("session closed: reload it or start a new worker"), {
         code: "QUEUED_RECEIVER_CLOSED",
       });
   }
@@ -10142,7 +10154,13 @@ export class Session {
   ): Promise<boolean> {
     const pauseTarget =
       this.agentManager.getAgent(agentId) ?? (await this.agentStorage.get(agentId));
-    if (noticePaused(this.agentStorage.noticePausePath, pauseTarget)) {
+    if (
+      noticePaused(
+        this.agentStorage.noticePausePath,
+        pauseTarget,
+        (id) => this.agentManager.getAgent(id) ?? this.agentStorage.getCached(id),
+      )
+    ) {
       if (this.pluginOriginId || msg.inputProvenance !== undefined || msg.nativeQueue)
         throw new ProvenanceRefusedError();
       const hold = async () => {
@@ -10263,7 +10281,7 @@ export class Session {
 
     try {
       const agentId = resolved.agentId;
-      await this.assertSendReceiverUnarchived(agentId);
+      await this.assertSendReceiverOpen(agentId);
       if (await this.holdOrRefuseAgentMessage(msg, agentId)) return;
       const prompt = buildAgentPrompt(msg.text, msg.images, msg.attachments);
       if (msg.nativeQueue) {

@@ -79,9 +79,24 @@ def read_policy(path):
     return value
 
 
-def paused(policy, target):
+def paused(policy, target, read_parent=None):
     provider = target['provider'].split('/')[0]
-    return provider in policy.get('pausedProviders', []) and target['id'] not in policy.get('exceptSessions', [])
+    if provider not in policy.get('pausedProviders', []):
+        return False
+    exceptions = set(policy.get('exceptSessions', []))
+    current, seen = target['id'], set()
+    try:
+        while current and current not in seen and len(seen) < 128:
+            if current in exceptions:
+                return False
+            seen.add(current)
+            if read_parent is None:
+                return True
+            current = read_parent(current)
+    except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError):
+        # An unavailable label must never turn a paused notice into provider input.
+        return True
+    return True
 
 
 def native(cli, args, **kwargs):
@@ -196,7 +211,7 @@ class Gate:
         self.run = run
 
     def target(self, cli, endpoint, identifier):
-        result = self.run(cli, [*endpoint, 'ls', '--json'], capture_output=True, text=True, timeout=60)
+        result = self.run(cli, [*endpoint, 'ls', '-g', '--json'], capture_output=True, text=True, timeout=60)
         if result.returncode:
             raise RuntimeError('Cannot resolve the notice target. No notice was sent.')
         rows = json.loads(result.stdout)
@@ -212,7 +227,38 @@ class Gate:
         row = matches[0]
         if not isinstance(row.get('provider'), str):
             raise ValueError('Unknown notice provider')
+        if row.get('archivedAt') or row.get('archived'):
+            raise TargetUnavailableError('The receiver is archived. Restore it first.')
+        if row.get('status') == 'closed':
+            raise TargetUnavailableError('session closed: reload it or start a new worker')
         return row
+
+    def parent_reader(self, cli, endpoint):
+        cache = {}
+        def read(identifier):
+            if identifier not in cache:
+                cache[identifier] = None
+                result = self.run(cli, [*endpoint, 'inspect', identifier, '--json'],
+                                  capture_output=True, text=True, timeout=60)
+                if result.returncode:
+                    raise ValueError('Cannot read session labels')
+                value = json.loads(result.stdout)
+                if not isinstance(value, dict) or value.get('Id', value.get('id')) != identifier:
+                    raise ValueError('Unknown session inspection schema')
+                if 'ParentAgentId' in value:
+                    parent = value['ParentAgentId']
+                elif isinstance(value.get('labels'), dict):
+                    labels = value['labels']
+                    parent = labels.get('paseo.parent-agent-id', labels.get('parent'))
+                else:
+                    raise ValueError('Session inspection has no parent labels')
+                if parent is not None and (not isinstance(parent, str) or not parent.strip()):
+                    raise ValueError('Invalid session parent label')
+                cache[identifier] = (parent,)
+            if cache[identifier] is None:
+                raise ValueError('Cannot read session labels')
+            return cache[identifier][0]
+        return read
 
     def send(self, cli, args, require_delivery=False):
         cli = shutil.which(cli) or cli
@@ -227,7 +273,7 @@ class Gate:
         # Read-only target discovery never starts a provider or sends input.
         target = self.target(cli, endpoint, identifier)
         with locked(self.store):
-            if paused(read_policy(self.policy), target):
+            if paused(read_policy(self.policy), target, self.parent_reader(cli, endpoint)):
                 if requires_plain or text.lstrip().startswith('/'):
                     raise ValueError('Paused notices require plain text. The original command was not sent or stored.')
                 if require_delivery:
@@ -271,6 +317,7 @@ class Gate:
 
     def drain(self):
         errors = []
+        readers = {}
         # Transport never holds the storage lock. A completion can always save its notice.
         with locked(self.store):
             paths = sorted(self.store.glob('*.json'))
@@ -293,10 +340,13 @@ class Gate:
                 except Exception:
                     errors.append(batch_id)
                     continue
+                reader_key = (cli, tuple(snapshot['endpoint']))
+                if reader_key not in readers:
+                    readers[reader_key] = self.parent_reader(cli, snapshot['endpoint'])
                 with locked(self.store):
                     record = json.loads(path.read_text())
                     batch = next(batch for batch in record['batches'] if batch['batchId'] == batch_id)
-                    if batch['state'] != 'held' or paused(read_policy(self.policy), target):
+                    if batch['state'] != 'held' or paused(read_policy(self.policy), target, readers[reader_key]):
                         continue
                     if target.get('status') == 'closed' or target.get('archivedAt') or target.get('archived'):
                         batch.update(state='refused', reason='Receiver closed or archived')
