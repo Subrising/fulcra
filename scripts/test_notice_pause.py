@@ -1,4 +1,6 @@
 import importlib.util
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -276,6 +278,16 @@ class NoticePauseTests(unittest.TestCase):
     def test_unknown_target_fails_closed(self):
         with self.assertRaises(ValueError):
             self.send('missing')
+        self.assertEqual(self.sends(), [])
+
+    def test_cli_target_miss_is_machine_readable_for_the_ssh_sender(self):
+        self.rows = []
+        output = io.StringIO()
+        with patch.object(m, 'Gate', return_value=self.gate), patch.object(sys, 'argv', [
+                'notice-pause.py', '--cli', '/native/cli', 'send', 'missing', '--prompt', 'marker']), contextlib.redirect_stderr(output):
+            code = m.cli_main()
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(output.getvalue())['error']['code'], 'AGENT_NOT_FOUND')
         self.assertEqual(self.sends(), [])
 
     def test_structured_route_defers_a_local_miss_to_native_sender_checks(self):

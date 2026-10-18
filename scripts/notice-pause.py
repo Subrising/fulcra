@@ -455,12 +455,19 @@ def main():
     return gate.send(sys.argv[2], sys.argv[3:], require_delivery=require_delivery)
 
 
-if __name__ == '__main__':
+def cli_main():
     try:
-        sys.exit(main())
+        return main()
+    except TargetNotFoundError as error:
+        print(json.dumps({'error': {'code': 'AGENT_NOT_FOUND', 'message': str(error)}}), file=sys.stderr)
+        return 1
     except (OSError, subprocess.SubprocessError):
         print('Notice gate: File or transport operation failed. Check the saved receipts.', file=sys.stderr)
-        sys.exit(1)
+        return 1
     except Exception as error:
         print('Notice gate: ' + str(error), file=sys.stderr)
-        sys.exit(1)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(cli_main())
