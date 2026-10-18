@@ -1,3 +1,4 @@
+import { reviewWork } from "./agent/work-review.js";
 import { randomUUID } from "node:crypto";
 import { hostLinksFor } from "./host-links.js";
 import { armPromptFinishNotification, disarmFinishNotification } from "./agent/agent-prompt.js";
@@ -3578,6 +3579,8 @@ export class Session {
     switch (msg.type) {
       case "agent.lifecycle.cleanup_idle.request":
         return this.handleIdleCleanupRequest(msg);
+      case "agent.work.owner_review.request":
+        return this.handleWorkOwnerReviewRequest(msg);
       case "agent.parent.adopt.request":
         return this.handleParentAdoptRequest(msg, source);
       case "agent.detach.request":
@@ -4544,6 +4547,31 @@ export class Session {
     this.emit({
       type: "agent.lifecycle.cleanup_idle.response",
       payload: { agentId: msg.agentId, requestId: msg.requestId, accepted: error === null, error },
+    });
+  }
+
+  // FU-349: the owner reviews work over the authenticated app connection. Agents use the MCP tool as a lead.
+  private async handleWorkOwnerReviewRequest(
+    msg: Extract<SessionInboundMessage, { type: "agent.work.owner_review.request" }>,
+  ): Promise<void> {
+    let error: string | null = null;
+    try {
+      await reviewWork(
+        {
+          agentManager: this.agentManager,
+          agentStorage: this.agentStorage,
+          logger: this.sessionLogger,
+        },
+        msg,
+        { kind: "owner" },
+      );
+    } catch (failure) {
+      if (admissionOutcome(failure)) throw failure;
+      error = getErrorMessageOr(failure, "Review refused");
+    }
+    this.emit({
+      type: "agent.work.owner_review.response",
+      payload: { requestId: msg.requestId, item: msg.item, accepted: error === null, error },
     });
   }
 

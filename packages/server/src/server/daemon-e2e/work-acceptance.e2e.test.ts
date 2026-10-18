@@ -177,7 +177,7 @@ test("daemon: failed check, rejection, second fix, approval, then every close ro
   expect(f.store.get("FU-1")?.approval?.approver).toEqual({ kind: "lead", id: f.lead.id });
 });
 
-test("daemon: a paused provider holds a send, and a held send does not use a turn of the round", async () => {
+test("design 8 (daemon): a paused provider holds a send, and a held send does not use a turn of the round", async () => {
   const f = await fixture();
   await f.assign();
   await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["codex"] }));
@@ -190,7 +190,7 @@ test("daemon: a paused provider holds a send, and a held send does not use a tur
   await vi.waitFor(() => expect(f.store.get("FU-1")?.roundTurns).toBe(1));
 });
 
-test("daemon: a usage-limited session holds automatic sends and stays assigned", async () => {
+test("design 8 (daemon): a usage-limited session holds automatic sends and stays assigned", async () => {
   const f = await fixture();
   await f.assign();
   const session = f.worker.session!;
@@ -219,7 +219,7 @@ test("daemon: a usage-limited session holds automatic sends and stays assigned",
   await expect(f.client.archiveAgent(f.worker.id)).rejects.toThrow(/Archive refused/);
 });
 
-test("daemon: an archived session stays closed, and a cancelled assignment records CANCELLED", async () => {
+test("design 8 (daemon): an archived session stays closed, and a cancelled assignment records CANCELLED", async () => {
   const f = await fixture();
   await f.assign();
   await f.asLead.executeTool("work_cancel", { item: "FU-1", reason: "Superseded" });
@@ -247,7 +247,7 @@ test("daemon: an archived session stays closed, and a cancelled assignment recor
   expect(f.store.get("FU-1")).toMatchObject({ generation: 2, workerId: next.id });
 });
 
-test("daemon: a lead on another host cannot review, and remote sends keep their guard", async () => {
+test("design 8 (daemon): a lead on another host cannot review, and remote sends keep their guard", async () => {
   const f = await fixture();
   await f.assign();
   const submitted = await f.submit("sha-1");
@@ -268,4 +268,271 @@ test("daemon: a lead on another host cannot review, and remote sends keep their 
   ).rejects.toThrow(/remote worker grant|host link/i);
   expect(f.store.get("FU-1")?.state).toBe("AWAITING_APPROVAL");
   await expect(f.client.archiveAgent(f.worker.id)).rejects.toThrow(/Archive refused/);
+});
+
+// --- one daemon test per item in the design's verification list ------------------------------------------
+
+const fail = {
+  passed: false,
+  checks: [{ command: "npm test", exitCode: 1 }],
+  evidence: "fail 3",
+};
+
+test("design 1 (daemon): missing, failed, stale or wrong-target verification refuses closure", async () => {
+  const f = await fixture();
+  await f.assign();
+  const refused = () =>
+    expect(f.client.archiveAgent(f.worker.id)).rejects.toThrow(/Archive refused/);
+  await refused(); // missing
+  await f.submit("sha-1", fail);
+  await refused(); // failed
+  const passed = await f.submit("sha-2");
+  // stale: the result changes after the check passed
+  await f.store.observeCandidate("FU-1", "sha-3");
+  expect(f.store.get("FU-1")?.state).toBe("RUNNING");
+  await refused();
+  // wrong target: approval for a different candidate is refused
+  const again = await f.submit("sha-4");
+  await expect(
+    f.approve("sha-OTHER", again.assignment.verification!.evidenceDigest),
+  ).rejects.toThrow(/different result or evidence/);
+  expect(passed.assignment.state).toBe("AWAITING_APPROVAL");
+  await refused();
+});
+
+test("design 2 (daemon): missing, rejected, forged or wrong-candidate approval refuses closure", async () => {
+  const f = await fixture();
+  await f.assign();
+  const refused = () =>
+    expect(f.client.archiveAgent(f.worker.id)).rejects.toThrow(/Archive refused/);
+  const sub = await f.submit("sha-1");
+  const digest = sub.assignment.verification!.evidenceDigest;
+  await refused(); // missing approval
+  await expect(f.approve("sha-1", "forged-digest")).rejects.toThrow(/different result or evidence/);
+  const other = await f.manager.createAgent(
+    { provider: "codex", cwd: f.root, modeId: "full-access", title: "Other lead" },
+    undefined,
+    {},
+  );
+  const asOther = createPaseoToolCatalog({
+    agentManager: f.manager,
+    agentStorage: f.storage,
+    providerSnapshotManager: Object.create(ProviderSnapshotManager.prototype),
+    callerAgentId: other.id,
+    logger: createTestLogger(),
+  });
+  await expect(
+    asOther.executeTool("work_review", {
+      item: "FU-1",
+      decision: "approve",
+      candidateId: "sha-1",
+      evidenceDigest: digest,
+    }),
+  ).rejects.toThrow(/Only the assigning lead/); // forged approver
+  await f.asLead.executeTool("work_review", { item: "FU-1", decision: "reject", findings: "No" });
+  await refused(); // rejected
+});
+
+test("design 3 (daemon): a valid lead milestone approval and an owner approval each permit closure", async () => {
+  const f = await fixture();
+  await f.assign();
+  const lead = await f.submit("sha-1");
+  await f.approve("sha-1", lead.assignment.verification!.evidenceDigest);
+  await f.client.archiveAgent(f.worker.id);
+  expect(f.store.get("FU-1")).toMatchObject({ state: "CLOSED" });
+
+  const second = await f.manager.createAgent(
+    { provider: "codex", cwd: f.root, modeId: "full-access", title: "Second worker" },
+    undefined,
+    { labels: { [PARENT_AGENT_ID_LABEL]: f.lead.id } },
+  );
+  await f.asLead.executeTool("work_assign", {
+    item: "FU-2",
+    project: "fulcra",
+    workerId: second.id,
+    goal: "A creative look",
+    acceptance: [],
+    approvalClass: "creative",
+    requestId: "req-FU-2",
+  });
+  const asSecond = createPaseoToolCatalog({
+    agentManager: f.manager,
+    agentStorage: f.storage,
+    providerSnapshotManager: Object.create(ProviderSnapshotManager.prototype),
+    callerAgentId: second.id,
+    logger: createTestLogger(),
+  });
+  const sub = (
+    (await asSecond.executeTool("work_submit", {
+      candidateKind: "artifact",
+      candidateId: "hash-1",
+      ...GOOD,
+    })) as { structuredContent: { result: { assignment: Assignment } } }
+  ).structuredContent.result.assignment;
+  const digest = sub.verification!.evidenceDigest;
+  // The lead cannot approve a creative look. The owner can, over the app connection.
+  await expect(
+    f.asLead.executeTool("work_review", {
+      item: "FU-2",
+      decision: "approve",
+      candidateId: "hash-1",
+      evidenceDigest: digest,
+    }),
+  ).rejects.toThrow(/needs the owner/);
+  await f.client.reviewWorkAsOwner({
+    item: "FU-2",
+    decision: "approve",
+    candidateId: "hash-1",
+    evidenceDigest: digest,
+    milestone: "look",
+  });
+  await f.client.archiveAgent(second.id);
+  expect(f.store.get("FU-2")).toMatchObject({ state: "CLOSED" });
+  expect(f.store.get("FU-2")?.approval?.approver).toEqual({ kind: "owner" });
+});
+
+test("design 4 (daemon): rejection retains the same session and requires the checks again", async () => {
+  const f = await fixture();
+  await f.assign();
+  const first = await f.submit("sha-1");
+  await f.client.reviewWorkAsOwner({ item: "FU-1", decision: "reject", findings: "Add a test" });
+  await vi.waitFor(() => expect(f.prompts.some((p) => p.includes("Add a test"))).toBe(true));
+  const after = f.store.get("FU-1")!;
+  expect(after).toMatchObject({ state: "RUNNING", workerId: f.worker.id, verification: undefined });
+  await expect(f.client.archiveAgent(f.worker.id)).rejects.toThrow(/Archive refused/);
+  await expect(f.approve("sha-1", first.assignment.verification!.evidenceDigest)).rejects.toThrow(
+    /not awaiting approval/,
+  );
+});
+
+test("design 5 (daemon): duplicate completion events cause one review notice and one next-item start", async () => {
+  const f = await fixture();
+  await f.assign();
+  const submits = await Promise.all(
+    [1, 2, 3].map(() =>
+      f.asWorker.executeTool("work_submit", {
+        candidateKind: "commit",
+        candidateId: "sha-1",
+        ...GOOD,
+      }),
+    ),
+  );
+  const notify = submits.map(
+    (r) => (r.structuredContent as { result: { notify: boolean } }).result.notify,
+  );
+  expect(notify.filter(Boolean)).toHaveLength(1);
+  const digest = f.store.get("FU-1")!.verification!.evidenceDigest;
+  await f.approve("sha-1", digest);
+  await f.client.archiveAgent(f.worker.id);
+  const starts = await Promise.all([1, 2, 3].map(() => f.store.claimNextStart("FU-1")));
+  expect(starts.filter(Boolean)).toHaveLength(1);
+});
+
+test("design 6 (daemon): restart during dispatch, approval or archive does not duplicate work", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "work-accept-restart-"));
+  cleanups.push(() => rm(root, { recursive: true, force: true }));
+  const start = () =>
+    createTestPaseoDaemon({
+      paseoHomeRoot: root,
+      cleanup: false,
+      agentClients: { codex: createTestAgentClient("codex") },
+    });
+  const first = await start();
+  const manager1 = first.daemon.agentManager;
+  const lead = await manager1.createAgent(
+    { provider: "codex", cwd: root, modeId: "full-access", title: "Lead" },
+    undefined,
+    {},
+  );
+  const worker = await manager1.createAgent(
+    { provider: "codex", cwd: root, modeId: "full-access", title: "Worker" },
+    undefined,
+    { labels: { [PARENT_AGENT_ID_LABEL]: lead.id } },
+  );
+  await manager1.flush();
+  const catalog = (daemon: typeof first, id: string) =>
+    createPaseoToolCatalog({
+      agentManager: daemon.daemon.agentManager,
+      agentStorage: daemon.daemon.agentStorage,
+      providerSnapshotManager: Object.create(ProviderSnapshotManager.prototype),
+      callerAgentId: id,
+      logger: createTestLogger(),
+    });
+  const assign = (daemon: typeof first, workerId: string, requestId: string) =>
+    catalog(daemon, lead.id).executeTool("work_assign", {
+      item: "FU-1",
+      project: "fulcra",
+      workerId,
+      goal: "g",
+      acceptance: [],
+      approvalClass: "milestone",
+      requestId,
+    });
+  await assign(first, worker.id, "req-1");
+  const submitted = (await catalog(first, worker.id).executeTool("work_submit", {
+    candidateKind: "commit",
+    candidateId: "sha-1",
+    ...GOOD,
+  })) as { structuredContent: { result: { assignment: Assignment } } };
+  const digest = submitted.structuredContent.result.assignment.verification!.evidenceDigest;
+  // Restart 1, during approval: the pending state survives and still needs the exact digests.
+  await first.close();
+  const second = await start();
+  cleanups.push(second.close);
+  const store2 = second.daemon.agentManager.workAcceptance!;
+  expect(store2.get("FU-1")).toMatchObject({ state: "AWAITING_APPROVAL", workerId: worker.id });
+  // Restart during dispatch: the same request id returns the same assignment; a new worker is refused.
+  await assign(second, worker.id, "req-1");
+  expect(store2.get("FU-1")?.generation).toBe(1);
+  await expect(assign(second, lead.id, "req-2")).rejects.toThrow(/already has an open assignment/);
+  await catalog(second, lead.id).executeTool("work_review", {
+    item: "FU-1",
+    decision: "approve",
+    candidateId: "sha-1",
+    evidenceDigest: digest,
+  });
+  // Restart during archive: CLOSING was written. The restarted daemon keeps it open until archived.
+  await store2.beginClose("FU-1");
+  await second.close();
+  const third = await start();
+  cleanups.push(third.close);
+  const store3 = third.daemon.agentManager.workAcceptance!;
+  expect(store3.get("FU-1")).toMatchObject({ state: "CLOSING" });
+  const client = new DaemonClient({ url: `ws://127.0.0.1:${third.port}/ws` });
+  await client.connect();
+  cleanups.push(() => client.close());
+  await client.archiveAgent(worker.id);
+  expect(store3.get("FU-1")).toMatchObject({ state: "CLOSED", generation: 1 });
+});
+
+test("design 7 (daemon): pending review produces no periodic model turns", async () => {
+  const f = await fixture();
+  await f.assign();
+  await f.submit("sha-1");
+  const before = f.prompts.length;
+  await expect(f.manager.runAgent(f.worker.id, "status?")).rejects.toThrow(/no model turn starts/);
+  await f.asLead
+    .executeTool("send_agent_prompt", { agentId: f.worker.id, prompt: "are you done?" })
+    .catch(() => undefined);
+  await new Promise((resolve) => setTimeout(resolve, 3000));
+  expect(f.prompts).toHaveLength(before);
+  expect(f.store.get("FU-1")).toMatchObject({ state: "AWAITING_APPROVAL", roundTurns: 0 });
+});
+
+test("design 9 (daemon): direct and cascading lifecycle actions cannot mark unapproved work DONE", async () => {
+  const f = await fixture();
+  const child = await f.manager.createAgent(
+    { provider: "codex", cwd: f.root, modeId: "full-access", title: "Child" },
+    undefined,
+    { labels: { [PARENT_AGENT_ID_LABEL]: f.worker.id } },
+  );
+  await f.manager.flush();
+  await f.assign("FU-1", child.id);
+  // Parent archive cascades to the unapproved child: refused before any effect.
+  await expect(f.client.archiveAgent(f.worker.id)).rejects.toThrow(/Archive refused/);
+  await expect(f.client.archiveAgent(child.id)).rejects.toThrow(/Archive refused/);
+  expect((await f.storage.get(f.worker.id))?.archivedAt).toBeFalsy();
+  expect((await f.storage.get(child.id))?.archivedAt).toBeFalsy();
+  expect(f.store.get("FU-1")).toMatchObject({ state: "RUNNING" });
+  expect(f.store.get("FU-1")?.cancelled).toBeUndefined();
 });

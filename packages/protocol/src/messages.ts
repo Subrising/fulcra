@@ -2394,6 +2394,26 @@ export const AgentCleanupIdleResponseMessageSchema = z.object({
   payload: AgentActionResponsePayloadSchema,
 });
 
+export const AgentWorkOwnerReviewRequestMessageSchema = z.object({
+  type: z.literal("agent.work.owner_review.request"),
+  item: z.string().min(1),
+  decision: z.enum(["approve", "reject"]),
+  candidateId: z.string().optional(),
+  evidenceDigest: z.string().optional(),
+  milestone: z.string().optional(),
+  findings: z.string().optional(),
+  requestId: z.string(),
+});
+export const AgentWorkOwnerReviewResponseMessageSchema = z.object({
+  type: z.literal("agent.work.owner_review.response"),
+  payload: z.object({
+    requestId: z.string(),
+    item: z.string(),
+    accepted: z.boolean(),
+    error: z.string().nullable(),
+  }),
+});
+
 export const AgentParentAdoptRequestMessageSchema = z.object({
   type: z.literal("agent.parent.adopt.request"),
   agentId: z.string(),
@@ -3948,6 +3968,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   AgentConfigApplyRequestMessageSchema,
   AgentParentAdoptRequestMessageSchema,
   AgentCleanupIdleRequestMessageSchema,
+  AgentWorkOwnerReviewRequestMessageSchema,
   AgentDetachRequestMessageSchema,
   AgentRewindRequestMessageSchema,
   AgentPermissionResponseMessageSchema,
@@ -8243,6 +8264,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   AgentConfigApplyResponseMessageSchema,
   AgentParentAdoptResponseMessageSchema,
   AgentCleanupIdleResponseMessageSchema,
+  AgentWorkOwnerReviewResponseMessageSchema,
   AgentDetachResponseMessageSchema,
   AgentRewindResponseMessageSchema,
   UpdateAgentResponseMessageSchema,

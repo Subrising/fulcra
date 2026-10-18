@@ -78,6 +78,7 @@ import {
   SteerUnavailableError,
 } from "../agent-prompt.js";
 import { FINAL_INPUT_CHECK } from "../agent-sdk-types.js";
+import { reviewWork } from "../work-review.js";
 import {
   recipientLimit,
   queuedAgentMessagesFor,
@@ -2555,48 +2556,14 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       },
       outputSchema: workOutput,
     },
-    async (input) => {
-      const store = workStore();
-      const reviewer = agentManager.currentReviewer(callerAgentId);
-      if (input.decision === "approve") {
-        if (!input.candidateId || !input.evidenceDigest)
-          throw new Error("Approval needs candidateId and evidenceDigest.");
-        return workResult(
-          await store.approve(input.item, reviewer, {
-            candidateId: input.candidateId,
-            evidenceDigest: input.evidenceDigest,
-            milestone: input.milestone,
-          }),
-        );
-      }
-      if (!input.findings) throw new Error("Rejection needs findings.");
-      const rejected = await store.reject(input.item, reviewer, input.findings);
-      // The same worker gets the findings and one new finish notice for the lead.
-      const noticeParent = rejected.leadId;
-      let rearmed: string | null = null;
-      try {
-        if (noticeParent)
-          rearmed = await armPromptFinishNotification({
-            agentManager,
-            agentStorage,
-            childAgentId: rejected.workerId,
-            callerAgentId: noticeParent,
-            forNextTurn: true,
-            logger: childLogger,
-          });
-        await sendPromptToAgent({
-          agentManager,
-          agentStorage,
-          agentId: rejected.workerId,
-          prompt: `Review of ${rejected.item} rejected this result. Fix these findings, run the checks again, then submit the new result.\n\n${input.findings}`,
-          logger: childLogger,
-        });
-      } catch (error) {
-        if (rearmed) await agentStorage.settleFinishNotice(rejected.workerId, rearmed, "cancelled");
-        throw error;
-      }
-      return workResult(rejected);
-    },
+    async (input) =>
+      workResult(
+        await reviewWork(
+          { agentManager, agentStorage, logger: childLogger },
+          input,
+          agentManager.currentReviewer(callerAgentId),
+        ),
+      ),
   );
 
   registerTool(

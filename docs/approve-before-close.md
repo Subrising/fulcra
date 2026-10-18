@@ -49,6 +49,7 @@ The lead raises the limit or rejects with findings.
 `work_assign` opens an assignment. `work_submit` sends the result and check evidence.
 `work_review` approves or rejects. `work_cancel` cancels.
 Rejection sends the findings to the same worker with a new finish notice for the lead.
+The owner reviews over the app connection with `agent.work.owner_review.request` (client method `reviewWorkAsOwner`).
 
 ## Storage
 

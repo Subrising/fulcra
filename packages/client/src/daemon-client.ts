@@ -3229,6 +3229,20 @@ export class DaemonClient {
     if (!payload.accepted) throw new Error(payload.error ?? "Idle cleanup refused");
   }
 
+  /** FU-349: the owner approves or rejects a worker's submitted result. */
+  async reviewWorkAsOwner(
+    input: Omit<
+      Extract<SessionInboundMessage, { type: "agent.work.owner_review.request" }>,
+      "type" | "requestId"
+    >,
+  ): Promise<void> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.work.owner_review.response">({
+        message: { type: "agent.work.owner_review.request", ...input },
+      });
+    if (!payload.accepted) throw new Error(payload.error ?? "Review refused");
+  }
+
   async archiveAgent(
     agentId: string,
     options?: { confirmed?: boolean },
