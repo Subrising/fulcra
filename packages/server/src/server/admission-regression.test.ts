@@ -28,6 +28,7 @@ test("B1a: delete_agent_request must not delete an agent whose close admission w
     agentManager: {
       trustedPlugins: authority,
       getAgent: () => null,
+      assertWorkCloseAllowed: async () => undefined,
       // Same shape as AgentManager.closeAgent: admission first, then effects.
       closeAgent: (id: string) =>
         authority.input({ id }, "close", undefined, async () => undefined),
