@@ -79,7 +79,14 @@ export interface Assignment {
   candidate?: Candidate;
   verification?: VerificationRecord;
   approval?: ApprovalRecord;
-  rejections: Array<{ findings: string; by: Approver; at: string; candidateId: string }>;
+  rejections: Array<{
+    findings: string;
+    by: Approver;
+    at: string;
+    candidateId: string;
+    /** False until the findings reached the worker. A failed send leaves them saved and pending. */
+    delivered?: boolean;
+  }>;
   reviewNoticeKey?: string;
   nextStartClaimed?: boolean;
   cancelled?: { reason: string; by: Approver; at: string };
@@ -260,7 +267,11 @@ export class WorkAcceptanceStore {
   }
 
   /** Mutate a copy, persist, then publish. A failed write leaves memory and disk unchanged. */
-  private async commit(item: string, change: (a: Assignment) => void): Promise<Assignment> {
+  private async commit(
+    item: string,
+    change: (a: Assignment) => void,
+    override?: Omit<OverrideRecord, "at">,
+  ): Promise<Assignment> {
     const index = this.assignments.findIndex((a) => a.item === item && OPEN.has(a.state));
     if (index < 0) throw new WorkAcceptanceError("no-assignment", `No open assignment for ${item}`);
     const draft = structuredClone(this.assignments[index]);
@@ -270,11 +281,16 @@ export class WorkAcceptanceStore {
     const next = [...this.assignments];
     next[index] = draft;
     const previous = this.assignments;
+    const previousOverrides = this.overrides;
     this.assignments = next;
+    // The override record and the change are one write: a crash cannot leave one without the other.
+    if (override)
+      this.overrides = [...previousOverrides, { at: this.now().toISOString(), ...override }];
     try {
       await this.persist();
     } catch (error) {
       this.assignments = previous;
+      this.overrides = previousOverrides;
       throw error;
     }
     return structuredClone(draft);
@@ -478,13 +494,42 @@ export class WorkAcceptanceStore {
     return resumed;
   }
 
-  raiseTurnLimit(item: string, by: Approver, turnLimit: number): Promise<Assignment> {
+  /** An owner raise is recorded in the same write as the change. */
+  raiseTurnLimit(
+    item: string,
+    by: Approver,
+    turnLimit: number,
+    reason?: string,
+  ): Promise<Assignment> {
     return this.serial(async () => {
       this.requireReviewer(this.open_(item), by);
-      return this.commit(item, (d) => {
-        if (turnLimit > d.turnLimit) d.turnLimit = turnLimit;
-      });
+      return this.commit(
+        item,
+        (d) => {
+          if (turnLimit > d.turnLimit) d.turnLimit = turnLimit;
+        },
+        by.kind === "owner"
+          ? { action: "raise_turn_limit", item, reason: reason ?? "Owner raised the turn limit" }
+          : undefined,
+      );
     });
+  }
+
+  /** The newest rejection whose findings never reached the worker, if any. */
+  pendingRejection(item: string): { findings: string; index: number } | undefined {
+    const a = this.assignments.find((x) => x.item === item && OPEN.has(x.state));
+    const index = a ? a.rejections.length - 1 : -1;
+    const last = a?.rejections[index];
+    return last && last.delivered === false ? { findings: last.findings, index } : undefined;
+  }
+
+  markRejectionDelivered(item: string): Promise<Assignment> {
+    return this.serial(async () =>
+      this.commit(item, (d) => {
+        const last = d.rejections.at(-1);
+        if (last) last.delivered = true;
+      }),
+    );
   }
 
   // --- evidence ---------------------------------------------------------------------------------------
@@ -636,6 +681,7 @@ export class WorkAcceptanceStore {
           by,
           at: this.now().toISOString(),
           candidateId: d.candidate?.id ?? "",
+          delivered: false,
         });
         d.approval = undefined;
         d.verification = undefined;
@@ -657,10 +703,15 @@ export class WorkAcceptanceStore {
           "unauthorised",
           "Only the assigning lead or the owner may cancel.",
         );
-      return this.commit(item, (d) => {
-        d.cancelled = { reason, by, at: this.now().toISOString() };
-        d.state = "CANCELLED";
-      });
+      // An owner cancel is recorded in the same write as the change.
+      return this.commit(
+        item,
+        (d) => {
+          d.cancelled = { reason, by, at: this.now().toISOString() };
+          d.state = "CANCELLED";
+        },
+        by.kind === "owner" ? { action: "cancel", item, reason } : undefined,
+      );
     });
   }
 

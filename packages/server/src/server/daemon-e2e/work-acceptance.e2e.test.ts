@@ -792,3 +792,40 @@ test("M3 and B3: a deleted store fails closed on the daemon, and the owner reset
   await client.archiveAgent(worker.id);
   expect((await second.daemon.agentStorage.get(worker.id))?.archivedAt).toBeTruthy();
 });
+
+test("rejection findings are kept when the send fails, and repeating the rejection delivers them once", async () => {
+  const f = await fixture();
+  await f.assign();
+  await f.submit("sha-1");
+  const failOnce = vi
+    .spyOn(f.storage, "rearmFinishNotice")
+    .mockRejectedValueOnce(new Error("notice store unavailable"));
+  await expect(
+    f.asLead.executeTool("work_review", {
+      item: "FU-1",
+      decision: "reject",
+      findings: "Cover the failure path",
+    }),
+  ).rejects.toThrow(/findings are saved but the worker did not get them/);
+  expect(failOnce).toHaveBeenCalledTimes(1);
+  expect(f.prompts.some((p) => p.includes("Cover the failure path"))).toBe(false);
+  // The rejection and its findings are in the record, marked as not delivered.
+  expect(f.store.get("FU-1")).toMatchObject({ state: "RUNNING" });
+  expect(f.store.get("FU-1")?.rejections).toMatchObject([
+    { findings: "Cover the failure path", delivered: false },
+  ]);
+
+  // Repeating the rejection resends the saved findings. It does not add a second rejection.
+  await f.asLead.executeTool("work_review", { item: "FU-1", decision: "reject", findings: "ignored" });
+  await vi.waitFor(() =>
+    expect(f.prompts.filter((p) => p.includes("Cover the failure path"))).toHaveLength(1),
+  );
+  expect(f.store.get("FU-1")?.rejections).toMatchObject([
+    { findings: "Cover the failure path", delivered: true },
+  ]);
+  // Once delivered, a new rejection is a new rejection.
+  await vi.waitFor(() => expect(f.manager.getAgent(f.worker.id)?.lifecycle).toBe("idle"));
+  await f.submit("sha-2");
+  await f.asLead.executeTool("work_review", { item: "FU-1", decision: "reject", findings: "Second round" });
+  expect(f.store.get("FU-1")?.rejections).toHaveLength(2);
+});

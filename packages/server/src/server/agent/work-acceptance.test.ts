@@ -21,9 +21,7 @@ import {
 // capabilities-20261018.md. Every test uses an isolated home and a fake provider. No live daemon is touched.
 
 const logger = createTestLogger();
-const LEAD: Approver = { kind: "lead", id: "lead-1" };
-const OWNER: Approver = { kind: "owner" };
-const GOOD = { passed: true, checks: [{ command: "npm test", exitCode: 0 }], evidence: "ok 12/12" };
+const LEAD: Approver = { kind: "lead", id: "lead-1" };const GOOD = { passed: true, checks: [{ command: "npm test", exitCode: 0 }], evidence: "ok 12/12" };
 const BAD = { passed: false, checks: [{ command: "npm test", exitCode: 1 }], evidence: "fail 3" };
 
 const cleanups: Array<() => Promise<void> | void> = [];
@@ -725,4 +723,33 @@ test("B1: idle cleanup refuses unapproved work and leaves the session live", asy
   expect(manager.getAgent(worker.id)).toBeTruthy();
   expect((await storage.get(worker.id))?.archivedAt).toBeFalsy();
   expect(store.get("FU-1")?.state).toBe("RUNNING");
+});
+
+// --- FU-349 review round 2 -----------------------------------------------------------------------------
+
+const OWNER: Approver = { kind: "owner" };
+
+test("an owner cancel or raise is recorded in the same write as the change, and a failed write keeps neither", async () => {
+  const dir = home();
+  const file = join(dir, "work-acceptance", "assignments.json");
+  const store = newStore(dir);
+  await openFor(store, "w1");
+  await store.raiseTurnLimit("FU-1", OWNER, 40, "Long job");
+  // One snapshot on disk holds both the new limit and its override record.
+  const afterRaise = JSON.parse(readFileSync(file, "utf8"));
+  expect(afterRaise.assignments[0].turnLimit).toBe(40);
+  expect(afterRaise.overrides).toMatchObject([{ action: "raise_turn_limit", item: "FU-1", reason: "Long job" }]);
+
+  // A write that fails changes neither the state nor the override log.
+  rmSync(join(dir, "work-acceptance"), { recursive: true, force: true });
+  writeFileSync(join(dir, "work-acceptance"), "file in the way");
+  await expect(store.cancel("FU-1", OWNER, "Lead is gone")).rejects.toThrow();
+  expect(store.get("FU-1")?.state).toBe("RUNNING");
+  expect(store.overrideLog()).toHaveLength(1);
+
+  // A lead's cancel is not an owner override and adds no record.
+  const other = newStore(home());
+  await openFor(other, "w1");
+  await other.cancel("FU-1", LEAD, "Superseded");
+  expect(other.overrideLog()).toEqual([]);
 });

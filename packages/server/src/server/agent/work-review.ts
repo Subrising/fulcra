@@ -31,8 +31,14 @@ export async function reviewWork(
       milestone: input.milestone ?? "milestone",
     });
   }
-  if (!input.findings) throw new Error("Rejection needs findings.");
-  const rejected = await store.reject(input.item, reviewer, input.findings);
+  // A rejection whose findings never reached the worker is saved. Repeating the rejection resends those findings
+  // and arms one new notice; it does not reject twice.
+  const pending = store.pendingRejection(input.item);
+  if (!pending && !input.findings) throw new Error("Rejection needs findings.");
+  const rejected = pending
+    ? (store.get(input.item) as Assignment)
+    : await store.reject(input.item, reviewer, input.findings!);
+  const findings = pending?.findings ?? input.findings!;
   // The same worker gets the findings and one new finish notice for the assigning lead.
   let rearmed: string | null = null;
   try {
@@ -49,13 +55,17 @@ export async function reviewWork(
       agentManager: deps.agentManager,
       agentStorage: deps.agentStorage,
       agentId: rejected.workerId,
-      prompt: `Review of ${rejected.item} rejected this result. Fix these findings, run the checks again, then submit the new result.\n\n${input.findings}`,
+      prompt: `Review of ${rejected.item} rejected this result. Fix these findings, run the checks again, then submit the new result.\n\n${findings}`,
       logger: deps.logger,
     });
   } catch (error) {
     if (rearmed)
       await deps.agentStorage.settleFinishNotice(rejected.workerId, rearmed, "cancelled");
-    throw error;
+    throw new Error(
+      `The findings are saved but the worker did not get them: ${error instanceof Error ? error.message : String(error)}. Repeat the rejection to retry.`,
+      { cause: error },
+    );
   }
+  await store.markRejectionDelivered(input.item);
   return rejected;
 }

@@ -4589,12 +4589,12 @@ export class Session {
       if (msg.action === "reset_store") await store.resetStore(msg.reason);
       else {
         if (!msg.item) throw new Error("This override needs an item.");
+        // The store records each owner override in the same write as the change.
         if (msg.action === "cancel") await store.cancel(msg.item, owner, msg.reason);
         else {
           if (!msg.turnLimit) throw new Error("Raising the turn limit needs turnLimit.");
-          await store.raiseTurnLimit(msg.item, owner, msg.turnLimit);
+          await store.raiseTurnLimit(msg.item, owner, msg.turnLimit, msg.reason);
         }
-        await store.recordOverride(msg.action, msg.item, msg.reason);
       }
     } catch (failure) {
       if (admissionOutcome(failure)) throw failure;
