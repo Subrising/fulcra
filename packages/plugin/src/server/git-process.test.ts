@@ -242,3 +242,30 @@ test("synchronous output over one MiB retains the tree deadline", async () => {
   const pid = Number(await readFile(pidFile, "utf8"));
   await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 5000 });
 });
+
+test("supervised Unix git groups remain owned until their pipes close", async () => {
+  const cwd = await repo();
+  const actual = process;
+  const sent: unknown[] = [];
+  vi.stubGlobal("process", {
+    ...actual,
+    platform: "linux",
+    connected: true,
+    send: (message: unknown) => {
+      sent.push(message);
+      return true;
+    },
+  });
+  vi.stubEnv("PASEO_SUPERVISED", "1");
+  try {
+    await execGitCommand(["status", "--porcelain"], { cwd });
+    expect(sent).toEqual([
+      { type: "paseo:owned-process", action: "add", pid: expect.any(Number) },
+      { type: "paseo:owned-process", action: "remove", pid: expect.any(Number) },
+    ]);
+    expect((sent[0] as { pid: number }).pid).toBe((sent[1] as { pid: number }).pid);
+  } finally {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  }
+});

@@ -30,6 +30,8 @@ interface GitRuntime {
   termination: WeakMap<ChildProcess, Promise<void>>;
   fetches: Map<string, FetchState>;
   guardian?: string;
+  exitCleanupRegistered?: boolean;
+  liveGroups?: Set<number>;
 }
 const runtimeKey = Symbol.for("fulcra.owned-git-runtime");
 const registry = globalThis as typeof globalThis & { [key: symbol]: GitRuntime };
@@ -39,6 +41,76 @@ const runtime = (registry[runtimeKey] ??= {
   fetches: new Map(),
 });
 const { children, termination, fetches } = runtime;
+const liveGroups = (runtime.liveGroups ??= new Set<number>());
+if (!runtime.exitCleanupRegistered) {
+  runtime.exitCleanupRegistered = true;
+  process.once("exit", () => {
+    if (process.platform === "win32") return;
+    for (const pid of liveGroups) {
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        /* The owned group has already ended. */
+      }
+    }
+  });
+}
+
+async function stopUnixGitTree(root: number): Promise<void> {
+  const signal = (pid: number, kind: NodeJS.Signals) => {
+    try {
+      process.kill(pid, kind);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
+  };
+  // Freeze the parent before enumerating. Shell aliases can create another process group.
+  signal(-root, "SIGSTOP");
+  const owned = new Set([root]);
+  const errors: unknown[] = [];
+  try {
+    for (let pass = 0; pass < 2; pass++) {
+      const { stdout } = await execute("/bin/ps", ["-axo", "pid=,ppid=,pgid="], {
+        timeout: 5000,
+        maxBuffer: 16 * 1024 * 1024,
+      });
+      const rows = stdout
+        .trim()
+        .split("\n")
+        .map((line) => line.trim().split(/\s+/).map(Number));
+      let added = true;
+      while (added) {
+        added = false;
+        for (const [pid, parent, group] of rows) {
+          if (!owned.has(pid) && (owned.has(parent) || group === root)) {
+            owned.add(pid);
+            added = true;
+          }
+        }
+      }
+      for (const pid of owned) signal(pid, "SIGSTOP");
+    }
+  } catch (error) {
+    errors.push(error);
+  } finally {
+    try {
+      for (const pid of [...owned].reverse()) {
+        try {
+          signal(pid, "SIGKILL");
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+    } finally {
+      try {
+        signal(-root, "SIGKILL");
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+  }
+  if (errors.length) throw new AggregateError(errors, "Git process tree cleanup failed");
+}
 
 /** Only Fulcra-owned git processes use this environment. Never change process.env or git config. */
 export function gitEnvironment(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -83,11 +155,7 @@ export function terminateGitProcess(child: ChildProcess): Promise<void> {
         if (child.exitCode === null && child.signalCode === null) throw error;
       }
     } else {
-      try {
-        process.kill(-child.pid, "SIGKILL");
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-      }
+      await stopUnixGitTree(child.pid);
     }
   })();
   termination.set(child, stopped);
@@ -135,6 +203,24 @@ export function spawnGitProcess(args: string[], options: SpawnOptions = {}): Chi
     detached: process.platform !== "win32",
     shell: false,
     windowsHide: true,
+  });
+  // The daemon preserves user detached jobs during shutdown. Register these groups as owned.
+  const publishOwnership = (action: "add" | "remove") => {
+    if (
+      process.platform !== "win32" &&
+      child.pid &&
+      process.env.PASEO_SUPERVISED === "1" &&
+      process.connected &&
+      process.send
+    ) {
+      process.send({ type: "paseo:owned-process", action, pid: child.pid }, () => {});
+    }
+  };
+  if (process.platform !== "win32" && child.pid) liveGroups.add(child.pid);
+  publishOwnership("add");
+  child.once("close", () => {
+    if (child.pid) liveGroups.delete(child.pid);
+    publishOwnership("remove");
   });
   children.add(child);
   let cleanupFailed = false;
