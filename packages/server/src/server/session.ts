@@ -4410,8 +4410,6 @@ export class Session {
       ...(placementProvider ? { provider: placementProvider } : {}),
     };
 
-    // FU-349: deleting a session is not acceptance of its work. Refuse before any effect.
-    await this.agentManager.assertWorkCloseAllowed(agentId);
     // Refusal must precede even the storage delete fence; the close path rechecks later.
     const operationHandle = this.agentManager.trustedPlugins.input(
       live ?? stored ?? { id: agentId },
@@ -4420,6 +4418,8 @@ export class Session {
       () => this.agentManager.trustedPlugins.captureOperation(),
       commandPayload("close", { purgeHistory: options.purgeHistory }),
     );
+    // FU-349: deleting a session is not acceptance of its work. Refuse before any effect.
+    await this.agentManager.assertWorkCloseAllowed(agentId);
     // File-backed storage still needs an early delete fence before closeAgent().
     beginAgentDeleteIfSupported(this.agentStorage, agentId);
 
