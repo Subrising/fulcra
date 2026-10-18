@@ -11,6 +11,7 @@ export interface IsolatedHostDaemon {
   serverId: string;
   port: number;
   paseoHome: string;
+  skillsHome: string;
   getPid(): number | undefined;
   restart(): Promise<void>;
   close(): Promise<void>;
@@ -96,6 +97,7 @@ export async function startIsolatedHostDaemon(
 
   const paseoHome =
     options.paseoHome ?? (await mkdtemp(path.join(tmpdir(), "paseo-e2e-secondary-host-")));
+  const skillsHome = path.join(paseoHome, "user-home");
   let publishedPackageRoot: string | null = null;
   if (options.publishedVersion) {
     publishedPackageRoot = await mkdtemp(path.join(tmpdir(), "paseo-e2e-published-server-"));
@@ -164,7 +166,7 @@ export async function startIsolatedHostDaemon(
         FULCRA_COMMAND_CENTRE_AUTH_HASH: undefined,
         ...options.environment,
         PASEO_HOME: paseoHome,
-        PASEO_SKILLS_HOME: path.join(paseoHome, "user-home"),
+        PASEO_SKILLS_HOME: skillsHome,
         PASEO_SERVER_ID: serverId,
         PASEO_LISTEN: `127.0.0.1:${port}`,
         PASEO_CORS_ORIGINS: `http://localhost:${metroPort}`,
@@ -216,6 +218,7 @@ export async function startIsolatedHostDaemon(
     serverId,
     port,
     paseoHome,
+    skillsHome,
     getPid: () => child.pid,
     restart: async () => {
       if (closed) throw new Error(`Cannot restart closed isolated daemon ${serverId}`);
