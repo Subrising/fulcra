@@ -169,7 +169,7 @@ test.describe("Worktree restore", () => {
   test("committed changes survive archive, restore and page reload", async ({ page }) => {
     const { worktree, route } = await createWorkspaceWithCommittedChange();
     await openCommittedWorkspace(page, route);
-    await archiveCommittedWorkspace(page, worktree, tempRepo.path);
+    await archiveCommittedWorkspace(page, worktree, tempRepo.path, worktreeClient);
     await restoreCommittedWorkspace(page, route);
     await expectCommittedFileAfterReload(page, "restored-change.txt");
     await expectRestoredCommitDiff(page);
@@ -539,10 +539,19 @@ async function archiveCommittedWorkspace(
   page: Page,
   worktree: { workspaceId: string; workspaceDirectory: string },
   fixtureRepo: string,
+  client: Awaited<ReturnType<typeof connectNewWorkspaceDaemonClient>>,
 ): Promise<void> {
   await archiveWorkspaceFromSidebar(page, worktree.workspaceId);
   await expectWorkspaceAbsentFromSidebar(page, worktree.workspaceId);
+  // The sidebar can change before the host commits the archive.
+  await expect
+    .poll(() => client.inspectWorkspaceRecovery(worktree.workspaceId), { timeout: 30_000 })
+    .toMatchObject({ kind: "recoverable", action: "unarchive" });
   removeArchivedWorktreeFixture(fixtureRepo, worktree.workspaceDirectory);
+  await expect(client.inspectWorkspaceRecovery(worktree.workspaceId)).resolves.toMatchObject({
+    kind: "recoverable",
+    action: "restore",
+  });
 }
 
 async function restoreCommittedWorkspace(page: Page, route: string): Promise<void> {
