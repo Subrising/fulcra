@@ -80,16 +80,24 @@ describe("session resource cleanup", () => {
     const tracker = new SessionResources({ ...f.options, fixtureInUse: async () => false });
     await tracker.sweep();
     expect(f.stopped).toEqual([101]);
-    expect(await readFile(`${f.options.file}.stops.jsonl`, "utf8")).toContain('"kind":"test-fixture"');
+    expect(await readFile(`${f.options.file}.stops.jsonl`, "utf8")).toContain(
+      '"kind":"test-fixture"',
+    );
   });
   test.each([
-    { ageSeconds: 7200 }, { cwd: "/tmp/paseo-omp-agent-test/subdir" },
-    { cwd: "/tmp/my-server" }, { command: "/bin/python" }, { ppid: 200 },
-    { serviceLabel: "dev.fulcra.fixture" }, { zombie: true },
+    { ageSeconds: 7200 },
+    { cwd: "/tmp/paseo-omp-agent-test/subdir" },
+    { cwd: "/tmp/my-server" },
+    { command: "/bin/python" },
+    { ppid: 200 },
+    { serviceLabel: "dev.fulcra.fixture" },
+    { zombie: true },
   ])("keeps a process outside the exact old fixture rule: %j", async (change) => {
     const f = await fixture();
     f.setLive(false);
-    f.setRows([{ ...child, ppid: 1, cwd: "/tmp/paseo-omp-agent-test", ageSeconds: 7201, ...change }]);
+    f.setRows([
+      { ...child, ppid: 1, cwd: "/tmp/paseo-omp-agent-test", ageSeconds: 7201, ...change },
+    ]);
     await new SessionResources({ ...f.options, fixtureInUse: async () => false }).sweep();
     expect(f.stopped).toEqual([]);
   });
@@ -106,7 +114,10 @@ describe("session resource cleanup", () => {
     f.setLive(false);
     f.setRows([{ ...child, ppid: 1, cwd: "/tmp/paseo-omp-agent-test", ageSeconds: 7201 }]);
     let inspections = 0;
-    await new SessionResources({ ...f.options, fixtureInUse: async () => ++inspections >= 3 }).sweep();
+    await new SessionResources({
+      ...f.options,
+      fixtureInUse: async () => ++inspections >= 3,
+    }).sweep();
     expect(f.stopped).toEqual([]);
   });
   test("keeps a fixture that changes cwd or native birth after admission", async () => {
@@ -115,7 +126,9 @@ describe("session resource cleanup", () => {
       f.setLive(false);
       const row = { ...child, ppid: 1, cwd: "/tmp/paseo-omp-agent-test", ageSeconds: 7201 };
       let reads = 0;
-      await new SessionResources({ ...f.options, fixtureInUse: async () => false,
+      await new SessionResources({
+        ...f.options,
+        fixtureInUse: async () => false,
         readProcesses: async () => [++reads >= 3 ? { ...row, ...changed } : row],
       }).sweep();
       expect(f.stopped).toEqual([]);
