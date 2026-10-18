@@ -19,6 +19,7 @@ import { FINAL_INPUT_CHECK } from "./agent/agent-sdk-types.js";
 import type { AgentStorage, StoredAgentRecord } from "./agent/agent-storage.js";
 import { createFinalInputCheck, waitForFinalInputHandoff } from "./agent/final-input-check.js";
 import { writeJsonFileAtomic } from "./atomic-file.js";
+import { withTimeout } from "../utils/promise-timeout.js";
 import { heldSendsFor } from "./held-sends.js";
 import { classifyEndingAssistantMessage, classifyFailedTurn } from "./limit-resume/detect.js";
 import { INTERRUPTED_SETTLE_MS, STAGGER_MS } from "./limit-resume/service.js";
@@ -84,12 +85,49 @@ interface LiveAgent {
 export async function recordOpenSessions(input: {
   paseoHome: string;
   agents: readonly LiveAgent[];
+  /** Read earlier in the stop (backgroundIdsForStop): replaces each agent's own `hasBackgroundWork`. */
+  backgroundIds?: ReadonlySet<string>;
   now?: Date;
 }): Promise<void> {
+  const { backgroundIds } = input;
+  const agents = backgroundIds
+    ? input.agents.map((agent) => ({ ...agent, hasBackgroundWork: backgroundIds.has(agent.id) }))
+    : input.agents;
   await writeJsonFileAtomic(
     path.join(input.paseoHome, REVIVE_FILE),
-    openSessionsRecord(input.agents, input.now ?? new Date()),
+    openSessionsRecord(agents, input.now ?? new Date()),
   );
+}
+
+/**
+ * Clean stop, before held and queued messages are dropped (they count as pending work): the ids of the sessions that
+ * have background work. A read that fails or takes longer than `timeoutMs` falls back to the ids in the live record
+ * (the last good copy), so a slow process table never loses the list.
+ */
+export async function backgroundIdsForStop(input: {
+  paseoHome: string;
+  list: () => Promise<ReadonlyArray<{ id: string; hasBackgroundWork?: boolean }>>;
+  logger: Logger;
+  timeoutMs?: number;
+}): Promise<Set<string>> {
+  try {
+    const listed = await withTimeout({
+      promise: input.list(),
+      timeoutMs: input.timeoutMs ?? 3_000,
+      label: "read background work for the restart record",
+    });
+    return new Set(listed.filter((entry) => entry.hasBackgroundWork).map((entry) => entry.id));
+  } catch (error) {
+    input.logger.warn(
+      { err: error },
+      "Background work could not be read for the restart record: using the live record",
+    );
+    const previous = await readReviveFile(
+      path.join(input.paseoHome, REVIVE_LIVE_FILE),
+      input.logger,
+    );
+    return new Set(previous?.backgroundIds);
+  }
 }
 
 function isCutOff(agent: LiveAgent): boolean {
@@ -251,7 +289,7 @@ export function formatBackgroundWakePrompt(restartedAt: Date): string {
     hour: "2-digit",
     minute: "2-digit",
   });
-  return `The Fulcra daemon restarted at ${time}. Background work you started before the restart (background shells, Monitor watches, CI watches, subagents, timers) was stopped. Check what finished and what did not, then restart only what you still need. Do not repeat finished steps.`;
+  return `The Fulcra daemon restarted at ${time}. Background work you started before the restart (background shells, Monitor watches, CI watches, subagents, timers) may have stopped. Check with ps (or the job's receipt) before you restart a job: detached jobs can still run. Check what finished and what did not, then restart only what you still need. Do not repeat finished steps.`;
 }
 
 export function formatRestartNotice(input: {

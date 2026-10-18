@@ -184,7 +184,11 @@ import {
   type ResolvedProviderLaunch,
 } from "../../provider-launch-config.js";
 import { withTimeout } from "../../../../utils/promise-timeout.js";
-import { readProcessTreeBirths, terminateWithTreeKill } from "../../../../utils/tree-kill.js";
+import {
+  classifyChildWork,
+  readProcessTreeBirths,
+  terminateWithTreeKill,
+} from "../../../../utils/tree-kill.js";
 import { execCommand } from "../../../../utils/spawn.js";
 import { composeSystemPromptParts } from "../../system-prompt.js";
 
@@ -1576,13 +1580,6 @@ export function readEventIdentifiers(message: SDKMessage): EventIdentifiers {
 }
 
 // A child born this long after the Claude process itself is work started during the session.
-const SLEEP_CHILD_GRACE_MS = 30_000;
-
-/** Descendants of the provider process born more than the grace after it: work that sleeping or a restart would end. */
-function lateChildren(tree: NonNullable<Awaited<ReturnType<typeof readProcessTreeBirths>>>) {
-  return tree.descendants.filter((entry) => entry.bornMs - tree.rootBornMs > SLEEP_CHILD_GRACE_MS);
-}
-
 export class ClaudeAgentClient implements AgentClient {
   // Update-7 W3: a new session without a mode takes Claude's own default, never its caller's.
   readonly resolveCreateConfig = resolveOwnDefaultCreateConfig;
@@ -3212,17 +3209,17 @@ class ClaudeAgentSession implements AgentSession {
     const tree = this.currentChild ? await readProcessTreeBirths(this.currentChild) : null;
     // The reads above awaited: the session may have taken work or slept meanwhile.
     if (this.sleepBlocked() || this.query !== oldQuery) return false;
-    if (!tree) {
+    const work = classifyChildWork(tree);
+    if (work.kind === "unreadable") {
       this.logger.info(
         { agentId: this.agentId, reason: "process tree unreadable" },
         "agent.sleep.skipped",
       );
       return false;
     }
-    const late = lateChildren(tree);
-    if (late.length > 0) {
+    if (work.kind === "running") {
       this.logger.info(
-        { agentId: this.agentId, reason: "child process running", pids: late.map((e) => e.pid) },
+        { agentId: this.agentId, reason: "child process running", pids: work.pids },
         "agent.sleep.skipped",
       );
       return false;
@@ -3266,14 +3263,15 @@ class ClaudeAgentSession implements AgentSession {
   /**
    * FU-362: true when this session, idle, still has background work that a restart would stop: work Fulcra tracks
    * (shells, workflows, agents, tasks) or a process born well after Claude (Monitor watches, nohup children). The
-   * same signals refuse idle sleep. An unreadable process tree counts as work. A session with no process has none.
+   * same signals refuse idle sleep, except that an unreadable process tree is no evidence of work here (idle sleep
+   * fails closed, this record must not: a failed read would wake every session). A session with no process has none.
    */
   async hasBackgroundWork(read?: Parameters<typeof readProcessTreeBirths>[1]): Promise<boolean> {
     if (this.closed || !this.query) return false;
     if (this.hasTrackedBackgroundWork()) return true;
     if (!this.currentChild) return false;
     const tree = await readProcessTreeBirths(this.currentChild, read);
-    return !tree || lateChildren(tree).length > 0;
+    return classifyChildWork(tree).kind === "running";
   }
 
   private hasTrackedBackgroundWork(): boolean {

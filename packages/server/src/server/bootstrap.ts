@@ -12,6 +12,7 @@ import { startInsightsRecorder } from "../utils/insights/recorder.js";
 import { startLimitResume } from "./limit-resume/start.js";
 import { startReportUp } from "./report-up.js";
 import {
+  backgroundIdsForStop,
   recordOpenSessions,
   reviveAfterRestart,
   sealStopRecord,
@@ -2297,6 +2298,12 @@ export async function createPaseoDaemon(
   };
 
   const stop = async () => {
+    // FU-362: first, before heldSends.close() and the queue close drop the messages that count as pending work.
+    const backgroundIds = await backgroundIdsForStop({
+      paseoHome: config.paseoHome,
+      list: () => agentManager.listAgentsForRevive(),
+      logger,
+    });
     stopSyncIoMeter();
     limitResume.stop();
     stopReportUp();
@@ -2318,14 +2325,8 @@ export async function createPaseoDaemon(
     // FULCRA(orchestration): the next boot loads these sessions again (revive-on-restart.ts).
     await recordOpenSessions({
       paseoHome: config.paseoHome,
-      agents: await withTimeout({
-        promise: agentManager.listAgentsForRevive(),
-        timeoutMs: 5_000,
-        label: "read background work for the restart record",
-      }).catch((err) => {
-        logger.warn({ err }, "Background work could not be read for the restart record");
-        return agentManager.listAgents();
-      }),
+      agents: agentManager.listAgents(),
+      backgroundIds,
     }).catch((err) => logger.warn({ err }, "Could not record the open sessions for the next boot"));
     // The clean record is on disk: now remove the crash-safe copy. A crash between the two writes still leaves a
     // record, and boot prefers the clean one.

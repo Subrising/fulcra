@@ -96,7 +96,9 @@ export function toListItem(agent: AgentSnapshotPayload): AgentListItem {
   // A stored record has native lifecycle "closed" whenever no provider process is loaded for it, also after a restart
   // reopened it as idle. Show the stored status for such a session; "closed" stays for records that really closed.
   const unloaded =
-    agent.nativeLifecycle === "closed" && (agent.status === "idle" || agent.status === "running");
+    agent.nativeLifecycle === "closed" &&
+    !agent.archivedAt &&
+    (agent.status === "idle" || agent.status === "running");
   const status = unloaded ? agent.status : (agent.nativeLifecycle ?? agent.status);
   return {
     id: agent.id,

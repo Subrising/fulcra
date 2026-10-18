@@ -30,6 +30,10 @@ const ALLOWED = new Map<string, string>([
   ["bootstrap.ts", "starts the sampler"],
   ["agent/provider-registry.ts", "forwards the session's hasBackgroundWork to derived providers"],
   [
+    "agent/providers/codex-app-server-agent.ts",
+    "answers hasBackgroundWork from the app-server process tree, for the restart record",
+  ],
+  [
     "revive-on-restart.ts",
     "records idle sessions with background work, to wake them after a restart",
   ],

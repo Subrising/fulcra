@@ -128,7 +128,11 @@ import {
 } from "../../../executable-resolution/executable-resolution.js";
 import { createPathEquivalenceMatcher } from "../../../utils/path.js";
 import { spawnProcess } from "../../../utils/spawn.js";
-import { readProcessTreeBirths } from "../../../utils/tree-kill.js";
+import {
+  classifyChildWork,
+  readProcessTreeBirths,
+  type OwnedProcessIdentity,
+} from "../../../utils/tree-kill.js";
 import { extractCodexTerminalSessionId, nonEmptyString } from "./tool-call-mapper-utils.js";
 import {
   buildCodexFeatures,
@@ -250,7 +254,6 @@ const CODEX_ADMISSION_MAX_QUOTA_READS = 3;
 const CODEX_ADMISSION_RETRY_DELAY_MS = 150;
 const INTERRUPT_TIMEOUT_MS = 2_000;
 // A process born this long after the app-server itself is work started during the session.
-const SLEEP_CHILD_GRACE_MS = 30_000;
 const CODEX_PROVIDER = "codex" as const;
 // Codex treats most app-server client names as the model-request originator.
 // This reserved Codex name is non-originating, so requests keep Codex's default
@@ -5632,19 +5635,17 @@ export class CodexAppServerAgentSession implements AgentSession {
     const tree = this.appServerChild ? await readProcessTreeBirths(this.appServerChild) : null;
     // The tree read awaited: the session may have taken work meanwhile.
     if (this.sleepBlocked() || this.client !== oldClient) return false;
-    if (!tree) {
+    const work = classifyChildWork(tree);
+    if (work.kind === "unreadable") {
       this.logger.info(
         { agentId: this.agentId, reason: "process tree unreadable" },
         "agent.sleep.skipped",
       );
       return false;
     }
-    const late = tree.descendants.filter(
-      (entry) => entry.bornMs - tree.rootBornMs > SLEEP_CHILD_GRACE_MS,
-    );
-    if (late.length > 0) {
+    if (work.kind === "running") {
       this.logger.info(
-        { agentId: this.agentId, reason: "child process running", pids: late.map((e) => e.pid) },
+        { agentId: this.agentId, reason: "child process running", pids: work.pids },
         "agent.sleep.skipped",
       );
       return false;
@@ -5680,6 +5681,16 @@ export class CodexAppServerAgentSession implements AgentSession {
       return false;
     }
     return true;
+  }
+
+  /**
+   * FU-362: true when the idle session has a process the app-server started more than 30 s after itself (a unified-exec
+   * terminal, a watch). The same reading refuses idle sleep, except that an unreadable tree is no evidence of work here.
+   */
+  async hasBackgroundWork(read?: () => Promise<OwnedProcessIdentity[]>): Promise<boolean> {
+    if (this.closed || !this.client || !this.appServerChild) return false;
+    const tree = await readProcessTreeBirths(this.appServerChild, read);
+    return classifyChildWork(tree).kind === "running";
   }
 
   // The session is idle with a live app-server and nothing in flight.

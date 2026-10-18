@@ -84,6 +84,13 @@ describe("ls status of an unloaded session", () => {
     expect(toListItem({ ...base, status: "closed" })).toMatchObject({ status: "closed", note: "" });
   });
 
+  it("keeps closed for an archived record", () => {
+    expect(toListItem({ ...base, archivedAt: "2026-10-19T00:00:00.000Z" })).toMatchObject({
+      status: "closed",
+      note: "",
+    });
+  });
+
   it("shows a loaded session as it is", () => {
     expect(toListItem({ ...base, nativeLifecycle: undefined })).toMatchObject({
       status: "idle",

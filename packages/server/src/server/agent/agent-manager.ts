@@ -2167,6 +2167,8 @@ export class AgentManager {
   private idleSleepProviders: () => readonly string[] = () => ["claude"];
   private idleSleepDeliveryPending: (agentId: string) => boolean = () => false;
   private readonly idleSleep: IdleSleep;
+  // FU-362: the sessions with background work at the last good process table read (listAgentsForRevive).
+  private lastBackgroundWorkIds = new Set<string>();
   private readonly agentsAwaitingInitialSnapshotPersist = new Set<string>();
   private readonly sessionEventTails = new Map<string, Promise<void>>();
   private readonly steerEventBarriers = new Map<string, SteerEventBarrier>();
@@ -2440,13 +2442,22 @@ export class AgentManager {
     return (await agent.session?.hasBackgroundWork?.(readProcessTable)) ?? false;
   }
 
-  /** Every session as the restart record needs it, with `hasBackgroundWork` set. One process table read serves all. */
+  /**
+   * Every session as the restart record needs it, with `hasBackgroundWork` set. One process table read serves all.
+   * When that read fails, the process-tree signal is unknown: a session that had background work at the last good
+   * read keeps it, and no other session gets it from the tree. The failure is logged.
+   */
   async listAgentsForRevive(): Promise<
     Array<{ id: string; lifecycle: string; internal?: boolean; hasBackgroundWork: boolean }>
   > {
     let table: Promise<OwnedProcessIdentity[]> | null = null;
-    const read = () => (table ??= readOwnedProcessTable());
-    return Promise.all(
+    let tableFailed = false;
+    const read = () =>
+      (table ??= readOwnedProcessTable().catch((error: unknown) => {
+        tableFailed = true;
+        throw error;
+      }));
+    const listed = await Promise.all(
       this.listAgents().map(async (agent) => ({
         id: agent.id,
         lifecycle: agent.lifecycle,
@@ -2454,6 +2465,18 @@ export class AgentManager {
         hasBackgroundWork: await this.hasLiveBackgroundWork(agent.id, read).catch(() => false),
       })),
     );
+    if (tableFailed) {
+      this.logger.warn(
+        "Process table unreadable: the restart record keeps the previous background work for the process-tree signal",
+      );
+      for (const entry of listed)
+        entry.hasBackgroundWork ||= this.lastBackgroundWorkIds.has(entry.id);
+    } else {
+      this.lastBackgroundWorkIds = new Set(
+        listed.filter((entry) => entry.hasBackgroundWork).map((entry) => entry.id),
+      );
+    }
+    return listed;
   }
 
   private async trySleepAgent(

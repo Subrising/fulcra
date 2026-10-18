@@ -4,10 +4,13 @@ import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { REPORTS_TO_LABEL } from "@getpaseo/protocol/agent-labels";
 import type { AgentManager } from "./agent/agent-manager.js";
+import { FINAL_INPUT_CHECK } from "./agent/agent-sdk-types.js";
+import { assertFinalInputCheck, recordFinalInputHandoff } from "./agent/final-input-check.js";
 import { AgentStorage, type StoredAgentRecord } from "./agent/agent-storage.js";
 import { createTestLogger } from "../test-utils/test-logger.js";
 import { readFile, writeFile } from "node:fs/promises";
 import {
+  backgroundIdsForStop,
   defaultSessions,
   formatRestartNotice,
   recordOpenSessions,
@@ -845,5 +848,125 @@ describe("live record after an unclean stop", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("clean stop: background work read (FU-362)", () => {
+  test("the stop record takes the ids read earlier, not the agents' own flags", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "revive-stop-"));
+    cleanup.push(home);
+    await recordOpenSessions({
+      paseoHome: home,
+      agents: [
+        { id: IDLE, lifecycle: "idle", hasBackgroundWork: true },
+        { id: BACKGROUND, lifecycle: "idle" },
+        { id: RUNNING, lifecycle: "running" },
+      ],
+      backgroundIds: new Set([BACKGROUND, RUNNING]),
+    });
+    const record = JSON.parse(await readFile(path.join(home, REVIVE_FILE), "utf8"));
+    // A running session is cut off, never "background".
+    expect(record.backgroundIds).toEqual([BACKGROUND]);
+    expect(record.interruptedIds).toEqual([RUNNING]);
+  });
+
+  test("a read that finishes gives the ids of the sessions with work", async () => {
+    const ids = await backgroundIdsForStop({
+      paseoHome: "/nonexistent",
+      list: async () => [
+        { id: IDLE, hasBackgroundWork: false },
+        { id: BACKGROUND, hasBackgroundWork: true },
+      ],
+      logger: createTestLogger(),
+    });
+    expect([...ids]).toEqual([BACKGROUND]);
+  });
+
+  test("a read that times out or fails falls back to the ids in the live record", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "revive-stop-"));
+    cleanup.push(home);
+    await writeFile(
+      path.join(home, REVIVE_LIVE_FILE),
+      JSON.stringify({
+        v: 1,
+        stoppedAt: "2026-10-11T09:28:00Z",
+        openIds: [BACKGROUND, IDLE],
+        interruptedIds: [],
+        backgroundIds: [BACKGROUND],
+      }),
+    );
+    const slow = await backgroundIdsForStop({
+      paseoHome: home,
+      list: () => new Promise(() => undefined),
+      logger: createTestLogger(),
+      timeoutMs: 20,
+    });
+    expect([...slow]).toEqual([BACKGROUND]);
+    const failed = await backgroundIdsForStop({
+      paseoHome: home,
+      list: async () => {
+        throw new Error("spawn ps EAGAIN");
+      },
+      logger: createTestLogger(),
+    });
+    expect([...failed]).toEqual([BACKGROUND]);
+    // No live record either: an empty list, and the stop goes on.
+    const none = await backgroundIdsForStop({
+      paseoHome: path.join(home, "missing"),
+      list: async () => {
+        throw new Error("x");
+      },
+      logger: createTestLogger(),
+    });
+    expect([...none]).toEqual([]);
+  });
+});
+
+describe("background wake on the real send path (FU-362)", () => {
+  function wakeSessions() {
+    const runs: Array<{ id: string; prompt: string }> = [];
+    const live = { instanceId: "i1", labels: {}, lastUserMessageAt: null as Date | null };
+    const manager = {
+      getAgent: () => live,
+      hasInFlightRun: () => false,
+      getLimitResumeBinding: () => ({ account: "pool" }),
+      canRunUnscopedLimitResume: () => true,
+      runAgent: async (id: string, prompt: string, options: Record<symbol, unknown>) => {
+        const check = options[FINAL_INPUT_CHECK] as object;
+        // The provider handoff: the final check runs, then the handoff is confirmed.
+        assertFinalInputCheck(check);
+        runs.push({ id, prompt });
+        recordFinalInputHandoff(check);
+      },
+    } as unknown as AgentManager;
+    const sessions = defaultSessions({
+      agentManager: manager,
+      agentStorage: {} as AgentStorage,
+      paseoHome: "",
+      localServerId: null,
+      logger: createTestLogger(),
+      isEnabled: () => true,
+    });
+    return { sessions, runs, live };
+  }
+
+  test("the wake prompt goes through runAgent and the final input check, also for a pool-account session", async () => {
+    const f = wakeSessions();
+    await f.sessions.sendBackgroundWake(BACKGROUND, "wake text", null);
+    expect(f.runs).toEqual([{ id: BACKGROUND, prompt: "wake text" }]);
+    // The continue prompt still leaves a pool-account session to limit-resume.
+    expect(f.sessions.refusal(BACKGROUND, "continue")).toBe(
+      "pool account: limit-resume continues it",
+    );
+    expect(f.sessions.refusal(BACKGROUND, "wake")).toBeNull();
+  });
+
+  test("a message that arrived after the cut-off refuses the wake at the final check", async () => {
+    const f = wakeSessions();
+    f.live.lastUserMessageAt = new Date("2026-10-11T09:50:00Z");
+    await expect(f.sessions.sendBackgroundWake(BACKGROUND, "wake text", null)).rejects.toThrow(
+      "Continue after restart refused",
+    );
+    expect(f.runs).toEqual([]);
   });
 });

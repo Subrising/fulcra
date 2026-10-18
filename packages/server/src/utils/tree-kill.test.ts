@@ -385,3 +385,22 @@ describe("readProcessTreeBirths", () => {
     ).toBeNull();
   });
 });
+
+describe("classifyChildWork (shared by idle sleep and the restart record)", () => {
+  test("unreadable, running and none", async () => {
+    const { classifyChildWork } = await import("./tree-kill.js");
+    expect(classifyChildWork(null)).toEqual({ kind: "unreadable" });
+    expect(
+      classifyChildWork({
+        rootBornMs: 1_000,
+        descendants: [
+          { pid: 1, bornMs: 5_000 },
+          { pid: 2, bornMs: 31_001 },
+        ],
+      }),
+    ).toEqual({ kind: "running", pids: [2] });
+    expect(
+      classifyChildWork({ rootBornMs: 1_000, descendants: [{ pid: 1, bornMs: 31_000 }] }),
+    ).toEqual({ kind: "none" });
+  });
+});

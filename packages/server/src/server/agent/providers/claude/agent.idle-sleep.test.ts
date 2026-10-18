@@ -270,8 +270,11 @@ describe("Claude idle sleep", () => {
         descendants: [{ pid: 4242, bornMs: 1_000_000 + 31_000 }],
       });
       expect(await idle.hasBackgroundWork?.()).toBe(true);
+      // Idle sleep fails closed on an unreadable tree (below); the restart record does not, so a failed read
+      // cannot wake every session.
       treeReader.read.mockResolvedValue(null);
-      expect(await idle.hasBackgroundWork?.()).toBe(true);
+      expect(await idle.hasBackgroundWork?.()).toBe(false);
+      expect(await idle.sleep?.()).toBe(false);
       treeReader.read.mockResolvedValue({ rootBornMs: 1_000_000, descendants: [] });
       expect(await idle.sleep?.()).toBe(true);
       // A sleeping session has no process, so no work.

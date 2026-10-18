@@ -237,6 +237,30 @@ test("Codex does not sleep while a process born long after the app-server runs, 
   });
 });
 
+test("Codex hasBackgroundWork (FU-362 restart record) sees a late child, and an unreadable tree is not work", async () => {
+  await withSleepySession({ goal: null }, async ({ session, servers, runTurn }) => {
+    await runTurn("first", servers[0]);
+    treeReader.read.mockResolvedValue({
+      rootBornMs: 1_000,
+      descendants: [{ pid: 11, bornMs: 5_000 }],
+    });
+    expect(await session.hasBackgroundWork()).toBe(false);
+    treeReader.read.mockResolvedValue({
+      rootBornMs: 1_000,
+      descendants: [{ pid: 12, bornMs: 61_000 }],
+    });
+    expect(await session.hasBackgroundWork()).toBe(true);
+    // Idle sleep fails closed on an unreadable tree; the restart record does not.
+    treeReader.read.mockResolvedValue(null);
+    expect(await session.hasBackgroundWork()).toBe(false);
+    expect(await session.sleep()).toBe(false);
+    // A sleeping session has no app-server and so no work.
+    treeReader.read.mockResolvedValue({ rootBornMs: 1_000, descendants: [] });
+    expect(await session.sleep()).toBe(true);
+    expect(await session.hasBackgroundWork()).toBe(false);
+  });
+});
+
 test("Codex sleep keeps the client when the old app-server cannot be ended, so close can retry", async () => {
   await withSleepySession({ goal: null }, async ({ session, servers, runTurn }) => {
     await runTurn("first", servers[0]);
