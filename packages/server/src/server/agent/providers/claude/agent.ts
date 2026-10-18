@@ -2221,6 +2221,10 @@ class ClaudeAgentSession implements AgentSession {
   private readonly harnessEnvironment: Record<string, string>;
   private readonly usageSessionKey = randomUUID();
   private childProcess: ChildProcess | null = null;
+  // Every Claude process this session spawned and that has not exited. Normally it holds the current child only.
+  private readonly liveChildren = new Set<ChildProcess>();
+  // The in-flight query start. Concurrent ensureQuery() callers share it, so one session never spawns two processes.
+  private queryStarting: Promise<Query> | null = null;
   private input: AsyncMessageInput<SDKUserMessage> | null = null;
   private readonly queryInputs = new WeakMap<Query, AsyncMessageInput<SDKUserMessage>>();
   /** The exact SDK query/input pair that owns the current foreground turn. */
@@ -3109,6 +3113,18 @@ class ClaudeAgentSession implements AgentSession {
       }
       this.childProcess = null;
     }
+    // Reload and refresh end the old session through close(), so this also ends a leaked extra process.
+    const leftover = [...this.liveChildren];
+    this.liveChildren.clear();
+    await Promise.all(
+      leftover.map((child) =>
+        terminateWithTreeKill(child, { gracefulTimeoutMs: 2_000, forceTimeoutMs: 2_000 }).catch(
+          () => {
+            /* process may already be dead */
+          },
+        ),
+      ),
+    );
     if (this.persistSession === false && this.claudeSessionId) {
       // Claude Code currently ignores --no-session-persistence outside --print mode
       // (see `claude --help`), so the SDK's persistSession=false is silently dropped
@@ -3502,11 +3518,22 @@ class ClaudeAgentSession implements AgentSession {
     return { kind: "fresh-session" };
   }
 
-  private async ensureQuery(launchMode: PermissionMode = this.currentMode): Promise<Query> {
+  // Single-flight: building the options awaits, and during that await this.query is still null. Without
+  // a shared promise every concurrent caller (listCommands, setMode, held-message delivery, startTurn)
+  // spawned its own `claude --resume` process and only the last one was kept. A restart also runs once.
+  private ensureQuery(launchMode: PermissionMode = this.currentMode): Promise<Query> {
     if (this.query && !this.queryRestartNeeded) {
-      return this.query;
+      return Promise.resolve(this.query);
     }
+    if (this.queryStarting) return this.queryStarting;
+    const starting: Promise<Query> = this.startQuery(launchMode).finally(() => {
+      if (this.queryStarting === starting) this.queryStarting = null;
+    });
+    this.queryStarting = starting;
+    return starting;
+  }
 
+  private async startQuery(launchMode: PermissionMode): Promise<Query> {
     if (this.queryRestartNeeded && !this.query) {
       // The flag can be set while no query exists — changing thinking or model on a resumed
       // runtime that has not queried yet. There is nothing to retire, and the query built
@@ -3557,6 +3584,7 @@ class ClaudeAgentSession implements AgentSession {
 
     const input = createAsyncMessageInput<SDKUserMessage>();
     const options = await this.buildOptions(launchMode);
+    if (this.closed) throw new Error("Claude session closed");
     this.logger.debug({ options: summarizeClaudeOptionsForLog(options) }, "claude query");
     this.input = input;
     // A fresh Claude process has no turn of its own in flight.
@@ -3572,7 +3600,12 @@ class ClaudeAgentSession implements AgentSession {
         queryFactory: this.queryFactory,
         onChildProcess: (child) => {
           this.childProcess = child;
-          child.once("exit", (code, signal) => this.handleRuntimeExit(child, code, signal));
+          this.liveChildren.add(child);
+          child.once("exit", (code, signal) => {
+            this.liveChildren.delete(child);
+            this.handleRuntimeExit(child, code, signal);
+          });
+          this.terminateExtraChildren(child);
         },
       },
     );
@@ -3587,6 +3620,29 @@ class ClaudeAgentSession implements AgentSession {
     // ensureQuery() (for listCommands()/setMode()), and sharing the same query
     // control plane can cause those calls to wait behind supportedModels().
     return preparedQuery;
+  }
+
+  // Defence in depth: a second live process for one session is a leak. Keep the newest and end the rest,
+  // with their MCP children.
+  private terminateExtraChildren(keep: ChildProcess | null): void {
+    const extras = [...this.liveChildren].filter((child) => child !== keep);
+    if (extras.length === 0) return;
+    this.logger.warn(
+      {
+        agentId: this.agentId,
+        count: this.liveChildren.size,
+        pids: [...this.liveChildren].map((child) => child.pid),
+      },
+      "provider.claude.extra_process",
+    );
+    for (const extra of extras) {
+      this.liveChildren.delete(extra);
+      void terminateWithTreeKill(extra, { gracefulTimeoutMs: 2_000, forceTimeoutMs: 2_000 }).catch(
+        () => {
+          /* process may already be dead */
+        },
+      );
+    }
   }
 
   private async awaitWithTimeout(

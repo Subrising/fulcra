@@ -1,7 +1,7 @@
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { REPORTS_TO_LABEL } from "@getpaseo/protocol/agent-labels";
 import type { AgentManager } from "./agent/agent-manager.js";
 import { AgentStorage, type StoredAgentRecord } from "./agent/agent-storage.js";
@@ -12,8 +12,10 @@ import {
   formatRestartNotice,
   recordOpenSessions,
   REVIVE_FILE,
+  REVIVE_LIVE_FILE,
   reviveAfterRestart,
   sealStopRecord,
+  startLiveRecorder,
   type ReviveDeps,
   type ReviveSessions,
 } from "./revive-on-restart.js";
@@ -581,5 +583,107 @@ describe("revive session reads", () => {
         lastUserMessageAt: "2026-10-11T09:42:00.000Z",
       }).changedSince(RUNNING, null),
     ).toBe("a new message arrived since the restart");
+  });
+});
+
+describe("live record after an unclean stop", () => {
+  const writeLive = (home: string, stoppedAt: string) =>
+    writeFile(
+      path.join(home, REVIVE_LIVE_FILE),
+      JSON.stringify({ v: 1, stoppedAt, openIds: [IDLE, RUNNING], interruptedIds: [RUNNING] }),
+    );
+
+  test("an unclean stop reopens the open sessions from the live record and removes it", async () => {
+    const f = await fixture({
+      records: [
+        // The running session kept writing until the crash, after the last live write.
+        { id: IDLE, updatedAt: "2026-10-11T09:20:00Z" },
+        { id: RUNNING, updatedAt: "2026-10-11T09:30:00Z" },
+      ],
+    });
+    await writeLive(f.home, "2026-10-11T09:28:00Z");
+    const result = await f.run();
+    expect(result.reopened.sort()).toEqual([IDLE, RUNNING].sort());
+    expect(result.continued).toEqual([RUNNING]);
+    await expect(stat(path.join(f.home, REVIVE_LIVE_FILE))).rejects.toThrow();
+  });
+
+  test("a session used long after the live record is not reopened", async () => {
+    const f = await fixture({
+      records: [
+        { id: IDLE, updatedAt: "2026-10-11T09:20:00Z" },
+        { id: RUNNING, updatedAt: "2026-10-11T12:00:00Z" },
+      ],
+    });
+    await writeLive(f.home, "2026-10-11T09:28:00Z");
+    const result = await f.run();
+    expect(result.reopened).toEqual([IDLE]);
+    expect(result.continued).toEqual([]);
+  });
+
+  test("a clean stop record wins; the live record is ignored and removed", async () => {
+    const f = await fixture({ records: [{ id: IDLE }, { id: RUNNING }] });
+    await recordOpenSessions({ paseoHome: f.home, agents: [{ id: IDLE, lifecycle: "idle" }] });
+    await writeLive(f.home, "2026-10-11T09:28:00Z");
+    const result = await f.run();
+    expect(result.reopened).toEqual([IDLE]);
+    expect(result.continued).toEqual([]);
+    await expect(stat(path.join(f.home, REVIVE_LIVE_FILE))).rejects.toThrow();
+  });
+
+  test("with neither file nothing is reopened", async () => {
+    const f = await fixture({ records: [{ id: IDLE }] });
+    const result = await f.run();
+    expect(result.reopened).toEqual([]);
+    expect(f.status(IDLE)).toBe("closed");
+  });
+
+  test("the recorder writes on a change at most once per check, refreshes every 5 minutes, and stop removes the file", async () => {
+    // Only the clock and the interval are faked: the file writes are real and finish on real timers.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-10-11T09:00:00Z"));
+      const home = await mkdtemp(path.join(tmpdir(), "revive-live-"));
+      cleanup.push(home);
+      const file = path.join(home, REVIVE_LIVE_FILE);
+      let agents = [{ id: IDLE, lifecycle: "idle" }];
+      const recorder = startLiveRecorder({
+        paseoHome: home,
+        listAgents: () => agents,
+        logger: createTestLogger(),
+      });
+      const advance = async (ms: number) => {
+        vi.advanceTimersByTime(ms);
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      };
+      const read = async () => JSON.parse(await readFile(file, "utf8"));
+      await vi.waitFor(async () => expect((await read()).openIds).toEqual([IDLE]));
+
+      // Several changes inside one check interval give one write that holds the last state.
+      const firstWrite = (await read()).stoppedAt;
+      agents = [...agents, { id: RUNNING, lifecycle: "running" }];
+      await advance(10_000);
+      agents = [
+        { id: IDLE, lifecycle: "idle" },
+        { id: RUNNING, lifecycle: "idle" },
+      ];
+      await advance(10_000);
+      expect((await read()).stoppedAt).toBe(firstWrite);
+      await advance(10_000);
+      const second = await read();
+      expect(second.openIds.sort()).toEqual([IDLE, RUNNING].sort());
+      expect(second.interruptedIds).toEqual([]);
+
+      // No change: no write until the 5-minute refresh.
+      await advance(4 * 60_000);
+      expect((await read()).stoppedAt).toBe(second.stoppedAt);
+      await advance(2 * 60_000);
+      expect((await read()).stoppedAt).not.toBe(second.stoppedAt);
+
+      await recorder.stop();
+      await expect(stat(file)).rejects.toThrow();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

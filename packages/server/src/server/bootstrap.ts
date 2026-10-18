@@ -5,7 +5,12 @@ import type { NativeReportOrigin } from "./report-origin.js";
 import { startInsightsRecorder } from "../utils/insights/recorder.js";
 import { startLimitResume } from "./limit-resume/start.js";
 import { startReportUp } from "./report-up.js";
-import { recordOpenSessions, reviveAfterRestart, sealStopRecord } from "./revive-on-restart.js";
+import {
+  recordOpenSessions,
+  reviveAfterRestart,
+  sealStopRecord,
+  startLiveRecorder,
+} from "./revive-on-restart.js";
 import { heldSendsFor } from "./held-sends.js";
 import { queuedAgentMessagesFor } from "./queued-agent-messages.js";
 import { mountHostLinkRoutes } from "./host-link-routes.js";
@@ -1937,6 +1942,7 @@ export async function createPaseoDaemon(
 
   logger.info({ elapsed: elapsed() }, "Bootstrap complete, ready to start listening");
 
+  let liveRecorder: ReturnType<typeof startLiveRecorder> | undefined;
   const start = async () => {
     let mainStarted = false;
     try {
@@ -2212,6 +2218,12 @@ export async function createPaseoDaemon(
           logger,
           isEnabled: () => daemonConfigStore.get().reviveOnRestart !== false,
           onSessionsReady: () => {
+            // The boot has read and removed the previous records: keep a crash-safe copy from now on.
+            liveRecorder ??= startLiveRecorder({
+              paseoHome: config.paseoHome,
+              listAgents: () => agentManager.listAgents(),
+              logger,
+            });
             // The final recovery chain below owns error reporting.
             void startQueuedMessages().catch(() => undefined);
           },
@@ -2261,6 +2273,10 @@ export async function createPaseoDaemon(
     // Freeze both ingress and registration before taking the agent closure snapshot.
     wsServer?.prepareForShutdown();
     agentManager.prepareForShutdown();
+    // A clean stop writes its own record: remove the crash-safe copy first (revive-on-restart.ts).
+    await liveRecorder
+      ?.stop()
+      .catch((err) => logger.warn({ err }, "Could not stop the live record"));
     // FULCRA(orchestration): the next boot loads these sessions again (revive-on-restart.ts).
     await recordOpenSessions({
       paseoHome: config.paseoHome,
