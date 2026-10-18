@@ -38,6 +38,7 @@ export interface LifecycleAgentManager {
     handle?: TrustedOperationHandle,
   ): Promise<StoredAgentRecord>;
   closeAgent(agentId: string, handle?: TrustedOperationHandle): Promise<void>;
+  assertWorkCloseAllowed?(agentId: string): Promise<void>;
   setLabels(agentId: string, labels: Record<string, string>): Promise<void>;
   detachAgent(agentId: string): Promise<{
     record: StoredAgentRecord;
@@ -232,6 +233,8 @@ export async function closeAgentCommand(
   agentId: string,
   handle?: TrustedOperationHandle,
 ): Promise<void> {
+  // FU-349: closing the session is not acceptance. Refuse before any effect when work is unapproved.
+  await dependencies.agentManager.assertWorkCloseAllowed?.(agentId);
   await dependencies.agentManager.closeAgent(agentId, handle);
 }
 

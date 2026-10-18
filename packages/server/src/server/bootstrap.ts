@@ -240,6 +240,7 @@ import { isHostnameAllowed, type HostnamesConfig } from "./hostnames.js";
 import {
   createRequireBearerMiddleware,
   isAgentMcpRequestAuthorized,
+  extractHttpBearerToken,
   type DaemonAuthConfig,
 } from "./auth.js";
 import { deleteLocalCredential, writeLocalCredential } from "./local-credential.js";
@@ -255,6 +256,8 @@ import {
   type CreateAgentCommandDependencies,
 } from "./agent/create-agent/create.js";
 import { archiveAgentCommand, cancelAgentRunCommand } from "./agent/lifecycle-command.js";
+import { WorkAcceptanceStore, liveCandidateId } from "./agent/work-acceptance.js";
+import { isAgentMcpToken } from "./agent/agent-mcp-token.js";
 import { CreateAgentLifecycleDispatch } from "./agent/create-agent-lifecycle-dispatch.js";
 import {
   HubRelationshipController,
@@ -1150,6 +1153,10 @@ export async function createPaseoDaemon(
   const agentManager = new AgentManager({
     costOutboxFile: path.join(config.paseoHome, "usage", "pending-costs.json"),
     archiveServerId: serverId,
+    workAcceptance: new WorkAcceptanceStore({
+      file: path.join(config.paseoHome, "work-acceptance", "assignments.json"),
+      resolveCandidate: liveCandidateId,
+    }),
     reportRegistryFile: path.join(config.paseoHome, "agent-requests", "report-authority.json"),
     reportGrantDirectory: getNativeReportGrantDirectory(distribution),
     durableTimelineStore,
@@ -1169,6 +1176,10 @@ export async function createPaseoDaemon(
       resolvePaseoToolPolicy(provider, daemonConfigStore.get().providers),
     logger,
   });
+  // FU-349: a close interrupted by a restart finishes once its worker is archived. Nothing else is accepted by a restart.
+  void agentManager.workAcceptance
+    ?.recover((id) => Boolean(agentStorage.getCached(id)?.archivedAt))
+    .catch((error) => logger.warn({ err: error }, "Work acceptance recovery failed"));
   daemonConfigStore.setDispatchOwnerAdmission(() => agentManager.assertDispatchOwner());
   // Display-only background-job sample for providers without a task protocol (MULTIHOST-DESIGN §6).
   agentManager.startBackgroundWorkSampling();
@@ -1734,6 +1745,7 @@ export async function createPaseoDaemon(
     paseoHome: config.paseoHome,
     worktreesRoot: config.worktreesRoot,
     callerAgentId: runtime.callerAgentId,
+    callerVerified: runtime.callerVerified ?? true,
     nativeReportOrigin: runtime.nativeReportOrigin,
     enableVoiceTools: runtime.enableVoiceTools,
     voiceOnly: runtime.voiceOnly,
@@ -1759,10 +1771,12 @@ export async function createPaseoDaemon(
     const createAgentMcpSession = async (
       callerAgentId?: string,
       nativeReportOrigin?: NativeReportOrigin,
+      callerVerified = false,
     ) => {
       const agentMcpServer = await createAgentMcpServer(
         createAgentToolHostDependencies({
           callerAgentId,
+          callerVerified,
           nativeReportOrigin,
           paseoToolPolicy: callerAgentId
             ? agentManager.getPaseoToolPolicy(callerAgentId)
@@ -1803,7 +1817,22 @@ export async function createPaseoDaemon(
       // authenticates here using the injected capability token (or a valid
       // daemon password). Without this, a password-protected daemon would be
       // wide open on its agent control plane.
+      const callerAgentIdRaw = req.query.callerAgentId;
+      let callerAgentId: string | undefined;
+      if (typeof callerAgentIdRaw === "string") {
+        callerAgentId = callerAgentIdRaw;
+      } else if (Array.isArray(callerAgentIdRaw) && typeof callerAgentIdRaw[0] === "string") {
+        callerAgentId = callerAgentIdRaw[0];
+      }
+      // FU-349: the caller id in the URL is only a claim. It is verified when the request carries the token
+      // derived for that exact agent id. A daemon-wide token or password proves no agent identity.
+      const callerVerified = isAgentMcpToken(
+        agentMcpAuthToken,
+        callerAgentId,
+        extractHttpBearerToken(req.header("authorization")),
+      );
       if (
+        !callerVerified &&
         !(await isAgentMcpRequestAuthorized({
           password: config.auth?.password,
           capabilityToken: agentMcpAuthToken,
@@ -1840,13 +1869,6 @@ export async function createPaseoDaemon(
           });
           return;
         }
-        const callerAgentIdRaw = req.query.callerAgentId;
-        let callerAgentId: string | undefined;
-        if (typeof callerAgentIdRaw === "string") {
-          callerAgentId = callerAgentIdRaw;
-        } else if (Array.isArray(callerAgentIdRaw) && typeof callerAgentIdRaw[0] === "string") {
-          callerAgentId = callerAgentIdRaw[0];
-        }
         const nativeReportOrigin = agentManager.nativeReportMcpOrigin(
           callerAgentId,
           req.header("x-paseo-report-origin"),
@@ -1869,6 +1891,7 @@ export async function createPaseoDaemon(
         const { server, transport } = await createAgentMcpSession(
           callerAgentId,
           nativeReportOrigin,
+          callerVerified,
         );
         res.on("close", () => {
           void transport.close();

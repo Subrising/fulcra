@@ -1,3 +1,4 @@
+import { agentMcpToken } from "./agent-mcp-token.js";
 import type { AgentSessionConfig } from "./agent-sdk-types.js";
 
 const PASEO_MCP_SERVER_NAME = "paseo";
@@ -54,7 +55,11 @@ export function withRuntimePaseoMcpServer(params: {
         ...(params.mcpAuthToken || params.nativeReportWitness
           ? {
               headers: {
-                ...(params.mcpAuthToken ? { Authorization: `Bearer ${params.mcpAuthToken}` } : {}),
+                ...(params.mcpAuthToken
+                  ? {
+                      Authorization: `Bearer ${agentMcpToken(params.mcpAuthToken, params.agentId)}`,
+                    }
+                  : {}),
                 ...(params.nativeReportWitness
                   ? { "X-Paseo-Report-Origin": params.nativeReportWitness }
                   : {}),

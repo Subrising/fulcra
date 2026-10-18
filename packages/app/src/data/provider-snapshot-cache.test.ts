@@ -778,4 +778,6 @@ it("coalesces missing bodies and keeps a newer pushed association when an older 
   } finally {
     queryClient.clear();
   }
-});
+  // The first dynamic imports here load the client and protocol modules. In the full suite they can pass 5 s on
+  // a loaded runner (CI run 39114934750). The test itself takes about 0.3 s.
+}, 30_000);

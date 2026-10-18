@@ -3229,6 +3229,34 @@ export class DaemonClient {
     if (!payload.accepted) throw new Error(payload.error ?? "Idle cleanup refused");
   }
 
+  /** FU-349: the owner approves or rejects a worker's submitted result. */
+  async reviewWorkAsOwner(
+    input: Omit<
+      Extract<SessionInboundMessage, { type: "agent.work.owner_review.request" }>,
+      "type" | "requestId"
+    >,
+  ): Promise<void> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.work.owner_review.response">({
+        message: { type: "agent.work.owner_review.request", ...input },
+      });
+    if (!payload.accepted) throw new Error(payload.error ?? "Review refused");
+  }
+
+  /** FU-349: owner override (cancel an assignment, raise a turn limit, reset a corrupt or deleted store). */
+  async overrideWorkAsOwner(
+    input: Omit<
+      Extract<SessionInboundMessage, { type: "agent.work.owner_override.request" }>,
+      "type" | "requestId"
+    >,
+  ): Promise<void> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.work.owner_override.response">({
+        message: { type: "agent.work.owner_override.request", ...input },
+      });
+    if (!payload.accepted) throw new Error(payload.error ?? "Override refused");
+  }
+
   async archiveAgent(
     agentId: string,
     options?: { confirmed?: boolean },

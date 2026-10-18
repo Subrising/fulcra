@@ -1,3 +1,4 @@
+import { reviewWork } from "./agent/work-review.js";
 import { randomUUID } from "node:crypto";
 import { hostLinksFor } from "./host-links.js";
 import { armPromptFinishNotification, disarmFinishNotification } from "./agent/agent-prompt.js";
@@ -3578,6 +3579,10 @@ export class Session {
     switch (msg.type) {
       case "agent.lifecycle.cleanup_idle.request":
         return this.handleIdleCleanupRequest(msg);
+      case "agent.work.owner_review.request":
+        return this.handleWorkOwnerReviewRequest(msg);
+      case "agent.work.owner_override.request":
+        return this.handleWorkOwnerOverrideRequest(msg);
       case "agent.parent.adopt.request":
         return this.handleParentAdoptRequest(msg, source);
       case "agent.detach.request":
@@ -4418,6 +4423,8 @@ export class Session {
       () => this.agentManager.trustedPlugins.captureOperation(),
       commandPayload("close", { purgeHistory: options.purgeHistory }),
     );
+    // FU-349: deleting a session is not acceptance of its work. Refuse before any effect.
+    await this.agentManager.assertWorkCloseAllowed(agentId);
     // File-backed storage still needs an early delete fence before closeAgent().
     beginAgentDeleteIfSupported(this.agentStorage, agentId);
 
@@ -4542,6 +4549,60 @@ export class Session {
     this.emit({
       type: "agent.lifecycle.cleanup_idle.response",
       payload: { agentId: msg.agentId, requestId: msg.requestId, accepted: error === null, error },
+    });
+  }
+
+  // FU-349: the owner reviews work over the authenticated app connection. Agents use the MCP tool as a lead.
+  private async handleWorkOwnerReviewRequest(
+    msg: Extract<SessionInboundMessage, { type: "agent.work.owner_review.request" }>,
+  ): Promise<void> {
+    let error: string | null = null;
+    try {
+      await reviewWork(
+        {
+          agentManager: this.agentManager,
+          agentStorage: this.agentStorage,
+          logger: this.sessionLogger,
+        },
+        msg,
+        { kind: "owner" },
+      );
+    } catch (failure) {
+      if (admissionOutcome(failure)) throw failure;
+      error = getErrorMessageOr(failure, "Review refused");
+    }
+    this.emit({
+      type: "agent.work.owner_review.response",
+      payload: { requestId: msg.requestId, item: msg.item, accepted: error === null, error },
+    });
+  }
+
+  // FU-349: owner override. Every override is recorded. A corrupt or deleted store is reset only here.
+  private async handleWorkOwnerOverrideRequest(
+    msg: Extract<SessionInboundMessage, { type: "agent.work.owner_override.request" }>,
+  ): Promise<void> {
+    let error: string | null = null;
+    try {
+      const store = this.agentManager.workAcceptance;
+      if (!store) throw new Error("Approve-before-close is not configured on this daemon.");
+      const owner = { kind: "owner" } as const;
+      if (msg.action === "reset_store") await store.resetStore(msg.reason);
+      else {
+        if (!msg.item) throw new Error("This override needs an item.");
+        // The store records each owner override in the same write as the change.
+        if (msg.action === "cancel") await store.cancel(msg.item, owner, msg.reason);
+        else {
+          if (!msg.turnLimit) throw new Error("Raising the turn limit needs turnLimit.");
+          await store.raiseTurnLimit(msg.item, owner, msg.turnLimit, msg.reason);
+        }
+      }
+    } catch (failure) {
+      if (admissionOutcome(failure)) throw failure;
+      error = getErrorMessageOr(failure, "Override refused");
+    }
+    this.emit({
+      type: "agent.work.owner_override.response",
+      payload: { requestId: msg.requestId, accepted: error === null, error },
     });
   }
 

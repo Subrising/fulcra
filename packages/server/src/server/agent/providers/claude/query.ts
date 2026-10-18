@@ -11,6 +11,7 @@ import {
 } from "../../provider-launch-config.js";
 import { buildSelfNodeCommand } from "../../../paseo-env.js";
 import { spawnProcess, type SpawnProcessOptions } from "../../../../utils/spawn.js";
+import { moveMcpConfigOffArgv } from "./mcp-config-file.js";
 
 // Keep the raw SDK query import in this module only. Claude process launch behavior
 // must stay shared between production and tests so Windows .cmd/.bat handling cannot
@@ -117,8 +118,16 @@ function applyRuntimeSettingsToClaudeOptions(
         : null;
       if (api && selfNodeCommand) sanitizeClaudeApiEnv(selfNodeCommand.env);
       const command = selfNodeCommand?.command ?? resolved.command;
-      const args = selfNodeCommand?.args ?? resolved.args;
-      const guard = prepareApiKeyGuard(launchEnv, spawnOptions.cwd, providerEnv, args);
+      // The MCP config can hold the agent's bearer token. Keep it out of argv, where the process list shows it.
+      const moved = moveMcpConfigOffArgv(selfNodeCommand?.args ?? resolved.args);
+      const args = moved.args;
+      let guard: ReturnType<typeof prepareApiKeyGuard>;
+      try {
+        guard = prepareApiKeyGuard(launchEnv, spawnOptions.cwd, providerEnv, args);
+      } catch (error) {
+        moved.cleanup();
+        throw error;
+      }
       let spawnEnv: SpawnProcessOptions = providerEnvSpec;
       if (api) spawnEnv = { baseEnv: providerEnv, envOverlay: {} };
       if (selfNodeCommand) spawnEnv = { env: selfNodeCommand.env, envMode: "internal" };
@@ -136,8 +145,11 @@ function applyRuntimeSettingsToClaudeOptions(
         });
       } catch (error) {
         guard?.close();
+        moved.cleanup();
         throw error;
       }
+      child.once("exit", moved.cleanup);
+      child.once("error", moved.cleanup);
       guard?.attach(child);
       onChildProcess?.(child);
       if (typeof options.stderr === "function") {

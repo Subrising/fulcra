@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 
+import { agentMcpToken } from "./agent-mcp-token.js";
 import type { AgentSessionConfig } from "./agent-sdk-types.js";
 import {
   withRuntimePaseoMcpServer,
@@ -24,7 +25,7 @@ describe("withRuntimePaseoMcpServer", () => {
     expect(result.mcpServers?.paseo).toEqual({
       type: "http",
       url: "http://127.0.0.1:6767/mcp/agents?callerAgentId=agent-1",
-      headers: { Authorization: "Bearer cap-token" },
+      headers: { Authorization: `Bearer ${agentMcpToken("cap-token", "agent-1")}` },
     });
   });
 
