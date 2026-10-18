@@ -533,10 +533,18 @@ export function ProgressBoardSurface(props: PluginSurfaceProps) {
       pending = false;
     }
     void refresh();
-    const timer = setInterval(() => void refresh(), 15000);
+    // A hidden page does not poll. It refreshes once when it becomes visible again.
+    const timer = setInterval(() => {
+      if (!document.hidden) void refresh();
+    }, 15000);
+    const onVisible = () => {
+      if (!document.hidden) void refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       disposed = true;
       clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [read, hosts, selected, revision, props.host.id]);
   return (

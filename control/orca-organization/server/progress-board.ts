@@ -298,6 +298,8 @@ export async function readBranch(
   return row;
 }
 
+const ACTIVITY_REFRESH_MS = 60_000;
+
 export function createProgressBoard(
   server: Pick<PluginServerContext, "on">,
   options: {
@@ -306,8 +308,10 @@ export function createProgressBoard(
     run?: RunRead;
     humanOwners?: () => readonly string[];
     historyFile?: string;
+    now?: () => number;
   } = {},
 ) {
+  const now = options.now ?? Date.now;
   const root =
     options.root ??
     (process.env.FULCRA_LEDGER_DIR?.trim() || path.join(os.homedir(), "shared-vault", "projects"));
@@ -389,6 +393,9 @@ export function createProgressBoard(
     }
   }
   const results = new Map<string, string>();
+  // Each timeline read loads large journal records from disk. Read a running session again only
+  // when its snapshot changed and the last read is at least one minute old.
+  const activityReads = new Map<string, { marker: string; at: number }>();
   const ledgers = new Map<string, { items: BoardItem[]; state: string; signature?: string }>();
   const hooks = [
     server.on("agent.turn_ended", (event) => {
@@ -561,7 +568,13 @@ export function createProgressBoard(
         projectAgents
           .filter((a) => a.status === "running" || a.status === "initializing")
           .map(async (a) => {
+            const marker = `${a.updatedAt}|${a.lastUserMessageAt ?? ""}|${a.activeTurn?.startedAt ?? ""}`;
+            const previous = activityReads.get(a.id);
+            const at = now();
+            if (previous && (previous.marker === marker || at - previous.at < ACTIVITY_REFRESH_MS))
+              return;
             try {
+              activityReads.set(a.id, { marker, at });
               const page = await paseo.agents.ref(a.id).timeline.refetch({ limit: 20 });
               const entries = page.entries.toReversed();
               const last =
@@ -637,6 +650,12 @@ export function createProgressBoard(
         branches: [],
       });
     }
+    const running = new Set(
+      agentRows
+        .filter((a) => a.status === "running" || a.status === "initializing")
+        .map((a) => a.id),
+    );
+    for (const id of activityReads.keys()) if (!running.has(id)) activityReads.delete(id);
     if (previousTransitions !== JSON.stringify(transitions)) saveHistory();
     if (historyUnavailable)
       warnings.push("Completion history could not be saved. Dates may be missing after a restart.");
@@ -677,7 +696,7 @@ export function createProgressBoard(
       hooks.forEach((stop) => stop());
       watchers.forEach((w) => w.close());
       results.clear();
-
+      activityReads.clear();
       ledgers.clear();
     },
   };
