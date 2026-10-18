@@ -249,6 +249,39 @@ afterEach(async () => {
 });
 
 describe("PluginRuntime", () => {
+  it("keeps supervised plugin Git calls on the plugin IPC channel", async () => {
+    vi.stubEnv("PASEO_SUPERVISED", "1");
+    vi.stubEnv("paseo_supervised", "1");
+    vi.stubEnv("ELECTRON_RUN_AS_NODE", "1");
+    const directory = await createPlugin(
+      "owned-git-channel",
+      `
+import { defineRpc } from "@getpaseo/plugin";
+import { execGitCommand } from "@getpaseo/plugin/server/git";
+import { z } from "zod";
+const inspect = defineRpc({name:"inspect",input:z.null(),output:z.object({version:z.string(),supervised:z.boolean(),electron:z.string()})});
+export default function contribute(server) {
+ server.handle(inspect, async () => {
+  const result = await execGitCommand(["--version"]);
+  return {version:result.stdout.trim(),supervised:Object.keys(process.env).some(key=>/^PASEO_SUPERVISED$/i.test(key)),electron:process.env.ELECTRON_RUN_AS_NODE??""};
+ });
+ return () => {};
+}`,
+    );
+    const runtime = createTestRuntime();
+    try {
+      await runtime.startPlugin("owned-git-channel", directory);
+      await expect(runtime.invoke("owned-git-channel", "inspect", null)).resolves.toEqual({
+        version: expect.stringMatching(/^git version /),
+        supervised: false,
+        electron: "1",
+      });
+    } finally {
+      await runtime.stopAll();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it.each([
     { specifier: "@getpaseo/plugin", moduleDirectory: "shared" },
     { specifier: "@getpaseo/plugin", moduleDirectory: "server" },

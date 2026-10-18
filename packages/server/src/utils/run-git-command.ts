@@ -12,7 +12,12 @@ import {
   startGitCommandTrace,
   submitGitCommandTrace,
 } from "./git-command-trace.js";
-import { spawnProcess } from "./spawn.js";
+import {
+  spawnGitProcess,
+  terminateGitProcess,
+  withGitFetchPolicy,
+} from "@getpaseo/plugin/server/git";
+import { createExternalCommandProcessEnv } from "../server/paseo-env.js";
 import {
   GitProcessScheduler,
   type GitProcessPriority,
@@ -51,6 +56,9 @@ export interface GitCommandOptions {
   envOverlay?: ProcessEnvRecord;
   logger?: Pick<Logger, "trace">;
   timeout?: number;
+  /** Set only for an explicit user retry after credentials change. */
+  retryFetch?: boolean;
+  allowFetchRefFallback?: boolean;
   maxOutputBytes?: number;
   acceptExitCodes?: number[];
   /** Synchronous refusal only, after scheduler admission and immediately before spawn. */
@@ -266,7 +274,22 @@ function runGitCommandWithProvenance(
   options: GitCommandOptions,
   provenance?: string,
 ): Promise<GitCommandResult> {
-  return executeGitCommand(args, options, (output) => output.toString("utf8"), provenance);
+  return withGitFetchPolicy(
+    options.cwd,
+    args,
+    async () => {
+      const result = await executeGitCommand(
+        args,
+        options,
+        (output) => output.toString("utf8"),
+        provenance,
+      );
+      return result;
+    },
+    options.retryFetch,
+    options.input,
+    options.allowFetchRefFallback,
+  );
 }
 
 /** Binary stdout preserves cat-file byte framing before text decoding. */
@@ -274,7 +297,14 @@ export function runGitCommandBytes(
   args: string[],
   options: GitCommandOptions,
 ): Promise<GitCommandResult<Buffer>> {
-  return executeGitCommand(args, options, (output) => output);
+  return withGitFetchPolicy(
+    options.cwd,
+    args,
+    () => executeGitCommand(args, options, (output) => output),
+    options.retryFetch,
+    options.input,
+    options.allowFetchRefFallback,
+  );
 }
 
 function executeGitCommand<Output>(
@@ -400,18 +430,23 @@ function executeGitCommand<Output>(
         settle(() => reject(processError));
       };
 
-      let child: ReturnType<typeof spawnProcess>;
+      const stopChild = () => {
+        void terminateGitProcess(child).catch((cleanupError) => {
+          processError = cleanupError;
+        });
+      };
+      let child: ReturnType<typeof spawnGitProcess>;
       try {
         // `core.quotepath=false` makes git emit raw UTF-8 paths instead of
         // octal-escaping non-ASCII bytes (e.g. `测试文件.txt` vs `"\346\265\213..."`).
         // `core.fsmonitor=false` prevents repository config from launching a command.
         options.beforeSpawn?.();
-        child = spawnProcess(
-          "git",
+        child = spawnGitProcess(
           ["-c", "core.quotepath=false", "-c", "core.fsmonitor=false", ...args],
           {
             cwd: options.cwd,
-            envOverlay,
+            env: createExternalCommandProcessEnv("git", process.env, envOverlay),
+            timeout,
             shell: false,
             stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
           },
@@ -425,14 +460,14 @@ function executeGitCommand<Output>(
       const stdout = child.stdout;
       const stderr = child.stderr;
       if (!stdout || !stderr) {
-        child.kill("SIGKILL");
+        stopChild();
         rejectSpawnFailure(new Error("Git process did not expose piped stdout and stderr"));
         return;
       }
 
       timer = setTimeout(() => {
         timeoutError = new Error(`Git command timed out after ${timeout}ms: ${command}`);
-        child.kill("SIGKILL");
+        stopChild();
         settle(() => reject(timeoutError));
         if (processExit) {
           settleTimeoutTrace(processExit.exitCode, processExit.signal);
@@ -447,7 +482,7 @@ function executeGitCommand<Output>(
 
         if (remainingBytes <= 0) {
           truncated = true;
-          child.kill("SIGKILL");
+          stopChild();
           return;
         }
 
@@ -455,7 +490,7 @@ function executeGitCommand<Output>(
           stdoutChunks.push(buffer.subarray(0, remainingBytes));
           stdoutBytes += remainingBytes;
           truncated = true;
-          child.kill("SIGKILL");
+          stopChild();
           return;
         }
 
@@ -498,7 +533,7 @@ function executeGitCommand<Output>(
           // A command may close stdin when it exits or reaches the output limit.
           if (error.code !== "EPIPE") {
             processError = error;
-            child.kill("SIGKILL");
+            stopChild();
           }
         });
         child.stdin!.end(options.input);

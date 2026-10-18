@@ -1,3 +1,4 @@
+import { execGitCommandSync } from "@getpaseo/plugin/server/git";
 import { bindGuardHome } from "./native-release-hooks.mjs";
 import { localJson } from "../local-machine.mjs";
 import fs from "node:fs";
@@ -176,10 +177,10 @@ const manifest = {
 };
 fs.writeFileSync(path.join(output, "manifest.json"), JSON.stringify(manifest, null, 2));
 if (process.argv[2] === "--apply") {
-  const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  const head = execGitCommandSync(["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
   if (
     process.argv[3] !== head ||
-    execFileSync("git", ["status", "--porcelain", "--", "src/control"], {
+    execGitCommandSync(["status", "--porcelain", "--", "src/control"], {
       cwd: root,
       encoding: "utf8",
     }).trim()

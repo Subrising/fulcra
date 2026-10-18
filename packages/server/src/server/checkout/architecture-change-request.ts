@@ -172,6 +172,7 @@ export async function handleArchitectureChangeFetchRequest(input: {
       cwd,
       envOverlay: { GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" },
       timeout: 120_000,
+      retryFetch: true,
       acceptExitCodes: [0, 1, 128],
     },
   );

@@ -1,3 +1,4 @@
+import { execGitCommand } from "@getpaseo/plugin/server/git";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -127,20 +128,24 @@ export function jobList(
 
 export type RunRead = (command: string, args: string[], cwd: string) => Promise<string>;
 export const runRead: RunRead = (command, args, cwd) =>
-  new Promise((resolve, reject) => {
-    execFile(
-      command,
-      args,
-      {
-        cwd,
-        timeout: 4000,
-        maxBuffer: 8 * 1024 * 1024,
-        windowsHide: true,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GH_PROMPT_DISABLED: "1" },
-      },
-      (error, stdout) => (error ? reject(error) : resolve(stdout)),
-    );
-  });
+  command === "git"
+    ? execGitCommand(args, { cwd, timeout: 4000, maxBuffer: 8 * 1024 * 1024 }).then(
+        (result) => result.stdout,
+      )
+    : new Promise((resolve, reject) => {
+        execFile(
+          command,
+          args,
+          {
+            cwd,
+            timeout: 4000,
+            maxBuffer: 8 * 1024 * 1024,
+            windowsHide: true,
+            env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GH_PROMPT_DISABLED: "1" },
+          },
+          (error, stdout) => (error ? reject(error) : resolve(stdout)),
+        );
+      });
 
 export async function ledgerLineDates(file: string, run = runRead): Promise<Map<string, string>> {
   const dates = new Map<string, string>();

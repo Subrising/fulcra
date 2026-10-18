@@ -25,7 +25,7 @@ async function fixture(t, state = "archived", { keepDays = 7 } = {}) {
   git(remote, "init", "--bare");
   git(repo, "init");
   git(repo, "config", "user.name", "Fixture");
-  git(repo, "config", "user.email", "fixture");
+  git(repo, "config", "user.email", "fulcra@users.noreply.github.com");
   await fs.writeFile(path.join(repo, ".gitignore"), "node_modules/\ndist/\n");
   await fs.writeFile(path.join(repo, "REPORT.md"), "Fixture evidence");
   git(repo, "add", ".");

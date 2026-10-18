@@ -1,3 +1,4 @@
+import { execGitCommand } from "@getpaseo/plugin/server/git";
 import type { DaemonTarget } from "../../utils/daemon-target.js";
 import { withGlobalOptions } from "../../utils/command-options.js";
 import type { CommandOptions } from "../../output/index.js";
@@ -46,7 +47,15 @@ import {
   type HubStarterTriggerConnection,
 } from "./starter-trigger.js";
 
-const execFileAsync = promisify(execFile);
+const executeFile = promisify(execFile);
+const execFileAsync = (
+  command: string,
+  args: string[],
+  options: { encoding: "utf8"; cwd?: string },
+) =>
+  command === "git"
+    ? execGitCommand(args, options)
+    : executeFile(command, args, { ...options, windowsHide: true });
 const DAEMON_READY_TIMEOUT_MS = 60_000;
 const DAEMON_READY_POLL_MS = 250;
 const PROVIDER_READY_TIMEOUT_MS = 60_000;

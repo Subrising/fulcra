@@ -12,6 +12,7 @@ import {
   quoteWindowsArgument,
   quoteWindowsCommand,
 } from "./process-internal/windows-command.js";
+import { spawnGitProcess, execGitCommand } from "./git-process.js";
 const execFileAsync = promisify(execFile);
 export interface ExecCommandOptions {
   env?: NodeJS.ProcessEnv;
@@ -56,6 +57,7 @@ export function spawnProcess(
   args: string[],
   options?: SpawnOptions,
 ): ChildProcess {
+  if (/^(?:.*[\\/])?git(?:\.exe)?$/i.test(command)) return spawnGitProcess(args, options);
   const spawnOptions = options ?? {};
   const isWindows = process.platform === "win32";
   const shell = shouldUseWindowsShell(command, spawnOptions.shell);
@@ -78,6 +80,7 @@ export async function execCommand(
   args: string[],
   options?: ExecCommandOptions,
 ): Promise<ExecCommandResult> {
+  if (/^(?:.*[\\/])?git(?:\.exe)?$/i.test(command)) return execGitCommand(args, options);
   const isWindows = process.platform === "win32";
   const shell = shouldUseWindowsShell(command, options?.shell);
   const shouldQuoteForShell = isWindows && shell !== false;
