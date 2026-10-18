@@ -10,6 +10,9 @@ import {
   WorkspaceSetupProgressMessageSchema,
   AgentTimelineEntryPayloadSchema,
   SendAgentMessageResponseMessageSchema,
+  SendAgentMessageRequestSchema,
+  AgentMessageRouteCheckRequestSchema,
+  AgentMessageRouteCheckResponseSchema,
 } from "./messages.js";
 
 test("send receipts retain legacy parsing while adding held and target-miss fields", () => {
@@ -478,4 +481,39 @@ test("usage login errors are additive and older reports still parse", () => {
   expect(SessionOutboundMessageSchema.parse(oldMessage)).toEqual(oldMessage);
   expect(SessionOutboundMessageSchema.parse(newMessage)).toEqual(newMessage);
   expect(legacy.parse(newMessage)).toEqual(oldMessage);
+});
+
+test("reporting-line checks preserve optional sender restrictions on the wire", () => {
+  const message = {
+    type: "send_agent_message_request",
+    requestId: "request",
+    agentId: "target",
+    text: "draft",
+  };
+  expect(SendAgentMessageRequestSchema.parse(message)).toEqual(message);
+  const sender = {
+    agentId: "source",
+    serverId: "source-host",
+    inboundOnly: true,
+    outboundMainOnly: true,
+    outboundServerOnly: "destination",
+    refusal: "Send this to your lead.",
+  };
+  expect(SendAgentMessageRequestSchema.parse({ ...message, sender }).sender).toEqual(sender);
+  expect(
+    AgentMessageRouteCheckRequestSchema.parse({
+      type: "agent.message.route_check.request",
+      requestId: "check",
+      input: { kind: "inbound", agentId: "target", sender },
+    }).input,
+  ).toMatchObject({ sender });
+  expect(
+    AgentMessageRouteCheckResponseSchema.parse({
+      type: "agent.message.route_check.response",
+      payload: {
+        requestId: "check",
+        output: { kind: "outbound", inboundOnly: true, refusal: sender.refusal },
+      },
+    }).payload.output,
+  ).toMatchObject({ inboundOnly: true });
 });

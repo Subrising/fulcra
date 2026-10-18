@@ -4,10 +4,18 @@ import { addSendOptions, runSendCommand } from "./send";
 
 const connection = vi.hoisted(() => vi.fn());
 vi.mock("../../utils/client.js", () => ({ connectToDaemon: connection }));
-const routes = vi.hoisted(() => ({ readSendRoute: vi.fn(), sshSend: vi.fn() }));
+const routes = vi.hoisted(() => ({
+  readSendRoute: vi.fn(),
+  sshSend: vi.fn(),
+  readRemoteSendHost: vi.fn(),
+}));
 vi.mock("../../utils/send-route.js", () => routes);
 const senderStamp = vi.hoisted(() => vi.fn((): { agentId: string } | null => null));
-vi.mock("../../utils/send-sender.js", () => ({ resolveSender: senderStamp }));
+const senderHost = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock("../../utils/send-sender.js", () => ({
+  resolveSender: senderStamp,
+  assertSenderDaemon: senderHost,
+}));
 const daemonTarget = { kind: "endpoint" as const, host: "fixture.test:1234" };
 const messageId = "native-message-1";
 let client: ReturnType<typeof fakeClient>;
@@ -16,8 +24,9 @@ function fakeClient() {
     close: vi.fn().mockResolvedValue(undefined),
     getLastServerInfoMessage: vi.fn(() => ({
       serverId: "source-host",
-      features: { agentSendReceipts: true },
+      features: { agentSendReceipts: true, agentSendReportingLines: true },
     })),
+    checkAgentMessageRoute: vi.fn().mockResolvedValue({ kind: "outbound", inboundOnly: false }),
     sendAgentMessage: vi.fn().mockResolvedValue(undefined),
     sendNativeQueuedMessage: vi
       .fn()
@@ -150,6 +159,68 @@ describe("configured SSH sends", () => {
     expect(result.data.status).toBe("held");
     expect(client.waitForFinish).not.toHaveBeenCalled();
   });
+  it("asks the source before any SSH and preserves its one-level restriction", async () => {
+    client.sendAgentMessage.mockRejectedValue(missing);
+    senderStamp.mockReturnValue({ agentId: "worker" });
+    routes.readSendRoute.mockResolvedValue(selected);
+    const policy = {
+      kind: "outbound",
+      inboundOnly: true,
+      refusal: "Send this to your lead, Lead (lead-1).",
+    };
+    client.checkAgentMessageRoute.mockResolvedValue(policy);
+    routes.readRemoteSendHost.mockImplementationOnce(async () => {
+      expect(client.checkAgentMessageRoute).toHaveBeenCalledExactlyOnceWith({
+        kind: "outbound",
+        senderId: "worker",
+        targetId: selected.agentId,
+      });
+      expect(routes.sshSend).not.toHaveBeenCalled();
+      return { serverId: "remote", mainAssistantId: selected.agentId };
+    });
+    routes.sshSend.mockResolvedValue({
+      agentId: selected.agentId,
+      status: "refused",
+      message: policy.refusal,
+    });
+    const result = await parsedSend(["role:main-assistant", "draft", "--no-wait"]);
+    expect(result.data.message).toBe(policy.refusal);
+    expect(routes.sshSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sender: { agentId: "worker", inboundOnly: true, refusal: policy.refusal },
+      }),
+    );
+  });
+  it("does not contact SSH when the source cannot verify its sender", async () => {
+    client.sendAgentMessage.mockRejectedValue(missing);
+    senderStamp.mockReturnValue({ agentId: "worker" });
+    routes.readSendRoute.mockResolvedValue(selected);
+    client.checkAgentMessageRoute.mockRejectedValue(new Error("Unknown source sender"));
+    await expect(parsedSend(["target", "draft"])).rejects.toThrow("Unknown source sender");
+    expect(routes.readRemoteSendHost).not.toHaveBeenCalled();
+    expect(routes.sshSend).not.toHaveBeenCalled();
+  });
+  it("refuses a stamped sender on another selected daemon before sending", async () => {
+    senderStamp.mockReturnValue({ agentId: "worker" });
+    senderHost.mockRejectedValueOnce({ code: "SENDER_HOST_MISMATCH" });
+    await expect(parsedSend(["target", "draft"])).rejects.toMatchObject({
+      code: "SENDER_HOST_MISMATCH",
+    });
+    expect(client.sendAgentMessage).not.toHaveBeenCalled();
+    expect(routes.sshSend).not.toHaveBeenCalled();
+  });
+  it("checks restricted receiver admission without input", async () => {
+    client.checkAgentMessageRoute.mockResolvedValue({
+      kind: "inbound",
+      allowed: false,
+      reason: "Send this to your lead.",
+    });
+    await expect(parsedSend(["target", "draft", "--check-only"])).rejects.toMatchObject({
+      code: "SEND_REFUSED",
+      message: "Send this to your lead.",
+    });
+    expect(client.sendAgentMessage).not.toHaveBeenCalled();
+  });
   it("reports a local miss without a route", async () => {
     client.sendAgentMessage.mockRejectedValue(missing);
     await expect(parsedSend(["target", "draft"])).rejects.toMatchObject({
@@ -163,7 +234,7 @@ describe("configured SSH sends", () => {
     routes.readSendRoute.mockResolvedValue(selected);
     client.getLastServerInfoMessage.mockReturnValue({
       serverId: "source-host",
-      features: { agentSendReceipts: false },
+      features: { agentSendReceipts: false, agentSendReportingLines: false },
     });
     await expect(parsedSend(["target", "draft"])).rejects.toThrow("Update the source host");
     expect(routes.sshSend).not.toHaveBeenCalled();

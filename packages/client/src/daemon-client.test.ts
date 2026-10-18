@@ -9126,3 +9126,43 @@ test("Radius persistent client rejects mismatched output without refunding the o
   ).rejects.toThrow("do not replay");
   expect(radiusConsumerRequests(mock)).toHaveLength(1);
 });
+
+test("reporting-line checks require host support before sending a request", async () => {
+  const { client, mock } = await nativeQueueClient(false);
+  await expect(
+    client.checkAgentMessageRoute({ kind: "outbound", senderId: "worker", targetId: "main" }),
+  ).rejects.toThrow("Update the host");
+  expect(mock.sent).toHaveLength(0);
+});
+test("reporting-line checks correlate the source decision without sending agent input", async () => {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "routing-test",
+    transportFactory: () => mock.transport,
+    reconnect: { enabled: false },
+  });
+  clients.push(client);
+  const connecting = client.connect();
+  mock.triggerOpen({ features: { agentSendReportingLines: true } });
+  await connecting;
+  const pending = client.checkAgentMessageRoute({
+    kind: "outbound",
+    senderId: "worker",
+    targetId: "main",
+  });
+  const frame = JSON.parse(mock.sent[0] as string);
+  expect(frame.message).toMatchObject({
+    type: "agent.message.route_check.request",
+    input: { kind: "outbound", senderId: "worker", targetId: "main" },
+  });
+  const output = { kind: "outbound", inboundOnly: true, refusal: "Send this to your lead." };
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "agent.message.route_check.response",
+      payload: { requestId: frame.message.requestId, output },
+    }),
+  );
+  expect(await pending).toEqual(output);
+  expect(nativeQueueRequests(mock)).toHaveLength(0);
+});

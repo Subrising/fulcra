@@ -2079,6 +2079,7 @@ export class VoiceAssistantWebSocketServer {
         nativeQueuedMessages: true,
         agentMessageQueue: true,
         agentSendReceipts: true,
+        agentSendReportingLines: true,
         messageCompletionWait: true,
         autoResumeOnLimit: true,
         notificationPolicy: true,

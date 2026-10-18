@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { spawn } from "node:child_process";
 import { z } from "zod";
 import type { Sender } from "./send-sender.js";
@@ -19,7 +19,7 @@ const routeSchema = z.object({
     .refine((s) => !s.includes(String.fromCharCode(0)) && !/[\r\n]/.test(s)),
 });
 const policySchema = z.object({
-  sshRoutes: z.record(z.string(), routeSchema).optional(),
+  sshRoutes: z.record(z.string().uuid(), routeSchema).optional(),
   roles: z.record(z.string(), z.string()).optional(),
 });
 export type SendRoute = z.infer<typeof routeSchema>;
@@ -65,6 +65,10 @@ request=json.load(sys.stdin)
 env=dict(os.environ)
 env.pop('PASEO_AGENT_ID',None)
 env['FULCRA_SEND_RELAYED']='1'
+if request.get('operation')=='metadata':
+ result=subprocess.run([request['cli'],'--home',request['home'],'status','--send-routing','--json'],env=env,capture_output=True,text=True)
+ sys.stdout.write(result.stdout if result.returncode==0 else result.stderr)
+ sys.exit(result.returncode)
 fd,name=tempfile.mkstemp(prefix='fulcra-send-')
 try:
  with os.fdopen(fd,'w',encoding='utf-8') as stream: stream.write(request['prompt'])
@@ -94,19 +98,47 @@ export async function sshSend(request: RemoteSendRequest): Promise<AgentSendResu
     throw new Error("SSH sends accept plain text only.");
   if (sender && !sender.serverId && !request.localServerId)
     throw new Error("Cannot identify the sending host. No remote send was attempted.");
-  const flags = [
-    ...(sender ? ["--from", `${sender.agentId}@${sender.serverId || request.localServerId}`] : []),
-    ...(options.notifyOnFinish === false ? ["--no-notify-on-finish"] : []),
-    ...(options.steer ? ["--steer"] : []),
-    ...(options.queue ? ["--queue"] : []),
-  ];
+  const flags = relayFlags({ sender, options, localServerId: request.localServerId });
   const body = JSON.stringify({
     ...route,
     agentId: request.agentId,
     prompt: request.prompt,
     flags,
   });
-  const result = await new Promise<SshResult>((resolve, reject) => {
+  const result = await runSsh(route, body);
+  const warning =
+    basename(route.cli) === "fulcra"
+      ? ""
+      : "Warning: This route may skip the Python pause guard. Use the host Fulcra launcher. ";
+  try {
+    const receipt = decodeReceipt(request, result);
+    return { ...receipt, message: warning + receipt.message };
+  } catch (error) {
+    if (warning && error instanceof Error) error.message = warning + error.message;
+    throw error;
+  }
+}
+
+function relayFlags(input: {
+  sender: Sender | null;
+  options: AgentSendOptions;
+  localServerId: string | undefined;
+}): string[] {
+  const { sender, options, localServerId } = input;
+  return [
+    ...(sender ? ["--from", `${sender.agentId}@${sender.serverId || localServerId}`] : []),
+    ...(sender?.inboundOnly ? ["--inbound-only"] : []),
+    ...(sender?.outboundMainOnly ? ["--outbound-main-only"] : []),
+    ...(sender?.outboundServerOnly ? ["--outbound-server-only", sender.outboundServerOnly] : []),
+    ...(sender?.refusal ? ["--outbound-refusal", sender.refusal] : []),
+    ...(options.notifyOnFinish === false ? ["--no-notify-on-finish"] : []),
+    ...(options.steer ? ["--steer"] : []),
+    ...(options.queue ? ["--queue"] : []),
+  ];
+}
+
+function runSsh(route: SendRoute, body: string): Promise<SshResult> {
+  return new Promise<SshResult>((resolve, reject) => {
     const child = spawn(
       "ssh",
       [
@@ -146,7 +178,29 @@ export async function sshSend(request: RemoteSendRequest): Promise<AgentSendResu
     });
     child.stdin.end(body);
   });
-  return decodeReceipt(request, result);
+}
+
+export async function readRemoteSendHost(
+  route: SendRoute,
+): Promise<{ serverId: string; mainAssistantId: string | null }> {
+  const result = await runSsh(route, JSON.stringify({ ...route, operation: "metadata" }));
+  const schema = z.object({
+    sendRouting: z.object({ serverId: z.string().min(1), mainAssistantId: z.string().nullable() }),
+  });
+  let value: unknown;
+  try {
+    value = JSON.parse(result.output);
+  } catch {
+    throw new Error(
+      `Cannot read reporting-line support from ${route.host}. Update the destination host.`,
+    );
+  }
+  const parsed = schema.safeParse(value);
+  if (result.code !== 0 || !parsed.success)
+    throw new Error(
+      `Cannot read reporting-line support from ${route.host}. Update the destination host.`,
+    );
+  return parsed.data.sendRouting;
 }
 
 function decodeReceipt(request: RemoteSendRequest, result: SshResult): AgentSendResult {
@@ -187,5 +241,11 @@ function decodeReceipt(request: RemoteSendRequest, result: SshResult): AgentSend
     throw new Error(
       `Unknown receipt from ${route.host}. Retain the draft; do not automatically retry.`,
     );
+  // COMPAT(remoteHeldReceipt): added in v0.2.26; remove after 2027-04-19 once destination CLI floor >= v0.2.26.
+  if (
+    data.status === "sent" &&
+    data.message === "Provider paused. Notice saved. No turn was started."
+  )
+    return { ...data, status: "held" };
   return data;
 }

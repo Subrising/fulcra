@@ -12,8 +12,8 @@ import type {
 import { readFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import { listAccounts, switchAccountSession } from "../account.js";
-import { resolveSender } from "../../utils/send-sender.js";
-import { readSendRoute, sshSend } from "../../utils/send-route.js";
+import { resolveSender, assertSenderDaemon } from "../../utils/send-sender.js";
+import { readSendRoute, sshSend, readRemoteSendHost } from "../../utils/send-route.js";
 
 /** Result type for agent send command */
 export interface AgentSendResult {
@@ -21,6 +21,7 @@ export interface AgentSendResult {
   status:
     | "sent"
     | "held"
+    | "allowed"
     | "completed"
     | "timeout"
     | "permission"
@@ -58,6 +59,11 @@ export interface AgentSendOptions extends CommandOptions {
   prompt?: string;
   promptFile?: string;
   from?: string;
+  inboundOnly?: boolean;
+  outboundMainOnly?: boolean;
+  outboundServerOnly?: string;
+  outboundRefusal?: string;
+  checkOnly?: boolean;
 }
 
 export function addSendOptions(cmd: Command): Command {
@@ -83,6 +89,17 @@ export function addSendOptions(cmd: Command): Command {
       "--from <chat>",
       "The chat this message comes from, as <chat id> or <chat id>@<server id>, for a send relayed from another computer",
     )
+    .option("--inbound-only", "Restrict a relayed send to the receiver's children and direct links")
+    .option("--outbound-main-only", "Restrict a relayed role send to the current Main assistant")
+    .option(
+      "--outbound-server-only <id>",
+      "Restrict a relayed send to its source-selected destination host",
+    )
+    .option(
+      "--outbound-refusal <text>",
+      "Source daemon reporting-line refusal for a restricted relay",
+    )
+    .option("--check-only", "Check receiver admission without sending input")
     .option("--no-wait", "Return immediately without waiting for completion");
 }
 
@@ -335,10 +352,28 @@ async function routeMissingSend(
     } satisfies CommandError;
   if (info?.features?.agentSendReceipts !== true)
     throw new Error("Update the source host to use configured SSH send routes.");
+  const check = sender
+    ? await client.checkAgentMessageRoute({
+        kind: "outbound",
+        senderId: sender.agentId,
+        targetId: selected.agentId,
+      })
+    : null;
+  await readRemoteSendHost(selected.route);
+  const relayedSender =
+    sender && check
+      ? {
+          ...sender,
+          ...(check.inboundOnly ? { inboundOnly: true as const } : {}),
+          ...(check.outboundMainOnly ? { outboundMainOnly: true as const } : {}),
+          ...(check.outboundServerOnly ? { outboundServerOnly: check.outboundServerOnly } : {}),
+          ...(check.refusal ? { refusal: check.refusal } : {}),
+        }
+      : sender;
   return sshSend({
     ...selected,
     prompt,
-    sender,
+    sender: relayedSender,
     localServerId: info?.serverId,
     localHost,
     options,
@@ -352,6 +387,66 @@ function throwSendFailure(error: unknown): never {
     code: "SEND_FAILED",
     message: `Failed to send message: ${message}`,
   } satisfies CommandError;
+}
+
+function restrictedSender(options: AgentSendOptions): ReturnType<typeof resolveSender> {
+  let sender = resolveSender({ from: options.from });
+  if (
+    options.inboundOnly ||
+    options.outboundMainOnly ||
+    options.outboundServerOnly ||
+    options.outboundRefusal
+  ) {
+    if (!options.from || !sender?.serverId)
+      throw {
+        code: "INVALID_FROM",
+        message: "Restricted relay flags require --from with the original host identity.",
+      } satisfies CommandError;
+    sender = {
+      ...sender,
+      ...(options.inboundOnly ? { inboundOnly: true } : {}),
+      ...(options.outboundMainOnly ? { outboundMainOnly: true } : {}),
+      ...(options.outboundServerOnly ? { outboundServerOnly: options.outboundServerOnly } : {}),
+      ...(options.outboundRefusal ? { refusal: options.outboundRefusal } : {}),
+    };
+  }
+  return sender;
+}
+
+async function checkSendAdmission(input: {
+  client: Awaited<ReturnType<typeof connectToDaemon>>;
+  sender: ReturnType<typeof resolveSender>;
+  agentId: string;
+  options: AgentSendOptions;
+}): Promise<SingleResult<AgentSendResult> | undefined> {
+  const { client, sender, agentId, options } = input;
+  if (options.checkOnly) {
+    const check = await client.checkAgentMessageRoute({
+      kind: "inbound",
+      agentId: agentId,
+      sender: sender ?? undefined,
+    });
+    if (!check.allowed)
+      throw {
+        code: "SEND_REFUSED",
+        message: check.reason ?? "The receiver refused this message.",
+      } satisfies CommandError;
+    return {
+      type: "single",
+      data: {
+        agentId: agentId,
+        status: "allowed",
+        message: "Admission check passed. No input was sent.",
+      },
+      schema: agentSendSchema,
+    };
+  }
+  if (
+    (sender?.inboundOnly || sender?.outboundMainOnly || sender?.outboundServerOnly) &&
+    client.getLastServerInfoMessage()?.features?.agentSendReportingLines !== true
+  )
+    throw new Error("Update the host to enforce the source reporting-line restriction.");
+  return undefined;
 }
 
 export async function runSendCommand(
@@ -386,10 +481,13 @@ export async function runSendCommand(
     } satisfies CommandError;
   }
   // FULCRA(orchestration): reporting lines. Stamp the sending chat; a send with no stamp is the owner.
-  const sender = resolveSender({ from: options.from });
+  const sender = restrictedSender(options);
   const client = await connectToDaemon({ target: options.daemonTarget });
 
   try {
+    await assertSenderDaemon({ sender, serverId: client.getLastServerInfoMessage()?.serverId });
+    const admission = await checkSendAdmission({ client, sender, agentId: agentIdArg, options });
+    if (admission) return admission;
     if (nativeQueue) {
       const receipt = await client.sendNativeQueuedMessage(agentIdArg, promptInput, {
         messageId: messageId!,

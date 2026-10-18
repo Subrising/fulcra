@@ -159,6 +159,8 @@ def parse_send(args):
     if not rest or rest[0] != 'send':
         return None
     positional, positions, text, source, message_id = [], [], [], None, None
+    restrictions = {}
+    check_only = False
     requires_plain = False
     index = 1
     while index < len(rest):
@@ -171,7 +173,7 @@ def parse_send(args):
             if index + 1 >= len(rest): raise ValueError('Missing send option value')
             if token == '--image': requires_plain = True
             index += 2
-        elif token in ['--prompt', '--prompt-file', '--from', '--message-id']:
+        elif token in ['--prompt', '--prompt-file', '--from', '--message-id', '--outbound-refusal', '--outbound-server-only']:
             if index + 1 >= len(rest):
                 raise ValueError('Missing send option value')
             value = rest[index + 1]
@@ -181,9 +183,17 @@ def parse_send(args):
                 text.append(Path(value).read_text(encoding='utf-8'))
             elif token == '--from':
                 source = value
+            elif token == '--outbound-server-only':
+                restrictions['outboundServerOnly'] = value
+            elif token == '--outbound-refusal':
+                restrictions['refusal'] = value
             else:
                 message_id = value
             index += 2
+        elif token in ['--inbound-only', '--outbound-main-only', '--check-only']:
+            if token == '--check-only': check_only = True
+            else: restrictions['inboundOnly' if token == '--inbound-only' else 'outboundMainOnly'] = True
+            index += 1
         elif token in ['--no-wait', '--wait', '--queue', '--steer', '--json', '--no-color', '--no-headers', '--quiet', '-q', '--native-queue', '--no-notify-on-finish']:
             if token == '--native-queue': requires_plain = True
             index += 1
@@ -197,7 +207,7 @@ def parse_send(args):
         text.append(positional.pop())
     if len(positional) != 1 or len(text) != 1:
         raise ValueError('A notice needs one target and one text source')
-    return endpoint, positional[0], text[0], source, message_id, positions[0], requires_plain
+    return endpoint, positional[0], text[0], source, message_id, positions[0], requires_plain, restrictions, check_only
 
 
 class TargetUnavailableError(ValueError):
@@ -294,7 +304,7 @@ class Gate:
         parsed = parse_send(args)
         if parsed is None:
             return self.run(cli, args).returncode
-        endpoint, identifier, text, source, message_id, target_index, requires_plain = parsed
+        endpoint, identifier, text, source, message_id, target_index, requires_plain, restrictions, check_only = parsed
         supplied_endpoint = bool(endpoint)
         if not endpoint:
             home = os.environ.get('PASEO_HOME') or read_policy(self.policy).get('defaultHome')
@@ -312,6 +322,8 @@ class Gate:
             routes = policy.get('sshRoutes', {})
             if not isinstance(routes, dict):
                 raise ValueError('Invalid SSH send routes. No notice was sent.')
+            if any(not isinstance(item, str) or len(item) != 36 or str(uuid.UUID(item)) != item.lower() for item in routes):
+                raise ValueError('SSH route keys must be complete session UUIDs. No notice was sent.')
             matches = [key] if key in routes else [item for item in routes if key and item.startswith(key)]
             if len(matches) != 1:
                 raise
@@ -319,6 +331,19 @@ class Gate:
             bound[target_index] = matches[0]
             if not supplied_endpoint: bound = [*endpoint, *bound]
             return self.run(cli, bound).returncode
+        bound = list(args)
+        bound[target_index] = target['id']
+        if not supplied_endpoint: bound = [*endpoint, *bound]
+        if check_only: return self.run(cli, bound).returncode
+        if restrictions:
+            # A restricted cross-host message must pass the destination check before a Python hold.
+            checked = self.run(cli, [*bound, '--check-only', '--json'], capture_output=True, text=True, timeout=60)
+            if checked.returncode:
+                if checked.stdout: print(checked.stdout, end='')
+                if checked.stderr: print(checked.stderr, end='', file=sys.stderr)
+                return checked.returncode
+            if json.loads(checked.stdout).get('status') != 'allowed':
+                raise ValueError('The destination did not confirm the reporting-line check. No notice was sent.')
         with locked(self.store):
             if paused(read_policy(self.policy), target, self.parent_reader(cli, endpoint)):
                 if requires_plain or text.lstrip().startswith('/'):
@@ -326,19 +351,20 @@ class Gate:
                 if require_delivery:
                     raise ValueError('Provider paused. The required notice was not delivered.')
                 return self.hold(cli, endpoint, target, text, source, message_id,
-                                 notify_on_finish='--no-notify-on-finish' not in args)
+                                 notify_on_finish='--no-notify-on-finish' not in args, restrictions=restrictions)
         bound = list(args)
         bound[target_index] = target['id']
         if not supplied_endpoint: bound = [*endpoint, *bound]
         return self.run(cli, bound).returncode
 
-    def hold(self, cli, endpoint, target, text, source, message_id, notify_on_finish=True):
+    def hold(self, cli, endpoint, target, text, source, message_id, notify_on_finish=True, restrictions=None):
         identity = {'endpoint': endpoint, 'agentId': target['id']}
         # All launcher paths for this endpoint share one session record.
         key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         path = self.store / (key + '.json')
         sender = {'from': source, 'agent': os.environ.get('PASEO_AGENT_ID')}
         if not notify_on_finish: sender['notifyOnFinish'] = False
+        if restrictions: sender.update(restrictions)
         record = json.loads(path.read_text()) if path.exists() else {
             **identity, 'cli': str(Path(cli).absolute()), 'batches': []}
         if sum(len(batch['notices']) for batch in record['batches'] if batch['state'] == 'held') >= 1000:
@@ -411,6 +437,10 @@ class Gate:
                     args = [*record['endpoint'], 'send', record['agentId'], '--queue', '--no-wait', '--json', '--prompt-file', str(prompt)]
                     if batch['sender']['from']: args.extend(['--from', batch['sender']['from']])
                     if batch['sender'].get('notifyOnFinish') is False: args.append('--no-notify-on-finish')
+                    if batch['sender'].get('inboundOnly'): args.append('--inbound-only')
+                    if batch['sender'].get('outboundMainOnly'): args.append('--outbound-main-only')
+                    if batch['sender'].get('outboundServerOnly'): args.extend(['--outbound-server-only', batch['sender']['outboundServerOnly']])
+                    if batch['sender'].get('refusal'): args.extend(['--outbound-refusal', batch['sender']['refusal']])
                     env = dict(os.environ)
                     env.pop('PASEO_AGENT_ID', None)
                     if batch['sender']['agent']: env['PASEO_AGENT_ID'] = batch['sender']['agent']

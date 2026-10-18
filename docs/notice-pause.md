@@ -81,7 +81,7 @@ Keep the current direct exceptions until the daemon inheritance fix ships.
 ## Configured SSH sends
 
 Use `sshRoutes` in the host guard's policy file for automatic cross-host sends.
-Each key is a complete receiver ID. Prefixes must select one configured ID.
+Each key must be a complete session UUID. Short or option-like keys are refused. Prefixes must select one configured ID.
 The local daemon gets the first send. Only `AGENT_NOT_FOUND` permits an SSH attempt.
 Display text in `noticeRoutes` grants no routing authority.
 Missing routes, transport failures, ambiguous IDs, and reporting refusals never select another host.
@@ -120,10 +120,16 @@ Mini to MacBook:
 ```
 
 Both hosts need the current CLI and an existing trusted SSH key.
-The source daemon must support the `AGENT_NOT_FOUND` response code.
-Use the host launcher as `cli` so the destination applies its pause policy and local credentials.
+Both daemons must support `agentSendReportingLines`. The source must also support the `AGENT_NOT_FOUND` response code.
+Use the host launcher named `fulcra` as `cli` so the destination applies its pause policy and local credentials.
+Other executable names cause a visible warning because they can skip the Python pause guard.
 The source sends the prompt on SSH stdin and stamps the original chat and server ID with `--from`.
-The destination applies its normal reporting-line, hold, and pause checks.
+The source checks the stamped sender's own line before SSH starts.
+A selected `--host` cannot change a local sender's host identity.
+Without a matching outbound line, the destination can accept only its own child or direct-link relation.
+The destination checks that relation before a Python hold and again before daemon delivery.
+Role and qualified-host restrictions stay with held notices until delivery.
+The older host-link path already requires a retained child grant and checks that child relation again at handoff.
 SSH sends return the destination admission receipt. They do not wait for task completion.
 An SSH disconnect can hide an accepted send. Retain the draft and inspect before any retry.
 The relay never follows another route from the destination.

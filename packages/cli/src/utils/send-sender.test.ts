@@ -1,5 +1,8 @@
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { isChatProcess, resolveSender, type ProcessInfo } from "./send-sender";
+import { assertSenderDaemon, isChatProcess, resolveSender, type ProcessInfo } from "./send-sender";
 
 // Fulcra 0.2.8 reporting lines: the CLI says which chat sends. No stamp means the owner.
 
@@ -66,4 +69,23 @@ describe("send sender", () => {
     expect(isChatProcess(proc("node", "node /Users/d/app/server.js"))).toBe(false);
     expect(isChatProcess(proc("/bin/zsh"))).toBe(false);
   });
+});
+
+it("binds a stamped sender to its own daemon, even with another selected endpoint", async () => {
+  const home = await mkdtemp(join(tmpdir(), "sender-host-"));
+  try {
+    await writeFile(join(home, "server-id"), "own-host\n");
+    const sender = { agentId: "worker" };
+    await assertSenderDaemon({ sender, serverId: "own-host", env: { PASEO_HOME: home } });
+    await expect(
+      assertSenderDaemon({ sender, serverId: "selected-other-host", env: { PASEO_HOME: home } }),
+    ).rejects.toMatchObject({ code: "SENDER_HOST_MISMATCH" });
+    await assertSenderDaemon({
+      sender: { agentId: "remote", serverId: "original-host" },
+      serverId: "selected-other-host",
+      env: {},
+    });
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
 });

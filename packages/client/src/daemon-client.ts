@@ -523,6 +523,15 @@ export interface SendMessageOptions {
   sender?: SendAgentMessageRequest["sender"];
 }
 
+type MessageRouteInput = Extract<
+  SessionInboundMessage,
+  { type: "agent.message.route_check.request" }
+>["input"];
+type MessageRouteOutput = Extract<
+  SessionOutboundMessage,
+  { type: "agent.message.route_check.response" }
+>["payload"]["output"];
+
 export type NativeQueueReceipt = NonNullable<
   SendAgentMessageResponseMessage["payload"]["nativeReceipt"]
 >;
@@ -3948,6 +3957,20 @@ export class DaemonClient {
   // ============================================================================
   // Agent Interaction
   // ============================================================================
+
+  async checkAgentMessageRoute<K extends MessageRouteInput["kind"]>(
+    input: Extract<MessageRouteInput, { kind: K }>,
+  ): Promise<Extract<MessageRouteOutput, { kind: K }>> {
+    if (this.lastServerInfoMessage?.features?.agentSendReportingLines !== true)
+      throw new Error("Update the host to check cross-host reporting lines.");
+    const response = await this.sendCorrelatedSessionRequest({
+      message: { type: "agent.message.route_check.request", input },
+      responseType: "agent.message.route_check.response",
+    });
+    if (response.output.kind !== input.kind)
+      throw new Error("Unexpected reporting-line check response.");
+    return response.output as Extract<MessageRouteOutput, { kind: K }>;
+  }
 
   private requireAgentMessageQueue(options?: SendMessageOptions): void {
     // COMPAT(agentMessageQueue): added in v0.2.18; remove after 2027-04-12 once the daemon floor includes v0.2.18.

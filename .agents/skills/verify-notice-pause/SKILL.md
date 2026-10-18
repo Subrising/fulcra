@@ -76,6 +76,12 @@ Use an existing trusted SSH key. Never put a password in the route or command.
 Require a local hit without SSH, a remote `held` receipt, and a remote reporting-line refusal.
 Require an absent receiver to name both checked hosts.
 Require zero provider inputs and exactly one retained paused marker on the destination.
+Give the source worker a lead. Require the same refusal for local and remote Main assistant sends.
+Run that refusal through the destination Python pause launcher. Require no saved notice for the refused worker.
+Require an allowed source lead to receive `held` from that launcher.
+Check an injection-like prompt through a real remote shell. Require exact text and no shell side effect.
+Require a short or option-like route key to fail before SSH.
+Check the legacy sent pause receipt, native CLI warning, and stamped `--host` identity refusal.
 Do not repeat an uncertain send. Inspect its original queue and receipt first.
 Archive the test sessions and close the isolated daemons after the check.
 

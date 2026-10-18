@@ -657,3 +657,80 @@ test("paused PC completion notices cross the socket without starting Claude", as
     await rm(root, { recursive: true, force: true });
   }
 }, 30_000);
+
+test("source and destination daemons keep the same worker-to-Main refusal before a paused hold", async () => {
+  const source = await createTestPaseoDaemon({ mcpEnabled: false });
+  let destination: TestPaseoDaemon | undefined;
+  let from: DaemonClient | undefined;
+  let to: DaemonClient | undefined;
+  try {
+    destination = await createTestPaseoDaemon({ mcpEnabled: false });
+    const sm = source.daemon.agentManager;
+    const dm = destination.daemon.agentManager;
+    const lead = await sm.createAgent(
+      { provider: "codex", cwd: source.paseoHome, modeId: "full-access", title: "Lead" },
+      undefined,
+      {},
+    );
+    const worker = await sm.createAgent(
+      { provider: "codex", cwd: source.paseoHome, modeId: "full-access", title: "Worker" },
+      undefined,
+      { labels: { [REPORTS_TO_LABEL]: lead.id } },
+    );
+    const main = await dm.createAgent(
+      {
+        provider: "codex",
+        cwd: destination.paseoHome,
+        modeId: "full-access",
+        title: "Main assistant",
+      },
+      undefined,
+      {},
+    );
+    await dm.setLabels(main.id, { [SEAT_LABEL]: "main-assistant" });
+    from = new DaemonClient({ url: `ws://127.0.0.1:${source.port}/ws` });
+    to = new DaemonClient({ url: `ws://127.0.0.1:${destination.port}/ws` });
+    await Promise.all([from.connect(), to.connect()]);
+    const metadata = await from.checkAgentMessageRoute({ kind: "metadata" });
+    const decision = await from.checkAgentMessageRoute({
+      kind: "outbound",
+      senderId: worker.id,
+      targetId: main.id,
+    });
+    expect(decision).toMatchObject({
+      inboundOnly: true,
+      refusal: `Send this to your lead, Lead (${lead.id.slice(0, 8)}).`,
+    });
+    const sender = {
+      agentId: worker.id,
+      serverId: metadata.serverId,
+      inboundOnly: true as const,
+      refusal: decision.refusal,
+    };
+    const admission = await to.checkAgentMessageRoute({
+      kind: "inbound",
+      agentId: MAIN_ASSISTANT_REF,
+      sender,
+    });
+    expect(admission).toEqual({ kind: "inbound", allowed: false, reason: decision.refusal });
+    const start = vi.spyOn(main.session!, "startTurn");
+    await writeFile(
+      destination.daemon.agentStorage.noticePausePath,
+      JSON.stringify({ pausedProviders: ["codex"] }),
+    );
+    await expect(
+      to.sendAgentMessage(MAIN_ASSISTANT_REF, "must not hold or start", { sender }),
+    ).rejects.toThrow(decision.refusal);
+    expect(start).not.toHaveBeenCalled();
+    expect(
+      await readFile(path.join(destination.paseoHome, "held-messages.json"), "utf8").catch(
+        () => "[]",
+      ),
+    ).not.toContain("must not hold or start");
+  } finally {
+    await from?.close();
+    await to?.close();
+    await destination?.close();
+    await source.close();
+  }
+}, 30_000);

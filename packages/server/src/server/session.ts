@@ -166,6 +166,8 @@ import {
   lineStoreOf,
   resolveRoleTarget,
   NO_MAIN_ASSISTANT,
+  decideOutboundSend,
+  findRoleHolder,
   type LineStore,
 } from "./reporting-lines.js";
 import { noteAgentMessage } from "./agent-message-log.js";
@@ -3702,6 +3704,12 @@ export class Session {
   }
 
   private dispatchAgentLifecycleMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    if (msg.type === "agent.message.route_check.request")
+      return this.handleAgentMessageRouteCheck(msg);
+    return this.dispatchAgentLifecycleOperation(msg);
+  }
+
+  private dispatchAgentLifecycleOperation(msg: SessionInboundMessage): Promise<void> | undefined {
     switch (msg.type) {
       case "fetch_agents_request":
         return this.handleFetchAgents(msg);
@@ -10108,7 +10116,9 @@ export class Session {
   }
 
   private async parentSendNeedsNotice(
-    sender: { agentId: string; serverId?: string },
+    sender: NonNullable<
+      Extract<SessionInboundMessage, { type: "send_agent_message_request" }>["sender"]
+    >,
     agentId: string,
   ): Promise<boolean> {
     const decision = await decideSend(
@@ -10217,6 +10227,41 @@ export class Session {
       return true;
     }
     return this.holdPausedAgentMessage(msg, agentId);
+  }
+
+  private async handleAgentMessageRouteCheck(
+    msg: Extract<SessionInboundMessage, { type: "agent.message.route_check.request" }>,
+  ): Promise<void> {
+    const input = msg.input;
+    const store = this.lineStore();
+    let output: Extract<
+      SessionOutboundMessage,
+      { type: "agent.message.route_check.response" }
+    >["payload"]["output"];
+    if (input.kind === "metadata") {
+      const holder = findRoleHolder(await store.list(), "main-assistant");
+      output = {
+        kind: "metadata",
+        serverId: this.localServerId!,
+        mainAssistantId: holder && "id" in holder ? holder.id : null,
+      };
+    } else if (input.kind === "outbound") {
+      output = {
+        kind: "outbound",
+        ...(await decideOutboundSend(store, { ...input, localServerId: this.localServerId })),
+      };
+    } else {
+      const target = await this.resolveSendTarget(input.agentId);
+      if (!target.ok) output = { kind: "inbound", allowed: false, reason: target.error };
+      else {
+        const reason = await this.reportingLineRefusal(input.sender, target.agentId);
+        output = { kind: "inbound", allowed: !reason, ...(reason ? { reason } : {}) };
+      }
+    }
+    this.emit({
+      type: "agent.message.route_check.response",
+      payload: { requestId: msg.requestId, output },
+    });
   }
 
   private async holdPausedAgentMessage(

@@ -14,11 +14,16 @@ import { describeDaemonTarget, type DaemonTarget } from "../../utils/daemon-targ
 
 export function daemonStatusCommand(): Command {
   return addJsonAndDaemonHostOptions(
-    new Command("status").description("Observe the selected daemon and its published endpoint"),
+    new Command("status")
+      .description("Observe the selected daemon and its published endpoint")
+      .option("--send-routing", "Read reporting-line metadata for an SSH send"),
   ).action(withOutput(runStatusCommand));
 }
 
-export async function runStatusCommand(options: CommandOptions, _command: Command) {
+export async function runStatusCommand(
+  options: CommandOptions & { sendRouting?: boolean },
+  _command: Command,
+) {
   const target = options.daemonTarget;
   const instance = target.kind === "instance" ? await readDaemonInstance(target.home) : null;
   const local =
@@ -27,7 +32,7 @@ export async function runStatusCommand(options: CommandOptions, _command: Comman
       : { host: describeDaemonTarget(target) };
   const observed =
     target.kind === "endpoint" || instance?.listen
-      ? await probeDaemonStatus(target, instance, local)
+      ? await probeDaemonStatus(target, instance, local, options.sendRouting === true)
       : { connectedDaemon: "not_probed" };
   const data: Record<string, unknown> = { ...local, ...observed };
   return {
@@ -54,6 +59,7 @@ async function probeDaemonStatus(
   target: DaemonTarget,
   instance: Awaited<ReturnType<typeof readDaemonInstance>>,
   local: Record<string, unknown>,
+  sendRouting = false,
 ) {
   let connectedDaemon = "unreachable";
   let note: string | undefined;
@@ -90,7 +96,11 @@ async function probeDaemonStatus(
         "Supervisor exited or was replaced during status observation.",
       );
     const info = client.getLastServerInfoMessage();
-    live = { serverId: info?.serverId, daemonVersion: info?.version };
+    live = {
+      serverId: info?.serverId,
+      daemonVersion: info?.version,
+      ...(await routingStatus(client, sendRouting)),
+    };
     connectedDaemon = client.isConnected ? "reachable" : "unreachable";
     if (!status) {
       const failure = toCommandError(requestError);
@@ -139,4 +149,11 @@ function localStatus(home: string, instance: Awaited<ReturnType<typeof readDaemo
     desktopManaged: instance?.desktopManaged === true,
     logPath: daemonLogPath(home),
   };
+}
+
+async function routingStatus(
+  client: Awaited<ReturnType<typeof connectToDaemon>>,
+  enabled: boolean,
+) {
+  return enabled ? { sendRouting: await client.checkAgentMessageRoute({ kind: "metadata" }) } : {};
 }
