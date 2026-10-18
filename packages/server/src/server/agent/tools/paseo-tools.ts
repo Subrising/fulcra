@@ -2469,6 +2469,151 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     },
   );
 
+  // FULCRA(orchestration): FU-349 approve-before-close. The host keeps the assignment; the model only asks.
+  const workStore = () => {
+    const store = agentManager.workAcceptance;
+    if (!store) throw new Error("Approve-before-close is not configured on this daemon.");
+    return store;
+  };
+  const workResult = (value: unknown) => ({
+    content: [],
+    structuredContent: ensureValidJson({ success: true, result: value as never }),
+  });
+  const workOutput = { success: z.boolean(), result: z.unknown() };
+
+  registerTool(
+    "work_assign",
+    {
+      title: "Open work assignment",
+      description:
+        "Record a worker's goal before work starts. The worker cannot be archived or closed until its result is verified and approved. Routine work is approved by its passing check; milestone work by the assigning lead or the owner; a creative look by the owner.",
+      inputSchema: {
+        item: z.string().min(1),
+        project: z.string().min(1),
+        workerId: z.string().min(1),
+        goal: z.string().min(1),
+        acceptance: z.array(z.string()).default([]),
+        approvalClass: z.enum(["routine", "milestone", "creative"]).default("routine"),
+        requestId: z.string().min(1),
+        turnLimit: z.number().int().positive().optional(),
+      },
+      outputSchema: workOutput,
+    },
+    async (input) => {
+      const worker =
+        agentManager.getAgent(input.workerId) ?? (await agentStorage.get(input.workerId));
+      return workResult(
+        await workStore().open({
+          ...input,
+          leadId: callerAgentId,
+          cwd: worker?.cwd,
+        }),
+      );
+    },
+  );
+
+  registerTool(
+    "work_submit",
+    {
+      title: "Submit work result",
+      description:
+        "The worker submits its result and check evidence. Failed checks keep the worker running. A passing result waits for approval and starts no further turns.",
+      inputSchema: {
+        candidateKind: z.enum(["commit", "artifact"]),
+        candidateId: z.string().min(1),
+        candidatePath: z.string().optional(),
+        passed: z.boolean(),
+        checks: z.array(z.object({ command: z.string(), exitCode: z.number().int() })),
+        evidence: z.string(),
+      },
+      outputSchema: workOutput,
+    },
+    async (input) => {
+      if (!callerAgentId) throw new Error("Only the assigned worker can submit its result.");
+      const submitted = await workStore().submit(
+        callerAgentId,
+        { kind: input.candidateKind, id: input.candidateId, path: input.candidatePath },
+        { passed: input.passed, checks: input.checks, evidence: input.evidence },
+      );
+      return workResult(submitted);
+    },
+  );
+
+  registerTool(
+    "work_review",
+    {
+      title: "Review work result",
+      description:
+        "Approve or reject a submitted result. Approval names the exact candidate and evidence digest. Rejection sends the findings to the same worker with a new finish notice.",
+      inputSchema: {
+        item: z.string().min(1),
+        decision: z.enum(["approve", "reject"]),
+        candidateId: z.string().optional(),
+        evidenceDigest: z.string().optional(),
+        milestone: z.string().default("milestone"),
+        findings: z.string().optional(),
+      },
+      outputSchema: workOutput,
+    },
+    async (input) => {
+      const store = workStore();
+      const reviewer = agentManager.currentReviewer(callerAgentId);
+      if (input.decision === "approve") {
+        if (!input.candidateId || !input.evidenceDigest)
+          throw new Error("Approval needs candidateId and evidenceDigest.");
+        return workResult(
+          await store.approve(input.item, reviewer, {
+            candidateId: input.candidateId,
+            evidenceDigest: input.evidenceDigest,
+            milestone: input.milestone,
+          }),
+        );
+      }
+      if (!input.findings) throw new Error("Rejection needs findings.");
+      const rejected = await store.reject(input.item, reviewer, input.findings);
+      // The same worker gets the findings and one new finish notice for the lead.
+      const noticeParent = rejected.leadId;
+      let rearmed: string | null = null;
+      try {
+        if (noticeParent)
+          rearmed = await armPromptFinishNotification({
+            agentManager,
+            agentStorage,
+            childAgentId: rejected.workerId,
+            callerAgentId: noticeParent,
+            forNextTurn: true,
+            logger: childLogger,
+          });
+        await sendPromptToAgent({
+          agentManager,
+          agentStorage,
+          agentId: rejected.workerId,
+          prompt: `Review of ${rejected.item} rejected this result. Fix these findings, run the checks again, then submit the new result.\n\n${input.findings}`,
+          logger: childLogger,
+        });
+      } catch (error) {
+        if (rearmed) await agentStorage.settleFinishNotice(rejected.workerId, rearmed, "cancelled");
+        throw error;
+      }
+      return workResult(rejected);
+    },
+  );
+
+  registerTool(
+    "work_cancel",
+    {
+      title: "Cancel work assignment",
+      description:
+        "Cancel an assignment. This records CANCELLED, never DONE, and lets the worker be archived. Only the assigning lead or the owner can cancel.",
+      inputSchema: { item: z.string().min(1), reason: z.string().min(1) },
+      outputSchema: workOutput,
+    },
+    async ({ item, reason }) =>
+      workResult(
+        await workStore().cancel(item, agentManager.currentReviewer(callerAgentId), reason),
+      ),
+  );
+
   registerTool(
     "archive_agent",
     {

@@ -255,6 +255,7 @@ import {
   type CreateAgentCommandDependencies,
 } from "./agent/create-agent/create.js";
 import { archiveAgentCommand, cancelAgentRunCommand } from "./agent/lifecycle-command.js";
+import { WorkAcceptanceStore, liveCandidateId } from "./agent/work-acceptance.js";
 import { CreateAgentLifecycleDispatch } from "./agent/create-agent-lifecycle-dispatch.js";
 import {
   HubRelationshipController,
@@ -1150,6 +1151,10 @@ export async function createPaseoDaemon(
   const agentManager = new AgentManager({
     costOutboxFile: path.join(config.paseoHome, "usage", "pending-costs.json"),
     archiveServerId: serverId,
+    workAcceptance: new WorkAcceptanceStore({
+      file: path.join(config.paseoHome, "work-acceptance", "assignments.json"),
+      resolveCandidate: liveCandidateId,
+    }),
     reportRegistryFile: path.join(config.paseoHome, "agent-requests", "report-authority.json"),
     reportGrantDirectory: getNativeReportGrantDirectory(distribution),
     durableTimelineStore,
@@ -1169,6 +1174,10 @@ export async function createPaseoDaemon(
       resolvePaseoToolPolicy(provider, daemonConfigStore.get().providers),
     logger,
   });
+  // FU-349: a close interrupted by a restart finishes once its worker is archived. Nothing else is accepted by a restart.
+  void agentManager.workAcceptance
+    ?.recover((id) => Boolean(agentStorage.getCached(id)?.archivedAt))
+    .catch((error) => logger.warn({ err: error }, "Work acceptance recovery failed"));
   daemonConfigStore.setDispatchOwnerAdmission(() => agentManager.assertDispatchOwner());
   // Display-only background-job sample for providers without a task protocol (MULTIHOST-DESIGN §6).
   agentManager.startBackgroundWorkSampling();
