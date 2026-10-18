@@ -31,6 +31,26 @@ test("a kept or invalid receipt cannot claim removal", async () => {
 });
 
 test("a positive removal receipt reports only the completed cleanup", async () => {
-  mocks.execute.mockResolvedValue({ stdout: '{"action":"REMOVED"}' });
+  mocks.execute.mockResolvedValue({ stdout: '{"action":"REMOVED","policyVersion":2}' });
   expect(await removeWithCleanupGuard("/tmp/fixture-worktree")).toBe(true);
+});
+
+test("B3 rejects old removal receipts and requires the exclusive-claim policy version", async () => {
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  mocks.execute.mockResolvedValue({ stdout: '{"action":"REMOVED"}' });
+  expect(await removeWithCleanupGuard("/tmp/fixture-worktree")).toBe(false);
+  const args = mocks.execute.mock.calls[0][1] as string[];
+  expect(args).toContain("--require-policy-version");
+  expect(args[args.indexOf("--require-policy-version") + 1]).toBe("2");
+});
+
+test("M5 sends the original path to the guard without collapsing a link and parent traversal", async () => {
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  mocks.execute.mockResolvedValue({
+    stdout: '{"action":"KEEP","reason":"parent traversal","policyVersion":2}',
+  });
+  const requested = "/tmp/fixture-root/link/../target";
+  expect(await removeWithCleanupGuard(requested)).toBe(false);
+  const args = mocks.execute.mock.calls[0][1] as string[];
+  expect(args[args.indexOf("--path") + 1]).toBe(requested);
 });

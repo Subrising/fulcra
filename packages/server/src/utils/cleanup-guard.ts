@@ -16,11 +16,26 @@ export async function removeWithCleanupGuard(worktree: string): Promise<boolean>
   try {
     const { stdout } = await execute(
       process.platform === "win32" ? "py" : "python3",
-      [guard, "remove", "--path", worktree, "--kind", "worktree", "--root", dirname(worktree)],
+      [
+        guard,
+        "remove",
+        "--path",
+        worktree,
+        "--kind",
+        "worktree",
+        "--root",
+        dirname(worktree),
+        "--require-policy-version",
+        "2",
+      ],
       { timeout: 120_000, maxBuffer: 65536 },
     );
-    const receipt = JSON.parse(stdout) as { action?: unknown; reason?: unknown };
-    if (receipt.action === "REMOVED") return true;
+    const receipt = JSON.parse(stdout) as {
+      action?: unknown;
+      reason?: unknown;
+      policyVersion?: unknown;
+    };
+    if (receipt.policyVersion === 2 && receipt.action === "REMOVED") return true;
     return keepWorktree(
       worktree,
       typeof receipt.reason === "string" ? receipt.reason : "The guard kept the worktree.",

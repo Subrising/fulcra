@@ -1083,6 +1083,12 @@ export async function deletePaseoWorktree({
   if (!worktreePath && !worktreeSlug) {
     throw new Error("worktreePath or worktreeSlug is required");
   }
+  if (
+    [worktreePath, worktreeSlug, worktreesRoot].some((value) => value?.split(/[\\/]/).includes(".."))
+  ) {
+    console.warn("KEEP cleanup: The original path has parent traversal.");
+    return false;
+  }
 
   // Resolve the worktrees-root. With a repo cwd we hash it the normal way; if
   // git has forgotten about the worktree we expect the caller to hand us the
@@ -1114,7 +1120,8 @@ export async function deletePaseoWorktree({
   }
 
   // The shared guard owns checks and removal. No teardown or force fallback can bypass it.
-  return removeWithCleanupGuard(resolvedWorktree);
+  // Keep the original path. Normalization must not hide a link before the guard checks it.
+  return removeWithCleanupGuard(requestedPath);
 }
 
 export async function rollbackCreatedPaseoWorktree(
