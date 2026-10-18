@@ -2203,7 +2203,13 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
               receiver?.persistence?.sessionId ?? null,
               undefined,
               () => {
-                if (noticePaused(agentStorage.noticePausePath, agentManager.getAgent(agentId)))
+                if (
+                  noticePaused(
+                    agentStorage.noticePausePath,
+                    agentManager.getAgent(agentId),
+                    (id) => agentManager.getAgent(id) ?? agentStorage.getCached(id),
+                  )
+                )
                   throw new NoticePausedError();
               },
             )
@@ -2262,7 +2268,11 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         if (!callerAgentId) return false;
         if (agentManager.hasInFlightRun(agentId)) return true;
         const target = agentManager.getAgent(agentId) ?? (await agentStorage.get(agentId));
-        return noticePaused(agentStorage.noticePausePath, target);
+        return noticePaused(
+          agentStorage.noticePausePath,
+          target,
+          (id) => agentManager.getAgent(id) ?? agentStorage.getCached(id),
+        );
       };
       if (await shouldQueuePrompt()) return queueForTurnEnd(callerAgentId!);
       try {

@@ -12,7 +12,11 @@ The daemon reads `pause.json` beside its agent storage directory, normally `$PAS
 }
 ```
 
-Exceptions use complete session IDs. A Claude pause leaves Codex delivery active.
+Exceptions use complete session IDs. An exception also includes its children and later descendants.
+The guard reads each parent through `inspect`; list rows do not include parent labels.
+The daemon reads live labels or its initialized storage cache at admission and final handoff.
+Each check caches parent reads. A failed read, missing ancestor, or parent cycle keeps the notice paused.
+A Claude pause leaves Codex delivery active.
 Missing policy files mean no pause. Invalid policy files stop delivery.
 
 Plain sends enter the existing durable message queue during a pause.

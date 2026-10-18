@@ -4084,7 +4084,7 @@ describe("send_agent_prompt MCP tool", () => {
           agentId: child.id,
           prompt: "do not reopen",
         }),
-      ).rejects.toThrow("The receiver is closed or archived");
+      ).rejects.toThrow("session closed: reload it or start a new worker");
       expect(agentManager.getAgent(child.id)).toBeNull();
       expect((await storage.get(child.id))?.lastStatus).toBe("closed");
     } finally {
