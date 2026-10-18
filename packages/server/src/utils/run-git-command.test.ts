@@ -227,6 +227,20 @@ async function loadRunGitCommand(concurrency: number) {
   return import("./run-git-command.js");
 }
 
+vi.mock("@getpaseo/plugin/server/git", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@getpaseo/plugin/server/git")>();
+  const childProcess = await import("node:child_process");
+  return {
+    ...actual,
+    // Runner tests own fake lifecycles. Never install real SDK timers around fake PIDs.
+    spawnGitProcess: (args: string[], options: import("node:child_process").SpawnOptions) =>
+      childProcess.spawn("git", args, options),
+    terminateGitProcess: async (child: { kill: (signal: string) => void }) => {
+      child.kill("SIGKILL");
+    },
+  };
+});
+
 describe("runGitCommand", () => {
   beforeEach(() => {
     fakeSpawnController.reset();

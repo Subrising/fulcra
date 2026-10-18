@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import * as pluginSharedRuntime from "@getpaseo/plugin";
 import * as pluginProviderRuntime from "@getpaseo/plugin/server/provider";
+import * as pluginGitRuntime from "@getpaseo/plugin/server/git";
 import * as pluginAcpRuntime from "@getpaseo/plugin/server/acp";
 import * as pluginUsageRuntime from "@getpaseo/plugin/server/usage";
 import * as pluginServerRuntime from "@getpaseo/plugin/server";
@@ -17,6 +18,7 @@ function runtimeRequire(name: string): unknown {
   if (name === "@getpaseo/plugin") return pluginSharedRuntime;
   if (name === "@getpaseo/plugin/server") return pluginServerRuntime;
   if (name === "@getpaseo/plugin/server/provider") return pluginProviderRuntime;
+  if (name === "@getpaseo/plugin/server/git") return pluginGitRuntime;
   if (name === "@getpaseo/plugin/server/acp") return pluginAcpRuntime;
   if (name === "@getpaseo/plugin/server/usage") return pluginUsageRuntime;
   if (name === "zod") return zod;
