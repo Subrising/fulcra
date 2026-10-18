@@ -9919,6 +9919,8 @@ export class AgentManager {
     this.backgroundWorkSampler = new BackgroundWorkSampler({
       listTargets: () =>
         [...this.agents.values()].flatMap((agent) => {
+          // Claude publishes its own task protocol. Its PID is exposed for resource ownership only.
+          if (agent.provider === "claude") return [];
           const pid = agent.session.getProcessId?.() ?? null;
           return pid === null ? [] : [{ agentId: agent.id, pid, idle: agent.lifecycle === "idle" }];
         }),

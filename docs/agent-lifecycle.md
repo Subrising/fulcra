@@ -46,6 +46,30 @@ work is gone. Report that exit as a turn failure so the agent lands in `error` w
 Claude and OMP report exits between turns. OMP relaunches from its session file on the next prompt;
 the unfinished turn is lost.
 
+### Session resources
+
+The daemon records observed Claude and Codex child processes on macOS. Each record binds the
+child PID and birth time to its session generation. Close and archive capture the tree before
+the provider exits. They then end retained children, including detached children whose parent
+has exited. A failed cleanup retains the ownership record for retry.
+
+Every 30 minutes, the daemon checks recorded resources whose owners are closed or archived.
+A resource must be older than 30 minutes. Live or unknown owners, changed process identities,
+protected apps, the daemon, and `dev.fulcra.*` services remain protected. The sweep never selects
+targets through a process-name search. Every attempted and completed signal has a private log
+beside `runtime/session-resources.json`.
+
+An explicit successful `xcrun simctl boot <UUID>` shell event can establish simulator ownership.
+The device must be shut down before that command. Cleanup checks its retained manager process
+identity and other recorded session users before shutdown. Pre-booted and rebooted devices stay.
+Commands hidden inside scripts or compound shell commands cannot establish this proof. Such
+scripts must shut down their own simulators with an exit handler. Processes that detach between
+samples without an observed parent link also stay unowned. Existing unrecorded leftovers require
+an owner check; this change does not adopt them.
+
+Daemon shutdown retains the existing detached-job policy. Windows process collection remains
+disabled until its executable and service protections have native verification.
+
 ### Quiet MCP configuration refresh
 
 For an authorized connection update on a retained session, use the client agent handle's

@@ -124,6 +124,7 @@ export class SessionResources {
   private tail: Promise<unknown> = Promise.resolve();
   private sampleTimer: ReturnType<typeof setInterval> | null = null;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
+  private sampling = false;
   private readonly boots = new Map<string, { root: Root; udid: string; shutdown: boolean }>();
 
   constructor(options: Options) {
@@ -133,7 +134,11 @@ export class SessionResources {
   }
   start(): void {
     if (this.sampleTimer) return;
-    this.sampleTimer = setInterval(() => { void this.sample().catch(() => this.warn()); }, 5_000);
+    this.sampleTimer = setInterval(() => {
+      if (this.sampling) return;
+      this.sampling = true;
+      void this.sample().catch(() => this.warn()).finally(() => { this.sampling = false; });
+    }, 5_000);
     this.sweepTimer = setInterval(() => { void this.sweep().catch(() => this.warn()); }, ORPHAN_INTERVAL_MS);
     this.sampleTimer.unref(); this.sweepTimer.unref();
   }
@@ -162,6 +167,7 @@ export class SessionResources {
       const roots = this.options.roots();
       if (roots.length === 0) return;
       const rows = await this.read(); const ledger = await this.load();
+      const previous = JSON.stringify(ledger);
       const currentRoots = this.options.roots();
       const byPid = new Map(rows.map((row) => [row.pid, row]));
       ledger.processes = ledger.processes.filter((record) => {
@@ -187,7 +193,7 @@ export class SessionResources {
           }
         }
       }
-      await this.save(ledger);
+      if (JSON.stringify(ledger) !== previous) await this.save(ledger);
     });
   }
 
@@ -224,6 +230,14 @@ export class SessionResources {
   }
   private async stopProcesses(ledger: Ledger, admitted: (record: ProcessRecord) => boolean): Promise<void> {
     const signaled: ProcessRecord[] = [];
+    if (!ledger.processes.some(admitted)) return;
+    const current = new Map((await this.read()).map((row) => [row.pid, row]));
+    ledger.processes = ledger.processes.filter((record) => {
+      if (!admitted(record)) return true;
+      const row = current.get(record.pid);
+      return row && !row.zombie && row.birth === record.birth;
+    });
+    await this.save(ledger);
     const records = ledger.processes;
     for (let index = records.length - 1; index >= 0; index -= 1) {
       const record = records[index]!;

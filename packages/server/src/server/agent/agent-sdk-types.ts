@@ -763,8 +763,9 @@ export interface AgentSession {
   subscribe(callback: (event: AgentStreamEvent) => void): () => void;
   streamHistory(): AsyncGenerator<AgentStreamEvent>;
   /**
-   * The provider process's pid, for the display-only background-job sample of providers without a
-   * task protocol (agent/background-work). Absent or null when there is no such process.
+   * The current provider process PID. Background display and session resource capture use it.
+   * A PID alone never authorizes a stop; resource cleanup retains and rechecks birth identities.
+   * Absent or null when there is no attached process.
    */
   getProcessId?(): number | null;
   getRuntimeInfo(): Promise<AgentRuntimeInfo>;
