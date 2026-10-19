@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RootErrorFallback } from "./root-error-boundary";
 
 const { runtime, theme } = vi.hoisted(() => ({
-  runtime: { breakpoint: "xs" },
+  runtime: { breakpoint: "xs", screen: { width: 1440, height: 900 } },
   theme: {
     spacing: { 2: 8, 3: 12, 4: 16, 6: 24, 8: 32 },
     borderWidth: { 1: 1 },

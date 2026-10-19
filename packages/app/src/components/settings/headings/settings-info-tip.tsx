@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Pressable, Text } from "react-native";
 import { useTranslation } from "react-i18next";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { Info } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -24,6 +25,7 @@ interface SettingsInfoTipProps {
  */
 export function SettingsInfoTip({ title, info, testID }: SettingsInfoTipProps) {
   const { t } = useTranslation();
+  const touch = useTouchTargets();
   return (
     <Tooltip delayDuration={0} enabledOnDesktop enabledOnMobile>
       <TooltipTrigger asChild>
@@ -32,7 +34,7 @@ export function SettingsInfoTip({ title, info, testID }: SettingsInfoTipProps) {
           accessibilityLabel={t("settings.groupInfo", { title })}
           testID={testID}
           hitSlop={8}
-          style={styles.button}
+          style={[styles.button, touch && touchTargetStyles.iconButton]}
         >
           <ThemedInfo size={ICON_SIZE.sm} uniProps={mutedIconMapping} />
         </Pressable>

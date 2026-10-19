@@ -70,6 +70,7 @@ import {
   type CommandCenterWorkspaceResult,
 } from "./results";
 import { useWorkspaceFileSearch } from "./workspace-file-search";
+import { TOUCH_TARGET, useTouchTargets } from "@/hooks/use-touch-targets";
 
 const ThemedBottomSheetTextInput = withUnistyles(TextInput, (theme) => ({
   placeholderTextColor: theme.colors.foregroundMuted,
@@ -284,14 +285,16 @@ function useCommandCenterState(): CommandCenterState {
     () => buildContributionSections(snapshot.contributions, query),
     [query, snapshot.contributions],
   );
+  const touch = useTouchTargets();
   const projection = useMemo(
     () =>
       projectCommandCenterRows(
         scope === "files"
           ? fileSections
           : [...contributionSections, ...fileSections, ...builtInSections],
+        touch ? TOUCH_TARGET : 0,
       ),
-    [builtInSections, contributionSections, fileSections, scope],
+    [builtInSections, contributionSections, fileSections, scope, touch],
   );
   const resolvedActiveId = preserveActiveResultId(activeId, projection.selectableResults);
 
@@ -386,6 +389,7 @@ interface ResultRowProps {
 }
 
 const ResultRow = memo(function ResultRow({ result, active, onSelect }: ResultRowProps) {
+  const touch = useTouchTargets();
   const press = useCallback(() => onSelect(result), [onSelect, result]);
   const choice =
     result.kind === "contribution" && result.contribution.presentation.kind === "choice"
@@ -402,6 +406,7 @@ const ResultRow = memo(function ResultRow({ result, active, onSelect }: ResultRo
   const style = useCallback(
     ({ hovered, pressed }: PressableStateCallbackType & { hovered?: boolean }) => [
       styles.row,
+      touch && styles.touchRow,
       (result.kind === "agent" ||
         result.kind === "workspace" ||
         (result.kind === "contribution" &&
@@ -410,7 +415,7 @@ const ResultRow = memo(function ResultRow({ result, active, onSelect }: ResultRo
         styles.tallRow,
       (Boolean(hovered) || pressed || active) && styles.activeRow,
     ],
-    [active, result],
+    [active, result, touch],
   );
   return (
     <Pressable
@@ -578,6 +583,7 @@ export function CommandCenter() {
   const { t } = useTranslation();
   const state = useCommandCenterState();
   const isCompact = useIsCompactFormFactor();
+  const touch = useTouchTargets();
   const showBottomSheet = isCompact && isNative;
   const modalLayer = useGlobalWebOverlayLayer("modal", isWeb && state.open && !showBottomSheet);
   const listRef = useRef<FlatList<CommandCenterListRow>>(null);
@@ -750,7 +756,7 @@ export function CommandCenter() {
                 ? t("shell.commandCenter.filePlaceholder")
                 : t("shell.commandCenter.placeholder")
             }
-            style={[styles.input, styles.growingInput]}
+            style={[styles.input, styles.growingInput, touch && styles.touchInput]}
             autoCapitalize="none"
             autoCorrect={false}
             autoFocus
@@ -786,7 +792,7 @@ export function CommandCenter() {
                     ? t("shell.commandCenter.filePlaceholder")
                     : t("shell.commandCenter.placeholder")
                 }
-                style={[styles.input, styles.growingInput]}
+                style={[styles.input, styles.growingInput, touch && styles.touchInput]}
                 autoCapitalize="none"
                 autoCorrect={false}
                 autoFocus
@@ -879,6 +885,7 @@ const styles = StyleSheet.create((theme) => ({
     outlineWidth: 0,
   },
   growingInput: { flex: 1, minWidth: 0 },
+  touchInput: { minHeight: TOUCH_TARGET },
   searchRow: { flexDirection: "row", alignItems: "center", gap: theme.spacing[2] },
   fileSearchStatus: { width: 14, height: 14, alignItems: "center", justifyContent: "center" },
   scopeChip: {
@@ -914,6 +921,7 @@ const styles = StyleSheet.create((theme) => ({
     backgroundColor: theme.colors.border,
   },
   row: { height: 36, paddingHorizontal: theme.spacing[4], paddingVertical: theme.spacing[2] },
+  touchRow: { height: TOUCH_TARGET, justifyContent: "center" },
   tallRow: { height: 56 },
   activeRow: { backgroundColor: theme.colors.surface1 },
   rowContent: {

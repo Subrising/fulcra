@@ -1,5 +1,6 @@
 import { memo, useCallback, useMemo, useState, type ReactElement } from "react";
 import { useTranslation } from "react-i18next";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { Text, View } from "react-native";
 import { FileText, Layers, MessageSquare, Undo2 } from "lucide-react-native";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
@@ -81,9 +82,14 @@ export const RewindMenu = memo(function RewindMenu({
     [isLocked, onRewind, rewoundText],
   );
 
+  const touch = useTouchTargets();
   const triggerStyle = useCallback(
-    () => [styles.trigger, isLocked ? styles.triggerDisabled : null],
-    [isLocked],
+    () => [
+      styles.trigger,
+      isLocked ? styles.triggerDisabled : null,
+      touch && touchTargetStyles.iconButton,
+    ],
+    [isLocked, touch],
   );
 
   const tooltipContent = useMemo(

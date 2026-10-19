@@ -291,8 +291,10 @@ export function buildContributionSections(
   return sections.sort(compareResultSections);
 }
 
+/** `minRowHeight` lifts short rows to a touch target on touch screens; the list scroll model reads the same heights. */
 export function projectCommandCenterRows(
   sections: readonly CommandCenterResultSection[],
+  minRowHeight = 0,
 ): CommandCenterListProjection {
   const populated = sections
     .filter((section) => section.results.length > 0)
@@ -321,7 +323,7 @@ export function projectCommandCenterRows(
       offset += sectionHeight;
     }
     for (const result of section.results) {
-      const height = resultHeight(result);
+      const height = Math.max(resultHeight(result), minRowHeight);
       offsets.push(offset);
       rowIndexByResultId.set(result.id, rows.length);
       rows.push({ kind: "result", key: result.id, result, height });

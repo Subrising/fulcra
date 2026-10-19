@@ -7,6 +7,7 @@ import {
   createControlGeometry,
   type ButtonControlSize,
 } from "@/components/ui/control-geometry";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import type { Theme } from "@/styles/theme";
 import { DropdownMenuTrigger, type DropdownMenuTriggerProps } from "@/components/ui/dropdown-menu";
 
@@ -36,6 +37,7 @@ export function DropdownTrigger({
   disabled,
   ...props
 }: DropdownTriggerProps): ReactElement {
+  const touch = useTouchTargets();
   let sizeStyle: ViewStyle;
   if (size === "xs") {
     sizeStyle = styles.xs;
@@ -52,8 +54,9 @@ export function DropdownTrigger({
       sizeStyle,
       pressed ? styles.pressed : null,
       disabled ? styles.disabled : null,
+      touch && touchTargetStyles.text,
     ],
-    [disabled, sizeStyle],
+    [disabled, sizeStyle, touch],
   );
   const labelStyle = useMemo(() => [styles.label, size === "xs" && styles.labelXs], [size]);
 
