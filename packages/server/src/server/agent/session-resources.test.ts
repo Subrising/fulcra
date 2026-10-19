@@ -178,7 +178,7 @@ describe("session resource cleanup", () => {
     expect(f.stopped).toEqual([101]);
     expect(JSON.parse(await readFile(f.options.file, "utf8"))).toEqual({
       version: 1,
-      roots: [{agentId: "owner", instanceId: "generation", pid: 100, birth: "10000"}],
+      roots: [{ agentId: "owner", instanceId: "generation", pid: 100, birth: "10000" }],
       processes: [],
       simulators: [],
     });

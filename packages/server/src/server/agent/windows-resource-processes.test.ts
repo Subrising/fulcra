@@ -42,7 +42,8 @@ describe("Windows resource identities", () => {
   });
   test("keeps unreadable process identities out of ownership capture", () => {
     const output = JSON.stringify({
-      queueState: "clear", installRoots: [],
+      queueState: "clear",
+      installRoots: [],
       processes: [
         { ...powershell, StartTicks: null },
         { ...powershell, Parent: null },
@@ -85,22 +86,40 @@ describe("Windows resource identities", () => {
   });
   test("does not adopt an unrelated Python process as a queue service by name", () => {
     const [row] = parseWindowsResourceSnapshot(
-      JSON.stringify({ queueState: "clear", installRoots: [], processes: [{ ...powershell, Name: "python" }] }),
+      JSON.stringify({
+        queueState: "clear",
+        installRoots: [],
+        processes: [{ ...powershell, Name: "python" }],
+      }),
     );
     expect(row?.protectionReason).toBeUndefined();
     expect(protectedSessionProcess(row!)).toBe(false);
   });
 });
 
-test("keeps Windows installation roots and descendants with generic process names",()=>{
- const root={...powershell,Id:100,Parent:1,StartTicks:"639000000000000000",Name:"node"};
- const rows=parseWindowsResourceSnapshot(JSON.stringify({queueState:"clear",installRoots:[{pid:100,birth:root.StartTicks}],processes:[root,powershell]}));
- expect(rows.map((row)=>row.protectionReason)).toEqual(["install-tree","install-tree"]);
- expect(protectedSessionDirectory("D:\\work\\fulcra-installer")).toBe(true);
+test("keeps Windows installation roots and descendants with generic process names", () => {
+  const root = {
+    ...powershell,
+    Id: 100,
+    Parent: 1,
+    StartTicks: "639000000000000000",
+    Name: "node",
+  };
+  const rows = parseWindowsResourceSnapshot(
+    JSON.stringify({
+      queueState: "clear",
+      installRoots: [{ pid: 100, birth: root.StartTicks }],
+      processes: [root, powershell],
+    }),
+  );
+  expect(rows.map((row) => row.protectionReason)).toEqual(["install-tree", "install-tree"]);
+  expect(protectedSessionDirectory("D:\\work\\fulcra-installer")).toBe(true);
 });
-test("missing or stale Windows installation identities keep every process",()=>{
- for(const installRoots of [undefined,[{pid:100,birth:"639000000000000000"}]]){
-  const [row]=parseWindowsResourceSnapshot(JSON.stringify({queueState:"clear",installRoots,processes:[powershell]}));
-  expect(row?.protectionReason).toBe("install-unknown");
- }
+test("missing or stale Windows installation identities keep every process", () => {
+  for (const installRoots of [undefined, [{ pid: 100, birth: "639000000000000000" }]]) {
+    const [row] = parseWindowsResourceSnapshot(
+      JSON.stringify({ queueState: "clear", installRoots, processes: [powershell] }),
+    );
+    expect(row?.protectionReason).toBe("install-unknown");
+  }
 });

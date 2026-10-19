@@ -49,7 +49,11 @@ $rows = @(Get-Process | ForEach-Object {
 
 const snapshotSchema = z.object({
   queueState: z.enum(["clear", "open", "unknown"]),
-  installRoots: z.array(z.object({pid: z.number().int().positive(), birth: z.string().regex(/^\d+$/)})).max(128).nullable().optional(),
+  installRoots: z
+    .array(z.object({ pid: z.number().int().positive(), birth: z.string().regex(/^\d+$/) }))
+    .max(128)
+    .nullable()
+    .optional(),
   processes: z.array(
     z.object({
       Id: z.number().int().nonnegative(),
@@ -67,16 +71,22 @@ export function parseWindowsResourceSnapshot(output: string): ResourceProcess[] 
   const protectedPids = new Set<number>();
   let unknownInstall = !snapshot.installRoots;
   for (const root of snapshot.installRoots ?? []) {
-    if (!snapshot.processes.some((row) => row.Id === root.pid && row.StartTicks === root.birth)) unknownInstall = true;
+    if (!snapshot.processes.some((row) => row.Id === root.pid && row.StartTicks === root.birth))
+      unknownInstall = true;
     else protectedPids.add(root.pid);
   }
   for (let pass = 0; pass < snapshot.processes.length; pass++) {
     const size = protectedPids.size;
-    for (const row of snapshot.processes) if (row.Parent !== null && protectedPids.has(row.Parent)) protectedPids.add(row.Id);
+    for (const row of snapshot.processes)
+      if (row.Parent !== null && protectedPids.has(row.Parent)) protectedPids.add(row.Id);
     if (size === protectedPids.size) break;
   }
   return snapshot.processes.flatMap((row) => {
     if (!row.Id || !row.StartTicks || row.Parent === null) return [];
+    let protectionReason: string | undefined;
+    if (protectedPids.has(row.Id)) protectionReason = "install-tree";
+    else if (unknownInstall) protectionReason = "install-unknown";
+    else if (snapshot.queueState !== "clear") protectionReason = `queue-${snapshot.queueState}`;
     return [
       {
         pid: row.Id,
@@ -88,8 +98,7 @@ export function parseWindowsResourceSnapshot(output: string): ResourceProcess[] 
         command: row.Name,
         rssKiB: row.WorkingSet64 / 1024,
         privateMemoryBytes: row.PrivateMemorySize64,
-        protectionReason:
-          protectedPids.has(row.Id) ? "install-tree" : unknownInstall ? "install-unknown" : snapshot.queueState === "clear" ? undefined : `queue-${snapshot.queueState}`,
+        protectionReason,
       },
     ];
   });
@@ -127,7 +136,9 @@ export function protectedSessionDirectory(cwd: string, title?: string | null): b
   return (
     /\b(?:Song|Video) Studio\b/i.test(title ?? "") ||
     /Fulcra.*(?:install|release|update)|(?:install|release).*Fulcra/i.test(title ?? "") ||
-    /(?:^|[\\/])(?:orca-service-releases[^\\/]*|fulcra-(?:releases?|install(?:er)?|updates?))(?:[\\/]|$)/i.test(cwd) ||
+    /(?:^|[\\/])(?:orca-service-releases[^\\/]*|fulcra-(?:releases?|install(?:er)?|updates?))(?:[\\/]|$)/i.test(
+      cwd,
+    ) ||
     /(?:^|[\\/])(?:song-studio|video-studio)(?:[\\/]|$)/i.test(cwd) ||
     /^[A-Za-z]:[\\/](?:Games|Videos|Steam)(?:[\\/]|$)/i.test(cwd)
   );

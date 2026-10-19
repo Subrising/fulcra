@@ -3802,7 +3802,9 @@ export class CodexAppServerAgentSession implements AgentSession {
 
   getProcessId(): number | null {
     const child = this.appServerChild;
-    return this.client && !this.closed && child?.exitCode === null && child.signalCode === null ? this.processId : null;
+    return this.client && !this.closed && child?.exitCode === null && child.signalCode === null
+      ? this.processId
+      : null;
   }
 
   private async establishConnection(): Promise<void> {
@@ -3825,7 +3827,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       if (this.client !== client) return;
       this.handleUnexpectedTermination(error);
       if (child.exitCode === null && child.signalCode === null) {
-        void client.dispose().catch(() => this.logger.warn("Could not retire the disconnected Codex transport"));
+        this.retireDisconnectedClient(client);
       }
     });
     client.setNotificationHandler((method, params) =>
@@ -3926,6 +3928,9 @@ export class CodexAppServerAgentSession implements AgentSession {
     };
   }
 
+  private retireDisconnectedClient(client: CodexAppServerClient): void {
+    void client.dispose().catch(() => this.logger.warn("Could not retire the disconnected Codex transport"));
+  }
   private handleUnexpectedTermination(error: Error): void {
     this.client = null;
     this.processId = null;

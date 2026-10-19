@@ -2310,7 +2310,10 @@ export class AgentManager {
     this.resolvePaseoToolPolicy = options.resolvePaseoToolPolicy ?? (() => undefined);
     this.appendSystemPrompt = options.appendSystemPrompt ?? "";
     this.logger = options.logger.child({ module: "agent", component: "agent-manager" });
-    this.sessionResources = this.createSessionResources(options.sessionResourcesFile, options.sessionResourceMode);
+    this.sessionResources = this.createSessionResources(
+      options.sessionResourcesFile,
+      options.sessionResourceMode,
+    );
     this.idleSleep = new IdleSleep({
       logger: this.logger,
       minutes: () => this.idleSleepMinutes(),
@@ -2351,7 +2354,10 @@ export class AgentManager {
     });
   }
 
-  private createSessionResources(file?: string, mode?: () => import("./session-resources.js").ResourceCleanupMode): SessionResources | undefined {
+  private createSessionResources(
+    file?: string,
+    mode?: () => import("./session-resources.js").ResourceCleanupMode,
+  ): SessionResources | undefined {
     if (!file) return undefined;
     return new SessionResources({
       file,
@@ -2377,7 +2383,12 @@ export class AgentManager {
         const canonical = (value: string) => value.replace(/^\/private\/tmp\//, "/tmp/");
         const matches = (value: string) => canonical(value) === canonical(cwd);
         if ([...this.agents.values()].some((agent) => matches(agent.cwd))) return true;
-        if ((await this.registry.list()).some((record) => matches(record.cwd) && !record.archivedAt && record.lastStatus !== "closed")) return true;
+        if (
+          (await this.registry.list()).some(
+            (record) => matches(record.cwd) && !record.archivedAt && record.lastStatus !== "closed",
+          )
+        )
+          return true;
         return testFixtureInUse(cwd, pid, birth);
       },
       ownerState: (id) => {
@@ -4540,6 +4551,17 @@ export class AgentManager {
     );
   }
 
+  private async captureResources(agentId: string): Promise<void> {
+    if (!this.acceptingAgentRegistrations) return;
+    try { await this.sessionResources?.sample(); }
+    catch { this.logger.warn({agentId}, "Resource capture failed; close will continue"); }
+  }
+  private async cleanupResources(agentId: string, agent: LiveManagedAgent): Promise<void> {
+    if (!this.acceptingAgentRegistrations || !agent.instanceId) return;
+    const instanceId = agent.instanceId;
+    try { await this.sessionResources?.closeOwner(agentId, instanceId, () => this.agents.get(agentId) === agent && agent.instanceId === instanceId); }
+    catch { this.logger.warn({agentId}, "Resource cleanup failed; close will continue"); }
+  }
   private async closeAgentRuntime(
     agentId: string,
     requireRetiringIdentity?: () => void,
@@ -4562,28 +4584,12 @@ export class AgentManager {
     // native writer, so publishing a resumable closed snapshot would orphan it.
     this.invokeReportRelaunchGuard(requireRetiringIdentity);
     // Capture before the provider closes stdin or releases its root process.
-    if (this.acceptingAgentRegistrations) {
-      try { await this.sessionResources?.sample(); }
-      catch { this.logger.warn({agentId}, "Resource capture failed; close will continue"); }
-    }
+    await this.captureResources(agentId);
     this.invokeReportRelaunchGuard(requireRetiringIdentity);
-    // Windows retains stale parent numbers after exit. Use the verified live root boundary first.
-    if (process.platform === "win32" && this.acceptingAgentRegistrations && agent.instanceId) {
-      const instanceId = agent.instanceId;
-      try { await this.sessionResources?.closeOwner(agentId, instanceId, () => this.agents.get(agentId) === agent && agent.instanceId === instanceId); }
-      catch { this.logger.warn({agentId}, "Resource cleanup failed; close will continue"); }
-    }
+    // Windows retains stale parent numbers after exit. Use the verified root first.
+    if (process.platform === "win32") await this.cleanupResources(agentId, agent);
     await nativeDispatch(() => agent.session.close());
-    if (this.acceptingAgentRegistrations && agent.instanceId) {
-      const instanceId = agent.instanceId;
-      try {
-      await this.sessionResources?.closeOwner(
-        agentId,
-        instanceId,
-        () => this.agents.get(agentId) === agent && agent.instanceId === instanceId,
-      );
-      } catch { this.logger.warn({agentId}, "Resource cleanup failed; close will continue"); }
-    }
+    await this.cleanupResources(agentId, agent);
     this.cancelRunningProviderSubagents(agentId);
     const closedAgent = await this.prepareAgentForClosure(agent, "agent closed");
 

@@ -16514,15 +16514,33 @@ test.skipIf(process.platform === "win32").each(["close", "archive"] as const)(
 test.each(["close", "archive"] as const)("H2 resource errors never block %s", async (action) => {
   const workdir = mkdtempSync(join(tmpdir(), "manager-resource-failure-"));
   const storage = new AgentStorage(join(workdir, "agents"), logger);
-  const manager = new AgentManager({clients: {codex: new TestAgentClient()}, registry: storage, logger, sessionResourcesFile: join(workdir,"runtime","resources.json")});
-  const resources = (manager as unknown as {sessionResources: {sample():Promise<void>;closeOwner():Promise<void>}}).sessionResources;
-  const sample = vi.spyOn(resources,"sample").mockRejectedValue(new Error("capture failed"));
-  const cleanup = vi.spyOn(resources,"closeOwner").mockRejectedValue(new Error("cleanup failed"));
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    registry: storage,
+    logger,
+    sessionResourcesFile: join(workdir, "runtime", "resources.json"),
+  });
+  const resources = (
+    manager as unknown as {
+      sessionResources: { sample(): Promise<void>; closeOwner(): Promise<void> };
+    }
+  ).sessionResources;
+  const sample = vi.spyOn(resources, "sample").mockRejectedValue(new Error("capture failed"));
+  const cleanup = vi.spyOn(resources, "closeOwner").mockRejectedValue(new Error("cleanup failed"));
   try {
-    const agent = await manager.createAgent({provider:"codex",cwd:workdir},undefined,{});
-    if(action === "close") await expect(manager.closeAgent(agent.id)).resolves.toBeUndefined();
-    else await expect(manager.archiveAgent(agent.id)).resolves.toEqual({archivedAt:expect.any(String)});
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+    if (action === "close") await expect(manager.closeAgent(agent.id)).resolves.toBeUndefined();
+    else
+      await expect(manager.archiveAgent(agent.id)).resolves.toEqual({
+        archivedAt: expect.any(String),
+      });
     expect((await storage.get(agent.id))?.lastStatus).toBe("closed");
-    if(action === "archive") expect((await storage.get(agent.id))?.archivedAt).toEqual(expect.any(String));
-  } finally {sample.mockRestore();cleanup.mockRestore();await manager.flushForShutdown();rmSync(workdir,{recursive:true,force:true});}
+    if (action === "archive")
+      expect((await storage.get(agent.id))?.archivedAt).toEqual(expect.any(String));
+  } finally {
+    sample.mockRestore();
+    cleanup.mockRestore();
+    await manager.flushForShutdown();
+    rmSync(workdir, { recursive: true, force: true });
+  }
 });
