@@ -983,9 +983,7 @@ test("FU-370: real MCP archive keeps open rows until the worker's lead transfers
     const result = await delegatedClient.archiveAgent(second.id, { transferLedgerOwnership: true });
     expect(result.transferredLedgerItems).toEqual(["fixture/FX-2"]);
     expect((await f.storage.get(second.id))?.archivedAt).toEqual(expect.any(String));
-    expect(await readFile(file, "utf8")).toContain(
-      `moved from Second worker (${second.id.slice(0, 8)}) at archive`,
-    );
+    expect(await readFile(file, "utf8")).toContain("moved from 'Second worker' at archive");
   } finally {
     await delegatedClient?.close();
     vi.unstubAllEnvs();

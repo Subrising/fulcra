@@ -16138,7 +16138,7 @@ test.each([
       expect((await storage.get(worker.id))?.archivedAt).toEqual(expect.any(String));
       const text = readFileSync(file, "utf8");
       expect(text).toContain(`Fixture lead (${lead.id.slice(0, 8)})`);
-      expect(text).toContain(`moved from Finished worker (${worker.id.slice(0, 8)}) at archive`);
+      expect(text).toContain("moved from 'Finished worker' at archive");
       expect(text).toContain("retained evidence | retained source");
     } else {
       await expect(
@@ -16227,6 +16227,8 @@ async function archiveReviewFixture(mode: string) {
     if (mode === "sole-short-id") owner = `Worker (${worker.id.slice(0, 8)})`;
     if (mode === "sole-full-id") owner = worker.id;
     if (mode === "sole-parenthesized-full-id") owner = `Worker (${worker.id})`;
+    if (mode === "named-co-owner")
+      owner = `Step-6 mini coder (${worker.id.slice(0, 8)}) + B2 (the 9 cards)`;
     const partial = ["partial-failure", "partial-throw"].includes(mode);
     const original =
       `| FX-1 | Work | FIX | ${owner} | ${mode === "lowercase-done" ? "done" : "OPEN"} | retained evidence | retained source |\n` +
@@ -16254,6 +16256,7 @@ async function archiveReviewFixture(mode: string) {
       lead,
       worker,
       title,
+      owner,
       manager,
       storage,
       client,
@@ -16299,6 +16302,7 @@ test.each([
   "sole-full-id",
   "sole-parenthesized-full-id",
   "unique-title-with-date",
+  "named-co-owner",
 ])("FU-370 review: transfer only a sole owner: %s", async (mode) => {
   const f = await archiveReviewFixture(mode);
   try {
@@ -16307,7 +16311,7 @@ test.each([
     expect((await f.storage.get(f.worker.id))?.archivedAt).toEqual(expect.any(String));
     const text = readFileSync(f.file, "utf8");
     expect(text).toContain(`Fixture lead (${f.lead.id.slice(0, 8)})`);
-    expect(text).toContain(`moved from ${f.title} (${f.worker.id.slice(0, 8)}) at archive`);
+    expect(text).toContain(`moved from '${f.owner}' at archive`);
     expect(text).toContain("retained evidence | retained source");
   } finally {
     await f.cleanup();
@@ -16347,10 +16351,43 @@ test.each(["partial-failure", "partial-throw"])(
   },
 );
 
+async function addStuckArchiveState(f: ControlledInterruptFixture): Promise<() => void> {
+  f.session.pushEvent({
+    type: "provider_subagent",
+    provider: "codex",
+    event: { type: "upsert", id: "stuck-child", title: "Stuck child", status: "running" },
+  });
+  await vi.waitFor(() =>
+    expect(f.manager.listProviderSubagents(f.agentId)).toEqual([
+      expect.objectContaining({ id: "stuck-child", status: "running" }),
+    ]),
+  );
+  await f.manager.flush();
+  await f.storage.upsert({
+    ...(await f.storage.get(f.agentId))!,
+    lastStatus: "error",
+    requiresAttention: true,
+    attentionReason: "error",
+  });
+  registerArchiveReportCount(f.manager, () => 1);
+  const release = deferred<void>();
+  const held = heldSendsFor(f.manager, logger);
+  held.hold(f.agentId, () => release.promise);
+  expect(held.archivePending(f.agentId)).toBe(1);
+  expect((await f.storage.get(f.agentId))?.lastStatus).toBe("error");
+  expect((await f.storage.get(f.agentId))?.attentionReason).toBe("error");
+  expect(f.manager.hasInFlightRun(f.agentId)).toBe(true);
+  return () => {
+    release.resolve(undefined);
+    held.close();
+  };
+}
+
 test.each(["terminal", "human", "MCP terminal", "MCP human"])(
   "FU-370 review: force from %s keeps interruption and the row guard",
   async (caller) => {
-    for (const ownsRow of [false, true]) {
+    for (const mode of ["empty", "rows", "stuck"]) {
+      const ownsRow = mode === "rows";
       const root = mkdtempSync(join(tmpdir(), "archive-force-caller-"));
       mkdirSync(join(root, "fixture"));
       const f = await createControlledInterruptFixture({
@@ -16368,9 +16405,11 @@ test.each(["terminal", "human", "MCP terminal", "MCP human"])(
         ? `| FX-1 | Work | FIX | ${f.agentId} | OPEN | proof | source |\n`
         : "";
       writeFileSync(file, before);
+      let releaseHeld: (() => void) | undefined;
       try {
         await f.startForegroundRun();
         expect(f.manager.getAgent(f.agentId)?.lifecycle).toBe("running");
+        if (mode === "stuck") releaseHeld = await addStuckArchiveState(f);
         const archive = () =>
           archiveSafetyCommand(
             { agentManager: f.manager, agentStorage: f.storage, logger },
@@ -16399,6 +16438,7 @@ test.each(["terminal", "human", "MCP terminal", "MCP human"])(
         }
         expect(readFileSync(file, "utf8")).toBe(before);
       } finally {
+        releaseHeld?.();
         await f.manager.cancelAgentRun(f.agentId).catch(() => undefined);
         await f.cleanup();
         rmSync(root, { recursive: true, force: true });

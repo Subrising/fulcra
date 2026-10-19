@@ -4734,15 +4734,14 @@ export class AgentManager {
     const caller = this.agentCallers.getStore();
     caller?.validate?.();
     const leadId = caller?.agentId;
+    if (!leadId) return { result: await operation(), transferredLedgerItems: [] };
     const record = await this.requireRegistry().get(agentId);
     if (record && isArchiveLead(record))
       throw new Error("A lead or owner session cannot be force-archived.");
-    // Human force keeps interruption semantics. Only an agent lead can transfer owned rows.
-    if (!leadId || (record && !(await this.archiveLedgerRows(record)).length)) {
-      if (record) {
-        const blockers = await this.archivePendingBlockers(agentId, record, true);
-        if (blockers.length) throw new Error(`Archive refused: ${blockers.join(" ")}`);
-      }
+    // Only an agent lead can transfer owned rows. Human force uses the ordinary archive guards.
+    if (record && !(await this.archiveLedgerRows(record)).length) {
+      const blockers = await this.archivePendingBlockers(agentId, record, true);
+      if (blockers.length) throw new Error(`Archive refused: ${blockers.join(" ")}`);
       return { result: await operation(), transferredLedgerItems: [] };
     }
     return this.withInput(
@@ -4757,7 +4756,7 @@ export class AgentManager {
           const rows = await this.archiveLedgerRows(worker);
           const lead = (await this.requireRegistry().get(leadId))!;
           const owner = `${lead.title?.trim() || "Lead"} (${lead.id.slice(0, 8)})`;
-          const note = `${new Date().toISOString()} moved from ${worker.title?.trim() || "Worker"} (${worker.id.slice(0, 8)}) at archive`;
+          const movedAt = new Date().toISOString();
           const transferredLedgerItems: string[] = [];
           for (const row of rows) {
             try {
@@ -4770,7 +4769,7 @@ export class AgentManager {
                 expectedOwner: row.owner,
                 expectedStatus: row.status,
                 owner,
-                note,
+                note: `${movedAt} moved from '${row.owner}' at archive`,
               });
               if (!transfer.ok) throw new Error(transfer.reason ?? "ledger refused the transfer");
               transferredLedgerItems.push(`${row.project}/${row.id}`);

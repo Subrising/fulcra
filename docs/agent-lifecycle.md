@@ -409,10 +409,10 @@ A worker's DONE report offers a transfer when open items remain.
 
 For a human or terminal caller, `--force` still interrupts an active run. The open-row guard stays in effect.
 The worker's current lead can request `fulcra archive <worker-id> --force` to transfer its open items before archive.
-Only rows owned solely by that worker can transfer. Shared owners and ambiguous titles require an explicit ledger update. The ledger keeps the former owner and date in the status.
+Only rows owned solely by that worker can transfer. Shared owners and ambiguous titles require an explicit ledger update. The ledger keeps the full former owner cell and date in the status.
 The result lists the transferred items. A failed transfer leaves the worker unarchived; completed transfers remain with the lead.
 
-Forced archive still refuses project leads, whole-project ledger owners, unread reports, and pending messages.
+Agent-led transfer still refuses project leads, whole-project ledger owners, unread reports, and pending messages.
 It also keeps the work acceptance checks. Transfer uses the same project lock as the ledger CLI and checks the previous owner and status.
 
 ## Tabs vs archive
