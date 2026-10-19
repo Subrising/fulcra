@@ -12,6 +12,7 @@ import { startInsightsRecorder } from "../utils/insights/recorder.js";
 import { startLimitResume } from "./limit-resume/start.js";
 import { startReportUp } from "./report-up.js";
 import {
+  backgroundIdsForStop,
   recordOpenSessions,
   reviveAfterRestart,
   sealStopRecord,
@@ -2263,7 +2264,7 @@ export async function createPaseoDaemon(
             // The boot has read and removed the previous records: keep a crash-safe copy from now on.
             liveRecorder ??= startLiveRecorder({
               paseoHome: config.paseoHome,
-              listAgents: () => agentManager.listAgents(),
+              listAgents: () => agentManager.listAgentsForRevive(),
               logger,
             });
             // The final recovery chain below owns error reporting.
@@ -2297,6 +2298,12 @@ export async function createPaseoDaemon(
   };
 
   const stop = async () => {
+    // FU-362: first, before heldSends.close() and the queue close drop the messages that count as pending work.
+    const backgroundIds = await backgroundIdsForStop({
+      paseoHome: config.paseoHome,
+      list: () => agentManager.listAgentsForRevive(),
+      logger,
+    });
     stopSyncIoMeter();
     limitResume.stop();
     stopReportUp();
@@ -2319,6 +2326,7 @@ export async function createPaseoDaemon(
     await recordOpenSessions({
       paseoHome: config.paseoHome,
       agents: agentManager.listAgents(),
+      backgroundIds,
     }).catch((err) => logger.warn({ err }, "Could not record the open sessions for the next boot"));
     // The clean record is on disk: now remove the crash-safe copy. A crash between the two writes still leaves a
     // record, and boot prefers the clean one.

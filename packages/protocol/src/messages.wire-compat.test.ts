@@ -9,7 +9,53 @@ import {
   WorkspaceSetupSnapshotSchema,
   WorkspaceSetupProgressMessageSchema,
   AgentTimelineEntryPayloadSchema,
+  SendAgentMessageResponseMessageSchema,
+  SendAgentMessageRequestSchema,
+  AgentMessageRouteCheckRequestSchema,
+  AgentMessageRouteCheckResponseSchema,
 } from "./messages.js";
+
+test("send receipts retain legacy parsing while adding held and target-miss fields", () => {
+  const legacy = z.object({
+    type: z.literal("send_agent_message_response"),
+    payload: z.object({
+      requestId: z.string(),
+      agentId: z.string(),
+      accepted: z.boolean(),
+      deliveryNote: z.string().optional(),
+      error: z.string().nullable(),
+    }),
+  });
+  const oldMessage = {
+    type: "send_agent_message_response",
+    payload: {
+      requestId: "request",
+      agentId: "target",
+      accepted: true,
+      error: null,
+    },
+  };
+  expect(SendAgentMessageResponseMessageSchema.parse(oldMessage)).toEqual(oldMessage);
+  const held = {
+    ...oldMessage,
+    payload: { ...oldMessage.payload, deliveryState: "held", deliveryNote: "Paused." },
+  };
+  expect(SendAgentMessageResponseMessageSchema.parse(held).payload.deliveryState).toBe("held");
+  expect(legacy.parse(held).payload.accepted).toBe(true);
+  const missing = {
+    ...oldMessage,
+    payload: {
+      ...oldMessage.payload,
+      accepted: false,
+      error: "Agent not found",
+      errorCode: "AGENT_NOT_FOUND",
+    },
+  };
+  expect(SendAgentMessageResponseMessageSchema.parse(missing).payload.errorCode).toBe(
+    "AGENT_NOT_FOUND",
+  );
+  expect(legacy.parse(missing).payload.accepted).toBe(false);
+});
 
 test("terminal listings accept older rows and retain new per-terminal directories", () => {
   const response = {
@@ -435,4 +481,39 @@ test("usage login errors are additive and older reports still parse", () => {
   expect(SessionOutboundMessageSchema.parse(oldMessage)).toEqual(oldMessage);
   expect(SessionOutboundMessageSchema.parse(newMessage)).toEqual(newMessage);
   expect(legacy.parse(newMessage)).toEqual(oldMessage);
+});
+
+test("reporting-line checks preserve optional sender restrictions on the wire", () => {
+  const message = {
+    type: "send_agent_message_request",
+    requestId: "request",
+    agentId: "target",
+    text: "draft",
+  };
+  expect(SendAgentMessageRequestSchema.parse(message)).toEqual(message);
+  const sender = {
+    agentId: "source",
+    serverId: "source-host",
+    inboundOnly: true,
+    outboundMainOnly: true,
+    outboundServerOnly: "destination",
+    refusal: "Send this to your lead.",
+  };
+  expect(SendAgentMessageRequestSchema.parse({ ...message, sender }).sender).toEqual(sender);
+  expect(
+    AgentMessageRouteCheckRequestSchema.parse({
+      type: "agent.message.route_check.request",
+      requestId: "check",
+      input: { kind: "inbound", agentId: "target", sender },
+    }).input,
+  ).toMatchObject({ sender });
+  expect(
+    AgentMessageRouteCheckResponseSchema.parse({
+      type: "agent.message.route_check.response",
+      payload: {
+        requestId: "check",
+        output: { kind: "outbound", inboundOnly: true, refusal: sender.refusal },
+      },
+    }).payload.output,
+  ).toMatchObject({ inboundOnly: true });
 });

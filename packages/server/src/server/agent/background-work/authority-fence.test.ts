@@ -28,6 +28,15 @@ const ALLOWED = new Map<string, string>([
   ["workspace-directory.ts", "folds it into the workspace status bucket"],
   ["report-up.ts", "excludes sessions with background jobs from idle nudges only"],
   ["bootstrap.ts", "starts the sampler"],
+  ["agent/provider-registry.ts", "forwards the session's hasBackgroundWork to derived providers"],
+  [
+    "agent/providers/codex-app-server-agent.ts",
+    "answers hasBackgroundWork from the app-server process tree, for the restart record",
+  ],
+  [
+    "revive-on-restart.ts",
+    "records idle sessions with background work, to wake them after a restart",
+  ],
   ["agent/providers/mock-load-test-agent.ts", "test-only provider: `paseo-e2e background <n>`"],
 ]);
 

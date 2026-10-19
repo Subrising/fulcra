@@ -2,7 +2,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { expect, test, vi } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
+
+// The fake app-server has no real pid. The tree reader is replaced; the default tree is empty and readable.
+const treeReader = vi.hoisted(() => ({ read: vi.fn() }));
+vi.mock("../../../utils/tree-kill.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../utils/tree-kill.js")>()),
+  readProcessTreeBirths: treeReader.read,
+}));
 
 import { createTestLogger } from "../../../test-utils/test-logger.js";
 import type { AgentStreamEvent } from "../agent-sdk-types.js";
@@ -13,6 +20,11 @@ import {
 } from "./codex/test-utils/fake-app-server.js";
 
 const logger = createTestLogger();
+
+beforeEach(() => {
+  treeReader.read.mockReset();
+  treeReader.read.mockResolvedValue({ rootBornMs: 0, descendants: [] });
+});
 
 type GoalAnswer = { goal: { status: string } | null } | "error";
 
@@ -123,6 +135,141 @@ test("Codex does not sleep during a turn", async () => {
     expect(await session.sleep()).toBe(false);
     servers[0].completeTurn();
     await run;
+    expect(await session.sleep()).toBe(true);
+  });
+});
+
+// Holds the live client's dispose() open: this is the window inside sleep() where the old client is being ended.
+function holdDispose(session: CodexAppServerAgentSession): {
+  started: () => boolean;
+  release: () => void;
+} {
+  const client = (session as unknown as { client: { dispose: () => Promise<void> } }).client;
+  const realDispose = client.dispose.bind(client);
+  let started = false;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  client.dispose = async () => {
+    started = true;
+    await gate;
+    await realDispose();
+  };
+  return { started: () => started, release };
+}
+
+test("Codex turn that starts while sleep ends the app-server runs on a new live client", async () => {
+  await withSleepySession({ goal: null }, async ({ session, servers, events, runTurn }) => {
+    await runTurn("first", servers[0]);
+    const held = holdDispose(session);
+    try {
+      const sleeping = session.sleep();
+      await vi.waitFor(() => expect(held.started()).toBe(true));
+
+      const second = session.run("second");
+      // The turn must start a new app-server, not use the client that sleep is ending.
+      await vi.waitFor(() => expect(servers).toHaveLength(2), { timeout: 2000 });
+      held.release();
+      expect(await sleeping).toBe(false);
+
+      await servers[1].waitForTurnStart();
+      servers[1].startsTurn({ threadId: "thread-1", turnId: "turn-second" });
+      let secondExited = false;
+      servers[1].child.once("exit", () => (secondExited = true));
+      servers[1].completeTurn();
+      await second;
+
+      expect(secondExited).toBe(false);
+      expect(session.isSleeping()).toBe(false);
+      expect(events.some((event) => event.type === "turn_failed")).toBe(false);
+      // The new client is still usable after sleep() returned.
+      expect(await session.listCommands()).toBeDefined();
+    } finally {
+      held.release();
+    }
+  });
+});
+
+test("Codex listCommands during the sleep window wakes the session and the new app-server stays", async () => {
+  await withSleepySession({ goal: null }, async ({ session, servers, runTurn }) => {
+    await runTurn("first", servers[0]);
+    const held = holdDispose(session);
+    try {
+      const sleeping = session.sleep();
+      await vi.waitFor(() => expect(held.started()).toBe(true));
+      let secondExited = false;
+      const commands = session.listCommands();
+      await vi.waitFor(() => expect(servers).toHaveLength(2), { timeout: 2000 });
+      servers[1].child.once("exit", () => (secondExited = true));
+      held.release();
+      expect(await sleeping).toBe(false);
+      await commands;
+      expect(secondExited).toBe(false);
+      expect(session.isSleeping()).toBe(false);
+    } finally {
+      held.release();
+    }
+  });
+});
+
+test("Codex does not sleep while a process born long after the app-server runs, or when the tree cannot be read", async () => {
+  await withSleepySession({ goal: null }, async ({ session, servers, runTurn }) => {
+    await runTurn("first", servers[0]);
+    treeReader.read.mockResolvedValue({
+      rootBornMs: 1_000,
+      descendants: [
+        { pid: 11, bornMs: 5_000 },
+        { pid: 12, bornMs: 61_000 },
+      ],
+    });
+    expect(await session.sleep()).toBe(false);
+    expect(session.isSleeping()).toBe(false);
+
+    treeReader.read.mockResolvedValue(null);
+    expect(await session.sleep()).toBe(false);
+    expect(session.isSleeping()).toBe(false);
+
+    // Startup helpers born inside the grace period do not block sleep.
+    treeReader.read.mockResolvedValue({
+      rootBornMs: 1_000,
+      descendants: [{ pid: 11, bornMs: 5_000 }],
+    });
+    expect(await session.sleep()).toBe(true);
+  });
+});
+
+test("Codex hasBackgroundWork (FU-362 restart record) sees a late child, and an unreadable tree is not work", async () => {
+  await withSleepySession({ goal: null }, async ({ session, servers, runTurn }) => {
+    await runTurn("first", servers[0]);
+    treeReader.read.mockResolvedValue({
+      rootBornMs: 1_000,
+      descendants: [{ pid: 11, bornMs: 5_000 }],
+    });
+    expect(await session.hasBackgroundWork()).toBe(false);
+    treeReader.read.mockResolvedValue({
+      rootBornMs: 1_000,
+      descendants: [{ pid: 12, bornMs: 61_000 }],
+    });
+    expect(await session.hasBackgroundWork()).toBe(true);
+    // Idle sleep fails closed on an unreadable tree; the restart record does not.
+    treeReader.read.mockResolvedValue(null);
+    expect(await session.hasBackgroundWork()).toBe(false);
+    expect(await session.sleep()).toBe(false);
+    // A sleeping session has no app-server and so no work.
+    treeReader.read.mockResolvedValue({ rootBornMs: 1_000, descendants: [] });
+    expect(await session.sleep()).toBe(true);
+    expect(await session.hasBackgroundWork()).toBe(false);
+  });
+});
+
+test("Codex sleep keeps the client when the old app-server cannot be ended, so close can retry", async () => {
+  await withSleepySession({ goal: null }, async ({ session, servers, runTurn }) => {
+    await runTurn("first", servers[0]);
+    const client = (session as unknown as { client: { dispose: () => Promise<void> } }).client;
+    const realDispose = client.dispose.bind(client);
+    client.dispose = vi.fn().mockRejectedValueOnce(new Error("process discovery failed"));
+    await expect(session.sleep()).rejects.toThrow("process discovery failed");
+    expect(session.isSleeping()).toBe(false);
+    client.dispose = realDispose;
     expect(await session.sleep()).toBe(true);
   });
 });

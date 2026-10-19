@@ -128,6 +128,11 @@ import {
 } from "../../../executable-resolution/executable-resolution.js";
 import { createPathEquivalenceMatcher } from "../../../utils/path.js";
 import { spawnProcess } from "../../../utils/spawn.js";
+import {
+  classifyChildWork,
+  readProcessTreeBirths,
+  type OwnedProcessIdentity,
+} from "../../../utils/tree-kill.js";
 import { extractCodexTerminalSessionId, nonEmptyString } from "./tool-call-mapper-utils.js";
 import {
   buildCodexFeatures,
@@ -248,6 +253,7 @@ const TURN_START_TIMEOUT_MS = 90 * 1000;
 const CODEX_ADMISSION_MAX_QUOTA_READS = 3;
 const CODEX_ADMISSION_RETRY_DELAY_MS = 150;
 const INTERRUPT_TIMEOUT_MS = 2_000;
+// A process born this long after the app-server itself is work started during the session.
 const CODEX_PROVIDER = "codex" as const;
 // Codex treats most app-server client names as the model-request originator.
 // This reserved Codex name is non-originating, so requests keep Codex's default
@@ -3681,6 +3687,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   private cachedSkills: Array<{ name: string; description: string; path: string }> | null = null;
   // For the display-only background-job sample (agent/background-work); null before connecting.
   private processId: number | null = null;
+  private appServerChild: ChildProcessWithoutNullStreams | null = null;
   private accountUsageObservation: AccountUsageReading | null = null;
 
   private readonly usageSessionKey = randomUUID();
@@ -3806,6 +3813,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     const connectStartedAt = Date.now();
     const child = await this.spawnAppServer();
     this.processId = child.pid ?? null;
+    this.appServerChild = child;
     const client = new CodexAppServerClient(child, this.logger, () => this.traceContext());
     if (this.closed) {
       await client.dispose();
@@ -5616,26 +5624,88 @@ export class CodexAppServerAgentSession implements AgentSession {
    * Returns false, and changes nothing, when a turn, a permission, an active goal or a connection is in progress.
    */
   async sleep(): Promise<boolean> {
-    if (
+    if (this.sleepBlocked()) return false;
+    const oldClient = this.client!;
+    if (this.goalsEnabled && (await this.goalMayRun())) return false;
+    // The goal read awaited: a turn, a close or a new connection may have started.
+    if (this.sleepBlocked() || this.client !== oldClient) return false;
+    // Unified-exec background terminals, Monitor-style watches and other work that Fulcra does not track live in
+    // the process tree. A process born well after the app-server is such work: do not stop it. An unreadable
+    // tree is not safe either.
+    const tree = this.appServerChild ? await readProcessTreeBirths(this.appServerChild) : null;
+    // The tree read awaited: the session may have taken work meanwhile.
+    if (this.sleepBlocked() || this.client !== oldClient) return false;
+    const work = classifyChildWork(tree);
+    if (work.kind === "unreadable") {
+      this.logger.info(
+        { agentId: this.agentId, reason: "process tree unreadable" },
+        "agent.sleep.skipped",
+      );
+      return false;
+    }
+    if (work.kind === "running") {
+      this.logger.info(
+        { agentId: this.agentId, reason: "child process running", pids: work.pids },
+        "agent.sleep.skipped",
+      );
+      return false;
+    }
+    // Detach first, in one synchronous step, so no caller can see a client that is being ended. A send or
+    // listCommands() that arrives while the old client ends runs connect() and starts a new client; this sleep
+    // ends only the client it detached.
+    this.sleptAt = Date.now();
+    const retiredProcessId = this.processId;
+    const retiredChild = this.appServerChild;
+    this.client = null;
+    this.connectionState = "disconnected";
+    this.currentTurnId = null;
+    this.processId = null;
+    this.appServerChild = null;
+    try {
+      await oldClient.dispose();
+    } catch (error) {
+      // The old process may still run. Give it back to the session, as close() does, so a retry can end it.
+      // When a new app-server already started, the session is awake and keeps that one.
+      if (!this.closed && this.client === null && this.connectionPromise === null) {
+        this.client = oldClient;
+        this.connectionState = "connected";
+        this.processId = retiredProcessId;
+        this.appServerChild = retiredChild;
+      }
+      this.sleptAt = null;
+      throw error;
+    }
+    // A message or listCommands() started a new app-server while the old one ended: the session is awake.
+    if (this.closed || this.client !== null || this.connectionPromise !== null) {
+      this.sleptAt = null;
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * FU-362: true when the idle session has a process the app-server started more than 30 s after itself (a unified-exec
+   * terminal, a watch). The same reading refuses idle sleep, except that an unreadable tree is no evidence of work here.
+   */
+  async hasBackgroundWork(read?: () => Promise<OwnedProcessIdentity[]>): Promise<boolean> {
+    if (this.closed || !this.client || !this.appServerChild) return false;
+    const tree = await readProcessTreeBirths(this.appServerChild, read);
+    return classifyChildWork(tree).kind === "running";
+  }
+
+  // The session is idle with a live app-server and nothing in flight.
+  private sleepBlocked(): boolean {
+    return (
       this.closed ||
       this.connectionState !== "connected" ||
-      this.connectionPromise ||
+      this.connectionPromise !== null ||
       !this.client ||
       this.activeForegroundTurnId !== null ||
       this.currentTurnId !== null ||
       this.pendingForegroundTurnIdentification !== null ||
       this.pendingPermissionHandlers.size > 0 ||
       this.pendingManualCompactionStarts > 0
-    ) {
-      return false;
-    }
-    if (this.goalsEnabled && (await this.goalMayRun())) return false;
-    // The goal read awaited: a turn or a close may have started.
-    if (this.closed || this.client === null || this.activeForegroundTurnId !== null) return false;
-    this.sleptAt = Date.now();
-    await this.disposeClient();
-    this.processId = null;
-    return true;
+    );
   }
 
   isSleeping(): boolean {

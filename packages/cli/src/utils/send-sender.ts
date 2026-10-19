@@ -1,5 +1,8 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { readFile } from "node:fs/promises";
+import { resolvePaseoHome } from "@getpaseo/server/daemon-control";
+import type { DaemonTarget } from "./daemon-target.js";
 import type { CommandError } from "../output/index.js";
 
 // FULCRA(orchestration): who sends (reporting lines, Fulcra 0.2.8). A send from a chat carries the chat's id, from
@@ -10,6 +13,38 @@ import type { CommandError } from "../output/index.js";
 export interface Sender {
   agentId: string;
   serverId?: string;
+  inboundOnly?: true;
+  outboundMainOnly?: true;
+  outboundServerOnly?: string;
+  refusal?: string;
+}
+
+/** An endpoint selector cannot change the identity of a locally stamped chat. */
+export async function assertSenderDaemon(input: {
+  sender: Sender | null;
+  serverId: string | undefined;
+  env?: NodeJS.ProcessEnv;
+  target?: DaemonTarget;
+}): Promise<void> {
+  if (!input.sender || input.sender.serverId) return;
+  const env = input.env ?? process.env;
+  // A background drain can retain --home without inheriting the original daemon environment.
+  // A stamped interactive sender keeps its own PASEO_HOME even when it selects another endpoint.
+  const home =
+    env.PASEO_HOME || (input.target?.kind === "instance" ? input.target.home : undefined);
+  let own: string;
+  try {
+    own = (
+      await readFile(path.join(resolvePaseoHome({ PASEO_HOME: home }), "server-id"), "utf8")
+    ).trim();
+  } catch (cause) {
+    throw new Error("Cannot read the sending chat's own daemon identity.", { cause });
+  }
+  if (!own || own !== input.serverId)
+    throw {
+      code: "SENDER_HOST_MISMATCH",
+      message: "The selected daemon is not the sending chat's own host.",
+    } satisfies CommandError;
 }
 
 export interface ProcessInfo {

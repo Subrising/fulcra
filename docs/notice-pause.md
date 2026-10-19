@@ -69,12 +69,71 @@ Completion notices use the default durable hold.
 
 The host guard does not replace the daemon pause gate.
 An older installed daemon can still hold a descendant that the guard permits.
-Its native CLI can return `status: sent` with `Provider paused. Notice saved. No turn was started.`
-That receipt confirms a saved notice, not provider input.
+An older native CLI can return `status: sent` with `Provider paused. Notice saved. No turn was started.`
+The current CLI returns `status: held` for that receipt and does not wait for completion.
+The daemon also sends an optional `deliveryState: held` field.
+The receipt confirms a saved notice, not provider input.
 A Python hold has `status: held` and a record in `paused-notices`.
 A daemon hold has a record with `pauseNotice: true` in `held-messages.json`.
 Check the installed daemon version and both stores when a descendant stays paused.
 Keep the current direct exceptions until the daemon inheritance fix ships.
+
+## Configured SSH sends
+
+Use `sshRoutes` in the host guard's policy file for automatic cross-host sends.
+Each key must be a complete session UUID. Short or option-like keys are refused. Prefixes must select one configured ID.
+The local daemon gets the first send. Only `AGENT_NOT_FOUND` permits an SSH attempt.
+Display text in `noticeRoutes` grants no routing authority.
+Missing routes, transport failures, ambiguous IDs, and reporting refusals never select another host.
+
+These examples describe separate policies. Replace the IDs, SSH aliases, paths, and homes with verified values.
+Do not copy another host's daemon password.
+
+MacBook to Mini:
+
+```json
+{
+  "sshRoutes": {
+    "11111111-1111-4111-8111-111111111111": {
+      "host": "Mac mini",
+      "sshTarget": "mini",
+      "cli": "/opt/fulcra/bin/fulcra",
+      "home": "/srv/fulcra/mini"
+    }
+  }
+}
+```
+
+Mini to MacBook:
+
+```json
+{
+  "sshRoutes": {
+    "22222222-2222-4222-8222-222222222222": {
+      "host": "MacBook Pro",
+      "sshTarget": "macbook-pro",
+      "cli": "/opt/fulcra/bin/fulcra",
+      "home": "/srv/fulcra/book"
+    }
+  }
+}
+```
+
+Both hosts need the current CLI and an existing trusted SSH key.
+Both daemons must support `agentSendReportingLines`. The source must also support the `AGENT_NOT_FOUND` response code.
+Use the host launcher named `fulcra` as `cli` so the destination applies its pause policy and local credentials.
+Other executable names cause a visible warning because they can skip the Python pause guard.
+The source sends the prompt on SSH stdin and stamps the original chat and server ID with `--from`.
+The source checks the stamped sender's own line before SSH starts.
+A selected `--host` cannot change a local sender's host identity.
+Without a matching outbound line, the destination can accept only its own child or direct-link relation.
+The destination checks that relation before a Python hold and again before daemon delivery.
+Role and qualified-host restrictions stay with held notices until delivery.
+The older host-link path already requires a retained child grant and checks that child relation again at handoff.
+SSH sends return the destination admission receipt. They do not wait for task completion.
+An SSH disconnect can hide an accepted send. Retain the draft and inspect before any retry.
+The relay never follows another route from the destination.
+Required restart warnings need an explicit endpoint; automatic SSH routing cannot defer them.
 
 The guard reserves an attempt before calling the native CLI.
 An uncertain attempt stays retained and is not replayed automatically.

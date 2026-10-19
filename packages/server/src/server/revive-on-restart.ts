@@ -19,6 +19,7 @@ import { FINAL_INPUT_CHECK } from "./agent/agent-sdk-types.js";
 import type { AgentStorage, StoredAgentRecord } from "./agent/agent-storage.js";
 import { createFinalInputCheck, waitForFinalInputHandoff } from "./agent/final-input-check.js";
 import { writeJsonFileAtomic } from "./atomic-file.js";
+import { withTimeout } from "../utils/promise-timeout.js";
 import { heldSendsFor } from "./held-sends.js";
 import { classifyEndingAssistantMessage, classifyFailedTurn } from "./limit-resume/detect.js";
 import { INTERRUPTED_SETTLE_MS, STAGGER_MS } from "./limit-resume/service.js";
@@ -40,6 +41,11 @@ import { lineStoreOf } from "./reporting-lines.js";
 // - A stop record is used only for sessions not written after the stop (`updatedAt <= stoppedAt`). The stop seals
 //   `stoppedAt` after every session is closed, so a stop record left by a rolled-back build reopens nothing that
 //   the older build used since.
+//
+// - Background work: a session that was idle but waiting for background work (shells, Monitor watches, CI watches,
+//   subagents, timers) lost that work in the restart and would sit idle with nobody to notice. The stop records these
+//   sessions as `backgroundIds`, and boot sends each one a single prompt that says so (FU-362). The signals are the
+//   ones idle sleep uses to refuse sleep (AgentManager.hasLiveBackgroundWork).
 //
 // A clean stop saves every open session as "closed", so the stop first records them in $PASEO_HOME/revive-at-boot.json.
 // After a crash the records still say "idle"/"running". daemon.reviveOnRestart = false turns it off.
@@ -63,24 +69,69 @@ const ReviveFileSchema = z.object({
   stoppedAt: z.string(),
   openIds: z.array(z.string()),
   interruptedIds: z.array(z.string()),
+  // FU-362: absent in files from older builds, which means none. Older readers ignore the key.
+  backgroundIds: z.array(z.string()).default([]),
 });
 
 interface LiveAgent {
   id: string;
   lifecycle: string;
   internal?: boolean;
+  /** An idle session with live background work (AgentManager.hasLiveBackgroundWork). Read at the moment of the record. */
+  hasBackgroundWork?: boolean;
 }
 
 /** Clean stop: records the open sessions and the turns still running, before closeAllAgents closes them. */
 export async function recordOpenSessions(input: {
   paseoHome: string;
   agents: readonly LiveAgent[];
+  /** Read earlier in the stop (backgroundIdsForStop): replaces each agent's own `hasBackgroundWork`. */
+  backgroundIds?: ReadonlySet<string>;
   now?: Date;
 }): Promise<void> {
+  const { backgroundIds } = input;
+  const agents = backgroundIds
+    ? input.agents.map((agent) => ({ ...agent, hasBackgroundWork: backgroundIds.has(agent.id) }))
+    : input.agents;
   await writeJsonFileAtomic(
     path.join(input.paseoHome, REVIVE_FILE),
-    openSessionsRecord(input.agents, input.now ?? new Date()),
+    openSessionsRecord(agents, input.now ?? new Date()),
   );
+}
+
+/**
+ * Clean stop, before held and queued messages are dropped (they count as pending work): the ids of the sessions that
+ * have background work. A read that fails or takes longer than `timeoutMs` falls back to the ids in the live record
+ * (the last good copy), so a slow process table never loses the list.
+ */
+export async function backgroundIdsForStop(input: {
+  paseoHome: string;
+  list: () => Promise<ReadonlyArray<{ id: string; hasBackgroundWork?: boolean }>>;
+  logger: Logger;
+  timeoutMs?: number;
+}): Promise<Set<string>> {
+  try {
+    const listed = await withTimeout({
+      promise: input.list(),
+      timeoutMs: input.timeoutMs ?? 3_000,
+      label: "read background work for the restart record",
+    });
+    return new Set(listed.filter((entry) => entry.hasBackgroundWork).map((entry) => entry.id));
+  } catch (error) {
+    input.logger.warn(
+      { err: error },
+      "Background work could not be read for the restart record: using the live record",
+    );
+    const previous = await readReviveFile(
+      path.join(input.paseoHome, REVIVE_LIVE_FILE),
+      input.logger,
+    );
+    return new Set(previous?.backgroundIds);
+  }
+}
+
+function isCutOff(agent: LiveAgent): boolean {
+  return agent.lifecycle === "running" || agent.lifecycle === "initializing";
 }
 
 function openSessionsRecord(agents: readonly LiveAgent[], now: Date) {
@@ -89,8 +140,9 @@ function openSessionsRecord(agents: readonly LiveAgent[], now: Date) {
     v: 1 as const,
     stoppedAt: now.toISOString(),
     openIds: open.map((agent) => agent.id),
-    interruptedIds: open
-      .filter((agent) => agent.lifecycle === "running" || agent.lifecycle === "initializing")
+    interruptedIds: open.filter(isCutOff).map((agent) => agent.id),
+    backgroundIds: open
+      .filter((agent) => !isCutOff(agent) && agent.hasBackgroundWork === true)
       .map((agent) => agent.id),
   };
 }
@@ -102,7 +154,7 @@ function openSessionsRecord(agents: readonly LiveAgent[], now: Date) {
  */
 export function startLiveRecorder(input: {
   paseoHome: string;
-  listAgents: () => readonly LiveAgent[];
+  listAgents: () => readonly LiveAgent[] | Promise<readonly LiveAgent[]>;
   logger: Logger;
   now?: () => Date;
   checkMs?: number;
@@ -115,12 +167,12 @@ export function startLiveRecorder(input: {
   let lastWriteAt = 0;
   let writing: Promise<void> = Promise.resolve();
   let stopped = false;
-  const check = () => {
-    if (stopped) return;
+  const check = () => checkOnce();
+  const checkOnce = async () => {
     const at = now();
     let record: ReturnType<typeof openSessionsRecord>;
     try {
-      record = openSessionsRecord(input.listAgents(), at);
+      record = openSessionsRecord(await input.listAgents(), at);
     } catch (error) {
       input.logger.warn({ err: error }, "Revive on restart: the live record could not be built");
       return;
@@ -128,7 +180,9 @@ export function startLiveRecorder(input: {
     const signature = JSON.stringify([
       [...record.openIds].sort(),
       [...record.interruptedIds].sort(),
+      [...record.backgroundIds].sort(),
     ]);
+    if (stopped) return;
     if (signature === lastSignature && at.getTime() - lastWriteAt < refreshMs) return;
     lastSignature = signature;
     lastWriteAt = at.getTime();
@@ -141,8 +195,8 @@ export function startLiveRecorder(input: {
         ),
       );
   };
-  check();
-  const timer = setInterval(check, input.checkMs ?? LIVE_CHECK_MS);
+  void check();
+  const timer = setInterval(() => void check(), input.checkMs ?? LIVE_CHECK_MS);
   timer.unref();
   return {
     async stop() {
@@ -175,8 +229,11 @@ export async function sealStopRecord(input: { paseoHome: string; now?: Date }): 
 /** What revive needs from a loaded session; the default reads the agent manager, tests replace it. */
 export interface ReviveSessions {
   load(agentId: string): Promise<void>;
-  /** Why the loaded session must not get the continue prompt, or null. */
-  refusal(agentId: string): string | null;
+  /**
+   * Why the loaded session must not get the continue prompt, or null. The background wake does not hand a pool-account
+   * session to limit-resume: limit-resume continues only turns a limit cut off.
+   */
+  refusal(agentId: string, mode?: ReviveMode): string | null;
   /**
    * Read again before the load and just before each resume: why the session is no longer the turn the restart cut
    * off (archived, closed by hand, or a user, limit-resume or a held send gave it a new message since `cutAt`), or
@@ -187,7 +244,12 @@ export interface ReviveSessions {
   limitedUntil(agentId: string): Promise<Date | null | undefined>;
   /** Sends the continue prompt; refuses at the provider handoff if the session got a message after `cutAt`. */
   sendContinue(agentId: string, cutAt: string | null): Promise<void>;
+  /** Sends the background-wake prompt (FU-362) under the same refusal rules as sendContinue. */
+  sendBackgroundWake(agentId: string, prompt: string, cutAt: string | null): Promise<void>;
 }
+
+/** "continue": the restart cut a turn off. "wake": the session was idle, waiting for background work that is gone. */
+export type ReviveMode = "continue" | "wake";
 
 export interface ReviveDeps {
   agentManager: AgentManager;
@@ -215,7 +277,19 @@ export interface ClosedSession {
 export interface ReviveResult {
   reopened: string[];
   continued: string[];
+  /** Idle sessions that got the background-wake prompt. */
+  woken: string[];
   closed: ClosedSession[];
+}
+
+export function formatBackgroundWakePrompt(restartedAt: Date): string {
+  const time = restartedAt.toLocaleString("en-GB", {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  return `The Fulcra daemon restarted at ${time}. Background work you started before the restart (background shells, Monitor watches, CI watches, subagents, timers) may have stopped. Check with ps (or the job's receipt) before you restart a job: detached jobs can still run. Check what finished and what did not, then restart only what you still need. Do not repeat finished steps.`;
 }
 
 export function formatRestartNotice(input: {
@@ -273,6 +347,45 @@ function limitReason(until: Date | null): string {
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
+ * An idle session that waited for background work. The live record is up to a few minutes old, so a session whose
+ * work ended since may get a prompt it did not need; the prompt says to check first. A null or missing timestamp
+ * never drops a session (notLaterThanStop reads it as not later).
+ */
+function backgroundToWake(
+  stopRecord: { backgroundIds: readonly string[] } | null,
+  interrupted: readonly string[],
+  keep: (id: string) => boolean,
+  logger: Logger,
+): string[] {
+  const ids = [...new Set(stopRecord?.backgroundIds)]
+    .filter((id) => !interrupted.includes(id))
+    .filter(keep);
+  if (ids.length > 0) logger.info({ agentIds: ids }, "Revive on restart: background wake");
+  return ids;
+}
+
+/** Cut-off turns first, then background wakes: REVIVE_CONCURRENCY at a time, each followed by a gap. */
+async function runQueue(input: {
+  interrupted: readonly string[];
+  background: readonly string[];
+  wakePrompt: string;
+  gapMs: number;
+  run: (item: { id: string; mode: ReviveMode }, wakePrompt: string) => Promise<void>;
+}): Promise<void> {
+  const queue = [
+    ...input.interrupted.map((id) => ({ id, mode: "continue" as const })),
+    ...input.background.map((id) => ({ id, mode: "wake" as const })),
+  ];
+  const worker = async () => {
+    for (let item = queue.shift(); item; item = queue.shift()) {
+      await input.run(item, input.wakePrompt);
+      await wait(input.gapMs);
+    }
+  };
+  await Promise.all(Array.from({ length: REVIVE_CONCURRENCY }, worker));
+}
+
+/**
  * Boot. `records` is the registry as read before the boot normalised interrupted turns; `crashInterrupted` lists the
  * turns that normalisation found still running (a crash). Resolves when every cut-off turn was handled.
  */
@@ -289,7 +402,7 @@ export async function reviveAfterRestart(
   const liveRecord = cleanRecord ? null : await readReviveFile(liveFile, logger);
   const stopRecord = cleanRecord ?? liveRecord;
   if (liveRecord) logger.info("Revive on restart: unclean stop, using the live record");
-  const result: ReviveResult = { reopened: [], continued: [], closed: [] };
+  const result: ReviveResult = { reopened: [], continued: [], woken: [], closed: [] };
   if (!deps.isEnabled()) {
     await fs.rm(file, { force: true });
     await fs.rm(liveFile, { force: true });
@@ -329,26 +442,35 @@ export async function reviveAfterRestart(
       ...input.crashInterrupted,
     ]),
   ].filter(eligible);
+  const background = backgroundToWake(
+    stopRecord,
+    interrupted,
+    (id) => eligible(id) && notLaterThanStop(id),
+    logger,
+  );
   logger.info(
     { reopened: result.reopened, interrupted },
     `Revive on restart: ${result.reopened.length} reopened, ${interrupted.length} cut-off turn(s) to continue`,
   );
-  if (interrupted.length === 0) return result;
+  if (interrupted.length === 0 && background.length === 0) return result;
 
   await wait(deps.settleMs ?? INTERRUPTED_SETTLE_MS);
   const sessions = deps.sessions ?? defaultSessions(deps);
-  const gapMs = deps.gapMs ?? STAGGER_MS;
-  const queue = [...interrupted];
-  const worker = async () => {
-    for (let id = queue.shift(); id; id = queue.shift()) {
-      await continueOne(id, byId.get(id)!, sessions, result, logger);
-      await wait(gapMs);
-    }
-  };
-  await Promise.all(Array.from({ length: REVIVE_CONCURRENCY }, worker));
+  await runQueue({
+    interrupted,
+    background,
+    wakePrompt: formatBackgroundWakePrompt(restartedAt),
+    gapMs: deps.gapMs ?? STAGGER_MS,
+    run: (item, wakePrompt) =>
+      continueOne(item.id, byId.get(item.id)!, sessions, result, logger, item.mode, wakePrompt),
+  });
   logger.info(
-    { continued: result.continued, closed: result.closed.map((entry) => entry.id) },
-    `Revive on restart: ${result.continued.length} continued, ${result.closed.length} not continued`,
+    {
+      continued: result.continued,
+      woken: result.woken,
+      closed: result.closed.map((entry) => entry.id),
+    },
+    `Revive on restart: ${result.continued.length} continued, ${result.woken.length} woken, ${result.closed.length} not continued`,
   );
   await tellLeads(deps, restartedAt, result.closed, byId);
   return result;
@@ -360,8 +482,15 @@ async function continueOne(
   sessions: ReviveSessions,
   result: ReviveResult,
   logger: Logger,
+  mode: ReviveMode,
+  wakePrompt: string,
 ): Promise<void> {
   const name = titleOf(record);
+  // A woken session is open and idle, as the user left it: a failure here is logged, not named as closed to its lead.
+  const fail = (reason: string) => {
+    if (mode === "continue") result.closed.push({ id, name, reason });
+    else logger.info({ agentId: id, reason }, "Revive on restart: background wake not sent");
+  };
   // The boot snapshot is at least the settle time old: read the session again so it is never resumed twice, and so
   // a session archived or closed by hand in the meantime is neither loaded nor named in a notice.
   const cutAt = record.lastUserMessageAt ?? null;
@@ -372,17 +501,17 @@ async function continueOne(
   }
   const problem = await folderProblem(record.cwd);
   if (problem) {
-    result.closed.push({ id, name, reason: problem });
+    fail(problem);
     return;
   }
   try {
     await sessions.load(id);
   } catch (error) {
     logger.warn({ err: error, agentId: id }, "Revive on restart: the session did not load");
-    result.closed.push({ id, name, reason: reasonOf(error, "could not load") });
+    fail(reasonOf(error, "could not load"));
     return;
   }
-  const skip = async () => sessions.refusal(id) ?? (await sessions.changedSince(id, cutAt));
+  const skip = async () => sessions.refusal(id, mode) ?? (await sessions.changedSince(id, cutAt));
   const before = await skip();
   if (before) {
     logger.info({ agentId: id, reason: before }, "Revive on restart: no continue prompt");
@@ -398,11 +527,11 @@ async function continueOne(
       { err: error, agentId: id },
       "Revive on restart: the account limit could not be checked",
     );
-    result.closed.push({ id, name, reason: "could not check its account limit" });
+    fail("could not check its account limit");
     return;
   }
   if (limited !== undefined) {
-    result.closed.push({ id, name, reason: limitReason(limited) });
+    fail(limitReason(limited));
     return;
   }
   const last = await skip();
@@ -411,11 +540,16 @@ async function continueOne(
     return;
   }
   try {
-    await sessions.sendContinue(id, cutAt);
-    result.continued.push(id);
+    if (mode === "wake") {
+      await sessions.sendBackgroundWake(id, wakePrompt, cutAt);
+      result.woken.push(id);
+    } else {
+      await sessions.sendContinue(id, cutAt);
+      result.continued.push(id);
+    }
   } catch (error) {
     logger.warn({ err: error, agentId: id }, "Revive on restart: the continue prompt failed");
-    result.closed.push({ id, name, reason: reasonOf(error, "could not continue") });
+    fail(reasonOf(error, "could not continue"));
   }
 }
 
@@ -423,12 +557,12 @@ async function continueOne(
 export function defaultSessions(deps: ReviveDeps): ReviveSessions {
   const { agentManager, agentStorage, logger } = deps;
   const now = deps.now ?? (() => new Date());
-  const refusal = (id: string): string | null => {
+  const refusal = (id: string, mode: ReviveMode = "continue"): string | null => {
     const live = agentManager.getAgent(id);
     if (!live || live.archivedAt) return "not loaded";
     if (agentManager.hasInFlightRun(id)) return "a turn is already running";
     // A pool-account session has a binding: limit-resume continues it.
-    if (agentManager.getLimitResumeBinding(id) !== null)
+    if (mode === "continue" && agentManager.getLimitResumeBinding(id) !== null)
       return "pool account: limit-resume continues it";
     // The owner continues its sessions through the controller restart queue and its journal checks.
     if (!agentManager.canRunUnscopedLimitResume(id)) return "owned by a trusted plugin";
@@ -470,29 +604,31 @@ export function defaultSessions(deps: ReviveDeps): ReviveSessions {
       if (!stop || stop.kind === "network") return undefined;
       return stop.resetAt && stop.resetAt > now().getTime() ? new Date(stop.resetAt) : null;
     },
-    sendContinue: async (id, cutAt) => {
-      const live = agentManager.getAgent(id);
-      if (!live) throw new Error("session not loaded");
-      const checkCurrent = () => {
-        const current = agentManager.getAgent(id);
-        if (
-          !current ||
-          current.instanceId !== live.instanceId ||
-          refusal(id) ||
-          liveMessageAt(id) !== cutAt
-        )
-          throw new Error("Continue after restart refused");
-      };
-      checkCurrent();
-      const finalCheck = createFinalInputCheck(checkCurrent);
-      void agentManager
-        .runAgent(id, INTERRUPTED_RESUME_PROMPT, { [FINAL_INPUT_CHECK]: finalCheck })
-        .catch((error: unknown) =>
-          logger.warn({ err: error, agentId: id }, "Continue after restart failed"),
-        );
-      await waitForFinalInputHandoff(finalCheck);
-    },
+    sendContinue: (id, cutAt) => sendPrompt(id, cutAt, INTERRUPTED_RESUME_PROMPT, "continue"),
+    sendBackgroundWake: (id, prompt, cutAt) => sendPrompt(id, cutAt, prompt, "wake"),
   };
+  async function sendPrompt(id: string, cutAt: string | null, prompt: string, mode: ReviveMode) {
+    const live = agentManager.getAgent(id);
+    if (!live) throw new Error("session not loaded");
+    const checkCurrent = () => {
+      const current = agentManager.getAgent(id);
+      if (
+        !current ||
+        current.instanceId !== live.instanceId ||
+        refusal(id, mode) ||
+        liveMessageAt(id) !== cutAt
+      )
+        throw new Error("Continue after restart refused");
+    };
+    checkCurrent();
+    const finalCheck = createFinalInputCheck(checkCurrent);
+    void agentManager
+      .runAgent(id, prompt, { [FINAL_INPUT_CHECK]: finalCheck })
+      .catch((error: unknown) =>
+        logger.warn({ err: error, agentId: id }, "Continue after restart failed"),
+      );
+    await waitForFinalInputHandoff(finalCheck);
+  }
 }
 
 async function tellLeads(

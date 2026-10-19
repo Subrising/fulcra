@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   checkReportingLine,
+  decideOutboundSend,
   checkPromptLine,
   decideSend,
   findRoleHolder,
@@ -41,6 +42,113 @@ function send(from: LineAgent, to: LineAgent) {
 }
 
 describe("reporting lines", () => {
+  it("keeps the same one-level refusal for a worker and a remote Main assistant", async () => {
+    const store: LineStore = {
+      get: async (id) => byId.get(id) ?? null,
+      list: async () => [...byId.values()],
+    };
+    const decision = await decideOutboundSend(store, {
+      senderId: worker.id,
+      targetId: main.id,
+      localServerId: MINI,
+    });
+    expect(decision).toMatchObject({
+      inboundOnly: true,
+      refusal: "Send this to your lead, Fulcra lead (lead-1).",
+    });
+    expect(
+      checkReportingLine({
+        sender: {
+          agentId: worker.id,
+          serverId: MINI,
+          inboundOnly: true,
+          refusal: decision.refusal,
+        },
+        senderAgent: null,
+        target: main,
+        senderParent: null,
+        localServerId: BOOK,
+        mainAssistantId: main.id,
+      }),
+    ).toEqual(send(worker, main));
+  });
+  it("refuses an inbound-only worker at a remote Main assistant", () => {
+    expect(
+      checkReportingLine({
+        sender: {
+          agentId: worker.id,
+          serverId: MINI,
+          inboundOnly: true,
+          refusal: "Send this to your lead, Fulcra lead (lead-1).",
+        },
+        senderAgent: null,
+        target: main,
+        senderParent: null,
+        localServerId: BOOK,
+        mainAssistantId: main.id,
+      }),
+    ).toEqual(send(worker, main));
+  });
+  it("allows only destination-owned children or links after an outbound refusal", () => {
+    const sender = { agentId: worker.id, serverId: MINI, inboundOnly: true as const };
+    for (const labels of [
+      { "fulcra.reports-to": `${worker.id}@${MINI}` },
+      { "fulcra.direct-link": `${worker.id}@${MINI}` },
+    ]) {
+      expect(
+        checkReportingLine({
+          sender,
+          senderAgent: null,
+          target: agent("remote-child", "Child", labels),
+          senderParent: null,
+          localServerId: BOOK,
+        }).allowed,
+      ).toBe(true);
+    }
+  });
+  it("checks source lines, qualified hosts, direct links, roles and unknown senders", async () => {
+    const check = async (labels: Record<string, string>) => {
+      const source = agent("source", "Source", labels);
+      return decideOutboundSend(
+        { get: async (id) => (id === source.id ? source : null), list: async () => [source] },
+        { senderId: source.id, targetId: main.id, localServerId: MINI },
+      );
+    };
+    expect(await check({})).toEqual({ inboundOnly: false });
+    expect(await check({ "fulcra.reports-to": main.id })).toEqual({ inboundOnly: false });
+    expect(await check({ "fulcra.reports-to": `${main.id}@${BOOK}` })).toMatchObject({
+      inboundOnly: false,
+      outboundServerOnly: BOOK,
+    });
+    expect(await check({ "fulcra.reports-to": "lead-1", "fulcra.direct-link": main.id })).toEqual({
+      inboundOnly: false,
+    });
+    expect(await check({ "fulcra.reports-to": "role:main-assistant" })).toMatchObject({
+      inboundOnly: false,
+      outboundMainOnly: true,
+    });
+    expect(
+      await check({ "fulcra.reports-to": "role:main-assistant", "fulcra.direct-link": main.id }),
+    ).toEqual({ inboundOnly: false });
+    await expect(
+      decideOutboundSend(
+        { get: async () => null, list: async () => [] },
+        { senderId: "missing", targetId: main.id },
+      ),
+    ).rejects.toThrow("not on this computer");
+    for (const restriction of [{ outboundMainOnly: true as const }, { outboundServerOnly: MINI }]) {
+      expect(
+        checkReportingLine({
+          sender: { agentId: worker.id, serverId: MINI, ...restriction },
+          senderAgent: null,
+          target: main,
+          senderParent: null,
+          localServerId: BOOK,
+          mainAssistantId: restriction.outboundMainOnly ? "other-main" : main.id,
+        }).allowed,
+      ).toBe(false);
+    }
+  });
   it("allows a send up to the parent and down to the chat's own children", () => {
     expect(send(worker, lead)).toEqual({ allowed: true, why: "parent" });
     expect(send(lead, worker)).toEqual({ allowed: true, why: "child" });
