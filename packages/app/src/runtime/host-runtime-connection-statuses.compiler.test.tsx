@@ -41,7 +41,10 @@ function fakeStore(initial: Record<string, Status>) {
 
 /** The hook's source, cut from host-runtime.ts exactly as it ships. */
 function hookSource(): string {
-  const file = fs.readFileSync(path.join(__dirname, "host-runtime.ts"), "utf8");
+  // A Windows checkout can have CRLF line ends.
+  const file = fs
+    .readFileSync(path.join(__dirname, "host-runtime.ts"), "utf8")
+    .replaceAll("\r\n", "\n");
   const start = file.indexOf("export function useHostRuntimeConnectionStatuses(");
   if (start < 0) throw new Error("hook not found in host-runtime.ts");
   const end = file.indexOf("\n}\n", start);
