@@ -1,8 +1,18 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, expect, test } from "vitest";
-import { prepare, apply } from "../../../../scripts/provision-host-link.js";
+import { afterEach, expect, test, vi } from "vitest";
+import { prepare, apply, provisioningError } from "../../../../scripts/provision-host-link.js";
+
+import { windowsAclIsSafe } from "./plugins/trusted-ownership.js";
+vi.mock("./windows-private-file.js", async (original) => ({
+  ...(await original<typeof import("./windows-private-file.js")>()),
+  assertWindowsPrivateFilesSettled: vi.fn(),
+}));
+vi.mock("./plugins/trusted-ownership.js", async (original) => ({
+  ...(await original<typeof import("./plugins/trusted-ownership.js")>()),
+  windowsAclIsSafe: vi.fn(() => true),
+}));
 
 const roots: string[] = [];
 afterEach(() => {
@@ -87,5 +97,40 @@ test.skipIf(process.platform === "win32")(
       "A private owner file is required.",
     );
     expect(readFileSync(file, "utf8")).toBe(before);
+  },
+);
+
+test("provisioning error types exclude paths and credentials", () => {
+  expect(
+    provisioningError(new Error("The link already exists. Reconcile the retained configuration.")),
+  ).toBe("link already exists");
+  expect(provisioningError(new Error("Host-link configuration is invalid."))).toBe(
+    "invalid config or input",
+  );
+  expect(provisioningError(new Error("private-path synthetic-secret"))).toBe(
+    "invalid config or input",
+  );
+  expect(provisioningError(Object.assign(new Error("private-path"), { code: "ENOENT" }))).toBe(
+    "input not found",
+  );
+});
+
+test.skipIf(process.platform === "win32")(
+  "provisioning refuses an existing Windows file with an unsafe ACL",
+  () => {
+    const f = fixture();
+    const home = path.join(f.root, "home");
+    apply(home, f.source);
+    const platform = process.platform;
+    vi.mocked(windowsAclIsSafe).mockReturnValue(false);
+    try {
+      Object.defineProperty(process, "platform", { value: "win32" });
+      expect(() => apply(home, { ...f.source, outgoing: [], chats: [] })).toThrow(
+        "A private owner file is required.",
+      );
+    } finally {
+      Object.defineProperty(process, "platform", { value: platform });
+      vi.mocked(windowsAclIsSafe).mockReturnValue(true);
+    }
   },
 );

@@ -7,6 +7,14 @@ import {
   HostLinkConfigSchema,
   type HostLinkConfig,
 } from "../packages/server/src/server/host-link-contracts.js";
+import {
+  initializeWindowsPrivateFiles,
+  assertWindowsPrivateFilesSettled,
+} from "../packages/server/src/server/windows-private-file.js";
+import {
+  windowsAclIsSafe,
+  WINDOWS_PRIVATE_MASK,
+} from "../packages/server/src/server/plugins/trusted-ownership.js";
 import { writePrivateFileAtomicSync } from "../packages/server/src/server/private-files.js";
 
 const empty = (machine: "mac" | "pc"): HostLinkConfig => ({
@@ -23,11 +31,14 @@ function config(value: unknown): HostLinkConfig {
   return result.data;
 }
 function privateRead(file: string): unknown {
+  if (process.platform === "win32") assertWindowsPrivateFilesSettled();
   const stat = lstatSync(file);
   if (
     !stat.isFile() ||
     stat.isSymbolicLink() ||
-    (process.platform !== "win32" && ((stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.()))
+    (process.platform === "win32"
+      ? !windowsAclIsSafe(file, WINDOWS_PRIVATE_MASK)
+      : (stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.())
   )
     throw new Error("A private owner file is required.");
   return JSON.parse(readFileSync(file, "utf8"));
@@ -147,8 +158,26 @@ export function apply(home: string, fragment: unknown): void {
   });
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+export function provisioningError(error: unknown): string {
+  if (error instanceof Error) {
+    if (error.message.startsWith("The link already exists")) return "link already exists";
+    if (error.message === "A private owner file is required.") return "private file required";
+    if (error.message.includes("requires reconciliation"))
+      return "commit uncertain; reconcile before retry";
+    if (
+      error.message.startsWith("Windows durable file") ||
+      error.message.startsWith("Windows SystemRoot")
+    )
+      return "Windows commit unavailable";
+    if ("code" in error && error.code === "EEXIST") return "output already exists";
+    if ("code" in error && error.code === "ENOENT") return "input not found";
+  }
+  return "invalid config or input";
+}
+
+async function main(): Promise<void> {
   try {
+    await initializeWindowsPrivateFiles();
     const [operation, input, output] = process.argv.slice(2);
     if (operation === "prepare" && input && output)
       prepare(privateRead(input) as Parameters<typeof prepare>[0], path.resolve(output));
@@ -156,10 +185,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
       apply(path.resolve(input), JSON.parse(readFileSync(0, "utf8")));
     else throw new Error("Use prepare PLAN OUTPUT or apply HOME with a fragment on stdin.");
     process.stdout.write("Host-link provisioning completed. No credentials were printed.\n");
-  } catch {
-    process.stderr.write(
-      "Host-link provisioning failed. Retain the private files and reconcile before retry.\n",
-    );
+  } catch (error) {
+    process.stderr.write(`Host-link provisioning failed: ${provisioningError(error)}.\n`);
     process.exitCode = 1;
   }
 }
+
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href)
+  void main();

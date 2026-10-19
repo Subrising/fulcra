@@ -1,3 +1,4 @@
+import { initializeWindowsPrivateFiles } from "./windows-private-file.js";
 import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 // FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
 import {
@@ -754,6 +755,9 @@ export async function createPaseoDaemon(
 ): Promise<PaseoDaemon> {
   configureGitProcessPolicy(config.git ?? resolveGitProcessPolicy({ env: process.env }));
   const logger = rootLogger.child({ module: "bootstrap" });
+  await initializeWindowsPrivateFiles().catch(() => {
+    logger.warn("Windows durable file commits are unavailable.");
+  });
   const stopSyncIoMeter = startSyncIoMeter((sites) =>
     logger.info({ sites }, "Synchronous disk calls on the main thread in the last minute"),
   );

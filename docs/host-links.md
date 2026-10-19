@@ -47,8 +47,13 @@ The `fulcra.hold=done` label refuses later worker prompts.
 
 Use private files with mode `0600` on POSIX systems.
 Host-link operations require a durable journal before provider input or receipt acknowledgement.
-On Windows, Windows PowerShell 5.1 creates each journal file with an owner-only ACL.
-It calls `FileStream.Flush(true)`, then `MoveFileExW` with `REPLACE_EXISTING | WRITE_THROUGH`.
+On Windows, one retained PowerShell helper creates each journal file with an owner-only ACL.
+It flushes the temporary file, renames it with `MoveFileExW`, then opens and flushes the destination.
+`WRITE_THROUGH` alone does not guarantee a same-volume rename commit.
+The helper retries access and sharing locks for one second.
+Cold compilation runs outside the daemon event loop. Each admission uses a 50 ms helper wait timeout.
+A timeout refuses effects until the original write settles and the caller reads its receipt again.
+Readers check Windows ownership and reject ACLs that expose content or mutation rights to other users.
 The temporary file stays in the destination directory. Cross-volume copies are disabled.
 A missing PowerShell executable, constrained language policy, flush failure, or rename failure refuses the operation.
 No native Node addon or live host installation is required.

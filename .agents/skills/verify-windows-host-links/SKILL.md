@@ -50,8 +50,13 @@ Use the queue's resource admission and retained receipt. Do not print account na
 A zero-GPU proof needs no provider account or daemon connection.
 Do not terminate another queue process to get admission.
 
-Require exit zero, `result: PASS`, all ten named checks, no missing outputs, and verified receipt hashes.
-The checks cover creation, replacement, Unicode paths, binary input, ACLs, writer exit, failures, cleanup, and retained bytes.
+Require exit zero, `result: PASS`, all 17 named checks, no missing outputs, and verified receipt hashes.
+Check that `D:\pc-busy.flag` is absent before each PC test. A native file-event wait may wait for removal.
+The proof initializes one helper asynchronously, then measures full commit latency and event-loop blocking.
+Require event-loop blocking below 100 ms, including 2 MiB and 8 MiB payloads.
+Check public-read ACL refusal, a short sharing lock, the original timed-out receipt, and unowned orphan preservation.
+The helper must flush the destination after rename. `WRITE_THROUGH` alone does not prove this step.
+Do not replay a timed-out write. Wait for its original receipt before reading the journal again.
 Save input hashes, the queue receipt, result JSON, elapsed time, Node version, candidate SHA, and command exit.
 PowerShell 5.1 redirection can encode the result file as UTF-16. Decode its BOM before reading JSON.
 

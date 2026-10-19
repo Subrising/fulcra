@@ -1,3 +1,4 @@
+import { windowsAclIsSafe } from "@getpaseo/server";
 import { mkdtemp, rm, stat, writeFile, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -8,6 +9,12 @@ import {
   hostLinkNoticeStatus,
   saveHostLinkReceipt,
 } from "./host-link.js";
+
+vi.mock("@getpaseo/server", async (original) => ({
+  ...(await original<typeof import("@getpaseo/server")>()),
+  initializeWindowsPrivateFiles: vi.fn(async () => {}),
+  windowsAclIsSafe: vi.fn(() => true),
+}));
 
 test("host-link status counts uncertain notices, exhausted notices, and exhausted watches without credentials", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "host-link-status-"));
@@ -99,3 +106,20 @@ test.skipIf(process.platform === "win32")(
     }
   },
 );
+
+test("host-link CLI refuses a Windows credential journal with an unsafe ACL", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "host-link-acl-"));
+  await writeFile(path.join(root, "host-links-outbox.json"), "{}", { mode: 0o600 });
+  const platform = process.platform;
+  vi.mocked(windowsAclIsSafe).mockReturnValue(false);
+  try {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    await expect(hostLinkNoticeStatus(root)).rejects.toThrow(
+      "Use a private, bounded host-link file.",
+    );
+  } finally {
+    Object.defineProperty(process, "platform", { value: platform });
+    vi.mocked(windowsAclIsSafe).mockReturnValue(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
