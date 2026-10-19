@@ -13,6 +13,7 @@ import {
   type TextStyle,
 } from "react-native";
 import { useTranslation } from "react-i18next";
+import { TOUCH_TARGET, touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { MarkdownParagraphView, MarkdownTextSpan } from "@/components/markdown-text";
 import { MarkdownTableCellText } from "@/components/markdown-text-selection";
 import * as React from "react";
@@ -588,6 +589,7 @@ interface AssistantTurnFooterProps {
 }
 
 const assistantTurnFooterStylesheet = StyleSheet.create((theme) => ({
+  labelTouch: { minHeight: TOUCH_TARGET, justifyContent: "center" },
   container: {
     flexDirection: "row",
     alignItems: "center",
@@ -644,6 +646,7 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
     };
   }, []);
 
+  const touch = useTouchTargets();
   const durationLabel = useMemo(
     () =>
       durationMs !== undefined && durationMs !== null ? getTurnDurationLabel(durationMs, t) : "",
@@ -693,6 +696,7 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
           onHoverOut={handleHoverOut}
           accessibilityRole={canSwap ? "button" : undefined}
           accessibilityLabel={canSwap ? `${durationLabel}, ended ${timestampLabel}` : primaryLabel}
+          style={touch ? assistantTurnFooterStylesheet.labelTouch : undefined}
         >
           <View style={assistantTurnFooterStylesheet.labelWrapper}>
             {/* Sizer reserves space for whichever label is longer so the
@@ -1069,9 +1073,14 @@ export const TurnCopyButton = memo(function TurnCopyButton({
     };
   }, []);
 
+  const touch = useTouchTargets();
   const pressableStyle = useMemo(
-    () => [turnCopyButtonStylesheet.container, containerStyle],
-    [containerStyle],
+    () => [
+      turnCopyButtonStylesheet.container,
+      containerStyle,
+      touch && touchTargetStyles.iconButton,
+    ],
+    [containerStyle, touch],
   );
 
   return (

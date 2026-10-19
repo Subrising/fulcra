@@ -40,7 +40,7 @@ vi.mock("react-native-unistyles", () => ({
       typeof factory === "function" ? (factory as (t: typeof theme) => unknown)(theme) : factory,
   },
   // A desktop layout; the touch-target hook reads the breakpoint.
-  useUnistyles: () => ({ theme, rt: { breakpoint: "lg" } }),
+  useUnistyles: () => ({ theme, rt: { breakpoint: "lg", screen: { width: 1440, height: 900 } } }),
 }));
 
 vi.mock("lucide-react-native", () => {

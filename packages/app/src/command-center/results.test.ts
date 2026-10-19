@@ -150,6 +150,28 @@ describe("Command Center result projection", () => {
     expect(projection.offsets).toEqual([0, 32, 68, 117]);
   });
 
+  it("lifts short rows to the touch target and keeps offsets in step", () => {
+    const sections = buildContributionSections(
+      [contribution({ id: "settings", group: "actions", groupRank: 0 })],
+      "",
+    );
+    const projection = projectCommandCenterRows(
+      [
+        ...sections,
+        {
+          id: "workspaces",
+          band: PINNED_SECTION_BAND,
+          rank: 2,
+          title: "Workspaces",
+          results: [workspace("workspace:1")],
+        },
+      ],
+      48,
+    );
+    expect(projection.rows.map((row) => row.height)).toEqual([32, 48, 49, 56]);
+    expect(projection.offsets).toEqual([0, 32, 80, 129]);
+  });
+
   it("shows query-only actions only when their group matches a search", () => {
     const contributions = [
       contribution({ id: "settings", group: "actions", groupRank: 0 }),

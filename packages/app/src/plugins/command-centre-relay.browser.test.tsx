@@ -26,7 +26,10 @@ vi.mock("react-native-unistyles", async () => {
       (Component: React.ComponentType<Record<string, unknown>>) =>
       ({ uniProps, ...props }: Record<string, unknown> & { uniProps?: (t: unknown) => object }) =>
         React.createElement(Component, { ...props, ...(uniProps ? uniProps(theme) : {}) }),
-    useUnistyles: () => ({ theme, rt: { themeName: "light" } }),
+    useUnistyles: () => ({
+      theme,
+      rt: { themeName: "light", screen: { width: 1440, height: 900 } },
+    }),
     UnistylesRuntime: { setTheme: () => undefined, themeName: "light" },
   };
 });
