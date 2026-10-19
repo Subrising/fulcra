@@ -6,6 +6,8 @@ import {
   HostLinkConfigSchema,
   HOST_LINK_RETENTION_MS,
   HOST_LINK_CLOCK_SKEW_MS,
+  HOST_LINK_NOTICE_MAX_MS,
+  HOST_LINK_NOTICE_SETTLED_MS,
   HostLinkDispatchSchema,
   HostLinkSpawnSchema,
   HostLinkJournalSchema,
@@ -124,6 +126,12 @@ export interface HostLinkDependencies {
 }
 function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+// A notice retried later gets a new issuedAt; it must still match its retained request.
+function wireDigest(wire: HostLinkWire): string {
+  if (wire.kind !== "notice") return digest(wire);
+  const { issuedAt: _issuedAt, ...rest } = wire;
+  return digest(rest);
 }
 // Return notices keep their authority across renewal and unrelated limit sharing changes.
 function authorityDigest(grant: {
@@ -330,6 +338,20 @@ export class HostLinks {
     for (const [key, entry] of Object.entries(replay))
       if (entry.retiredAt < this.now() - HOST_LINK_RETENTION_MS) delete replay[key];
     return Object.keys(replay).length !== before;
+  }
+  // Notice entries have no worker; without this they would fill the receiver journal and spawn headroom.
+  private retireStaleNotices(): void {
+    const links = this.requiredConfig().incoming;
+    const keys = Object.entries(this.journal(this.inboxFile))
+      .filter(([, entry]) => {
+        if (entry.profile !== null || entry.issuedAt === undefined) return false;
+        if (!links.some((link) => link.id === entry.linkId)) return false;
+        const age = this.now() - entry.issuedAt;
+        const settled = ["delivered", "suppressed", "refused"].includes(entry.receipt.state);
+        return age >= (settled ? HOST_LINK_NOTICE_SETTLED_MS : HOST_LINK_NOTICE_MAX_MS);
+      })
+      .map(([key]) => key);
+    if (keys.length > 0) this.retire(this.inboxFile, keys);
   }
   private retire(file: string, keys: string[]): void {
     const journal = this.journal(file);
@@ -693,7 +715,9 @@ export class HostLinks {
     const wire = HostLinkWireSchema.parse({
       ...input,
       ...origin,
-      ...(input.kind === "notice" ? { noticeKind, isLead: this.isLead(chat) } : {}),
+      ...(input.kind === "notice"
+        ? { noticeKind, isLead: this.isLead(chat), issuedAt: this.now() }
+        : {}),
     });
     if (
       input.kind === "spawn" &&
@@ -705,7 +729,7 @@ export class HostLinks {
         "Remote finish delivery is unavailable on the home host.",
       );
     const entry: HostLinkJournal[string] = {
-      hash: digest(wire),
+      hash: wireDigest(wire),
       grant: digest(link),
       sender: chat.id,
       linkId: link.id,
@@ -876,13 +900,13 @@ export class HostLinks {
     const key = `${link.id}:${wire.sender}:${wire.messageId}`;
     const retained = this.journal(this.inboxFile)[key];
     if (retained) {
-      if (retained.hash !== digest(wire) || retained.grant !== digest(link))
+      if (retained.hash !== wireDigest(wire) || retained.grant !== digest(link))
         throw new HostLinkError("conflict", "The retained request changed.");
       // A prior rename may have succeeded while its directory flush failed.
       this.save(this.inboxFile, key, retained);
       return retained.receipt;
     }
-    const replayed = this.retained(this.inboxFile, key, digest(wire), digest(link));
+    const replayed = this.retained(this.inboxFile, key, wireDigest(wire), digest(link));
     if (replayed) return replayed;
     return this.admit(link, wire, key, this.prepareIncoming(link, wire, key));
   }
@@ -891,10 +915,11 @@ export class HostLinks {
     wire: Exclude<HostLinkWire, { kind: "account_limit" }>,
     key: string,
   ): HostLinkJournal[string] {
+    this.retireStaleNotices();
     const agentId = wire.kind === "spawn" ? randomUUID() : this.deps.mainAssistant();
     if (!agentId) throw new HostLinkError("refused", "The main assistant has no chat.");
     const entry: HostLinkJournal[string] = {
-      hash: digest(wire),
+      hash: wireDigest(wire),
       grant: digest(link),
       sender: wire.sender,
       linkId: link.id,
@@ -902,7 +927,7 @@ export class HostLinks {
       profile: null,
       cwd: null,
       receipt: this.receipt(wire.messageId, agentId),
-      ...(wire.kind === "spawn" ? { issuedAt: wire.issuedAt } : {}),
+      ...(wire.kind === "spawn" || wire.issuedAt !== undefined ? { issuedAt: wire.issuedAt } : {}),
       ...(wire.kind === "spawn" ? { noticeGrant: authorityDigest(link) } : {}),
     };
     if (wire.kind === "spawn") {
