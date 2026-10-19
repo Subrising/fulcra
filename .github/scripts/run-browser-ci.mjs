@@ -3,8 +3,9 @@ import { spawnSync } from "node:child_process";
 import { availableParallelism, totalmem } from "node:os";
 import { testListPath, BROWSER_SHARDS } from "./browser-shards.mjs";
 
-const shard = process.argv[2] === "recovery" ? "recovery" : Number(process.argv[2]);
-if (shard !== "recovery" && (!Number.isInteger(shard) || shard < 1 || shard > BROWSER_SHARDS))
+const named = new Set(["recovery", "quarantine"]);
+const shard = named.has(process.argv[2]) ? process.argv[2] : Number(process.argv[2]);
+if (!named.has(shard) && (!Number.isInteger(shard) || shard < 1 || shard > BROWSER_SHARDS))
   throw new Error("Invalid browser shard");
 const list = testListPath(shard, Number(process.env.GITHUB_RUN_ATTEMPT ?? 1), {
   exists: existsSync,

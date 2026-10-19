@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { needsMetro } from "./browser-routing.mjs";
 import { balanceTests, BROWSER_SHARDS } from "./browser-shards.mjs";
+import { isQuarantined } from "./browser-quarantine.mjs";
 
 function identity(test, rootDir) {
   const titles = [test.title];
@@ -41,7 +42,12 @@ export default class BrowserReporter {
       readFileSync(new URL("../browser-test-times.json", import.meta.url), "utf8"),
     );
     const recovery = this.tests.filter((test) => needsMetro(test));
-    const regular = this.tests.filter((test) => !recovery.includes(test));
+    const quarantine = this.tests.filter(
+      (test) => !recovery.includes(test) && isQuarantined(identity(test, this.rootDir).key),
+    );
+    const regular = this.tests.filter(
+      (test) => !recovery.includes(test) && !quarantine.includes(test),
+    );
     const buckets = balanceTests(
       regular.map((test) => identity(test, this.rootDir)),
       history.seconds,
@@ -60,6 +66,10 @@ export default class BrowserReporter {
     writeFileSync(
       ".e2e-plan/recovery.txt",
       recovery.map((test) => identity(test, this.rootDir).line).join("\n") + "\n",
+    );
+    writeFileSync(
+      ".e2e-plan/quarantine.txt",
+      quarantine.map((test) => identity(test, this.rootDir).line).join("\n") + "\n",
     );
     writeFileSync(
       ".e2e-plan/manifest.json",

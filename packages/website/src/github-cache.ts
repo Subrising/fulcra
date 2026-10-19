@@ -1,8 +1,11 @@
 export const GITHUB_CACHE_TTL_MS = 5 * 60 * 1000;
+export const GITHUB_API_URL = "https://api.github.com";
 
 export interface WebsiteCacheContext {
   cache: KVNamespace | null;
   waitUntil: (promise: Promise<unknown>) => void;
+  /** Tests point this at a local stub. A live GitHub outage must not fail them. */
+  githubApiUrl?: string;
 }
 
 interface CachedValue<T> {
