@@ -21,6 +21,7 @@ import { requiresFullSuite } from "./ci-shared-changes.mjs";
 import { selectPassedCI } from "../.github/scripts/ci-check.mjs";
 import { proveMerge, complete } from "../.github/scripts/ci-finished.mjs";
 import { balanceTests, testListPath, BROWSER_SHARDS } from "../.github/scripts/browser-shards.mjs";
+import { QUARANTINED_BROWSER_TESTS } from "../.github/scripts/browser-quarantine.mjs";
 import { startStaticWeb } from "../.github/scripts/static-e2e-web.mjs";
 import { browserInputPaths } from "../.github/scripts/browser-inputs.mjs";
 import { watchOperation } from "../.github/scripts/watch-ci.mjs";
@@ -1725,6 +1726,32 @@ test("a browser job retry selects only failures and fails closed without them", 
   assert.equal(testListPath(1, 2, ports), null);
   files.set("packages/app/.e2e-retry/incomplete", "failed setup");
   assert.throws(() => testListPath(1, 2, ports), /incomplete/);
+});
+
+test("quarantined browser cases run outside the required gate", () => {
+  const files = new Map([["packages/app/.e2e-plan/quarantine.txt", "flaky"]]);
+  const ports = { exists: (file) => files.has(file), read: (file) => files.get(file) };
+  assert.equal(testListPath("quarantine", 1, ports), ".e2e-plan/quarantine.txt");
+  files.set("packages/app/.e2e-plan/quarantine.txt", "");
+  assert.equal(testListPath("quarantine", 1, ports), null);
+  for (const [key, item] of QUARANTINED_BROWSER_TESTS) {
+    assert.match(key, /^[\w.-]+\.spec\.ts › /);
+    assert.match(item, /^FU-\d+$/);
+  }
+  const jobs = jobBlocks(readFileSync(ciWorkflowPath, "utf8"));
+  const quarantine = jobs.get("browser-quarantine").join("\n");
+  assert.match(quarantine, /^ {4}continue-on-error: true$/m);
+  assert.match(quarantine, /PLAYWRIGHT_ARTIFACT: quarantine/);
+  assert.ok(!jobs.get("ci-passed").join("\n").includes("- browser-quarantine\n"));
+});
+
+test("a failed browser input download is attempted once more", () => {
+  const steps = jobBlocks(readFileSync(ciWorkflowPath, "utf8")).get("playwright-1").join("\n");
+  assert.match(steps, /id: browser-inputs\n\s+continue-on-error: true/);
+  assert.match(
+    steps,
+    /Restore shared browser inputs again\n\s+if: \$\{\{ steps\.browser-inputs\.outcome == 'failure' \}\}/,
+  );
 });
 
 test("prebuilt web server serves SPA routes without masking missing bundle assets", async () => {
