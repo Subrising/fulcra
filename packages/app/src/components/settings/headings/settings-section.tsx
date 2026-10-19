@@ -74,7 +74,6 @@ const styles = StyleSheet.create((theme) => ({
   // On a phone the label sits on the card edge, the one left edge of the page.
   compactHeader: {
     marginLeft: 0,
-    marginBottom: theme.spacing[2],
   },
   titleRow: {
     flexDirection: "row",
