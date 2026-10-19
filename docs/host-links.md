@@ -253,13 +253,16 @@ Update both host daemons and remote clients. Local messages keep their existing 
 Legacy active worker receipts remain readable. Timestamp-free pending requests require reconciliation and cannot replay automatically.
 A notice save capacity or write failure produces a fixed warning through the normal source lead delivery path.
 Start events and temporary Windows reconciliation fences do not set this warning.
+Events blocked by a Windows receipt wait for its completion, then retry only journal persistence.
+The daemon checks the original write result. It reports a confirmed write failure without replaying provider input.
 Real result text remains available. A successful notice save clears its warning.
 The source stops its notice watch after delivering a storage warning. It does not poll that warning indefinitely.
 A separate private `host-links-notice-failures.json` file keeps warnings across restart when storage permits.
 Events from a cleaned-up worker also set a repair marker. Do not restore retired workers; create a new worker instead.
-After storage repair and worker reconciliation, clear only that worker's marker on its host:
+After storage repair and worker reconciliation, stop the worker host daemon when idle.
+Keep it stopped while you clear only that worker's marker:
 `fulcra host-link clear-notice-failure --home <worker-home> --worker <worker-uuid>`.
-If the marker file write also failed, restart the repaired daemon when idle to clear its in-memory warning.
+Restart the repaired daemon. This also clears any in-memory fallback warning.
 Repeat the original, unexpired creation request on the source to resume its notice watch.
 Run `fulcra host-link status --home <source-home>` to count uncertain notices, exhausted deliveries, and exhausted watches.
 An exhausted watch means the home daemon stopped checking that worker for notices.

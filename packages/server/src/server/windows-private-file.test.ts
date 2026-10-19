@@ -190,3 +190,21 @@ test("ten healthy minutes reset the helper restart delay", async () => {
   await vi.advanceTimersByTimeAsync(1);
   expect(transport.workers).toHaveLength(4);
 });
+
+test("a pending write keeps its original commit receipt for the eventual result", async () => {
+  const api = await helper();
+  transport.mode = "pending";
+  vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
+  let failure: unknown;
+  try {
+    api.writeWindowsPrivateFileAtomicSync("journal.json", "notice");
+  } catch (error) {
+    failure = error;
+  }
+  expect(failure).toBeInstanceOf(api.WindowsPrivateFileReconciliationError);
+  const receipt = (failure as InstanceType<typeof api.WindowsPrivateFileReconciliationError>)
+    .receipt!;
+  expect(Atomics.load(receipt, 0)).toBe(0);
+  Atomics.store(new Int32Array(transport.buffer!), 0, -1);
+  expect(Atomics.load(receipt, 0)).toBe(-1);
+});

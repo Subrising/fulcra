@@ -392,7 +392,7 @@ export class HostLinks {
       );
     }
   }
-  private clearNoticeFailure(agentId: string): void {
+  clearWorkerNoticeFailure(agentId: string): void {
     try {
       const failures = HostLinkNoticeFailuresSchema.parse(
         privateJson(this.noticeFailuresFile) ?? {},
@@ -1216,7 +1216,7 @@ export class HostLinks {
         complete: kind !== "permission" && !entry.pendingPromptIds?.length,
         finishArmed: kind === "permission",
       });
-      this.clearNoticeFailure(agentId);
+      this.clearWorkerNoticeFailure(agentId);
     }
   }
 

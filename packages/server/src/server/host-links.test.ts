@@ -1145,7 +1145,7 @@ test("FU-170 reconciles a lost creation reply before returning the retained fini
   expect(f.created).toHaveLength(1);
 });
 
-test.each([false, true])(
+test.each([false, true, "reconcile", "late-failure"] as const)(
   "FU-170 runtime carries a worker notice into the lead provider (storage refused: %s)",
   async (storageRefused) => {
     const { AgentManager } = await import("./agent/agent-manager.js");
@@ -1266,7 +1266,7 @@ test.each([false, true])(
       path.join(targetHome, "host-links.json"),
       JSON.stringify(targetConfig),
     );
-    if (storageRefused) {
+    if (storageRefused === true) {
       const rejectNotice = vi
         .spyOn(targetRuntime.service, "recordWorkerNotice")
         .mockImplementation(() => {
@@ -1274,6 +1274,28 @@ test.each([false, true])(
         });
       cleanups.push(async () => {
         rejectNotice.mockRestore();
+      });
+    }
+    if (storageRefused === "reconcile") {
+      const blocked = vi
+        .spyOn(targetRuntime.service, "recordWorkerNotice")
+        .mockImplementationOnce(() => {
+          throw new WindowsPrivateFileReconciliationError();
+        });
+      cleanups.push(async () => {
+        blocked.mockRestore();
+      });
+    }
+    if (storageRefused === "late-failure") {
+      const receipt = new Int32Array(new SharedArrayBuffer(4));
+      Atomics.store(receipt, 0, -1);
+      const failed = vi
+        .spyOn(targetRuntime.service, "recordWorkerNotice")
+        .mockImplementationOnce(() => {
+          throw new WindowsPrivateFileReconciliationError(receipt);
+        });
+      cleanups.push(async () => {
+        failed.mockRestore();
       });
     }
     sourceRuntime.start();
@@ -1293,6 +1315,16 @@ test.each([false, true])(
         notifyOnFinish: true,
       });
       await ended;
+      if (storageRefused === "reconcile") {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        const result = (await targetRuntime.service.worker(receipt.token, {
+          kind: "notices",
+          agentId: receipt.agentId,
+        })) as { notices: { text: string }[] };
+        expect(result.notices.some((notice) => notice.text.includes("finished its turn"))).toBe(
+          true,
+        );
+      }
       await notified;
       await sourceRuntime.service.flushNotificationDeliveries();
       expect(leadInputs).toHaveLength(1);
@@ -1313,7 +1345,9 @@ test.each([false, true])(
       expect(workerInputs).toHaveLength(1);
       expect(String(leadInputs[0])).toContain(receipt.agentId!);
       expect(String(leadInputs[0])).toContain(
-        storageRefused ? "could not save a worker notice" : "finished",
+        storageRefused === true || storageRefused === "late-failure"
+          ? "could not save a worker notice"
+          : "finished",
       );
       expect(retainedReturn(sourceHome).receivedNotices?.[0]?.state).toBe("delivered");
       await sourceRuntime.service.syncNotifications();

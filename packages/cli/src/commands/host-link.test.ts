@@ -1,3 +1,4 @@
+import { readDaemonInstance } from "@getpaseo/server/daemon-control";
 import { windowsAclIsSafe } from "@getpaseo/server/private-files";
 import { mkdtemp, rm, stat, writeFile, chmod, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -10,6 +11,11 @@ import {
   hostLinkNoticeStatus,
   saveHostLinkReceipt,
 } from "./host-link.js";
+
+vi.mock("@getpaseo/server/daemon-control", async (original) => ({
+  ...(await original<typeof import("@getpaseo/server/daemon-control")>()),
+  readDaemonInstance: vi.fn(async () => null),
+}));
 
 vi.mock("@getpaseo/server/private-files", async (original) => ({
   ...(await original<typeof import("@getpaseo/server/private-files")>()),
@@ -136,6 +142,28 @@ test("notice repair clears only the reconciled worker warning", async () => {
     expect(JSON.parse(await readFile(file, "utf8"))).toEqual({ [other]: true });
     expect((await stat(file)).mode & 0o777).toBe(0o600);
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("notice repair refuses a running daemon without changing any marker", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "host-link-repair-live-"));
+  const worker = "11111111-1111-4111-8111-111111111111";
+  const file = path.join(root, "host-links-notice-failures.json");
+  const original = JSON.stringify({ [worker]: true });
+  try {
+    await writeFile(file, original, { mode: 0o600 });
+    vi.mocked(readDaemonInstance).mockResolvedValueOnce({
+      pid: process.pid,
+      startedAt: new Date().toISOString(),
+      hostname: "fixture",
+      uid: 0,
+      listen: null,
+    });
+    await expect(clearHostLinkNoticeFailure(root, worker)).rejects.toThrow("stop the daemon");
+    expect(await readFile(file, "utf8")).toBe(original);
+  } finally {
+    vi.mocked(readDaemonInstance).mockReset();
     await rm(root, { recursive: true, force: true });
   }
 });

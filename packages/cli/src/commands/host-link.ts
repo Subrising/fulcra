@@ -1,3 +1,4 @@
+import { readDaemonInstance } from "@getpaseo/server/daemon-control";
 import {
   initializeWindowsPrivateFiles,
   windowsAclIsSafe,
@@ -104,13 +105,19 @@ export async function hostLinkNoticeStatus(home: string): Promise<{
   }
   return counts;
 }
+async function requireOfflineNoticeRepair(home: string): Promise<void> {
+  if (await readDaemonInstance(home))
+    throw new Error("Reconcile workers and stop the daemon before clearing its notice warning.");
+}
 export async function clearHostLinkNoticeFailure(home: string, agentId: string): Promise<void> {
   z.string().uuid().parse(agentId);
+  await requireOfflineNoticeRepair(home);
   const file = resolve(home, "host-links-notice-failures.json");
   const markers = z
     .record(z.string(), z.literal(true))
     .parse(privateJson(await privateRead(file, 128 * 1024)));
   delete markers[agentId];
+  await requireOfflineNoticeRepair(home);
   writePrivateFileAtomicSync(file, JSON.stringify(markers), { durable: true });
 }
 function privateJson(text: string): unknown {

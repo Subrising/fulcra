@@ -159,7 +159,7 @@ parentPort.on('message', (request) => {
 `;
 
 export class WindowsPrivateFileReconciliationError extends Error {
-  constructor() {
+  constructor(readonly receipt?: Int32Array) {
     super("Windows durable file commit requires reconciliation.");
     this.name = "WindowsPrivateFileReconciliationError";
   }
@@ -275,7 +275,8 @@ function request(operation: "W" | "A", filePath: string, value: string, byteLeng
   const waitMs = Math.min(250, 50 + Math.ceil((15 * byteLength) / (1024 * 1024)));
   Atomics.wait(state, 0, 0, waitMs);
   const result = Atomics.load(state, 0);
-  if (result === 0 || result === -2) throw new WindowsPrivateFileReconciliationError();
+  if (result === 0 || result === -2)
+    throw new WindowsPrivateFileReconciliationError(operation === "W" ? state : undefined);
   return result === 1;
 }
 
