@@ -28,6 +28,47 @@ export const QUARANTINED_BROWSER_TESTS = new Map([
     "daemon-lifecycle.spec.ts › settings restart waits for a replacement worker while retaining the supervisor",
     "FU-399",
   ],
+  // The cases below failed in 10 repeats without retries on main ddf11122d (CI 39314850707).
+  [
+    // FU-300: 4/10. After the Settings sheet closes, the Usage sheet stays fully extended.
+    "usage-sidebar-item.spec.ts › Usage item › pinned windows show in the sidebar, follow the used/remaining toggle and persist",
+    "FU-300",
+  ],
+  [
+    // FU-251: 2/10. One failed image load leaves "Image unavailable" with no retry.
+    "agent-tab-image-stability.spec.ts › switching between settled agent tabs keeps a real assistant PNG rendered",
+    "FU-251",
+  ],
+  [
+    // FU-250: 2/10. Same image cause as FU-251.
+    "agent-tab-image-stability.spec.ts › reloading a timeline anchors near-tail assistant image growth",
+    "FU-250",
+  ],
+  [
+    // FU-248: 1/10. Same image cause as FU-251.
+    "agent-tab-image-stability.spec.ts › a real assistant PNG remains reachable through pagination and remount",
+    "FU-248",
+  ],
+  [
+    // FU-257: 1/10. Same image cause as FU-251.
+    "assistant-selection-copy.spec.ts › copying a selection across an assistant image keeps its Markdown source and alt text",
+    "FU-257",
+  ],
+  [
+    // FU-255: 2/10. The Retry button stays enabled while its response is held.
+    "agent-timeline-sync-retry.spec.ts › Agent timeline sync retry › a refused catch-up offers a retry that reports pending, failure, and recovery",
+    "FU-255",
+  ],
+  [
+    // FU-246: 1/10. The scrolled-away viewport offset reads 0.
+    "agent-stream-ui.spec.ts › Agent stream UI › keeps the viewport fixed when delayed authoritative history arrives after scroll-away",
+    "FU-246",
+  ],
+  [
+    // FU-252: 1/10. Older history does not load from the keyboard.
+    "agent-timeline-pagination.spec.ts › Agent timeline pagination › loads older history when the user navigates to history start with the keyboard",
+    "FU-252",
+  ],
 ]);
 
 export function isQuarantined(key) {
