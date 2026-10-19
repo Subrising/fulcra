@@ -278,9 +278,17 @@ function simulatorCommand(item: ToolCallTimelineItem): { action: string; udid: s
 }
 
 function simulatorUseCommand(shell: string): boolean {
-  if (/\b(?:xcodebuild|simctl)\b|\bflutter\s+(?:run|test|drive)\b|\bcap(?:acitor)?\s+run\b|\bSimulator\b|[\w.-]*(?:ios|simulator)[\w.-]*\.sh/.test(shell)) return true;
+  if (
+    /\b(?:xcodebuild|simctl)\b|\bflutter\s+(?:run|test|drive)\b|\bcap(?:acitor)?\s+run\b|\bSimulator\b|[\w.-]*(?:ios|simulator)[\w.-]*\.sh/.test(
+      shell,
+    )
+  )
+    return true;
   if (!/\bxcrun\b/.test(shell)) return false;
-  return /-(?:destination|device|udid)\b|iphonesimulator/i.test(shell) || /[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}/.test(shell);
+  return (
+    /-(?:destination|device|udid)\b|iphonesimulator/i.test(shell) ||
+    /[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}/.test(shell)
+  );
 }
 
 /** Observed descendants and narrowly admitted, unused test fixtures enter the ledger. */
@@ -395,23 +403,46 @@ export class SessionResources {
       const currentRoots = this.options.roots();
       const rootPids = new Set(currentRoots.map((root) => root.pid));
       for (const root of roots) {
-        if (!currentRoots.some((r) => r.agentId === root.agentId && r.instanceId === root.instanceId && r.pid === root.pid)) continue;
+        if (
+          !currentRoots.some(
+            (r) =>
+              r.agentId === root.agentId && r.instanceId === root.instanceId && r.pid === root.pid,
+          )
+        )
+          continue;
         const processRoot = this.bindRoot(root, byPid, fresh, ledger);
-        if (processRoot) this.captureChildren(root, processRoot, rows, byPid, fresh, rootPids, ledger);
+        if (processRoot)
+          this.captureChildren(root, processRoot, rows, byPid, fresh, rootPids, ledger);
       }
       if (JSON.stringify(ledger) !== previous) await this.save(ledger);
     });
   }
-  private bindRoot(root: Root, rows: Map<number, ResourceProcess>, fresh: Map<number, ResourceProcess>, ledger: Ledger): ResourceProcess | null {
+  private bindRoot(
+    root: Root,
+    rows: Map<number, ResourceProcess>,
+    fresh: Map<number, ResourceProcess>,
+    ledger: Ledger,
+  ): ResourceProcess | null {
     const current = rows.get(root.pid);
     if (!current || current.zombie || fresh.get(root.pid)?.birth !== current.birth) return null;
-    const binding = ledger.roots.find((r) => r.agentId === root.agentId && r.instanceId === root.instanceId && r.pid === root.pid);
+    const binding = ledger.roots.find(
+      (r) => r.agentId === root.agentId && r.instanceId === root.instanceId && r.pid === root.pid,
+    );
     if (binding && binding.birth !== current.birth) return null;
-    if (!binding) ledger.roots.push({...root, birth: current.birth});
+    if (!binding) ledger.roots.push({ ...root, birth: current.birth });
     return current;
   }
-  private captureChildren(root: Root, processRoot: ResourceProcess, rows: ResourceProcess[], byPid: Map<number, ResourceProcess>, fresh: Map<number, ResourceProcess>, rootPids: Set<number>, ledger: Ledger): void {
-    const queue = [root.pid], seen = new Set(queue);
+  private captureChildren(
+    root: Root,
+    processRoot: ResourceProcess,
+    rows: ResourceProcess[],
+    byPid: Map<number, ResourceProcess>,
+    fresh: Map<number, ResourceProcess>,
+    rootPids: Set<number>,
+    ledger: Ledger,
+  ): void {
+    const queue = [root.pid],
+      seen = new Set(queue);
     for (let parent = queue.shift(); parent !== undefined; parent = queue.shift()) {
       for (const row of rows) {
         if (row.ppid !== parent || seen.has(row.pid) || rootPids.has(row.pid)) continue;
@@ -422,23 +453,53 @@ export class SessionResources {
       }
     }
   }
-  private validChild(row: ResourceProcess, parent: ResourceProcess | undefined, fresh: Map<number, ResourceProcess>): boolean {
+  private validChild(
+    row: ResourceProcess,
+    parent: ResourceProcess | undefined,
+    fresh: Map<number, ResourceProcess>,
+  ): boolean {
     if (!parent || row.zombie || row.protectionReason?.startsWith("install")) return false;
-    return fresh.get(parent.pid)?.birth === parent.birth && fresh.get(row.pid)?.birth === row.birth &&
-      fresh.get(row.pid)?.ppid === row.ppid && bornAfter(row.birth, parent.birth) &&
-      !protectedSessionProcess({...row, protectionReason: undefined});
+    return (
+      fresh.get(parent.pid)?.birth === parent.birth &&
+      fresh.get(row.pid)?.birth === row.birth &&
+      fresh.get(row.pid)?.ppid === row.ppid &&
+      bornAfter(row.birth, parent.birth) &&
+      !protectedSessionProcess({ ...row, protectionReason: undefined })
+    );
   }
-  private recordChild(ledger: Ledger, root: Root, processRoot: ResourceProcess, row: ResourceProcess): void {
+  private recordChild(
+    ledger: Ledger,
+    root: Root,
+    processRoot: ResourceProcess,
+    row: ResourceProcess,
+  ): void {
     const existing = ledger.processes.find((p) => p.pid === row.pid && p.birth === row.birth);
-    if (existing && (existing.agentId !== root.agentId || existing.instanceId !== root.instanceId)) return;
-    const kind = resourceKind(row, existing?.kind === "unbounded-log-tail" || this.logReaders.has(`${root.agentId}:${root.instanceId}`));
+    if (existing && (existing.agentId !== root.agentId || existing.instanceId !== root.instanceId))
+      return;
+    const kind = resourceKind(
+      row,
+      existing?.kind === "unbounded-log-tail" ||
+        this.logReaders.has(`${root.agentId}:${root.instanceId}`),
+    );
     if (existing) {
       existing.rootPid = root.pid;
       existing.rootBirth = processRoot.birth;
       existing.kind = kind;
       return;
     }
-    ledger.processes.push({agentId: root.agentId, instanceId: root.instanceId, pid: row.pid, birth: row.birth, rootPid: root.pid, rootBirth: processRoot.birth, observedAt: this.now(), command: row.command, rssKiB: row.rssKiB, privateMemoryBytes: row.privateMemoryBytes, kind});
+    ledger.processes.push({
+      agentId: root.agentId,
+      instanceId: root.instanceId,
+      pid: row.pid,
+      birth: row.birth,
+      rootPid: root.pid,
+      rootBirth: processRoot.birth,
+      observedAt: this.now(),
+      command: row.command,
+      rssKiB: row.rssKiB,
+      privateMemoryBytes: row.privateMemoryBytes,
+      kind,
+    });
   }
 
   sweep(): Promise<void> {
@@ -580,20 +641,44 @@ export class SessionResources {
     await this.save(ledger);
     if (pending) this.warn();
   }
-  private async stopSimulators(ledger: Ledger, admitted: (record: SimulatorRecord) => boolean): Promise<void> {
+  private async stopSimulators(
+    ledger: Ledger,
+    admitted: (record: SimulatorRecord) => boolean,
+  ): Promise<void> {
     for (const record of ledger.simulators) {
-      try { await this.stopSimulator(record, ledger, admitted); }
-      catch { this.warn(); }
+      try {
+        await this.stopSimulator(record, ledger, admitted);
+      } catch {
+        this.warn();
+      }
     }
   }
-  private simulatorAdmitted(record: SimulatorRecord, admitted: (record: SimulatorRecord) => boolean): boolean {
-    return this.mode() !== "off" && admitted(record) && !this.simulatorInUse(record) &&
-      !record.users.some((user) => (user.agentId !== record.agentId || user.instanceId !== record.instanceId) && this.options.ownerState(user.agentId) !== "inactive");
+  private simulatorAdmitted(
+    record: SimulatorRecord,
+    admitted: (record: SimulatorRecord) => boolean,
+  ): boolean {
+    return (
+      this.mode() !== "off" &&
+      admitted(record) &&
+      !this.simulatorInUse(record) &&
+      !record.users.some(
+        (user) =>
+          (user.agentId !== record.agentId || user.instanceId !== record.instanceId) &&
+          this.options.ownerState(user.agentId) !== "inactive",
+      )
+    );
   }
-  private simulatorMatches(record: SimulatorRecord, state: {booted: boolean; pid: number | null; birth: string | null}): boolean {
+  private simulatorMatches(
+    record: SimulatorRecord,
+    state: { booted: boolean; pid: number | null; birth: string | null },
+  ): boolean {
     return state.booted && state.pid === record.pid && state.birth === record.birth;
   }
-  private async stopSimulator(record: SimulatorRecord, ledger: Ledger, admitted: (record: SimulatorRecord) => boolean): Promise<void> {
+  private async stopSimulator(
+    record: SimulatorRecord,
+    ledger: Ledger,
+    admitted: (record: SimulatorRecord) => boolean,
+  ): Promise<void> {
     const allowed = () => this.simulatorAdmitted(record, admitted);
     if (!allowed()) return;
     const state = await this.simulators.inspect(record.udid);
@@ -603,16 +688,17 @@ export class SessionResources {
       await this.save(ledger);
       return;
     }
-    await this.log({action: "simulator-shutdown-attempt", ...record});
-    if (!allowed() || await this.simulators.inUse?.(record.udid)) return;
+    await this.log({ action: "simulator-shutdown-attempt", ...record });
+    if (!allowed() || (await this.simulators.inUse?.(record.udid))) return;
     const fresh = await this.simulators.inspect(record.udid);
     if (!this.simulatorMatches(record, fresh) || !allowed()) return;
     if (this.mode() !== "on") {
-      if (this.mode() === "dry-run") await this.log({action: "dry-run-simulator-shutdown", ...record});
+      if (this.mode() === "dry-run")
+        await this.log({ action: "dry-run-simulator-shutdown", ...record });
       return;
     }
     await this.simulators.shutdown(record.udid);
-    await this.log({action: "simulator-shutdown", ...record});
+    await this.log({ action: "simulator-shutdown", ...record });
     ledger.simulators = ledger.simulators.filter((r) => r !== record);
     await this.save(ledger);
   }
@@ -620,20 +706,22 @@ export class SessionResources {
     return [this.simulatorUsers.get(record.udid), this.simulatorUsers.get("*")].some((users) =>
       [...(users?.values() ?? [])].some(
         (user) =>
-          (user.agentId !== record.agentId || user.instanceId !== record.instanceId) && this.options.ownerState(user.agentId) !== "inactive",
+          (user.agentId !== record.agentId || user.instanceId !== record.instanceId) &&
+          this.options.ownerState(user.agentId) !== "inactive",
       ),
     );
   }
   private async validFixture(record: ProcessRecord, target: ResourceProcess): Promise<boolean> {
     if (record.kind !== "test-fixture") return true;
-    if (!oldTestFixture(target) || target.cwd !== record.fixtureCwd || !this.options.fixtureInUse) return false;
-    return !await this.options.fixtureInUse(target.cwd!, target.pid, target.birth);
+    if (!oldTestFixture(target) || target.cwd !== record.fixtureCwd || !this.options.fixtureInUse)
+      return false;
+    return !(await this.options.fixtureInUse(target.cwd!, target.pid, target.birth));
   }
   private async canSignal(record: ProcessRecord, rows: ResourceProcess[]): Promise<boolean> {
     const byPid = new Map(rows.map((row) => [row.pid, row]));
     const target = byPid.get(record.pid);
     if (!target || target.birth !== record.birth || target.zombie) return false;
-    if (!await this.validFixture(record, target)) return false;
+    if (!(await this.validFixture(record, target))) return false;
     const roots = this.options.roots();
     if (
       record.kind !== "test-fixture" &&

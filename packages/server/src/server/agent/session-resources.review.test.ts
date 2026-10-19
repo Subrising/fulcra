@@ -43,7 +43,7 @@ async function fixture() {
     logger: createTestLogger(),
     roots: () => (live ? [{ agentId: "owner", instanceId: "generation", pid: 100 }] : []),
     ownerState: (id: string) =>
-      (id === "other" || live) ? ("live" as const) : ("inactive" as const),
+      id === "other" || live ? ("live" as const) : ("inactive" as const),
     readProcesses: async () => rows,
     now: () => now,
     gracefulTimeoutMs: 0,
@@ -140,33 +140,36 @@ test("dry-run logs the decision and preserves the owned process", async () => {
   expect(f.stopped).toEqual([]);
   expect(await readFile(f.options.file + ".stops.jsonl", "utf8")).toContain("dry-run-stop");
 });
-test.each(["echo hello", "xcrun clang -c hello.c"])("an unrelated tool event does not wait behind the cleanup queue: %s", async (command) => {
-  const f = await fixture();
-  let release!: () => void;
-  const blocked = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const tracker = new SessionResources({
-    ...f.options,
-    readProcesses: async () => {
-      await blocked;
-      return [root, child];
-    },
-  });
-  const sample = tracker.sample();
-  try {
-    await Promise.race([
-      tracker.observeTool(
-        { agentId: "owner", instanceId: "generation", pid: 100 },
-        item(command),
-      ),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("tool event blocked")), 50)),
-    ]);
-  } finally {
-    release();
-    await sample;
-  }
-});
+test.each(["echo hello", "xcrun clang -c hello.c"])(
+  "an unrelated tool event does not wait behind the cleanup queue: %s",
+  async (command) => {
+    const f = await fixture();
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tracker = new SessionResources({
+      ...f.options,
+      readProcesses: async () => {
+        await blocked;
+        return [root, child];
+      },
+    });
+    const sample = tracker.sample();
+    try {
+      await Promise.race([
+        tracker.observeTool(
+          { agentId: "owner", instanceId: "generation", pid: 100 },
+          item(command),
+        ),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("tool event blocked")), 50)),
+      ]);
+    } finally {
+      release();
+      await sample;
+    }
+  },
+);
 test("a missing ancestor keeps an otherwise recorded process", async () => {
   const f = await fixture(),
     tracker = new SessionResources(f.options);

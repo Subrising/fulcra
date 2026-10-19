@@ -4553,14 +4553,24 @@ export class AgentManager {
 
   private async captureResources(agentId: string): Promise<void> {
     if (!this.acceptingAgentRegistrations) return;
-    try { await this.sessionResources?.sample(); }
-    catch { this.logger.warn({agentId}, "Resource capture failed; close will continue"); }
+    try {
+      await this.sessionResources?.sample();
+    } catch {
+      this.logger.warn({ agentId }, "Resource capture failed; close will continue");
+    }
   }
   private async cleanupResources(agentId: string, agent: LiveManagedAgent): Promise<void> {
     if (!this.acceptingAgentRegistrations || !agent.instanceId) return;
     const instanceId = agent.instanceId;
-    try { await this.sessionResources?.closeOwner(agentId, instanceId, () => this.agents.get(agentId) === agent && agent.instanceId === instanceId); }
-    catch { this.logger.warn({agentId}, "Resource cleanup failed; close will continue"); }
+    try {
+      await this.sessionResources?.closeOwner(
+        agentId,
+        instanceId,
+        () => this.agents.get(agentId) === agent && agent.instanceId === instanceId,
+      );
+    } catch {
+      this.logger.warn({ agentId }, "Resource cleanup failed; close will continue");
+    }
   }
   private async closeAgentRuntime(
     agentId: string,

@@ -3929,7 +3929,9 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   private retireDisconnectedClient(client: CodexAppServerClient): void {
-    void client.dispose().catch(() => this.logger.warn("Could not retire the disconnected Codex transport"));
+    void client
+      .dispose()
+      .catch(() => this.logger.warn("Could not retire the disconnected Codex transport"));
   }
   private handleUnexpectedTermination(error: Error): void {
     this.client = null;
