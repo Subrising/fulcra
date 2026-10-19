@@ -28,10 +28,12 @@ const initializeMs = Math.round(performance.now() - started);
 const root = mkdtempSync(path.join(path.resolve(process.argv[3]), "durability-"));
 const file = path.join(root, "journal-\u03bb.json");
 const durations = [];
+const payloadSizes = [];
 const blocking = [];
 const uncertainSizes = [];
 async function save(bytes) {
   idle();
+  payloadSizes.push(Buffer.byteLength(bytes));
   const start = performance.now();
   try {
     commit(file, bytes);
@@ -98,8 +100,15 @@ if (!$a.AreAccessRulesProtected -or $a.GetOwner($s) -ne $m -or $r.Count -ne 1 -o
   await save(Buffer.from('{"generation":2}'));
   await save(Buffer.from([0, 255, 13, 10, 128, 0]));
   for (let i = 0; i < 20; i++) await save(JSON.stringify({ generation: i + 3 }));
-  for (const mib of [2, 8]) await save(Buffer.alloc(mib * 1024 * 1024, 120));
-  assert.ok(Math.max(...blocking) <= 100, "warm commits must not block the event loop over 100 ms");
+  for (const mib of [1, 2, 8]) await save(Buffer.alloc(mib * 1024 * 1024, 120));
+  // Exercise the Windows journal limit repeatedly. Each near-cap save must be acknowledged.
+  for (let i = 0; i < 20; i++) await save(Buffer.alloc(1024 * 1024, 120));
+  assert.deepEqual(uncertainSizes, [], "scaled waits acknowledge writes through 8 MiB");
+  assert.ok(Math.max(...blocking) <= 250, "commits stay within the bounded wait");
+  assert.ok(
+    blocking.every((ms, index) => payloadSizes[index] > 1024 * 1024 || ms <= 100),
+    "near-cap commits stay below 100 ms",
+  );
   await save('{"generation":3}');
   const writer = path.join(root, "writer.mjs");
   writeFileSync(
@@ -199,6 +208,7 @@ $f.Close()
         "replace",
         "unicode path",
         "binary input",
+        "1 MiB near-cap acknowledgements",
         "2 MiB payload",
         "8 MiB payload",
         "owner-only file and directory ACLs",
@@ -214,6 +224,12 @@ $f.Close()
         "previous receipt retained",
       ],
       initializeMs,
+      perSaveMs: durations.map((elapsedMs, index) => ({
+        index,
+        payloadBytes: payloadSizes[index],
+        elapsedMs,
+        mainThreadBlockedMs: blocking[index],
+      })),
       warmSaveMs: {
         count: durations.length,
         max: Math.max(...durations),

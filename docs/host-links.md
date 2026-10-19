@@ -51,8 +51,9 @@ On Windows, one retained PowerShell helper creates each journal file with an own
 It flushes the temporary file, renames it with `MoveFileExW`, then opens and flushes the destination.
 `WRITE_THROUGH` alone does not guarantee a same-volume rename commit.
 The helper retries access and sharing locks for one second.
-Cold compilation runs outside the daemon event loop. Each admission uses a 50 ms helper wait timeout.
-A timeout refuses effects until the original write settles and the caller reads its receipt again.
+Windows journals stop at 1 MiB before writing; POSIX journals retain the 8 MiB limit.
+Cold compilation runs outside the daemon event loop. Helper waits use 50 ms plus 15 ms per MiB, capped at 250 ms.
+After a pending receipt times out, reconcile its original write, then use a new message id.
 Readers check Windows ownership and reject ACLs that expose content or mutation rights to other users.
 The temporary file stays in the destination directory. Cross-volume copies are disabled.
 A missing PowerShell executable, constrained language policy, flush failure, or rename failure refuses the operation.
