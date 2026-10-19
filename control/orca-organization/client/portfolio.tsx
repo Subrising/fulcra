@@ -84,7 +84,7 @@ export function PortfolioSurface(props: PluginSurfaceProps & { onTask: (id: stri
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: c.surface0 }}
-      contentContainerStyle={{ padding: props.layout.compact ? 16 : 28, gap: 20 }}
+      contentContainerStyle={{ padding: props.layout.compact ? 16 : 24, gap: 20 }}
     >
       {chosen ? (
         <>
@@ -108,8 +108,7 @@ export function PortfolioSurface(props: PluginSurfaceProps & { onTask: (id: stri
       ) : (
         <>
           <View style={{ gap: 8 }}>
-            <Text style={{ ...muted, letterSpacing: 1, fontSize: 12 }}>FULCRA / LEADERSHIP</Text>
-            <Text style={{ ...text, fontSize: 30, fontWeight: "600" }}>Your leads</Text>
+            <Text style={{ ...text, fontSize: 26, fontWeight: "600" }}>Your leads</Text>
             <Text style={{ ...muted, fontSize: 16, lineHeight: 24 }}>
               Who is leading. What needs you. Where the work goes next.
             </Text>

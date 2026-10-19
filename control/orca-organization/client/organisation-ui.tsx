@@ -45,29 +45,38 @@ export function Button({
       aria-expanded={expanded}
       disabled={disabled}
       onPress={onPress}
+      // FU-396: the same scale as WorkButton: a 44 px hit area around a compact 32 px button.
       style={{
         minHeight: 44,
-        paddingHorizontal: 14,
-        paddingVertical: 10,
-        borderRadius: 12,
         justifyContent: "center",
+        alignSelf: "flex-start",
         opacity: disabled ? 0.5 : 1,
-        backgroundColor: primary ? c.accent : selected ? c.surface2 : c.surface1,
-        borderWidth: primary ? 0 : 1,
-        borderColor: selected ? c.accent : c.border,
       }}
     >
-      {children ?? (
-        <Text
-          style={{
-            color: primary ? c.accentForeground : c.foreground,
-            fontWeight: selected || primary ? "700" : "600",
-            fontSize: 15,
-          }}
-        >
-          {label}
-        </Text>
-      )}
+      <View
+        style={{
+          minHeight: 32,
+          paddingHorizontal: 12,
+          paddingVertical: 6,
+          borderRadius: 8,
+          justifyContent: "center",
+          backgroundColor: primary ? c.accent : selected ? c.surface2 : "transparent",
+          borderWidth: primary ? 0 : 1,
+          borderColor: selected ? c.accent : c.border,
+        }}
+      >
+        {children ?? (
+          <Text
+            style={{
+              color: primary ? c.accentForeground : c.foreground,
+              fontWeight: selected || primary ? "600" : "500",
+              fontSize: 13,
+            }}
+          >
+            {label}
+          </Text>
+        )}
+      </View>
     </Pressable>
   );
 }

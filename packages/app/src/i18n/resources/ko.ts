@@ -242,6 +242,8 @@ export const ko: TranslationResources = {
   },
   agentStream: {
     empty: "이 에이전트와 대화를 시작하세요...",
+    emptyHint:
+      "계획, 구현 또는 검토할 작업을 설명하세요. @로 파일을 추가하고 /로 명령을 사용하세요.",
     scrollToBottom: "맨 아래로 스크롤",
     historyLoadFailed: "에이전트 기록을 로드할 수 없습니다.",
     messageCapped: "이 메시지는 길이 제한으로 잘렸습니다({{bytes}}바이트).",

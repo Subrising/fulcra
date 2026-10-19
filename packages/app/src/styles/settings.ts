@@ -2,7 +2,8 @@ import { StyleSheet } from "react-native-unistyles";
 
 export const settingsStyles = StyleSheet.create((theme) => ({
   section: {
-    marginBottom: theme.spacing[6],
+    // FU-396: groups read as groups: more space between them and a label with some weight.
+    marginBottom: theme.spacing[8],
   },
   sectionHeader: {
     alignItems: "center",
@@ -14,7 +15,7 @@ export const settingsStyles = StyleSheet.create((theme) => ({
   sectionHeaderTitle: {
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.sm,
-    fontWeight: theme.fontWeight.normal,
+    fontWeight: theme.fontWeight.medium,
   },
   sectionHeaderLink: {
     alignItems: "center",

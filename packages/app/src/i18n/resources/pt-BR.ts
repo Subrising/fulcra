@@ -243,6 +243,8 @@ export const ptBR: TranslationResources = {
   },
   agentStream: {
     empty: "Comece a conversar com este agente...",
+    emptyHint:
+      "Descreva uma tarefa para planejar, criar ou revisar. Digite @ para adicionar arquivos e / para comandos.",
     scrollToBottom: "Rolar para o fim",
     historyLoadFailed: "Não foi possível carregar o histórico do agente",
     messageCapped: "Esta mensagem foi truncada ({{bytes}} bytes).",

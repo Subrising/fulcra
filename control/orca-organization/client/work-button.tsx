@@ -1,6 +1,9 @@
-import { Pressable, Text } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 
+// FU-396: one button scale. The hit area stays 48 px; the drawn control is a compact 32 px button, so a screen of
+// actions no longer reads as a wall of equal pills. `primary` is the one main action of a section, `quiet` a text
+// action for repeated row actions, and the default an outlined secondary button.
 export function WorkButton({
   theme,
   label,
@@ -9,6 +12,8 @@ export function WorkButton({
   selected,
   expanded,
   disabled,
+  primary,
+  quiet,
 }: Pick<PluginSurfaceProps, "theme"> & {
   label: string;
   children?: string;
@@ -16,8 +21,11 @@ export function WorkButton({
   selected?: boolean;
   expanded?: boolean;
   disabled?: boolean;
+  primary?: boolean;
+  quiet?: boolean;
 }) {
   const c = theme.colors;
+  const filled = primary && !disabled;
   return (
     <Pressable
       accessibilityRole="button"
@@ -30,25 +38,43 @@ export function WorkButton({
       style={{
         minHeight: 48,
         minWidth: 48,
-        paddingHorizontal: 16,
-        paddingVertical: 12,
         justifyContent: "center",
+        alignSelf: "flex-start",
         flexShrink: 1,
-        borderRadius: 14,
-        borderWidth: 1,
-        borderColor: selected ? (c.accent ?? c.foreground) : c.border,
-        backgroundColor: selected ? (c.surface2 ?? c.surface0) : (c.surface1 ?? c.surface0),
       }}
     >
-      <Text
+      <View
         style={{
-          color: disabled ? c.foregroundMuted : c.foreground,
-          fontSize: 14,
-          fontWeight: selected ? "700" : "500",
+          minHeight: 32,
+          paddingHorizontal: quiet ? 4 : 12,
+          paddingVertical: 6,
+          justifyContent: "center",
+          borderRadius: 8,
+          borderWidth: quiet || filled ? 0 : 1,
+          borderColor: selected ? (c.accent ?? c.foreground) : c.border,
+          backgroundColor: filled
+            ? c.accent
+            : selected
+              ? (c.surface2 ?? c.surface0)
+              : "transparent",
         }}
       >
-        {children ?? label}
-      </Text>
+        <Text
+          style={{
+            color: disabled
+              ? c.foregroundMuted
+              : filled
+                ? c.accentForeground
+                : quiet
+                  ? c.statusSuccess
+                  : c.foreground,
+            fontSize: 13,
+            fontWeight: filled || selected ? "600" : "500",
+          }}
+        >
+          {children ?? label}
+        </Text>
+      </View>
     </Pressable>
   );
 }

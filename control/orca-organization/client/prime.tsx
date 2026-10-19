@@ -680,7 +680,7 @@ export function PrimeSurface(props: Props) {
   const h = buildHierarchy(fleet.data, directory.data, briefing.data, roles.data);
   const chosen = h.projects.find((p) => p.id === project) ?? null,
     node = fleet.data?.nodes.find((n) => n.id === session);
-  const pad = { padding: props.layout.compact ? 16 : 28 };
+  const pad = { padding: props.layout.compact ? 16 : 24 };
 
   if (node)
     return (
@@ -714,16 +714,15 @@ export function PrimeSurface(props: Props) {
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: c.surface0 }}
-      contentContainerStyle={{ ...pad, gap: 22, maxWidth: props.layout.compact ? undefined : 860 }}
+      contentContainerStyle={{ ...pad, gap: 22 }}
     >
       <View style={{ gap: 8 }}>
-        <Text style={{ ...muted, letterSpacing: 1, fontSize: 12 }}>FULCRA / LEADS</Text>
         <Text
           accessibilityRole="header"
           style={{
             ...text,
-            fontSize: props.layout.compact ? 28 : 32,
-            lineHeight: props.layout.compact ? 34 : 39,
+            fontSize: props.layout.compact ? 24 : 26,
+            lineHeight: props.layout.compact ? 30 : 32,
             fontWeight: "600",
           }}
         >
@@ -859,6 +858,7 @@ export function PrimeSurface(props: Props) {
                       <WorkButton
                         key={`led-${p.id}`}
                         theme={props.theme}
+                        quiet
                         label={`Open project with a lead: ${p.name}`}
                         onPress={() => {
                           setProject(p.id);
@@ -871,6 +871,7 @@ export function PrimeSurface(props: Props) {
                       <WorkButton
                         key={`vac-${p.id}`}
                         theme={props.theme}
+                        quiet
                         label={`Open project needing a lead: ${p.name}`}
                         onPress={() => {
                           setProject(p.id);

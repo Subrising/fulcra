@@ -244,6 +244,8 @@ export const ja: TranslationResources = {
   },
   agentStream: {
     empty: "このエージェントとチャットを始めましょう...",
+    emptyHint:
+      "計画・作成・レビューしたいタスクを書いてください。@ でファイルを追加、/ でコマンドを使えます。",
     scrollToBottom: "下にスクロール",
     historyLoadFailed: "エージェントの履歴を読み込めませんでした",
     messageCapped: "このメッセージは上限で切り詰められました（{{bytes}}バイト）。",

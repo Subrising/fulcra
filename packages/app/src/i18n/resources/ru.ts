@@ -244,6 +244,8 @@ export const ru: TranslationResources = {
   },
   agentStream: {
     empty: "Начните общаться с этим агентом...",
+    emptyHint:
+      "Опишите задачу: спланировать, сделать или проверить. Введите @, чтобы добавить файлы, и / для команд.",
     scrollToBottom: "Прокрутить вниз",
     historyLoadFailed: "Не удалось загрузить историю агента",
     messageCapped: "Это сообщение было обрезано ({{bytes}} байт).",

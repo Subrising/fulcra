@@ -632,16 +632,11 @@ export function FleetSurface(props: PluginSurfaceProps & { onTask: (id: string) 
       style={{ flex: 1, backgroundColor: c.surface0 }}
       contentContainerStyle={{
         width: "100%",
-        maxWidth: 1040,
-        alignSelf: "center",
         padding: props.layout.compact ? 16 : 24,
         gap: 16,
       }}
     >
       <View style={{ gap: 8 }}>
-        <Text style={{ ...muted, fontSize: 12, letterSpacing: 1, fontWeight: "600" }}>
-          FULCRA / WORK
-        </Text>
         <Text style={{ ...text, fontSize: 26, fontWeight: "600" }}>Your work, at a glance</Text>
         <Text style={{ ...muted, fontSize: 16 }}>The goal. The progress. What needs you next.</Text>
       </View>
@@ -807,6 +802,7 @@ export function FleetSurface(props: PluginSurfaceProps & { onTask: (id: string) 
           </View>
           <WorkButton
             theme={props.theme}
+            quiet
             label="Technical observation details"
             expanded={technical}
             onPress={() => showTechnical(!technical)}
