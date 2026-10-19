@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { GitCommandTimeoutError, runGitCommand } from "./run-git-command.js";
 
@@ -68,6 +68,8 @@ describe("runGitCommand timeout", () => {
     expect(error).toBeInstanceOf(GitCommandTimeoutError);
     await (error as GitCommandTimeoutError).stopped;
     const pid = Number(readFileSync(pidPath, "utf8"));
-    expect(() => process.kill(pid, 0)).toThrow();
+    // SIGKILL is sent. The process stays visible until its new parent reaps it.
+    const signalChild = () => process.kill(pid, 0);
+    await vi.waitFor(() => expect(signalChild).toThrow(), { timeout: 5_000 });
   });
 });
