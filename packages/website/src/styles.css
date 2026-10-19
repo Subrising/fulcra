@@ -553,6 +553,8 @@
   padding: 0.125rem 0.375rem;
   border-radius: 0.25rem;
   font-size: 0.875em;
+  /* Long config keys and paths otherwise push the page wider than a phone. */
+  overflow-wrap: anywhere;
 }
 
 .docs-prose hr {

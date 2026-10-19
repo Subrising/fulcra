@@ -66,7 +66,8 @@ function discoverAlternativeRoutes(): string[] {
     .filter((entry) => entry.isFile() && entry.name.endsWith(".tsx"))
     .map((entry) => entry.name.replace(/\.tsx$/, ""))
     .sort();
-  return ["/alternatives", ...slugs.map((slug) => `/alternatives/${slug}`)];
+  // There is no /alternatives index page, so list only the comparison pages.
+  return slugs.map((slug) => `/alternatives/${slug}`);
 }
 
 function discoverBlogRoutes(): string[] {

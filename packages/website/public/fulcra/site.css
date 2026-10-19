@@ -56,11 +56,11 @@ a {
 .skip {
   position: absolute;
   left: 12px;
-  top: -48px;
+  top: -64px;
   z-index: 20;
   background: var(--coral);
   color: #1a0d0f;
-  padding: 8px 14px;
+  padding: 13px 16px;
   border-radius: 8px;
   font-weight: 600;
   text-decoration: none;
@@ -83,12 +83,13 @@ a {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 60px;
+  height: 64px;
   gap: 16px;
 }
 .brand {
   display: flex;
   align-items: center;
+  min-height: 48px;
   gap: 10px;
   font-weight: 700;
   font-size: 19px;
@@ -101,25 +102,33 @@ a {
 nav {
   display: flex;
   align-items: center;
-  gap: 26px;
+  gap: 10px;
   font-size: 15px;
 }
+/* The padding grows each link's hit area to 48px without moving its text. */
 nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 48px;
+  padding: 0 8px;
   color: var(--ink-2);
   text-decoration: none;
 }
 nav a:hover {
   color: var(--ink);
 }
+/* A transparent border keeps the 48px hit area while the pill draws at 36px. */
 nav .nav-cta {
   color: var(--ink);
   background: var(--chip);
-  border: 1px solid var(--line-2);
-  padding: 6px 14px;
+  background-clip: padding-box;
+  border: 6px solid transparent;
+  box-shadow: inset 0 0 0 1px var(--line-2);
+  padding: 0 14px;
   border-radius: 999px;
 }
 nav .nav-cta:hover {
-  border-color: rgba(255, 138, 91, 0.6);
+  box-shadow: inset 0 0 0 1px rgba(255, 138, 91, 0.6);
 }
 
 /* Hero */
@@ -147,6 +156,11 @@ nav .nav-cta:hover {
 .hero-copy {
   position: relative;
   text-align: center;
+}
+h1,
+h2,
+h3 {
+  text-wrap: balance;
 }
 h1 {
   font-size: clamp(40px, 6.6vw, 76px);
@@ -325,6 +339,10 @@ h3 {
   gap: 56px;
   align-items: center;
 }
+/* Even steps put the text on the right, so the wide column moves with the image. */
+.step:nth-child(even) {
+  grid-template-columns: minmax(0, 7fr) minmax(0, 4fr);
+}
 .step:nth-child(even) .step-text {
   order: 2;
 }
@@ -423,6 +441,7 @@ h3 {
   border-color: rgba(255, 138, 91, 0.45);
 }
 .node.prime {
+  width: min(300px, 100%);
   background: linear-gradient(rgba(94, 22, 35, 0.55), rgba(67, 21, 33, 0.35));
   border-color: rgba(255, 138, 91, 0.4);
 }
@@ -540,6 +559,7 @@ h3 {
 
 @media (max-width: 900px) {
   .step,
+  .step:nth-child(even),
   .split {
     grid-template-columns: 1fr;
     gap: 28px;
@@ -607,6 +627,12 @@ h3 {
   }
   .foot span:last-child {
     text-align: left;
+  }
+}
+/* Phones held sideways: start the headline nearer the header. */
+@media (max-height: 500px) {
+  .hero {
+    padding-top: 40px;
   }
 }
 @media (prefers-reduced-motion: reduce) {

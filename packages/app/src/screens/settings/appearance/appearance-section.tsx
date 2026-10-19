@@ -267,7 +267,7 @@ function FontFamilyRow({
   }, [value]);
 
   return (
-    <View style={withBorder ? styles.rowWithBorder : settingsStyles.row}>
+    <View style={[withBorder ? styles.rowWithBorder : settingsStyles.row, styles.fontFamilyRow]}>
       <View style={settingsStyles.rowContent}>
         <Text style={settingsStyles.rowTitle}>{title}</Text>
         <Text style={settingsStyles.rowHint}>{hint}</Text>
@@ -724,10 +724,13 @@ const styles = StyleSheet.create((theme) => ({
     borderWidth: theme.borderWidth[1],
     borderColor: theme.colors.border,
   },
+  // On phones the font field drops under its label so the hint keeps a readable width.
+  fontFamilyRow: { flexWrap: "wrap", rowGap: theme.spacing[3] },
   fontFamilyInput: {
     flexGrow: 1,
     flexShrink: 1,
-    maxWidth: 280,
+    flexBasis: { xs: "100%", sm: "auto" },
+    maxWidth: { xs: "100%", sm: 280 },
     minHeight: 36,
     paddingVertical: theme.spacing[2],
     paddingHorizontal: theme.spacing[3],

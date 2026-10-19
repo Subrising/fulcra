@@ -200,7 +200,8 @@ const styles = StyleSheet.create((theme) => ({
     maxWidth: 452,
     flexDirection: "row",
     flexWrap: "wrap",
-    justifyContent: "flex-start",
+    // Web shows three tiles (no Pair a phone); centring keeps the odd one under the pair.
+    justifyContent: "center",
     gap: theme.spacing[3],
   },
   tile: {

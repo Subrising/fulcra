@@ -1395,7 +1395,7 @@ function TerminalProfileRow({
           <ThemedProfileSquareTerminal size={ICON_SIZE.md} uniProps={mutedColorMapping} />
         )}
       </View>
-      <View style={settingsStyles.rowContent}>
+      <View style={[settingsStyles.rowContent, terminalProfileStyles.rowContent]}>
         <Text style={settingsStyles.rowTitle} numberOfLines={1}>
           {profile.name}
         </Text>
@@ -1691,9 +1691,14 @@ export function HostTerminalsPage({ serverId }: { serverId: string }) {
 }
 
 const terminalProfileStyles = StyleSheet.create((theme) => ({
+  // On phones the four actions wrap under the name instead of cutting it short.
   row: {
     gap: theme.spacing[2],
     minHeight: 56,
+    flexWrap: { xs: "wrap", sm: "nowrap" },
+  },
+  rowContent: {
+    minWidth: { xs: 180, sm: 0 },
   },
   iconWrapper: {
     width: theme.iconSize.md,
@@ -1704,6 +1709,7 @@ const terminalProfileStyles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
     gap: 0,
+    marginLeft: "auto",
   },
   emptyCard: {
     padding: theme.spacing[4],

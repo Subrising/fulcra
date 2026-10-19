@@ -165,7 +165,7 @@ function PluginsPage() {
 
         <PluginSection labelledBy="categories">
           <PluginSectionTitle id="categories">Categories</PluginSectionTitle>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-2 min-[420px]:grid-cols-2 sm:grid-cols-3">
             {CATEGORIES.map((category) => {
               const Icon = CATEGORY_ICONS[category.slug];
               return (
