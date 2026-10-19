@@ -16383,6 +16383,73 @@ async function addStuckArchiveState(f: ControlledInterruptFixture): Promise<() =
   };
 }
 
+test.each(["zero-row", "lead-target", "rows"])(
+  "FU-389 lead force on a stuck worker: %s",
+  async (mode) => {
+    const root = mkdtempSync(join(tmpdir(), "archive-lead-force-"));
+    mkdirSync(join(root, "fixture"));
+    const f = await createControlledInterruptFixture({
+      name: "archive-lead-force",
+      agentId: randomUUID(),
+      turnId: "archive-lead-force-turn",
+      archiveLedgerDirectory: root,
+      interrupt: async (session) => {
+        session.pushEvent({ type: "turn_completed", provider: "codex", turnId: session.turnId });
+      },
+    });
+    registerArchiveReportCount(f.manager, () => 0);
+    const file = join(root, "fixture", "OPEN-ITEMS.md");
+    const before =
+      mode === "rows" ? `| FX-1 | Work | FIX | ${f.agentId} | OPEN | proof | source |\n` : "";
+    writeFileSync(file, before);
+    let releaseHeld: (() => void) | undefined;
+    try {
+      await f.startForegroundRun();
+      releaseHeld = await addStuckArchiveState(f);
+      const worker = (await f.storage.get(f.agentId))!;
+      const leadId = randomUUID();
+      await f.storage.upsert({
+        ...worker,
+        id: leadId,
+        title: "Fixture lead",
+        labels: { "fulcra.role": "orchestration" },
+      });
+      await f.storage.upsert({
+        ...worker,
+        labels: {
+          ...worker.labels,
+          "fulcra.reports-to": leadId,
+          ...(mode === "lead-target" ? { "fulcra.role": "orchestration" } : {}),
+        },
+      });
+      const archive = () =>
+        archiveSafetyCommand(
+          { agentManager: f.manager, agentStorage: f.storage, logger },
+          f.agentId,
+        );
+      const execute = () => f.manager.withArchiveLedgerTransfer(f.agentId, archive);
+      const result = f.manager.withAgentCaller(leadId, execute);
+      if (mode === "zero-row") {
+        await expect(result).resolves.toBeDefined();
+        expect(f.session.interruptCalled).toBe(true);
+        expect((await f.storage.get(f.agentId))?.archivedAt).toEqual(expect.any(String));
+      } else {
+        await expect(result).rejects.toThrow(
+          mode === "lead-target" ? "cannot be force-archived" : "unread reports",
+        );
+        expect(f.session.interruptCalled).toBe(false);
+        expect((await f.storage.get(f.agentId))?.archivedAt).toBeFalsy();
+      }
+      expect(readFileSync(file, "utf8")).toBe(before);
+    } finally {
+      releaseHeld?.();
+      await f.manager.cancelAgentRun(f.agentId).catch(() => undefined);
+      await f.cleanup();
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
+
 test.each(["terminal", "human", "MCP terminal", "MCP human"])(
   "FU-370 review: force from %s keeps interruption and the row guard",
   async (caller) => {

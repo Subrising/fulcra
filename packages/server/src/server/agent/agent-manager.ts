@@ -4740,6 +4740,15 @@ export class AgentManager {
       throw new Error("A lead or owner session cannot be force-archived.");
     // Only an agent lead can transfer owned rows. Human force uses the ordinary archive guards.
     if (record && !(await this.archiveLedgerRows(record)).length) {
+      // A worker's own lead clears a stuck worker with no open rows like a human does: interrupt and archive.
+      const lead = await this.requireRegistry().get(leadId);
+      if (
+        lead &&
+        !lead.archivedAt &&
+        isArchiveLead(lead) &&
+        reportsToArchiveParent(lead, record, this.archiveServerId)
+      )
+        return { result: await operation(), transferredLedgerItems: [] };
       const blockers = await this.archivePendingBlockers(agentId, record, true);
       if (blockers.length) throw new Error(`Archive refused: ${blockers.join(" ")}`);
       return { result: await operation(), transferredLedgerItems: [] };
