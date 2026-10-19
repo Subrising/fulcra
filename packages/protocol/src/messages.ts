@@ -1532,8 +1532,47 @@ export const SendAgentMessageRequestSchema = z.object({
     .object({
       agentId: z.string().min(1).max(200),
       serverId: z.string().min(1).max(200).optional(),
+      inboundOnly: z.literal(true).optional(),
+      outboundMainOnly: z.literal(true).optional(),
+      outboundServerOnly: z.string().min(1).max(200).optional(),
+      refusal: z.string().max(2000).optional(),
     })
     .optional(),
+});
+
+export const AgentMessageRouteCheckRequestSchema = z.object({
+  type: z.literal("agent.message.route_check.request"),
+  requestId: z.string(),
+  input: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("metadata") }),
+    z.object({ kind: z.literal("outbound"), senderId: z.string(), targetId: z.string() }),
+    z.object({
+      kind: z.literal("inbound"),
+      agentId: z.string(),
+      sender: SendAgentMessageRequestSchema.shape.sender,
+    }),
+  ]),
+});
+export const AgentMessageRouteCheckResponseSchema = z.object({
+  type: z.literal("agent.message.route_check.response"),
+  payload: z.object({
+    requestId: z.string(),
+    output: z.discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("metadata"),
+        serverId: z.string(),
+        mainAssistantId: z.string().nullable(),
+      }),
+      z.object({
+        kind: z.literal("outbound"),
+        inboundOnly: z.boolean(),
+        outboundMainOnly: z.literal(true).optional(),
+        outboundServerOnly: z.string().optional(),
+        refusal: z.string().optional(),
+      }),
+      z.object({ kind: z.literal("inbound"), allowed: z.boolean(), reason: z.string().optional() }),
+    ]),
+  }),
 });
 
 export const NativeArtifactContentReadRequestSchema = NativeArtifactContentReadInputSchema.extend({
@@ -3886,6 +3925,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   WorkspaceRecoveryRestoreRequestSchema,
   SetVoiceModeMessageSchema,
   SendAgentMessageRequestSchema,
+  AgentMessageRouteCheckRequestSchema,
   NativeOwnerReportReadRequestSchema,
   NativeEvidenceReadRequestSchema,
   NativeArtifactContentReadRequestSchema,
@@ -4280,6 +4320,8 @@ export const ServerInfoStatusPayloadSchema = z
         agentRequestReceipts: z.boolean().optional(),
         nativeQueuedMessages: z.boolean().optional(),
         agentMessageQueue: z.boolean().optional(),
+        agentSendReceipts: z.boolean().optional(),
+        agentSendReportingLines: z.boolean().optional(),
         messageCompletionWait: z.boolean().optional(),
         // Absent on older hosts means the usage-limit resume setting is unsupported.
         autoResumeOnLimit: z.boolean().optional(),
@@ -5791,6 +5833,8 @@ export const SendAgentMessageResponseMessageSchema = z.object({
     agentId: z.string(),
     accepted: z.boolean(),
     deliveryNote: z.string().optional(),
+    deliveryState: z.literal("held").optional(),
+    errorCode: z.string().optional(),
     nativeReceipt: NativeQueuedMessageReceiptSchema.optional(),
     error: z.string().nullable(),
   }),
@@ -8248,6 +8292,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   WorkspaceClearAttentionResponseSchema,
   WorkspaceMarkUnreadResponseSchema,
   SendAgentMessageResponseMessageSchema,
+  AgentMessageRouteCheckResponseSchema,
   NativeOwnerReportReadResponseSchema,
   NativeEvidenceReadResponseSchema,
   NativeArtifactContentReadResponseSchema,

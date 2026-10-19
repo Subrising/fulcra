@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import shutil
+import socket
 import tempfile
 import uuid
 
@@ -158,6 +159,8 @@ def parse_send(args):
     if not rest or rest[0] != 'send':
         return None
     positional, positions, text, source, message_id = [], [], [], None, None
+    restrictions = {}
+    check_only = False
     requires_plain = False
     index = 1
     while index < len(rest):
@@ -170,7 +173,7 @@ def parse_send(args):
             if index + 1 >= len(rest): raise ValueError('Missing send option value')
             if token == '--image': requires_plain = True
             index += 2
-        elif token in ['--prompt', '--prompt-file', '--from', '--message-id']:
+        elif token in ['--prompt', '--prompt-file', '--from', '--message-id', '--outbound-refusal', '--outbound-server-only']:
             if index + 1 >= len(rest):
                 raise ValueError('Missing send option value')
             value = rest[index + 1]
@@ -180,10 +183,18 @@ def parse_send(args):
                 text.append(Path(value).read_text(encoding='utf-8'))
             elif token == '--from':
                 source = value
+            elif token == '--outbound-server-only':
+                restrictions['outboundServerOnly'] = value
+            elif token == '--outbound-refusal':
+                restrictions['refusal'] = value
             else:
                 message_id = value
             index += 2
-        elif token in ['--no-wait', '--wait', '--queue', '--steer', '--json', '--no-color', '--no-headers', '--quiet', '-q', '--native-queue']:
+        elif token in ['--inbound-only', '--outbound-main-only', '--check-only']:
+            if token == '--check-only': check_only = True
+            else: restrictions['inboundOnly' if token == '--inbound-only' else 'outboundMainOnly'] = True
+            index += 1
+        elif token in ['--no-wait', '--wait', '--queue', '--steer', '--json', '--no-color', '--no-headers', '--quiet', '-q', '--native-queue', '--no-notify-on-finish']:
             if token == '--native-queue': requires_plain = True
             index += 1
         elif token.startswith('-'):
@@ -196,10 +207,14 @@ def parse_send(args):
         text.append(positional.pop())
     if len(positional) != 1 or len(text) != 1:
         raise ValueError('A notice needs one target and one text source')
-    return endpoint, positional[0], text[0], source, message_id, positions[0], requires_plain
+    return endpoint, positional[0], text[0], source, message_id, positions[0], requires_plain, restrictions, check_only
 
 
 class TargetUnavailableError(ValueError):
+    pass
+
+
+class TargetNotFoundError(TargetUnavailableError):
     pass
 
 
@@ -245,7 +260,7 @@ class Gate:
             matches = [row for row in rows if row['id'].startswith(identifier)]
         if len(matches) != 1:
             if not matches:
-                raise TargetUnavailableError('The target is absent from the selected daemon.'
+                raise TargetNotFoundError('The target is absent from the selected daemon on ' + socket.gethostname() + '.'
                                              + self.route_hint(identifier) + ' No notice was sent.')
             raise TargetUnavailableError('The notice target is ambiguous. Use its full session ID. No notice was sent.')
         row = matches[0]
@@ -289,31 +304,67 @@ class Gate:
         parsed = parse_send(args)
         if parsed is None:
             return self.run(cli, args).returncode
-        endpoint, identifier, text, source, message_id, target_index, requires_plain = parsed
+        endpoint, identifier, text, source, message_id, target_index, requires_plain, restrictions, check_only = parsed
         supplied_endpoint = bool(endpoint)
         if not endpoint:
             home = os.environ.get('PASEO_HOME') or read_policy(self.policy).get('defaultHome')
             if home: endpoint = ['--home', home]
         # Read-only target discovery never starts a provider or sends input.
-        target = self.target(cli, endpoint, identifier)
+        try:
+            target = self.target(cli, endpoint, identifier)
+        except TargetNotFoundError:
+            # Only the native CLI validates sender provenance and dispatches SSH routes.
+            # Display-only noticeRoutes never grant an automatic remote send.
+            policy = read_policy(self.policy)
+            if require_delivery:
+                raise ValueError('A required notice needs an explicit destination endpoint. No remote send was attempted.')
+            key = policy.get('roles', {}).get(identifier[5:]) if identifier.startswith('role:') else identifier
+            routes = policy.get('sshRoutes', {})
+            if not isinstance(routes, dict):
+                raise ValueError('Invalid SSH send routes. No notice was sent.')
+            if any(not isinstance(item, str) or len(item) != 36 or str(uuid.UUID(item)) != item.lower() for item in routes):
+                raise ValueError('SSH route keys must be complete session UUIDs. No notice was sent.')
+            matches = [key] if key in routes else [item for item in routes if key and item.startswith(key)]
+            if len(matches) != 1:
+                raise
+            bound = list(args)
+            bound[target_index] = matches[0]
+            if not supplied_endpoint: bound = [*endpoint, *bound]
+            return self.run(cli, bound).returncode
+        bound = list(args)
+        bound[target_index] = target['id']
+        if not supplied_endpoint: bound = [*endpoint, *bound]
+        if check_only: return self.run(cli, bound).returncode
+        if restrictions:
+            # A restricted cross-host message must pass the destination check before a Python hold.
+            checked = self.run(cli, [*bound, '--check-only', '--json'], capture_output=True, text=True, timeout=60)
+            if checked.returncode:
+                if checked.stdout: print(checked.stdout, end='')
+                if checked.stderr: print(checked.stderr, end='', file=sys.stderr)
+                return checked.returncode
+            if json.loads(checked.stdout).get('status') != 'allowed':
+                raise ValueError('The destination did not confirm the reporting-line check. No notice was sent.')
         with locked(self.store):
             if paused(read_policy(self.policy), target, self.parent_reader(cli, endpoint)):
                 if requires_plain or text.lstrip().startswith('/'):
                     raise ValueError('Paused notices require plain text. The original command was not sent or stored.')
                 if require_delivery:
                     raise ValueError('Provider paused. The required notice was not delivered.')
-                return self.hold(cli, endpoint, target, text, source, message_id)
+                return self.hold(cli, endpoint, target, text, source, message_id,
+                                 notify_on_finish='--no-notify-on-finish' not in args, restrictions=restrictions)
         bound = list(args)
         bound[target_index] = target['id']
         if not supplied_endpoint: bound = [*endpoint, *bound]
         return self.run(cli, bound).returncode
 
-    def hold(self, cli, endpoint, target, text, source, message_id):
+    def hold(self, cli, endpoint, target, text, source, message_id, notify_on_finish=True, restrictions=None):
         identity = {'endpoint': endpoint, 'agentId': target['id']}
         # All launcher paths for this endpoint share one session record.
         key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         path = self.store / (key + '.json')
         sender = {'from': source, 'agent': os.environ.get('PASEO_AGENT_ID')}
+        if not notify_on_finish: sender['notifyOnFinish'] = False
+        if restrictions: sender.update(restrictions)
         record = json.loads(path.read_text()) if path.exists() else {
             **identity, 'cli': str(Path(cli).absolute()), 'batches': []}
         if sum(len(batch['notices']) for batch in record['batches'] if batch['state'] == 'held') >= 1000:
@@ -385,8 +436,15 @@ class Gate:
                     atomic(path, record)
                     args = [*record['endpoint'], 'send', record['agentId'], '--queue', '--no-wait', '--json', '--prompt-file', str(prompt)]
                     if batch['sender']['from']: args.extend(['--from', batch['sender']['from']])
+                    if batch['sender'].get('notifyOnFinish') is False: args.append('--no-notify-on-finish')
+                    if batch['sender'].get('inboundOnly'): args.append('--inbound-only')
+                    if batch['sender'].get('outboundMainOnly'): args.append('--outbound-main-only')
+                    if batch['sender'].get('outboundServerOnly'): args.extend(['--outbound-server-only', batch['sender']['outboundServerOnly']])
+                    if batch['sender'].get('refusal'): args.extend(['--outbound-refusal', batch['sender']['refusal']])
                     env = dict(os.environ)
                     env.pop('PASEO_AGENT_ID', None)
+                    endpoint = record['endpoint']
+                    if '--home' in endpoint: env['PASEO_HOME'] = endpoint[endpoint.index('--home') + 1]
                     if batch['sender']['agent']: env['PASEO_AGENT_ID'] = batch['sender']['agent']
                 try:
                     result = self.run(cli, args, env=env, capture_output=True, text=True, timeout=60)
@@ -429,12 +487,19 @@ def main():
     return gate.send(sys.argv[2], sys.argv[3:], require_delivery=require_delivery)
 
 
-if __name__ == '__main__':
+def cli_main():
     try:
-        sys.exit(main())
+        return main()
+    except TargetNotFoundError as error:
+        print(json.dumps({'error': {'code': 'AGENT_NOT_FOUND', 'message': str(error)}}), file=sys.stderr)
+        return 1
     except (OSError, subprocess.SubprocessError):
         print('Notice gate: File or transport operation failed. Check the saved receipts.', file=sys.stderr)
-        sys.exit(1)
+        return 1
     except Exception as error:
         print('Notice gate: ' + str(error), file=sys.stderr)
-        sys.exit(1)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(cli_main())

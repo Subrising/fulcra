@@ -1,4 +1,6 @@
 import importlib.util
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -34,6 +36,8 @@ class NoticePauseTests(unittest.TestCase):
 
     def run_native(self, cli, args, **kwargs):
         self.calls.append((cli, args, kwargs))
+        if '--check-only' in args:
+            return subprocess.CompletedProcess(args, 0, json.dumps({'status': 'allowed'}), '')
         if 'inspect' in args:
             if self.inspect_error:
                 return subprocess.CompletedProcess(args, 1, '', 'read error')
@@ -212,6 +216,31 @@ class NoticePauseTests(unittest.TestCase):
         self.gate.drain()
         self.assertEqual(self.sends()[0][2]['env']['PASEO_AGENT_ID'], 'source')
 
+    def test_local_sender_drain_restores_record_home_without_daemon_environment(self):
+        selected_home = str(self.root / 'selected-home')
+        original = self.gate.run
+        deliveries = []
+        def run(cli, args, **kwargs):
+            if 'send' in args:
+                env = kwargs.get('env', {})
+                deliveries.append((args, env))
+                matched = env.get('PASEO_HOME') == selected_home and env.get('PASEO_AGENT_ID') == 'source'
+                return subprocess.CompletedProcess(args, 0 if matched else 1,
+                    json.dumps({'status': 'sent'}) if matched else '',
+                    '' if matched else json.dumps({'error': {'code': 'SENDER_HOST_MISMATCH'}}))
+            return original(cli, args, **kwargs)
+        self.gate.run = run
+        with patch.dict(os.environ, {}, clear=True):
+            with patch.dict(os.environ, {'PASEO_AGENT_ID': 'source'}):
+                self.gate.send('/native/cli', ['--home', selected_home, 'send', 'claude-owner', '--prompt', 'held local result'])
+            self.assertNotIn('PASEO_HOME', os.environ)
+            self.policy([])
+            self.gate.drain()
+        self.assertEqual(self.records()[0]['state'], 'delivered')
+        self.assertEqual(len(deliveries), 1)
+        self.assertEqual(deliveries[0][1]['PASEO_HOME'], selected_home)
+        self.assertEqual(deliveries[0][1]['PASEO_AGENT_ID'], 'source')
+
     def test_different_senders_are_retained_with_their_source(self):
         with patch.dict(os.environ, {'PASEO_AGENT_ID': 'source-a'}): self.send(text='one')
         with patch.dict(os.environ, {'PASEO_AGENT_ID': 'source-b'}): self.send(text='two')
@@ -278,6 +307,83 @@ class NoticePauseTests(unittest.TestCase):
             self.send('missing')
         self.assertEqual(self.sends(), [])
 
+    def test_cli_target_miss_is_machine_readable_for_the_ssh_sender(self):
+        self.rows = []
+        output = io.StringIO()
+        with patch.object(m, 'Gate', return_value=self.gate), patch.object(sys, 'argv', [
+                'notice-pause.py', '--cli', '/native/cli', 'send', 'missing', '--prompt', 'marker']), contextlib.redirect_stderr(output):
+            code = m.cli_main()
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(output.getvalue())['error']['code'], 'AGENT_NOT_FOUND')
+        self.assertEqual(self.sends(), [])
+
+    def test_structured_route_defers_a_local_miss_to_native_sender_checks(self):
+        self.policy([], sshRoutes={'11111111-1111-4111-8111-111111111111': {
+            'host': 'remote host', 'sshTarget': 'remote',
+            'cli': '/opt/fulcra/bin/fulcra', 'home': '/srv/fulcra'}})
+        self.send('11111111-1111-4111-8111-111111111111')
+        self.assertEqual(len(self.sends()), 1)
+        self.assertIn('11111111-1111-4111-8111-111111111111', self.sends()[0][1])
+
+    def test_structured_route_never_replaces_a_local_hit(self):
+        self.policy([], sshRoutes={'codex-owner': {
+            'host': 'remote host', 'sshTarget': 'remote',
+            'cli': '/opt/fulcra/bin/fulcra', 'home': '/srv/fulcra'}})
+        self.send('codex-owner')
+        self.assertEqual(len(self.sends()), 1)
+        self.assertIn('codex-owner', self.sends()[0][1])
+
+    def test_required_notice_cannot_defer_through_a_route(self):
+        self.policy([], sshRoutes={'11111111-1111-4111-8111-111111111111': {
+            'host': 'remote host', 'sshTarget': 'remote',
+            'cli': '/opt/fulcra/bin/fulcra', 'home': '/srv/fulcra'}})
+        with self.assertRaisesRegex(ValueError, 'explicit destination'):
+            self.gate.send('/native/cli', ['send', '11111111-1111-4111-8111-111111111111', '--prompt', 'warning'], require_delivery=True)
+        self.assertEqual(self.sends(), [])
+
+    def test_invalid_route_key_is_refused(self):
+        for key in ['-oProxyCommand=wrong', '11111111']:
+            self.policy([], sshRoutes={key: {'host': 'remote'}})
+            with self.assertRaisesRegex(ValueError, 'complete session UUIDs'):
+                self.send("missing")
+        self.assertEqual(self.sends(), [])
+
+    def test_restricted_refusal_cannot_be_saved_as_a_pause_hold(self):
+        original = self.gate.run
+        def run(cli, args, **kwargs):
+            if '--check-only' in args:
+                return subprocess.CompletedProcess(args, 1, '', json.dumps({'error': {'code': 'SEND_REFUSED', 'message': 'Send this to your lead.'}}))
+            return original(cli, args, **kwargs)
+        self.gate.run = run
+        error = io.StringIO()
+        with contextlib.redirect_stderr(error):
+            code = self.gate.send('/native/cli', ['send', 'claude-owner', '--prompt', 'private', '--from', 'worker@source', '--inbound-only', '--outbound-refusal', 'Send this to your lead.'])
+        self.assertEqual(code, 1)
+        self.assertIn('Send this to your lead.', error.getvalue())
+        self.assertEqual(self.records(), [])
+        self.assertEqual(self.sends(), [])
+
+    def test_restricted_hold_preserves_source_policy_until_drain(self):
+        self.gate.send('/native/cli', ['send', 'claude-owner', '--prompt', 'private', '--from', 'worker@source', '--inbound-only', '--outbound-refusal', 'Send this to your lead.'])
+        self.assertTrue(self.records()[0]['sender']['inboundOnly'])
+        self.policy([])
+        self.gate.drain()
+        actual = [call for call in self.sends() if '--check-only' not in call[1]]
+        self.assertEqual(len(actual), 1)
+        self.assertIn('--inbound-only', actual[0][1])
+        self.assertIn('Send this to your lead.', actual[0][1])
+
+    def test_remote_opt_out_reaches_the_native_sender_check(self):
+        self.policy([])
+        self.gate.send('/native/cli', ['send', 'codex-owner', '--prompt', 'quiet', '--no-notify-on-finish'])
+        self.assertIn('--no-notify-on-finish', self.sends()[0][1])
+
+    def test_paused_remote_opt_out_survives_resume(self):
+        self.gate.send('/native/cli', ['send', 'claude-owner', '--prompt', 'quiet', '--no-notify-on-finish'])
+        self.policy([])
+        self.gate.drain()
+        self.assertIn('--no-notify-on-finish', self.sends()[0][1])
+
     def test_target_binding_preserves_an_identical_endpoint_value(self):
         self.gate.send('/native/cli', ['--home', 'codex', 'send', 'codex', '--prompt', 'receipt'])
         self.assertEqual(self.sends()[0][1][1], 'codex')
@@ -289,17 +395,17 @@ class NoticePauseTests(unittest.TestCase):
         self.assertEqual(self.sends()[0][1][1], 'claude-owner')
 
     def test_remote_target_names_the_host_and_route_without_sending(self):
-        self.policy([], roles={'main-assistant': 'remote-main', 'fulcra-lead': 'remote-lead'},
+        self.policy([], roles={'main-assistant': '11111111-1111-4111-8111-111111111111', 'fulcra-lead': 'remote-lead'},
                     noticeRoutes={key: {'host': 'Mac mini', 'route': 'ssh mini using ~/.local/bin/fulcra'}
-                                  for key in ['remote-main', 'remote-lead']})
-        for identifier in ['role:main-assistant', 'role:fulcra-lead', 'remote-m', 'remote-lead']:
+                                  for key in ['11111111-1111-4111-8111-111111111111', 'remote-lead']})
+        for identifier in ['role:main-assistant', 'role:fulcra-lead', '11111111', 'remote-lead']:
             with self.assertRaisesRegex(m.TargetUnavailableError, 'Mac mini.*ssh mini'):
                 self.send(identifier)
         self.assertEqual(self.sends(), [])
 
     def test_failed_discovery_names_the_route_without_exposing_transport_output(self):
-        self.policy([], roles={'main-assistant': 'remote-main'}, noticeRoutes={
-            'remote-main': {'host': 'Mac mini', 'route': 'ssh mini using ~/.local/bin/fulcra'}})
+        self.policy([], roles={'main-assistant': '11111111-1111-4111-8111-111111111111'}, noticeRoutes={
+            '11111111-1111-4111-8111-111111111111': {'host': 'Mac mini', 'route': 'ssh mini using ~/.local/bin/fulcra'}})
         self.gate.run = lambda *args, **kw: subprocess.CompletedProcess(args, 7, '', 'private transport output')
         with self.assertRaisesRegex(RuntimeError, 'selected daemon.*exit 7.*Mac mini.*ssh mini') as error:
             self.send('role:main-assistant')

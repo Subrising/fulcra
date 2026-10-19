@@ -2078,6 +2078,8 @@ export class VoiceAssistantWebSocketServer {
         // Explicit authenticated delegated queue; not ordinary human/Claude conversion.
         nativeQueuedMessages: true,
         agentMessageQueue: true,
+        agentSendReceipts: true,
+        agentSendReportingLines: true,
         messageCompletionWait: true,
         autoResumeOnLimit: true,
         notificationPolicy: true,

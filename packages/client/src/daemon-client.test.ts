@@ -8091,6 +8091,51 @@ test("agent message queue reports the daemon delivery note", async () => {
   expect(onDelivery).toHaveBeenCalledExactlyOnceWith("Message queued for combined delivery.");
 });
 
+test("agent send preserves a structured held receipt", async () => {
+  const { client, mock } = await nativeQueueClient(false);
+  const onDelivery = vi.fn();
+  const pending = client.sendAgentMessage("target", "draft", { onDelivery });
+  const request = nativeQueueRequests(mock)[0];
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "send_agent_message_response",
+      payload: {
+        requestId: request.requestId,
+        agentId: "target",
+        accepted: true,
+        error: null,
+        deliveryNote: "Provider paused. Notice saved. No turn was started.",
+        deliveryState: "held",
+      },
+    }),
+  );
+  await pending;
+  expect(onDelivery).toHaveBeenCalledExactlyOnceWith(
+    "Provider paused. Notice saved. No turn was started.",
+    "held",
+  );
+});
+
+test("agent send preserves a machine-readable target miss", async () => {
+  const { client, mock } = await nativeQueueClient(false);
+  const pending = client.sendAgentMessage("missing", "draft");
+  const assertion = expect(pending).rejects.toMatchObject({ code: "AGENT_NOT_FOUND" });
+  const request = nativeQueueRequests(mock)[0];
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "send_agent_message_response",
+      payload: {
+        requestId: request.requestId,
+        agentId: "missing",
+        accepted: false,
+        error: "Agent not found: missing",
+        errorCode: "AGENT_NOT_FOUND",
+      },
+    }),
+  );
+  await assertion;
+});
+
 test("native queue client does not queue across reconnect or reuse the old host feature", async () => {
   const { client, mock } = await nativeQueueClient();
   mock.triggerClose({ code: 1006 });
@@ -9080,4 +9125,44 @@ test("Radius persistent client rejects mismatched output without refunding the o
     }),
   ).rejects.toThrow("do not replay");
   expect(radiusConsumerRequests(mock)).toHaveLength(1);
+});
+
+test("reporting-line checks require host support before sending a request", async () => {
+  const { client, mock } = await nativeQueueClient(false);
+  await expect(
+    client.checkAgentMessageRoute({ kind: "outbound", senderId: "worker", targetId: "main" }),
+  ).rejects.toThrow("Update the host");
+  expect(mock.sent).toHaveLength(0);
+});
+test("reporting-line checks correlate the source decision without sending agent input", async () => {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "routing-test",
+    transportFactory: () => mock.transport,
+    reconnect: { enabled: false },
+  });
+  clients.push(client);
+  const connecting = client.connect();
+  mock.triggerOpen({ features: { agentSendReportingLines: true } });
+  await connecting;
+  const pending = client.checkAgentMessageRoute({
+    kind: "outbound",
+    senderId: "worker",
+    targetId: "main",
+  });
+  const frame = JSON.parse(mock.sent[0] as string);
+  expect(frame.message).toMatchObject({
+    type: "agent.message.route_check.request",
+    input: { kind: "outbound", senderId: "worker", targetId: "main" },
+  });
+  const output = { kind: "outbound", inboundOnly: true, refusal: "Send this to your lead." };
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "agent.message.route_check.response",
+      payload: { requestId: frame.message.requestId, output },
+    }),
+  );
+  expect(await pending).toEqual(output);
+  expect(nativeQueueRequests(mock)).toHaveLength(0);
 });

@@ -513,7 +513,7 @@ export interface SendMessageOptions {
   notifyOnFinish?: boolean;
   queue?: boolean;
   /** Reports queue admission or a steering fallback. This is not task completion. */
-  onDelivery?: (note: string) => void;
+  onDelivery?: (note: string, state?: "held") => void;
   messageId?: string;
   /** Human input steers while busy. Agent input queues unless steering is requested. */
   activeTurnBehavior?: ActiveTurnBehavior;
@@ -522,6 +522,15 @@ export interface SendMessageOptions {
   /** FULCRA(orchestration): the chat that sends (reporting lines). Omit for the owner. */
   sender?: SendAgentMessageRequest["sender"];
 }
+
+type MessageRouteInput = Extract<
+  SessionInboundMessage,
+  { type: "agent.message.route_check.request" }
+>["input"];
+type MessageRouteOutput = Extract<
+  SessionOutboundMessage,
+  { type: "agent.message.route_check.response" }
+>["payload"]["output"];
 
 export type NativeQueueReceipt = NonNullable<
   SendAgentMessageResponseMessage["payload"]["nativeReceipt"]
@@ -3949,6 +3958,20 @@ export class DaemonClient {
   // Agent Interaction
   // ============================================================================
 
+  async checkAgentMessageRoute<K extends MessageRouteInput["kind"]>(
+    input: Extract<MessageRouteInput, { kind: K }>,
+  ): Promise<Extract<MessageRouteOutput, { kind: K }>> {
+    if (this.lastServerInfoMessage?.features?.agentSendReportingLines !== true)
+      throw new Error("Update the host to check cross-host reporting lines.");
+    const response = await this.sendCorrelatedSessionRequest({
+      message: { type: "agent.message.route_check.request", input },
+      responseType: "agent.message.route_check.response",
+    });
+    if (response.output.kind !== input.kind)
+      throw new Error("Unexpected reporting-line check response.");
+    return response.output as Extract<MessageRouteOutput, { kind: K }>;
+  }
+
   private requireAgentMessageQueue(options?: SendMessageOptions): void {
     // COMPAT(agentMessageQueue): added in v0.2.18; remove after 2027-04-12 once the daemon floor includes v0.2.18.
     if (
@@ -3961,8 +3984,12 @@ export class DaemonClient {
   private notifyMessageDelivery(
     options: SendMessageOptions | undefined,
     note: string | undefined,
+    state?: "held",
   ): void {
-    if (note) options?.onDelivery?.(note);
+    if (note) {
+      if (state) options?.onDelivery?.(note, state);
+      else options?.onDelivery?.(note);
+    }
   }
 
   async sendAgentMessage(
@@ -4001,9 +4028,12 @@ export class DaemonClient {
       },
     });
     if (!payload.accepted) {
-      throw new Error(payload.error ?? "sendAgentMessage rejected");
+      throw Object.assign(
+        new Error(payload.error ?? "sendAgentMessage rejected"),
+        payload.errorCode ? { code: payload.errorCode } : {},
+      );
     }
-    this.notifyMessageDelivery(options, payload.deliveryNote);
+    this.notifyMessageDelivery(options, payload.deliveryNote, payload.deliveryState);
   }
 
   /** Explicit host-owner metadata read. Capability advertisement never grants read authority. */

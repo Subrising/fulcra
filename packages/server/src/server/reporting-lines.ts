@@ -8,6 +8,8 @@ import {
   SEAT_LABEL,
   ROLE_REF_PREFIX,
 } from "@getpaseo/protocol/agent-labels";
+import type { SendAgentMessageRequest } from "@getpaseo/protocol/messages";
+type LineSender = NonNullable<SendAgentMessageRequest["sender"]>;
 
 // FULCRA(orchestration): reporting lines (Fulcra 0.2.8). A chat sends only to the chat it reports to, to the chats
 // that report to it, or to the one direct link its lead allowed. These are cooperative rules, not security: the CLI
@@ -29,7 +31,7 @@ export interface LineAgent {
 }
 
 export interface LineInput {
-  sender: { agentId: string; serverId?: string };
+  sender: LineSender;
   /** The sender's record on this computer; null when the sender is on another computer or unknown here. */
   senderAgent: LineAgent | null;
   target: LineAgent;
@@ -92,7 +94,7 @@ export async function resolveRoleTarget(
 /** The decision for one stamped send, read from this computer's records. Null when the target is not here. */
 export async function decideSend(
   store: LineStore,
-  sender: { agentId: string; serverId?: string },
+  sender: LineSender,
   targetId: string,
   localServerId: string | null,
 ): Promise<LineDecision | null> {
@@ -159,7 +161,7 @@ function inboundDecision(
       };
     return { allowed: true, why: "child" };
   }
-  if (target.labels?.[DIRECT_LINK_LABEL]?.trim() === senderKey)
+  if (sameChat(target.labels?.[DIRECT_LINK_LABEL]?.trim() ?? null, sender.agentId, senderServer))
     return { allowed: true, why: "direct link" };
   return null;
 }
@@ -202,6 +204,17 @@ function refusal(input: LineInput, rawLine: string, line: string | null): LineDe
   };
 }
 
+function restrictedRemoteDecision(input: LineInput): LineDecision {
+  const { sender, target, localServerId } = input;
+  if (
+    sender.inboundOnly ||
+    (sender.outboundMainOnly && target.id !== input.mainAssistantId) ||
+    (sender.outboundServerOnly && sender.outboundServerOnly !== localServerId)
+  )
+    return { allowed: false, reason: sender.refusal ?? "Send this to your lead." };
+  return remoteDecision(input);
+}
+
 export function checkReportingLine(input: LineInput): LineDecision {
   const { sender, target, localServerId } = input;
   const remote = Boolean(sender.serverId && sender.serverId !== localServerId);
@@ -209,7 +222,7 @@ export function checkReportingLine(input: LineInput): LineDecision {
   if (!remote && sender.agentId === target.id) return { allowed: true, why: "self" };
   const inbound = inboundDecision(input, senderKey, remote);
   if (inbound) return inbound;
-  if (remote) return remoteDecision(input);
+  if (remote) return restrictedRemoteDecision(input);
   const rawLine = reportsTo(input.senderAgent);
   if (!rawLine) return { allowed: true, why: "no line recorded" };
   const line = resolveLineRef(rawLine, input.mainAssistantId ?? null);
@@ -217,6 +230,91 @@ export function checkReportingLine(input: LineInput): LineDecision {
   if (input.senderAgent?.labels?.[DIRECT_LINK_LABEL]?.trim() === target.id)
     return { allowed: true, why: "direct link" };
   return refusal(input, rawLine, line);
+}
+
+export interface OutboundSendInput {
+  senderId: string;
+  targetId: string;
+  localServerId?: string;
+}
+export interface OutboundSendDecision {
+  inboundOnly: boolean;
+  outboundMainOnly?: true;
+  outboundServerOnly?: string;
+  refusal?: string;
+}
+
+/** Read the source's own record. A missing outbound relation permits only a destination-owned child or link. */
+export async function decideOutboundSend(
+  store: LineStore,
+  input: OutboundSendInput,
+): Promise<OutboundSendDecision> {
+  const senderAgent = await store.get(input.senderId);
+  if (!senderAgent || senderAgent.archivedAt)
+    throw new Error("This send names a chat that is not on this computer.");
+  const rawLine = reportsTo(senderAgent);
+  if (!rawLine) return { inboundOnly: false };
+  const holder = findRoleHolder(await store.list(), MAIN_ASSISTANT_ROLE);
+  if (rawLine === MAIN_ASSISTANT_REF && holder && "ambiguous" in holder)
+    throw new Error(TWO_MAIN_ASSISTANTS);
+  const mainAssistantId = holder && "id" in holder ? holder.id : null;
+  const line = resolveLineRef(rawLine, mainAssistantId);
+  const reason = await outboundRefusal({
+    store,
+    input,
+    senderAgent,
+    rawLine,
+    line,
+    mainAssistantId,
+  });
+  const direct = matchingOutboundReference(
+    senderAgent.labels?.[DIRECT_LINK_LABEL]?.trim() ?? null,
+    input.targetId,
+  );
+  if (direct)
+    return direct.server
+      ? { inboundOnly: false, outboundServerOnly: direct.server, refusal: reason }
+      : { inboundOnly: false };
+  if (rawLine === MAIN_ASSISTANT_REF && !mainAssistantId)
+    return {
+      inboundOnly: false,
+      outboundMainOnly: true,
+      refusal: "Send this to the main assistant.",
+    };
+  const relation = matchingOutboundReference(line, input.targetId);
+  if (relation) {
+    const server =
+      relation.server ?? (rawLine === MAIN_ASSISTANT_REF ? input.localServerId : undefined);
+    return server
+      ? { inboundOnly: false, outboundServerOnly: server, refusal: reason }
+      : { inboundOnly: false };
+  }
+  return { inboundOnly: true, refusal: reason };
+}
+
+async function outboundRefusal(data: {
+  store: LineStore;
+  input: OutboundSendInput;
+  senderAgent: LineAgent;
+  rawLine: string;
+  line: string | null;
+  mainAssistantId: string | null;
+}): Promise<string> {
+  const { store, input, senderAgent, rawLine, line, mainAssistantId } = data;
+  const parentId = (line ?? rawLine).split("@", 1)[0]!;
+  const rejected = refusal(
+    {
+      sender: { agentId: input.senderId },
+      senderAgent,
+      target: { id: input.targetId },
+      senderParent: await store.get(parentId),
+      localServerId: input.localServerId ?? null,
+      mainAssistantId,
+    },
+    rawLine,
+    line,
+  );
+  return rejected.allowed ? "Send this to your lead." : rejected.reason;
 }
 
 interface LineRecord extends LineAgent {
@@ -236,6 +334,16 @@ export function lineStoreOf(deps: {
       (await deps.agentStorage.get(id).catch(() => null)) ?? deps.agentManager.getAgent(id) ?? null,
     list: async () => (await deps.agentStorage.list()).filter((record) => !record.internal),
   };
+}
+
+function matchingOutboundReference(
+  reference: string | null,
+  targetId: string,
+): { server?: string } | null {
+  if (!reference) return null;
+  const [id, server, extra] = reference.split("@");
+  if (id !== targetId || extra !== undefined || server === "") return null;
+  return server ? { server } : {};
 }
 
 /**
