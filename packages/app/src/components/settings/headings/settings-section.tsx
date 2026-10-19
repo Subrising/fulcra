@@ -3,6 +3,7 @@ import { Text, View, type StyleProp, type ViewStyle } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { SettingsInfoTip } from "./settings-info-tip";
 import { settingsStyles } from "@/styles/settings";
+import { useIsCompactFormFactor } from "@/constants/layout";
 
 interface SettingsSectionProps {
   title: string;
@@ -36,13 +37,14 @@ export function SettingsSection({
   flush,
   children,
 }: SettingsSectionProps) {
+  const isCompact = useIsCompactFormFactor();
   const sectionStyle = useMemo(
     () => [settingsStyles.section, flush ? styles.flush : null, style],
     [flush, style],
   );
   return (
     <View style={sectionStyle} testID={testID}>
-      <View style={styles.header}>
+      <View style={[styles.header, isCompact && styles.compactHeader]}>
         <View style={styles.titleRow}>
           <Text style={settingsStyles.sectionHeaderTitle}>{title}</Text>
           {info ? (
@@ -68,6 +70,11 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.spacing[2],
     marginBottom: theme.spacing[3],
     marginLeft: theme.spacing[1],
+  },
+  // On a phone the label sits on the card edge, the one left edge of the page.
+  compactHeader: {
+    marginLeft: 0,
+    marginBottom: theme.spacing[2],
   },
   titleRow: {
     flexDirection: "row",

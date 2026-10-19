@@ -1,4 +1,5 @@
 import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
+import { useIsCompactFormFactor } from "@/constants/layout";
 import { useCallback, useMemo, useRef, useState, type ReactElement } from "react";
 import { Pressable, View } from "react-native";
 import { Search, X } from "lucide-react-native";
@@ -47,6 +48,7 @@ export function SearchField({
   clearTestID,
 }: SearchFieldProps): ReactElement {
   const touch = useTouchTargets();
+  const isCompact = useIsCompactFormFactor();
   const inputStyle = useMemo(() => [styles.input, touch && touchTargetStyles.icon], [touch]);
   const clearStyle = useMemo(() => [styles.clear, touch && touchTargetStyles.icon], [touch]);
   const [isFocused, setIsFocused] = useState(false);
@@ -59,7 +61,14 @@ export function SearchField({
   }, [onChangeText]);
 
   return (
-    <View style={[styles.field, touch && styles.touchField, isFocused && styles.fieldFocused]}>
+    <View
+      style={[
+        styles.field,
+        touch && styles.touchField,
+        isCompact && styles.compactField,
+        isFocused && styles.fieldFocused,
+      ]}
+    >
       <ThemedSearch size={14} uniProps={mutedColorMapping} />
       <ThemedTextInput
         testID={testID}
@@ -109,6 +118,8 @@ const styles = StyleSheet.create((theme) => ({
     borderColor: theme.colors.border,
   },
   touchField: { paddingVertical: 0 },
+  // A phone search field spans its row, also when the phone is held sideways.
+  compactField: { maxWidth: "100%" },
   clear: { alignItems: "center", justifyContent: "center" },
   fieldFocused: {
     borderColor: theme.colors.borderAccent,
