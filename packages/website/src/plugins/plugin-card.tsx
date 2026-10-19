@@ -7,7 +7,7 @@ import { PluginTile } from "./plugin-tile";
 import { firstMediaImage, getAuthor, getCategory, type Plugin } from "./registry";
 
 export const PLUGIN_GRID_CLASS =
-  "grid gap-x-4 gap-y-8 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4";
+  "grid grid-cols-1 gap-x-4 gap-y-8 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4";
 
 /** First allowed image, or the plugin tile on a quiet backdrop when there is none. */
 function PluginShot({ plugin }: { plugin: Plugin }) {

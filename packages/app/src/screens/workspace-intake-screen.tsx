@@ -100,6 +100,7 @@ export function WorkspaceIntakeScreen() {
           <Text style={styles.notice}>{hydrationError}</Text>
           <SettingsInput
             label="What would you like to work on?"
+            layout="stacked"
             initialValue={draft.text}
             onChangeText={draft.setText}
           />
@@ -185,6 +186,7 @@ function IntakeConnection({
           </Text>
           <SettingsInput
             label="What would you like to work on?"
+            layout="stacked"
             initialValue={draft.text}
             onChangeText={draft.setText}
           />
@@ -203,7 +205,7 @@ function IntakeConnection({
                 choose={choose}
               />
             ))}
-          <Button size="sm" variant="outline" onPress={connect}>
+          <Button size="sm" variant="outline" onPress={connect} style={styles.fallbackAction}>
             Connect or update Fulcra
           </Button>
         </View>
@@ -278,6 +280,8 @@ function ControllerChoice({
 const styles = StyleSheet.create((theme) => ({
   screen: { flex: 1, backgroundColor: theme.colors.surface0 },
   toolbar: { paddingHorizontal: 16, paddingVertical: 8 },
-  fallback: { padding: 16, gap: 12 },
+  // Same centred 720 column as settings pages, so the prompt and its field line up.
+  fallback: { padding: 16, gap: 12, width: "100%", maxWidth: 720, alignSelf: "center" },
+  fallbackAction: { alignSelf: "flex-start", marginLeft: 16 },
   notice: { color: theme.colors.foregroundMuted, padding: 8 },
 }));
