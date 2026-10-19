@@ -714,7 +714,7 @@ export class SessionResources {
     const shell = item.detail.type === "shell" ? item.detail.command : "";
     if (item.status === "running" && /\bGet-Content\b/i.test(shell) && /(?:^|\s)-Wait\b/i.test(shell)) this.logReaders.add(`${root.agentId}:${root.instanceId}`);
     const command = simulatorCommand(item);
-    const simulatorUse = /\b(?:xcodebuild|xcrun|simctl)\b|\b(?:flutter|cap)\s+run\b|Simulator\.app/.test(shell);
+    const simulatorUse = /\b(?:xcodebuild|xcrun|simctl)\b|\bflutter\s+(?:run|test|drive)\b|\bcap(?:acitor)?\s+run\b|\bSimulator\b|[\w.-]*(?:ios|simulator)[\w.-]*\.sh/.test(shell);
     if (!command && !simulatorUse) return Promise.resolve();
     const ids = [...shell.matchAll(/[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}/g)].map((m) => m[0].toUpperCase());
     for (const id of ids.length ? ids : ["*"]) {

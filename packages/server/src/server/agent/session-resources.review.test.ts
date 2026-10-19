@@ -2,7 +2,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
-import { SessionResources, ORPHAN_INTERVAL_MS, resourceCleanupMode, type ResourceProcess, type SimulatorTable } from "./session-resources.js";
+import { SessionResources, ORPHAN_INTERVAL_MS, type ResourceProcess, type SimulatorTable } from "./session-resources.js";
 import { createTestLogger } from "../../test-utils/test-logger.js";
 
 const directories: string[] = [];
@@ -83,7 +83,8 @@ test.each(["dry-run","on"] as const)("keeps simulator GUI users and logs dry-run
  const tracker=new SessionResources({...f.options,mode,simulators}),owner={agentId:"owner",instanceId:"generation",pid:100};await tracker.observeTool(owner,item(`xcrun simctl boot ${uuid}`));booted=true;await tracker.observeTool(owner,item(`xcrun simctl boot ${uuid}`,"completed"));await tracker.closeOwner("owner","generation",()=>true);expect(shutdown).not.toHaveBeenCalled();
 });
 
-test("cleanup configuration defaults on and rejects invalid modes safely",()=>{
+test("cleanup configuration defaults on and rejects invalid modes safely",async()=>{
+ const {resourceCleanupMode}=await import("./session-resources.js");
  expect(resourceCleanupMode()).toBe("on");expect(resourceCleanupMode("dry-run")).toBe("dry-run");expect(resourceCleanupMode("off")).toBe("off");expect(resourceCleanupMode("invalid")).toBe("off");
 });
 test("persistent collection failures log at most once per five minutes",async()=>{
