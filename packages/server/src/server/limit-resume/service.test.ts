@@ -469,7 +469,7 @@ describe("LimitResumeService", () => {
 
   describe("lookup failures at the due time", () => {
     /** A service whose resume-time lookup throws like ensureUnarchivedAgentLoaded does. */
-    const makeThrowing = (message: () => string | null) => {
+    const makeThrowing = (message: string) => {
       const lookups: number[] = [];
       const skips: Array<{ agentId: string; reason: string }> = [];
       const errors: unknown[] = [];
@@ -480,8 +480,7 @@ describe("LimitResumeService", () => {
         getAgent: async (id, forResume) => {
           if (forResume) {
             lookups.push(Date.now());
-            const failure = message();
-            if (failure) throw new Error(failure);
+            throw new Error(message);
           }
           return agents.get(id) ?? null;
         },
@@ -503,7 +502,7 @@ describe("LimitResumeService", () => {
 
     it("drops a session that was archived after it was queued: one attempt, then never again", async () => {
       agents.set("a", idle());
-      const { svc, lookups, skips } = makeThrowing(() => "Agent is archived: a");
+      const { svc, lookups, skips } = makeThrowing("Agent is archived: a");
       svc.start();
       await svc.onAgentEvent(failed("a", resetIn(60 * 60_000)));
       await vi.advanceTimersByTimeAsync(3_600_000 + HANDOFF_MS + 1_000);
@@ -519,7 +518,7 @@ describe("LimitResumeService", () => {
 
     it("drops a session that no longer exists: one attempt, then never again", async () => {
       agents.set("a", idle());
-      const { svc, lookups, skips } = makeThrowing(() => "Agent not found: a");
+      const { svc, lookups, skips } = makeThrowing("Agent not found: a");
       svc.start();
       await svc.onAgentEvent(failed("a", resetIn(60 * 60_000)));
       await vi.advanceTimersByTimeAsync(3_600_000 + HANDOFF_MS + 1_000);
@@ -532,7 +531,7 @@ describe("LimitResumeService", () => {
 
     it("retries an unknown lookup error with growing delays, then gives up", async () => {
       agents.set("a", idle());
-      const { svc, lookups, skips, errors } = makeThrowing(() => "provider timed out");
+      const { svc, lookups, skips, errors } = makeThrowing("provider timed out");
       svc.start();
       await svc.onAgentEvent(failed("a", resetIn(60 * 60_000)));
       await vi.advanceTimersByTimeAsync(3_600_000 + HANDOFF_MS + 1_000);
