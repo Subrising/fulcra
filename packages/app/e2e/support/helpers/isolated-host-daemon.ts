@@ -7,6 +7,9 @@ import { assertTestHome } from "../../../../../scripts/test-support/test-home.cj
 import { withDisabledE2ESpeechEnv } from "./speech-env";
 import { killProcessTree, spawnTsx } from "./spawn-node";
 
+// A killed daemon's child can still write into its home while it is removed (ENOTEMPTY).
+const REMOVE_TREE = { recursive: true, force: true, maxRetries: 5, retryDelay: 200 } as const;
+
 export interface IsolatedHostDaemon {
   serverId: string;
   port: number;
@@ -126,9 +129,9 @@ export async function startIsolatedHostDaemon(
       );
     } catch (error) {
       if (!options.preserveHome) {
-        await rm(paseoHome, { recursive: true, force: true });
+        await rm(paseoHome, REMOVE_TREE);
       }
-      await rm(publishedPackageRoot, { recursive: true, force: true });
+      await rm(publishedPackageRoot, REMOVE_TREE);
       throw error;
     }
   }
@@ -219,10 +222,10 @@ export async function startIsolatedHostDaemon(
     child = await spawnFirstDaemon();
   } catch (error) {
     if (!options.preserveHome) {
-      await rm(paseoHome, { recursive: true, force: true });
+      await rm(paseoHome, REMOVE_TREE);
     }
     if (publishedPackageRoot) {
-      await rm(publishedPackageRoot, { recursive: true, force: true });
+      await rm(publishedPackageRoot, REMOVE_TREE);
     }
     throw error;
   }
@@ -244,10 +247,10 @@ export async function startIsolatedHostDaemon(
       closed = true;
       await killProcessTree(child);
       if (!options.preserveHome) {
-        await rm(paseoHome, { recursive: true, force: true });
+        await rm(paseoHome, REMOVE_TREE);
       }
       if (publishedPackageRoot) {
-        await rm(publishedPackageRoot, { recursive: true, force: true });
+        await rm(publishedPackageRoot, REMOVE_TREE);
       }
     },
   };
