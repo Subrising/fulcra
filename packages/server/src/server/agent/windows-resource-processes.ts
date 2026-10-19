@@ -127,7 +127,7 @@ export function protectedSessionDirectory(cwd: string, title?: string | null): b
   return (
     /\b(?:Song|Video) Studio\b/i.test(title ?? "") ||
     /Fulcra.*(?:install|release|update)|(?:install|release).*Fulcra/i.test(title ?? "") ||
-    /(?:^|[\\/])(?:orca-service-releases[^\\/]*|fulcra-(?:releases?|installer?|updates?))(?:[\\/]|$)/i.test(cwd) ||
+    /(?:^|[\\/])(?:orca-service-releases[^\\/]*|fulcra-(?:releases?|install(?:er)?|updates?))(?:[\\/]|$)/i.test(cwd) ||
     /(?:^|[\\/])(?:song-studio|video-studio)(?:[\\/]|$)/i.test(cwd) ||
     /^[A-Za-z]:[\\/](?:Games|Videos|Steam)(?:[\\/]|$)/i.test(cwd)
   );

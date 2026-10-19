@@ -398,8 +398,8 @@ export class SessionResources {
             const existing = ledger.processes.find(
               (p) => p.pid === row.pid && p.birth === row.birth,
             );
+            if (existing && (existing.agentId !== root.agentId || existing.instanceId !== root.instanceId)) continue;
             if (existing) {
-              if (existing.agentId !== root.agentId || existing.instanceId !== root.instanceId) continue;
               // An external queue lease blocks stops, not ownership capture. Never transfer the owner.
               existing.rootPid = root.pid;
               existing.rootBirth = processRoot.birth;
@@ -609,7 +609,7 @@ export class SessionResources {
     )
       return false;
     const roots = this.options.roots();
-    if (record.kind !== "test-fixture" && (!record.rootBirth || !record.rootPid)) return false;
+    if (record.kind !== "test-fixture" && (!record.rootBirth || !record.rootPid || !bornAfter(record.birth, record.rootBirth))) return false;
     const seen = new Set<number>();
     let row = target;
     while (!seen.has(row.pid)) {
