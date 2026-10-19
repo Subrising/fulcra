@@ -237,6 +237,7 @@ test.each(["none", "local", "remote", "paused Claude"])(
       remoteReceipt = await hostLinksFor(manager)!.receive(token, {
         kind: "spawn",
         messageId: randomUUID(),
+        issuedAt: Date.now(),
         destination: daemon.daemon.getServerId(),
         sender: parent.id,
         sourceProvider: "codex",

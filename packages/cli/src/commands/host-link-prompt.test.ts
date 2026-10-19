@@ -23,6 +23,7 @@ test.each([false, true])(
     };
     connection.mockResolvedValue(client);
     const messageId = "22222222-2222-4222-8222-222222222222";
+    const issuedAt = Date.now();
     try {
       const receiptFile = path.join(root, "receipt.json");
       const promptFile = path.join(root, "prompt.txt");
@@ -46,6 +47,7 @@ test.each([false, true])(
           promptFile,
           messageId,
           daemonTarget,
+          issuedAt,
           steer,
           notifyOnFinish: !steer,
         }),
@@ -54,6 +56,7 @@ test.each([false, true])(
       expect(client.sendAgentMessage).toHaveBeenCalledWith("child@remote", "Next task.", {
         sender: { agentId: "parent" },
         messageId,
+        issuedAt,
         ...(steer ? { activeTurnBehavior: "steer", notifyOnFinish: false } : {}),
       });
       expect(client.close).toHaveBeenCalledOnce();
