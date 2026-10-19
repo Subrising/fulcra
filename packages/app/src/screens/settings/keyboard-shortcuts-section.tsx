@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { View, Text, type PressableStateCallbackType } from "react-native";
 import { useIsFocused } from "@react-navigation/native";
 import { MoreHorizontal, Pencil, Undo2, X } from "lucide-react-native";
@@ -174,6 +175,7 @@ function ShortcutActionsMenu({
   onReset: () => void;
 }) {
   const { t } = useTranslation();
+  const touch = useTouchTargets();
   const triggerStyle = useCallback(
     ({
       pressed,
@@ -183,8 +185,9 @@ function ShortcutActionsMenu({
       styles.menuButton,
       (hovered || open) && styles.menuButtonHovered,
       pressed && styles.menuButtonPressed,
+      touch && touchTargetStyles.iconButton,
     ],
-    [],
+    [touch],
   );
 
   return (

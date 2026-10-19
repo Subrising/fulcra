@@ -88,6 +88,11 @@ vi.mock("react-native-unistyles", () => ({
       React.createElement(Component, { ...props, ...mapping?.(theme) }),
 }));
 
+vi.mock("@/hooks/use-touch-targets", () => ({
+  TOUCH_TARGET: 48,
+  useTouchTargets: () => false,
+}));
+
 describe("Switch", () => {
   let root: Root | null = null;
   let container: HTMLElement | null = null;

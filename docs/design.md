@@ -148,6 +148,10 @@ One row off the rail makes the whole card look unconsidered.
 
 Compact-first. The small case is designed; the large case adds chrome around it.
 
+Compact means a phone: the `xs` and `sm` breakpoints, or an `md` width shorter than 500px (a phone held sideways). `useIsCompactFormFactor()` (`packages/app/src/constants/layout.ts`) owns that rule; never test the breakpoint or the window height at a call site. Breakpoint-keyed style values (`{ xs, md }`) still follow width only, so a sideways phone gets the compact shell with `md` spacing.
+
+On a touch screen (`useTouchTargets()`: native, compact, or no fine pointer) every control is at least 48×48px. The drawn icon or label keeps its size; the pressable grows around it with `touchTargetStyles` (`packages/app/src/hooks/use-touch-targets.ts`). The design-system controls (button, dropdown and select triggers, form inputs, switch, segmented control, menu rows) do this themselves. A bespoke pressable adds `touch && touchTargetStyles.iconButton` (icon) or `.text` (label). A mouse desktop keeps the dense 28/32/44px sizes.
+
 The list+detail pattern is canonical and reused across surfaces. The settings shell (`packages/app/src/screens/settings-screen.tsx`) and the projects screen (`packages/app/src/screens/projects-screen.tsx`) implement it identically:
 
 - On compact: full-screen list with `<BackHeader>` at the top. Tapping a row pushes a full-screen detail with its own `<BackHeader>` that returns to the list.

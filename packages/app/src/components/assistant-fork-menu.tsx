@@ -1,5 +1,6 @@
 import { memo, useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { Text, View } from "react-native";
 import { Split } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -55,9 +56,14 @@ export const AssistantForkMenu = memo(function AssistantForkMenu({
     [isLocked, onFork],
   );
 
+  const touch = useTouchTargets();
   const triggerStyle = useCallback(
-    () => [styles.trigger, isLocked ? styles.triggerDisabled : null],
-    [isLocked],
+    () => [
+      styles.trigger,
+      isLocked ? styles.triggerDisabled : null,
+      touch && touchTargetStyles.iconButton,
+    ],
+    [isLocked, touch],
   );
 
   const tooltipContent = useMemo(

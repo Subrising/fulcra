@@ -1,18 +1,19 @@
 import { ComposerDockBackground } from "@/composer/dock";
 import { useMemo, type ReactNode } from "react";
 import type { LayoutChangeEvent } from "react-native";
-import { View, type StyleProp, type ViewStyle } from "react-native";
+import { View, useWindowDimensions, type StyleProp, type ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import {
   HEADER_INNER_HEIGHT,
   HEADER_INNER_HEIGHT_MOBILE,
+  COMPACT_FORM_FACTOR_MAX_HEIGHT,
   HEADER_TOP_PADDING_MOBILE,
   useIsCompactFormFactor,
 } from "@/constants/layout";
 import { WindowChromeSafeArea } from "@/utils/desktop-window";
 import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
-import { useTouchTargets } from "@/hooks/use-touch-targets";
+import { TOUCH_TARGET, useTouchTargets } from "@/hooks/use-touch-targets";
 
 interface ScreenHeaderProps {
   left?: ReactNode;
@@ -39,7 +40,9 @@ export function ScreenHeader({
   const insets = useSafeAreaInsets();
   const isMobile = useIsCompactFormFactor();
   // Only add extra padding on mobile for better touch targets; on desktop, only use safe area insets
-  const topPadding = isMobile ? HEADER_TOP_PADDING_MOBILE : 0;
+  // A phone held sideways has little height to spare: the header shrinks to its 48 px buttons.
+  const shortViewport = useWindowDimensions().height < COMPACT_FORM_FACTOR_MAX_HEIGHT;
+  const topPadding = isMobile && !shortViewport ? HEADER_TOP_PADDING_MOBILE : 0;
   const baseHorizontalPadding = isMobile ? theme.spacing[2] : theme.spacing[3];
 
   const innerStyle = useMemo(
@@ -49,8 +52,13 @@ export function ScreenHeader({
   // FU-73: on a touch screen the header holds 48 px buttons, so a tablet gets the phone's header height.
   const touch = useTouchTargets();
   const rowStyle = useMemo(
-    () => [styles.row, touch && styles.touchRow, borderless && styles.borderless],
-    [borderless, touch],
+    () => [
+      styles.row,
+      touch && styles.touchRow,
+      touch && shortViewport && styles.shortTouchRow,
+      borderless && styles.borderless,
+    ],
+    [borderless, shortViewport, touch],
   );
   const leftCombinedStyle = useMemo(() => [styles.left, leftStyle], [leftStyle]);
   const rightCombinedStyle = useMemo(() => [styles.right, rightStyle], [rightStyle]);
@@ -107,6 +115,9 @@ const styles = StyleSheet.create((theme) => ({
   },
   touchRow: {
     height: HEADER_INNER_HEIGHT_MOBILE,
+  },
+  shortTouchRow: {
+    height: TOUCH_TARGET,
   },
   borderless: {
     borderBottomColor: "transparent",

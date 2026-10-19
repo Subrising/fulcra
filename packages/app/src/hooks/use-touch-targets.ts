@@ -23,4 +23,13 @@ export function useTouchTargets(): boolean {
 export const touchTargetStyles = StyleSheet.create({
   icon: { minWidth: TOUCH_TARGET, minHeight: TOUCH_TARGET },
   text: { minHeight: TOUCH_TARGET },
+  /** An icon-only pressable: the drawn icon stays its size, centred in the target. */
+  iconButton: {
+    minWidth: TOUCH_TARGET,
+    minHeight: TOUCH_TARGET,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  /** A text field: the input itself is the target, so its frame drops the vertical padding. */
+  fieldChrome: { paddingVertical: 0, justifyContent: "center" },
 });

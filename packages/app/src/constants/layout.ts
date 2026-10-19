@@ -13,6 +13,10 @@ export const HEADER_TOP_PADDING_MOBILE = 8;
 
 export const COMPACT_FORM_FACTOR_WIDTH = 500;
 
+// A phone held sideways is wide enough for the "md" breakpoint but too short for the
+// desktop shell. Below this height an "md" width still gets the compact layout.
+export const COMPACT_FORM_FACTOR_MAX_HEIGHT = 500;
+
 // Settings uses the canonical desktop list + detail layout. Its sidebar and
 // detail target must fit together before it can share width with app navigation.
 export const SETTINGS_DESKTOP_SIDEBAR_WIDTH = 320;
@@ -39,7 +43,14 @@ export {
  */
 export function useIsCompactFormFactor(): boolean {
   const { rt } = useUnistyles();
-  return rt.breakpoint === "xs" || rt.breakpoint === "sm";
+  return isCompactFormFactor(rt.breakpoint, rt.screen.height);
+}
+
+export function isCompactFormFactor(breakpoint: string | undefined, height: number): boolean {
+  if (breakpoint === "xs" || breakpoint === "sm") {
+    return true;
+  }
+  return breakpoint === "md" && height < COMPACT_FORM_FACTOR_MAX_HEIGHT;
 }
 
 // SplitContainer relies on dnd-kit and DOM-backed accessibility helpers.

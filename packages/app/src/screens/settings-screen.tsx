@@ -820,11 +820,13 @@ function MenuRow({
   testID,
 }: MenuRowProps) {
   const touch = useTouchTargets();
+  // On a phone the list is the whole page, not a sidebar beside a detail: its titles read at full contrast.
+  const isCompact = useIsCompactFormFactor();
   const { theme } = useUnistyles();
   const accessibilityState = useMemo(() => ({ selected: isSelected }), [isSelected]);
   const labelStyle = useMemo(
-    () => [sidebarStyles.label, isSelected && { color: theme.colors.foreground }],
-    [isSelected, theme.colors.foreground],
+    () => [sidebarStyles.label, (isSelected || isCompact) && { color: theme.colors.foreground }],
+    [isCompact, isSelected, theme.colors.foreground],
   );
   const rowStyle = useCallback(
     (state: PressableStateCallbackType & { hovered?: boolean }) => [

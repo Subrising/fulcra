@@ -8,8 +8,9 @@ import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { ReactElement, ReactNode, RefObject } from "react";
 import { useTranslation } from "react-i18next";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import type { TFunction } from "i18next";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, Text, View, useWindowDimensions } from "react-native";
 import type { PressableStateCallbackType } from "react-native";
 import { StyleSheet, useUnistyles, withUnistyles } from "react-native-unistyles";
 import { createNameId } from "mnemonic-id";
@@ -34,7 +35,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
 import { SidebarMenuToggle } from "@/components/headers/menu-header";
 import { ScreenHeader } from "@/components/headers/screen-header";
-import { useIsCompactFormFactor } from "@/constants/layout";
+import { COMPACT_FORM_FACTOR_MAX_HEIGHT, useIsCompactFormFactor } from "@/constants/layout";
+import { ScrollView } from "@/components/ui/scroll-view";
 import { useToast } from "@/contexts/toast-context";
 import { useAgentInputDraft } from "@/composer/draft/input-draft";
 import { useForgeSearchQuery } from "@/git/use-forge-search-query";
@@ -1445,14 +1447,16 @@ function useNewWorkspaceFormStack(input: NewWorkspaceFormStackInput): ReactEleme
     [project.onAddProject],
   );
 
+  const touch = useTouchTargets();
   const badgePressableStyle = useCallback(
     ({ pressed, hovered }: PressableStateCallbackType & { hovered?: boolean }) => [
       styles.badge,
       Boolean(hovered) && !isPending && styles.badgeHovered,
       pressed && !isPending && styles.badgePressed,
       isPending && styles.badgeDisabled,
+      touch && touchTargetStyles.text,
     ],
-    [isPending],
+    [isPending, touch],
   );
 
   const desktopControlStyle = isCompact ? undefined : styles.desktopControl;
@@ -1634,6 +1638,12 @@ function useNewWorkspaceFormStack(input: NewWorkspaceFormStackInput): ReactEleme
   );
 }
 
+/** A phone held sideways has the width for the one-row form and not the height for the column. */
+function useIsStackedFormLayout(isCompact: boolean): boolean {
+  const isShortViewport = useWindowDimensions().height < COMPACT_FORM_FACTOR_MAX_HEIGHT;
+  return isCompact && !isShortViewport;
+}
+
 export function NewWorkspaceScreen({
   serverId,
   sourceDirectory: sourceDirectoryProp,
@@ -1645,6 +1655,7 @@ export function NewWorkspaceScreen({
   const { theme } = useUnistyles();
   const { t } = useTranslation();
   const isCompact = useIsCompactFormFactor();
+  const isStackedForm = useIsStackedFormLayout(isCompact);
   const toast = useToast();
   const mergeWorkspaces = useCallback(
     (targetServerId: string, workspaces: Iterable<WorkspaceDescriptor>) => {
@@ -2322,7 +2333,7 @@ export function NewWorkspaceScreen({
       : t("newWorkspace.refPicker.noMatchingRefs");
 
   const formStack = useNewWorkspaceFormStack({
-    isCompact,
+    isCompact: isStackedForm,
     isPending,
     project: {
       anchorRef: projectPickerAnchorRef,
@@ -2479,7 +2490,7 @@ function NewWorkspaceLayout({
 }) {
   // At the top of the screen on compact layouts, under the composer otherwise.
   const importSessionButton = <ImportSessionButton compact={isCompact} onPress={onImportSession} />;
-  const setupFields = (
+  const fields = (
     <>
       {isCompact ? <View style={styles.compactTopActions}>{importSessionButton}</View> : null}
       <View style={styles.composerTitleContainer} pointerEvents="none">
@@ -2487,6 +2498,18 @@ function NewWorkspaceLayout({
       </View>
       {formStack}
     </>
+  );
+  // A phone held sideways can be shorter than the setup fields: they scroll, never clip.
+  const setupFields = isCompact ? (
+    <ScrollView
+      style={styles.compactSetup}
+      contentContainerStyle={styles.compactSetupContent}
+      keyboardShouldPersistTaps="handled"
+    >
+      {fields}
+    </ScrollView>
+  ) : (
+    fields
   );
   return (
     <ComposerDock centered={!isCompact}>
@@ -2511,6 +2534,8 @@ const styles = StyleSheet.create((theme) => ({
   },
   // Takes the free space above the setup fields, so its button sits at the top of the screen.
   // The inset puts the ghost button's icon on the setup rows' icon rail.
+  compactSetup: { flex: 1 },
+  compactSetupContent: { flexGrow: 1, justifyContent: "flex-end" },
   compactTopActions: {
     flex: 1,
     paddingHorizontal: theme.spacing[3],
