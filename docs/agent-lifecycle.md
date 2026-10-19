@@ -46,6 +46,43 @@ work is gone. Report that exit as a turn failure so the agent lands in `error` w
 Claude and OMP report exits between turns. OMP relaunches from its session file on the next prompt;
 the unfinished turn is lost.
 
+### Session resources
+
+The daemon records observed Claude and Codex child processes on macOS and Windows. Each record binds the
+child PID and birth time to its session generation. Close and archive capture the tree before
+the provider exits. They then end retained children, including detached children whose parent
+has exited. A failed cleanup retains the ownership record for retry.
+
+Every 30 minutes, the daemon checks recorded resources whose owners are closed or archived.
+A resource must be older than 30 minutes. Live or unknown owners, changed process identities,
+protected apps, the daemon, and `dev.fulcra.*` services remain protected. The sweep never selects
+targets through a process-name search. Every attempted and completed signal has a private log
+beside `runtime/session-resources.json`.
+
+An explicit successful `xcrun simctl boot <UUID>` shell event can establish simulator ownership.
+The device must be shut down before that command. Cleanup checks its retained manager process
+identity and other recorded session users before shutdown. Pre-booted and rebooted devices stay.
+Commands hidden inside scripts or compound shell commands cannot establish this proof. Such
+scripts must shut down their own simulators with an exit handler. Processes that detach between
+samples without an observed parent link also stay unowned. Existing unrecorded leftovers require
+an owner check; this change does not adopt them.
+
+Daemon shutdown retains the existing detached-job policy.
+
+Windows collection uses process names, parent IDs, native start ticks, resident memory, and private
+memory. It reads no process arguments or environments. A private
+`runtime/session-resource-policy.json` supplies the host's GPU queue receipt directory:
+
+```json
+{ "version": 1, "queueReceiptDirectory": "D:\\queue\\jobs" }
+```
+
+Missing or unreadable queue proof keeps processes. An open queue job blocks Windows stops.
+Independent queue engines never enter a session ledger through process-name matching. The queue
+controls their shutdown. User apps and protected studio directories stay protected. Log-tail observations
+and PowerShell private memory above 2 GiB add cleanup reasons. They never override live owners,
+process birth checks, or queue protection. Queue metadata reads have size limits.
+
 ### Quiet MCP configuration refresh
 
 For an authorized connection update on a retained session, use the client agent handle's
@@ -531,3 +568,41 @@ Each agent is a single JSON file. Fields relevant to this doc:
 | `lastStatus`                                 | `AgentStatus` | `initializing` / `idle` / `running` / `error` / `closed`                           |
 
 See [`docs/data-model.md`](./data-model.md) for the full agent record.
+
+### Old test fixtures
+
+The sweep can also stop an old Node test fixture without a session ledger entry.
+It requires parent PID 1, age over two hours, and an exact `/tmp/paseo-*-test` directory.
+On macOS, `/private/tmp/paseo-*-test` is also accepted.
+Subdirectories, other program names, and processes with launchd labels are excluded.
+The sweep checks all stored and resident sessions for that directory before each signal.
+Live or unreadable session state prevents the stop.
+Each signal checks the native birth identity and current directory again.
+The scan inspects at most 128 old detached Node candidates. It never reads arguments or environments.
+OMP test harnesses register teardown before start. Teardown closes native helpers after failed assertions.
+
+### Cleanup controls and ownership safeguards
+
+`FULCRA_SESSION_RESOURCE_CLEANUP` controls this additional resource cleanup. The default is `on`.
+Set it to `off` to disable collection and cleanup. Set it to `dry-run` to record decisions without signals or simulator shutdown.
+Other values disable this cleanup. Set the environment before starting the daemon.
+Existing provider transport shutdown still runs when a session closes.
+
+Each sampled root is bound to its native birth identity. Reused roots cannot acquire new children under the old binding.
+Child and parent births must agree across snapshots. A child cannot be older than its recorded parent.
+Missing ancestry keeps the target. Cleanup errors keep affected targets and cannot block session close or archive.
+Corrupt ledgers are preserved under a `.corrupt-<UUID>` name. The current operation then performs no cleanup.
+Warnings for repeated collection failures are limited to one per five minutes.
+
+Windows policy must include `installRoots`: an array of exact `{ "pid": 123, "birth": "native ticks" }` identities.
+An empty array explicitly declares no installation in progress. Missing or stale installation identities prevent stops.
+Installation roots and their descendants stay protected, including generic Node and PowerShell children.
+
+Old fixture cleanup also requires an exact helper/owner lease under `.fulcra-fixture-owners` in the fixture directory.
+OMP echo test helpers publish this proof. A live test worker keeps its helper, even during a long soak test.
+Missing or invalid proof keeps the process. Unrecorded fixtures from older test runs need an operator ownership check.
+
+Simulator use includes destination UUIDs from `xcodebuild`, other `xcrun` commands, and Flutter or Capacitor runs.
+Ambiguous device commands keep all owned devices while the user session is live.
+Visible Simulator.app or active Xcode/Flutter processes prevent automated shutdown.
+Ordinary tool events do not enter the cleanup queue.

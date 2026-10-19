@@ -1,3 +1,4 @@
+import { testFixtureInUse } from "./test-fixture-ownership.js";
 import { withCleanupAdmission } from "../../utils/cleanup-admission.js";
 import {
   assertComputerUseLabels,
@@ -123,6 +124,8 @@ import {
 } from "./native-queued-dispatch.js";
 import { TRUSTED_OPERATION, NATIVE_QUEUED_FINAL, FINAL_INPUT_CHECK } from "./agent-sdk-types.js";
 import type { AgentBackgroundWork } from "@getpaseo/protocol/agent-background-work";
+import { SessionResources } from "./session-resources.js";
+import { protectedSessionDirectory } from "./windows-resource-processes.js";
 import {
   BackgroundWorkSampler,
   type BackgroundWorkSamplerOptions,
@@ -145,7 +148,7 @@ import {
   type AgentMcpRefreshResult,
   type AgentMcpRefreshState,
 } from "@getpaseo/protocol/messages";
-import { basename, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { stat } from "node:fs/promises";
 import {
   AGENT_LIFECYCLE_STATUSES,
@@ -528,6 +531,8 @@ export interface CreateAgentOptions {
 }
 
 export interface AgentManagerOptions {
+  sessionResourcesFile?: string;
+  sessionResourceMode?: () => import("./session-resources.js").ResourceCleanupMode;
   costOutboxFile?: string;
   archiveServerId?: string;
   archiveLedgerDirectory?: string;
@@ -2182,6 +2187,7 @@ export class AgentManager {
   private readonly foregroundMutationTails = new Map<string, Promise<void>>();
   private readonly runs = new AgentRunState();
   private backgroundWorkSampler: BackgroundWorkSampler | null = null;
+  private readonly sessionResources?: SessionResources;
   private readonly subscribers = new Set<SubscriptionRecord>();
   private readonly idFactory: () => string;
   private readonly registry?: AgentStorage;
@@ -2304,6 +2310,10 @@ export class AgentManager {
     this.resolvePaseoToolPolicy = options.resolvePaseoToolPolicy ?? (() => undefined);
     this.appendSystemPrompt = options.appendSystemPrompt ?? "";
     this.logger = options.logger.child({ module: "agent", component: "agent-manager" });
+    this.sessionResources = this.createSessionResources(
+      options.sessionResourcesFile,
+      options.sessionResourceMode,
+    );
     this.idleSleep = new IdleSleep({
       logger: this.logger,
       minutes: () => this.idleSleepMinutes(),
@@ -2341,6 +2351,54 @@ export class AgentManager {
     this.updateProviderRegistry({
       providerDefinitions: options.providerDefinitions ?? {},
       clients: options.clients ?? {},
+    });
+  }
+
+  private createSessionResources(
+    file?: string,
+    mode?: () => import("./session-resources.js").ResourceCleanupMode,
+  ): SessionResources | undefined {
+    if (!file) return undefined;
+    return new SessionResources({
+      file,
+      logger: this.logger,
+      mode,
+      windowsPolicyFile: join(dirname(file), "session-resource-policy.json"),
+      roots: () =>
+        [...this.agents.values()].flatMap((agent) => {
+          if (
+            protectedSessionDirectory(
+              agent.cwd,
+              this.registry?.getCached(agent.id)?.title ?? agent.config.title,
+            )
+          )
+            return [];
+          const pid = agent.session.getProcessId?.();
+          return pid && agent.instanceId
+            ? [{ agentId: agent.id, instanceId: agent.instanceId, pid }]
+            : [];
+        }),
+      fixtureInUse: async (cwd, pid, birth) => {
+        if (!this.acceptingAgentRegistrations || !this.registry) return true;
+        const canonical = (value: string) => value.replace(/^\/private\/tmp\//, "/tmp/");
+        const matches = (value: string) => canonical(value) === canonical(cwd);
+        if ([...this.agents.values()].some((agent) => matches(agent.cwd))) return true;
+        if (
+          (await this.registry.list()).some(
+            (record) => matches(record.cwd) && !record.archivedAt && record.lastStatus !== "closed",
+          )
+        )
+          return true;
+        return testFixtureInUse(cwd, pid, birth);
+      },
+      ownerState: (id) => {
+        if (!this.acceptingAgentRegistrations) return "unknown";
+        if (this.agents.has(id)) return "live";
+        const record = this.registry?.getCached(id);
+        if (!record) return "unknown";
+        if (protectedSessionDirectory(record.cwd, record.title)) return "unknown";
+        return record.archivedAt || record.lastStatus === "closed" ? "inactive" : "live";
+      },
     });
   }
 
@@ -4493,6 +4551,27 @@ export class AgentManager {
     );
   }
 
+  private async captureResources(agentId: string): Promise<void> {
+    if (!this.acceptingAgentRegistrations) return;
+    try {
+      await this.sessionResources?.sample();
+    } catch {
+      this.logger.warn({ agentId }, "Resource capture failed; close will continue");
+    }
+  }
+  private async cleanupResources(agentId: string, agent: LiveManagedAgent): Promise<void> {
+    if (!this.acceptingAgentRegistrations || !agent.instanceId) return;
+    const instanceId = agent.instanceId;
+    try {
+      await this.sessionResources?.closeOwner(
+        agentId,
+        instanceId,
+        () => this.agents.get(agentId) === agent && agent.instanceId === instanceId,
+      );
+    } catch {
+      this.logger.warn({ agentId }, "Resource cleanup failed; close will continue");
+    }
+  }
   private async closeAgentRuntime(
     agentId: string,
     requireRetiringIdentity?: () => void,
@@ -4514,7 +4593,13 @@ export class AgentManager {
     // Retain ownership until shutdown succeeds. A failed close may still own a
     // native writer, so publishing a resumable closed snapshot would orphan it.
     this.invokeReportRelaunchGuard(requireRetiringIdentity);
+    // Capture before the provider closes stdin or releases its root process.
+    await this.captureResources(agentId);
+    this.invokeReportRelaunchGuard(requireRetiringIdentity);
+    // Windows retains stale parent numbers after exit. Use the verified root first.
+    if (process.platform === "win32") await this.cleanupResources(agentId, agent);
     await nativeDispatch(() => agent.session.close());
+    await this.cleanupResources(agentId, agent);
     this.cancelRunningProviderSubagents(agentId);
     const closedAgent = await this.prepareAgentForClosure(agent, "agent closed");
 
@@ -8386,6 +8471,19 @@ export class AgentManager {
     agent: ActiveManagedAgent,
     event: AgentStreamEvent,
   ): Promise<void> {
+    if (event.type === "timeline" && event.item.type === "tool_call" && agent.instanceId) {
+      const pid = agent.session.getProcessId?.();
+      if (pid) {
+        try {
+          await this.sessionResources?.observeTool(
+            { agentId: agent.id, instanceId: agent.instanceId, pid },
+            event.item,
+          );
+        } catch {
+          this.logger.warn({ agentId: agent.id }, "Could not record session simulator ownership");
+        }
+      }
+    }
     if (event.type === "provider_subagent") {
       const update = this.providerSubagents.apply(agent.id, event.provider, event.event);
       this.dispatch({ type: "provider_subagent", event: update });
@@ -9879,10 +9977,13 @@ export class AgentManager {
    * without it.
    */
   startBackgroundWorkSampling(options?: Partial<BackgroundWorkSamplerOptions>): void {
+    this.sessionResources?.start();
     if (this.backgroundWorkSampler) return;
     this.backgroundWorkSampler = new BackgroundWorkSampler({
       listTargets: () =>
         [...this.agents.values()].flatMap((agent) => {
+          // Claude publishes its own task protocol. Its PID is exposed for resource ownership only.
+          if (agent.provider === "claude") return [];
           const pid = agent.session.getProcessId?.() ?? null;
           return pid === null ? [] : [{ agentId: agent.id, pid, idle: agent.lifecycle === "idle" }];
         }),
@@ -10030,6 +10131,7 @@ export class AgentManager {
    */
   async flushForShutdown(): Promise<void> {
     this.stopBackgroundWorkSampling();
+    await this.sessionResources?.stop();
     await this.flushTasks({ includeAgentRegistrations: true });
   }
 

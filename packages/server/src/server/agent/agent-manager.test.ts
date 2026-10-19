@@ -18,6 +18,7 @@ import { ProviderSnapshotManager } from "./provider-snapshot-manager.js";
 import * as archiveLedger from "../ledger-routing/ledger.js";
 import { SessionAuthorization, OWNER_PERMISSIONS } from "../authorization/index.js";
 import { spawn } from "node:child_process";
+import { readOwnedProcessTable } from "../../utils/tree-kill.js";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -16446,3 +16447,100 @@ test.each(["terminal", "human", "MCP terminal", "MCP human"])(
     }
   },
 );
+
+test.skipIf(process.platform === "win32").each(["close", "archive"] as const)(
+  "%s stops a session-owned detached process after its provider exits",
+  async (action) => {
+    const workdir = mkdtempSync(join(tmpdir(), "manager-session-resource-"));
+    const storage = new AgentStorage(join(workdir, "agents"), logger);
+    const helper = "process.on('SIGTERM',()=>{});process.send('ready');setInterval(()=>{},1000)";
+    const code = `const {spawn}=require('node:child_process');const c=spawn(process.execPath,['-e',${JSON.stringify(helper)}],{detached:true,stdio:['ignore','ignore','ignore','ipc']});c.once('message',()=>process.send(c.pid));setInterval(()=>{},1000)`;
+    const provider = spawn(process.execPath, ["-e", code], {
+      stdio: ["ignore", "ignore", "ignore", "ipc"],
+    });
+    const jobPid = await new Promise<number>((resolve, reject) => {
+      provider.once("message", (pid) => resolve(Number(pid)));
+      provider.once("error", reject);
+    });
+    class ResourceSession extends TestAgentSession {
+      getProcessId(): number | null {
+        return provider.exitCode === null && provider.signalCode === null ? provider.pid! : null;
+      }
+      override async close(): Promise<void> {
+        if (provider.exitCode !== null || provider.signalCode !== null) return;
+        const exit = new Promise<void>((resolve) => provider.once("exit", () => resolve()));
+        provider.kill("SIGKILL");
+        await exit;
+      }
+    }
+    class ResourceClient extends TestAgentClient {
+      override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+        return new ResourceSession(config);
+      }
+    }
+    const manager = new AgentManager({
+      clients: { codex: new ResourceClient() },
+      registry: storage,
+      logger,
+      sessionResourcesFile: join(workdir, "runtime", "session-resources.json"),
+    });
+    try {
+      const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+        workspaceId: undefined,
+      });
+      if (action === "close") await manager.closeAgent(agent.id);
+      else await manager.archiveAgent(agent.id);
+      const runningJob = (await readOwnedProcessTable()).some(
+        (row) => row.pid === jobPid && !row.zombie,
+      );
+      expect(runningJob).toBe(false);
+      const record = await storage.get(agent.id);
+      expect(record?.lastStatus).toBe("closed");
+      if (action === "archive") expect(record?.archivedAt).toEqual(expect.any(String));
+    } finally {
+      try {
+        process.kill(jobPid, "SIGKILL");
+      } catch {
+        /* already stopped */
+      }
+      provider.kill("SIGKILL");
+      await manager.flushForShutdown();
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  },
+  20_000,
+);
+
+test.each(["close", "archive"] as const)("H2 resource errors never block %s", async (action) => {
+  const workdir = mkdtempSync(join(tmpdir(), "manager-resource-failure-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    registry: storage,
+    logger,
+    sessionResourcesFile: join(workdir, "runtime", "resources.json"),
+  });
+  const resources = (
+    manager as unknown as {
+      sessionResources: { sample(): Promise<void>; closeOwner(): Promise<void> };
+    }
+  ).sessionResources;
+  const sample = vi.spyOn(resources, "sample").mockRejectedValue(new Error("capture failed"));
+  const cleanup = vi.spyOn(resources, "closeOwner").mockRejectedValue(new Error("cleanup failed"));
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+    if (action === "close") await expect(manager.closeAgent(agent.id)).resolves.toBeUndefined();
+    else
+      await expect(manager.archiveAgent(agent.id)).resolves.toEqual({
+        archivedAt: expect.any(String),
+      });
+    expect((await storage.get(agent.id))?.lastStatus).toBe("closed");
+    if (action === "archive")
+      expect((await storage.get(agent.id))?.archivedAt).toEqual(expect.any(String));
+  } finally {
+    sample.mockRestore();
+    cleanup.mockRestore();
+    await manager.flushForShutdown();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});

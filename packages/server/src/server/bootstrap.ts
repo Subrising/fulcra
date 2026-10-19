@@ -1,4 +1,5 @@
 import { initializeWindowsPrivateFiles } from "./windows-private-file.js";
+import { resourceCleanupMode } from "./agent/session-resources.js";
 import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 // FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
 import {
@@ -1175,6 +1176,8 @@ export async function createPaseoDaemon(
   // A retention interrupted by a crash is finished before any agent reads its history.
   await finishTimelineRetention(durableTimelineStore, agentStorage, logger);
   const agentManager = new AgentManager({
+    sessionResourceMode: () => resourceCleanupMode(process.env.FULCRA_SESSION_RESOURCE_CLEANUP),
+    sessionResourcesFile: path.join(config.paseoHome, "runtime", "session-resources.json"),
     costOutboxFile: path.join(config.paseoHome, "usage", "pending-costs.json"),
     archiveServerId: serverId,
     workAcceptance: new WorkAcceptanceStore({

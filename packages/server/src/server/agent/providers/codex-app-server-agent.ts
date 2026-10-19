@@ -3801,7 +3801,10 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   getProcessId(): number | null {
-    return this.client && !this.closed ? this.processId : null;
+    const child = this.appServerChild;
+    return this.client && !this.closed && child?.exitCode === null && child.signalCode === null
+      ? this.processId
+      : null;
   }
 
   private async establishConnection(): Promise<void> {
@@ -3821,7 +3824,11 @@ export class CodexAppServerAgentSession implements AgentSession {
     }
     this.client = client;
     client.setUnexpectedTerminationHandler((error) => {
+      if (this.client !== client) return;
       this.handleUnexpectedTermination(error);
+      if (child.exitCode === null && child.signalCode === null) {
+        this.retireDisconnectedClient(client);
+      }
     });
     client.setNotificationHandler((method, params) =>
       this.handleNotification(method, params, client),
@@ -3921,7 +3928,15 @@ export class CodexAppServerAgentSession implements AgentSession {
     };
   }
 
+  private retireDisconnectedClient(client: CodexAppServerClient): void {
+    void client
+      .dispose()
+      .catch(() => this.logger.warn("Could not retire the disconnected Codex transport"));
+  }
   private handleUnexpectedTermination(error: Error): void {
+    this.client = null;
+    this.processId = null;
+    this.appServerChild = null;
     this.connectionState = "disconnected";
     const hasActiveRootTurn = this.activeForegroundTurnId !== null || this.currentTurnId !== null;
     this.clearPendingPermissions({ preservePlanApprovals: !hasActiveRootTurn });
