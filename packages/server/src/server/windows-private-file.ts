@@ -158,7 +158,17 @@ parentPort.on('message', (request) => {
 });
 `;
 
+export class WindowsPrivateFileReconciliationError extends Error {
+  readonly receipt?: Int32Array;
+  constructor(receipt?: Int32Array) {
+    super("Windows durable file commit requires reconciliation.");
+    this.name = "WindowsPrivateFileReconciliationError";
+    this.receipt = receipt;
+  }
+}
 let helper: Worker | undefined;
+let restartDelay = 1000;
+let restartScheduled = false;
 let preparation: Promise<void> | undefined;
 let pending: Int32Array | undefined;
 let pendingOperation: "W" | "A" | undefined;
@@ -170,7 +180,7 @@ export function initializeWindowsPrivateFiles(
   logger: { warn(message: string): void } = console,
 ): Promise<void> {
   if (process.platform !== "win32") return Promise.resolve();
-  if (preparation) return preparation;
+  if (preparation || restartScheduled) return preparation ?? Promise.resolve();
   preparation = new Promise<void>((resolve, reject) => {
     const systemRoot = process.env.SystemRoot;
     if (!systemRoot) return reject(new Error("Windows SystemRoot is unavailable."));
@@ -190,6 +200,7 @@ export function initializeWindowsPrivateFiles(
     helper = worker;
     let started = false;
     let failedOnce = false;
+    let healthyTimer: ReturnType<typeof setTimeout> | undefined;
     const timer = setTimeout(() => failed(), 30000);
     const failed = () => {
       if (failedOnce || helper !== worker) return;
@@ -198,6 +209,7 @@ export function initializeWindowsPrivateFiles(
       ready = false;
       void worker.terminate();
       clearTimeout(timer);
+      clearTimeout(healthyTimer);
       reject(new Error("Windows durable file helper is unavailable."));
       const commitPending =
         pendingOperation === "W" && pending && [0, -2].includes(Atomics.load(pending, 0));
@@ -212,11 +224,15 @@ export function initializeWindowsPrivateFiles(
         pending = undefined;
         pendingOperation = undefined;
         preparation = undefined;
-        queueMicrotask(() => {
+        restartScheduled = true;
+        const delay = restartDelay;
+        restartDelay = Math.min(60000, restartDelay * 2);
+        setTimeout(() => {
+          restartScheduled = false;
           if (helper !== worker) return;
           helper = undefined;
           void initializeWindowsPrivateFiles(logger).catch(() => {});
-        });
+        }, delay).unref();
       }
     };
     worker.on("error", failed);
@@ -229,6 +245,10 @@ export function initializeWindowsPrivateFiles(
       started = true;
       ready = true;
       unavailable = false;
+      healthyTimer = setTimeout(() => {
+        if (helper === worker && ready && !unavailable) restartDelay = 1000;
+      }, 10 * 60000);
+      healthyTimer.unref();
       worker.unref();
       resolve();
     });
@@ -243,7 +263,7 @@ export function windowsPrivateFilesReady(): boolean {
 /** Do not read an old receipt while an earlier timed-out commit can still change it. */
 export function assertWindowsPrivateFilesSettled(): void {
   if (!helper || !ready || unavailable || (pending && [0, -2].includes(Atomics.load(pending, 0))))
-    throw new Error("Windows durable file commit requires reconciliation.");
+    throw new WindowsPrivateFileReconciliationError();
 }
 
 function request(operation: "W" | "A", filePath: string, value: string, byteLength = 0): boolean {
@@ -257,7 +277,8 @@ function request(operation: "W" | "A", filePath: string, value: string, byteLeng
   const waitMs = Math.min(250, 50 + Math.ceil((15 * byteLength) / (1024 * 1024)));
   Atomics.wait(state, 0, 0, waitMs);
   const result = Atomics.load(state, 0);
-  if (result === 0) throw new Error("Windows durable file commit requires reconciliation.");
+  if (result === 0 || result === -2)
+    throw new WindowsPrivateFileReconciliationError(operation === "W" ? state : undefined);
   return result === 1;
 }
 

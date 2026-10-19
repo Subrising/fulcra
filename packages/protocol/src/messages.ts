@@ -1364,6 +1364,8 @@ export const SendAgentMessageSchema = z.object({
   agentId: z.string(),
   text: z.string(),
   messageId: z.string().optional(), // Client-provided ID for deduplication
+  /** Original Unix milliseconds for remote prompt replay expiry. Local sends do not require it. */
+  issuedAt: z.number().int().nonnegative().optional(),
   activeTurnBehavior: ActiveTurnBehaviorSchema.optional(),
   images: z.array(ImageAttachmentSchema).optional(),
   attachments: AgentAttachmentsSchema,
@@ -1523,6 +1525,8 @@ export const SendAgentMessageRequestSchema = z.object({
   agentId: z.string(),
   text: z.string(),
   messageId: z.string().optional(), // Client-provided ID for deduplication
+  /** Original Unix milliseconds for remote prompt replay expiry. Local sends do not require it. */
+  issuedAt: z.number().int().nonnegative().optional(),
   activeTurnBehavior: ActiveTurnBehaviorSchema.optional(),
   images: z.array(ImageAttachmentSchema).optional(),
   attachments: AgentAttachmentsSchema,

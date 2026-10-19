@@ -85,11 +85,15 @@ export const HostLinkConfigSchema = z
 export type HostLinkConfig = z.infer<typeof HostLinkConfigSchema>;
 export type IncomingHostLink = HostLinkConfig["incoming"][number];
 export type OutgoingHostLink = HostLinkConfig["outgoing"][number];
+export const HOST_LINK_RETENTION_MS = 30 * 86400000;
+export const HOST_LINK_CLOCK_SKEW_MS = 5 * 60000;
+const issuedAt = z.number().int().nonnegative();
 const identity = { messageId: z.string().uuid() };
 export const HostLinkSpawnSchema = z
   .object({
     kind: z.literal("spawn"),
     ...identity,
+    issuedAt: issuedAt.optional(),
     workload: z.enum(["standard", "heavy", "gpu"]),
     workspace: name,
     profile: name,
@@ -138,14 +142,22 @@ export const HostAccountLimitWireSchema = HostAccountLimitSchema.extend({
   ...identity,
   destination: name,
 }).strict();
+const spawnWire = HostLinkSpawnSchema.extend({ ...origin, issuedAt }).strict();
+const noticeWire = HostLinkNoticeSchema.extend({
+  ...origin,
+  noticeKind: z.enum(["explicit", "finished", "failed", "permission", "limit"]),
+  isLead: z.boolean(),
+}).strict();
 export const HostLinkWireSchema = z.discriminatedUnion("kind", [
   HostAccountLimitWireSchema,
-  HostLinkSpawnSchema.extend(origin).strict(),
-  HostLinkNoticeSchema.extend({
-    ...origin,
-    noticeKind: z.enum(["explicit", "finished", "failed", "permission", "limit"]),
-    isLead: z.boolean(),
-  }).strict(),
+  spawnWire,
+  noticeWire,
+]);
+// COMPAT(hostLinkIssuedAt): added v0.2.26; read legacy retained workers until 2027-04-19. Never replay timestamp-free pending requests.
+const storedWire = z.discriminatedUnion("kind", [
+  HostAccountLimitWireSchema,
+  spawnWire.extend({ issuedAt: issuedAt.optional() }),
+  noticeWire,
 ]);
 export type HostLinkWire = z.infer<typeof HostLinkWireSchema>;
 export type HostLinkNoticeKind = Extract<HostLinkWire, { kind: "notice" }>["noticeKind"];
@@ -153,6 +165,7 @@ export const HostLinkWorkerRequestSchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("prompt"),
+      issuedAt,
       notifyOnFinish: z.boolean().optional(),
       steer: z.boolean().optional(),
       acknowledgedNoticeIds: z.array(name).max(128).optional(),
@@ -163,6 +176,9 @@ export const HostLinkWorkerRequestSchema = z.discriminatedUnion("kind", [
     .strict(),
   z.object({ kind: z.literal("inspect"), agentId: name }).strict(),
   z.object({ kind: z.literal("notices"), agentId: name }).strict(),
+  z
+    .object({ kind: z.literal("acknowledge"), agentId: name, noticeIds: z.array(name).max(128) })
+    .strict(),
 ]);
 export type HostLinkWorkerRequest = z.infer<typeof HostLinkWorkerRequestSchema>;
 export const HostLinkReceiptSchema = z
@@ -197,10 +213,12 @@ export const HostLinkWorkerNoticesSchema = z
     serverId: name,
     agentId: name,
     complete: z.boolean(),
+
     settledPromptIds: z.array(z.string().uuid()).max(128).optional(),
     notices: z.array(HostLinkWorkerNoticeSchema).max(128),
   })
   .strict();
+export type HostLinkWorkerNotices = z.infer<typeof HostLinkWorkerNoticesSchema>;
 const receivedNotice = HostLinkWorkerNoticeSchema.extend({
   state: z.enum(["queued", "sending", "delivered", "uncertain", "exhausted", "suppressed"]),
   attempts: z.number().int().min(0).max(8),
@@ -218,7 +236,8 @@ export const HostLinkJournalSchema = z.record(
       profile: HostLinkProfileSchema.nullable(),
       cwd: z.string().nullable(),
       receipt: HostLinkReceiptSchema,
-      wire: HostLinkWireSchema.optional(),
+      wire: storedWire.optional(),
+      issuedAt: issuedAt.optional(),
       sourceSessionId: z.string().nullable().optional(),
       sourceGrant: z.string().optional(),
       noticeGrant: z.string().optional(),
@@ -252,3 +271,23 @@ export const HostLinkJournalSchema = z.record(
     .strict(),
 );
 export type HostLinkJournal = z.infer<typeof HostLinkJournalSchema>;
+
+// Separate bounded replay records outlive the active worker journal.
+export const HostLinkReplaySchema = z.record(
+  z.string(),
+  z
+    .object({
+      hash: z.string(),
+      grant: z.string(),
+      receipt: HostLinkReceiptSchema,
+      retiredAt: z.number().finite(),
+      credential: z.string(),
+      noticeGrant: z.string(),
+      issuedAt: issuedAt.optional(),
+    })
+    .strict(),
+);
+
+export const HostLinkCleanupSchema = z.object({ archived: z.boolean() }).strict();
+
+export const HostLinkNoticeFailuresSchema = z.record(z.string(), z.literal(true));

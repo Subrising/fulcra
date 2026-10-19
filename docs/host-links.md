@@ -52,7 +52,10 @@ It flushes the temporary file, renames it with `MoveFileExW`, then opens and flu
 `WRITE_THROUGH` alone does not guarantee a same-volume rename commit.
 The helper retries access and sharing locks for one second.
 Windows journals stop at 1 MiB before writing; POSIX journals retain the 8 MiB limit.
+New spawns stop at 512 KiB on Windows and 4 MiB on POSIX, to reserve space for worker notices.
 Cold compilation runs outside the daemon event loop. Helper waits use 50 ms plus 15 ms per MiB, capped at 250 ms.
+Safe helper restarts wait one second, then double to 60 seconds. Ten healthy minutes reset the delay.
+An uncertain commit prevents restart.
 After a pending receipt times out, reconcile its original write, then use a new message id.
 Readers check Windows ownership and reject ACLs that expose content or mutation rights to other users.
 The temporary file stays in the destination directory. Cross-volume copies are disabled.
@@ -160,6 +163,7 @@ Prepare a private JSON request with one retained UUID:
 ```json
 {
   "kind": "spawn",
+  "issuedAt": 1792065600000,
   "messageId": "11111111-1111-4111-8111-111111111111",
   "workload": "standard",
   "workspace": "job",
@@ -174,7 +178,7 @@ fulcra host-link request request.json --endpoint https://source.example.test \
   --credential-file chat.secret --receipt-file worker-receipt.json
 fulcra host-link inspect --receipt-file worker-receipt.json
 fulcra host-link prompt --receipt-file worker-receipt.json \
-  --message-id 22222222-2222-4222-8222-222222222222 --prompt-file follow-up.txt
+  --issued-at 1792065600000 --message-id 22222222-2222-4222-8222-222222222222 --prompt-file follow-up.txt
 ```
 
 The CLI stores the worker credential in the private receipt file. It does not print that credential.
@@ -201,7 +205,7 @@ A notice cannot claim role authority through its text.
 
 Agent-scoped `create_agent` accepts an optional destination `serverId`.
 Omit it, or select the local server ID, to keep local creation.
-For a remote host, supply `hostLink` with `messageId`, `workload`, `workspace`, and `profile`.
+For a remote host, supply `hostLink` with `messageId`, `issuedAt`, `workload`, `workspace`, and `profile`.
 Use one retained UUID for retries. Workspace and profile identifiers name destination grants, not source paths or accounts.
 The provider, explicit model, and explicit mode must match the destination profile.
 Local workspace placement, labels, features, and detached creation are refused for remote requests.
@@ -227,13 +231,43 @@ Changed authority, archived callers, and changed provider sessions refuse delive
 Credential rotation and expiry renewal preserve return notices while the grants remain active.
 
 Healthy subscriptions check for retained events every ten seconds. Network failures use eight persisted attempts with delays capped at sixty seconds.
-The home daemon reads at most four workers concurrently. It has no timer when no eligible work remains.
+The home daemon reads at most four workers concurrently. It checks completed workers until archive permits cleanup.
+It has no timer when no eligible work remains.
 After retry exhaustion, repeat the same native creation request with its original UUID to renew the retry budget.
 This reuses the worker and notice receipts. It never starts a replacement worker or replays a delivered notice.
 
 Each worker keeps up to 127 permission checkpoints and one terminal notice within the existing journal storage limits.
 Do not delete receipt files to clear capacity or retry a request.
-The private source outbox retains notice text and delivery state for owner inspection.
+The private source outbox retains notice text and delivery state for owner inspection until cleanup.
+Cleanup requires an archived worker, no pending prompts, and source acknowledgement of every terminal notice.
+Resolved permission notices can also be removed. Finished workers keep their control grants until archive.
+Both hosts must support the `acknowledge` operation for automatic cleanup.
+The receiver first commits compact replay records in `host-links-inbox.json.replay`, then removes active entries.
+The source uses `host-links-outbox.json.replay`. A duplicate UUID returns its old outcome; a changed request fails.
+Each replay file has a 1 MiB cap. New spawns reserve replay space for active work and stop before capacity is full.
+Replay records expire after 30 days, including records for configured credentials.
+The source sets a missing spawn `issuedAt` at first dispatch and retains it with the request UUID.
+Retries reuse that time from the active outbox or replay record. A different caller timestamp fails.
+Prompt requests must retain their original `issuedAt` in Unix milliseconds with their UUID.
+Both hosts refuse requests aged 30 days minus five minutes, and timestamps more than five minutes in the future.
+Keep host clocks synchronized. Never refresh a retry's timestamp. Reconcile an expired request before using a new UUID.
+Update both host daemons and remote clients. Local messages keep their existing protocol shape.
+Legacy active worker receipts remain readable. Timestamp-free pending requests require reconciliation and cannot replay automatically.
+A notice save capacity or write failure produces a fixed warning through the normal source lead delivery path.
+Start events and temporary Windows reconciliation fences do not set this warning.
+Events blocked by a Windows receipt wait for its completion, then retry only journal persistence.
+The daemon checks the original write result. It reports a confirmed write failure without replaying provider input.
+Real result text remains available. Only a successful terminal notice save or source acknowledgement clears its warning.
+The source stops its notice watch after delivering a storage warning. It does not poll that warning indefinitely.
+A separate private `host-links-notice-failures.json` file keeps warnings across restart when storage permits.
+Notices from a cleaned-up worker set a repair marker and a runtime log warning.
+After source cleanup, the warning appears only in the worker host log and its marker file.
+Do not restore retired workers; create a new worker instead.
+After storage repair and worker reconciliation, stop the worker host daemon when idle.
+Keep it stopped while you clear only that worker's marker:
+`fulcra host-link clear-notice-failure --home <worker-home> --worker <worker-uuid>`.
+Restart the repaired daemon. This also clears any in-memory fallback warning.
+Repeat the original, unexpired creation request on the source to resume its notice watch.
 Run `fulcra host-link status --home <source-home>` to count uncertain notices, exhausted deliveries, and exhausted watches.
 An exhausted watch means the home daemon stopped checking that worker for notices.
 A failed or interrupted provider handoff has state `uncertain`. It requires reconciliation; the daemon never replays it automatically.

@@ -328,6 +328,7 @@ function completionPolicy(
   const remote = Boolean(sender && /^[a-f0-9-]{36}@[a-z0-9_-]+$/i.test(agentId));
   return {
     background: options.wait === false || remote,
+    remote,
     messageId: options.wait === false && !remote ? undefined : randomUUID(),
   };
 }
@@ -528,6 +529,7 @@ export async function runSendCommand(
           (note === "Provider paused. Notice saved. No turn was started." ? "held" : undefined);
       }),
       ...(completionMessageId ? { messageId: completionMessageId } : {}),
+      ...(policy.remote ? { issuedAt: Date.now() } : {}),
     });
 
     if (deliveryState === "held") {

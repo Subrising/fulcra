@@ -515,6 +515,8 @@ export interface SendMessageOptions {
   /** Reports queue admission or a steering fallback. This is not task completion. */
   onDelivery?: (note: string, state?: "held") => void;
   messageId?: string;
+  /** Keep the original Unix milliseconds when retrying a remote message ID. */
+  issuedAt?: number;
   /** Human input steers while busy. Agent input queues unless steering is requested. */
   activeTurnBehavior?: ActiveTurnBehavior;
   images?: Array<{ data: string; mimeType: string }>;
@@ -4003,6 +4005,14 @@ export class DaemonClient {
     }
   }
 
+  private remoteMessageTime(agentId: string, options?: SendMessageOptions): { issuedAt?: number } {
+    if (!/^[a-f0-9-]{36}@[^@]+$/i.test(agentId))
+      return options?.issuedAt === undefined ? {} : { issuedAt: options.issuedAt };
+    if (options?.messageId && options.issuedAt === undefined)
+      throw new Error("Retain issuedAt with a remote message ID.");
+    return { issuedAt: options?.issuedAt ?? Date.now() };
+  }
+
   async sendAgentMessage(
     agentId: string,
     text: string,
@@ -4011,6 +4021,7 @@ export class DaemonClient {
     this.requireAgentMessageQueue(options);
     const requestId = this.createRequestId();
     const messageId = options?.messageId ?? crypto.randomUUID();
+    const requestTime = this.remoteMessageTime(agentId, options);
     const message = SessionInboundMessageSchema.parse({
       type: "send_agent_message_request",
       requestId,
@@ -4019,6 +4030,7 @@ export class DaemonClient {
       ...(options?.notifyOnFinish !== undefined ? { notifyOnFinish: options.notifyOnFinish } : {}),
       ...(options?.queue ? { queue: true } : {}),
       ...(messageId ? { messageId } : {}),
+      ...requestTime,
       ...(options?.activeTurnBehavior ? { activeTurnBehavior: options.activeTurnBehavior } : {}),
       ...(options?.images ? { images: options.images } : {}),
       ...(options?.attachments ? { attachments: options.attachments } : {}),

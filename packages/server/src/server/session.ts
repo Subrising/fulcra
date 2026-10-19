@@ -10360,10 +10360,15 @@ export class Session {
         throw new Error("Remote sends accept plain parent prompts only.");
       const links = hostLinksFor(this.agentManager);
       if (!links) throw new Error("Remote sends require a configured host link.");
+      if (msg.messageId && msg.issuedAt === undefined)
+        throw new Error(
+          "Remote retries require the original issuedAt. Update the client and retain both values.",
+        );
       await links.promptForAgent(msg.sender.agentId, serverId, {
         agentId: agentId,
         prompt: msg.text,
         messageId: msg.messageId ?? randomUUID(),
+        issuedAt: msg.issuedAt ?? Date.now(),
         notifyOnFinish: msg.notifyOnFinish,
         steer: msg.activeTurnBehavior === "steer",
       });

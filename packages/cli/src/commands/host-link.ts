@@ -1,3 +1,4 @@
+import { readDaemonInstance } from "@getpaseo/server/daemon-control";
 import {
   initializeWindowsPrivateFiles,
   windowsAclIsSafe,
@@ -34,6 +35,7 @@ interface RequestOptions {
 interface WorkerOptions {
   receiptFile: string;
   messageId?: string;
+  issuedAt?: number;
   promptFile?: string;
 }
 
@@ -102,6 +104,21 @@ export async function hostLinkNoticeStatus(home: string): Promise<{
     }
   }
   return counts;
+}
+async function requireOfflineNoticeRepair(home: string): Promise<void> {
+  if (await readDaemonInstance(home))
+    throw new Error("Reconcile workers and stop the daemon before clearing its notice warning.");
+}
+export async function clearHostLinkNoticeFailure(home: string, agentId: string): Promise<void> {
+  z.string().uuid().parse(agentId);
+  await requireOfflineNoticeRepair(home);
+  const file = resolve(home, "host-links-notice-failures.json");
+  const markers = z
+    .record(z.string(), z.literal(true))
+    .parse(privateJson(await privateRead(file, 128 * 1024)));
+  delete markers[agentId];
+  await requireOfflineNoticeRepair(home);
+  writePrivateFileAtomicSync(file, JSON.stringify(markers), { durable: true });
 }
 function privateJson(text: string): unknown {
   try {
@@ -183,6 +200,7 @@ export async function promptHostLink(
     await client.sendAgentMessage(`${receipt.agentId}@${receipt.serverId}`, prompt, {
       sender,
       messageId,
+      issuedAt: z.number().int().nonnegative().parse(options.issuedAt),
       ...(options.steer ? { activeTurnBehavior: "steer" as const } : {}),
       ...(options.notifyOnFinish === false ? { notifyOnFinish: false } : {}),
     });
@@ -203,6 +221,20 @@ export function createHostLinkCommand(): Command {
         process.stdout.write(
           `${JSON.stringify(await hostLinkNoticeStatus(options.daemonTarget.home))}\n`,
         );
+      }),
+    ),
+  );
+  command.addCommand(
+    addLocalDaemonOptions(
+      new Command("clear-notice-failure")
+        .description("Clear one warning after worker and receipt reconciliation")
+        .requiredOption("--worker <id>", "Reconciled worker UUID"),
+    ).action(
+      withGlobalOptions(async (options: CommandOptions & { worker: string }) => {
+        if (options.daemonTarget.kind !== "instance")
+          throw new Error("Use the worker host's local daemon home.");
+        await clearHostLinkNoticeFailure(options.daemonTarget.home, options.worker);
+        process.stdout.write("Worker notice warning cleared.\n");
       }),
     ),
   );
@@ -228,6 +260,11 @@ export function createHostLinkCommand(): Command {
     addLocalDaemonOptions(new Command("prompt"))
       .requiredOption("--receipt-file <path>", "Retained private worker receipt")
       .requiredOption("--message-id <id>", "Retained UUID for this prompt")
+      .requiredOption(
+        "--issued-at <milliseconds>",
+        "Original Unix milliseconds; retain on retry",
+        Number,
+      )
       .requiredOption("--prompt-file <path>", "Private UTF-8 prompt")
       .option("--steer", "Join the current remote turn when supported")
       .option("--no-notify-on-finish", "Do not request a finish notice")

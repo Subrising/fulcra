@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { spawnSync } from "node:child_process";
 import { afterEach, expect, test, vi } from "vitest";
 
 const transport = vi.hoisted(() => ({
@@ -37,6 +38,7 @@ vi.mock("node:worker_threads", () => ({
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
 afterEach(() => {
   Object.defineProperty(process, "platform", platformDescriptor);
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   transport.mode = "ok";
@@ -51,6 +53,21 @@ async function helper(logger = { warn: vi.fn() }) {
   await api.initializeWindowsPrivateFiles(logger);
   return api;
 }
+test("the helper loads with Node strip-only TypeScript support", () => {
+  const source = new URL("./windows-private-file.ts", import.meta.url).href;
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--experimental-strip-types",
+      "--input-type=module",
+      "-e",
+      `await import(${JSON.stringify(source)})`,
+    ],
+    { encoding: "utf8", env: { ...process.env, NODE_OPTIONS: "" } },
+  );
+  expect(result.stderr).not.toContain("ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX");
+  expect(result.status).toBe(0);
+});
 test.each([2, 8])("Windows line transport accepts %i MiB without a JSON parser", async (mib) => {
   const api = await helper();
   const bytes = Buffer.alloc(mib * 1024 * 1024, 120);
@@ -111,7 +128,7 @@ test("a terminated helper blocks reconciliation before its exit message is proce
   const api = await helper();
   transport.mode = "fatal";
   expect(() => api.writeWindowsPrivateFileAtomicSync("journal.json", "value")).toThrow(
-    "Windows durable file commit failed",
+    "requires reconciliation",
   );
   expect(() => api.assertWindowsPrivateFilesSettled()).toThrow("requires reconciliation");
   await expect(api.waitForWindowsPrivateFilesSettled()).rejects.toThrow("helper is unavailable");
@@ -132,16 +149,22 @@ test.each([
   expect(wait).toHaveBeenLastCalledWith(expect.any(Int32Array), 0, 0, 50);
 });
 
-test("an idle helper exit logs once and restarts without replaying a write", async () => {
+test("idle helper restarts back off from one second to 60 seconds without replay", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const logger = { warn: vi.fn() };
   const api = await helper(logger);
   api.writeWindowsPrivateFileAtomicSync("journal.json", "committed");
-  transport.workers[0]!.emit("exit", 1);
-  await api.initializeWindowsPrivateFiles(logger);
-  expect(logger.warn).toHaveBeenCalledExactlyOnceWith("Windows durable file helper exited.");
-  expect(transport.workers).toHaveLength(2);
+  for (const [index, delay] of [1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000].entries()) {
+    transport.workers[index]!.emit("exit", 1);
+    await api.initializeWindowsPrivateFiles(logger);
+    await vi.advanceTimersByTimeAsync(delay - 1);
+    expect(transport.workers).toHaveLength(index + 1);
+    expect(api.windowsPrivateFilesReady()).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(transport.workers).toHaveLength(index + 2);
+    expect(api.windowsPrivateFilesReady()).toBe(true);
+  }
   expect(transport.posts).toBe(1);
-  expect(api.windowsPrivateFilesReady()).toBe(true);
   api.writeWindowsPrivateFileAtomicSync("journal.json", "next");
   expect(transport.posts).toBe(2);
 });
@@ -166,4 +189,38 @@ test("an exit with an uncertain commit logs and keeps its fence without restart"
   );
   expect(transport.posts).toBe(1);
   await expect(api.waitForWindowsPrivateFilesSettled()).rejects.toThrow("helper is unavailable");
+});
+
+test("ten healthy minutes reset the helper restart delay", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  await helper();
+  transport.workers[0]!.emit("exit", 1);
+  await vi.advanceTimersByTimeAsync(1000);
+  transport.workers[1]!.emit("exit", 1);
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(transport.workers).toHaveLength(3);
+  await vi.advanceTimersByTimeAsync(10 * 60000);
+  transport.workers[2]!.emit("exit", 1);
+  await vi.advanceTimersByTimeAsync(999);
+  expect(transport.workers).toHaveLength(3);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(transport.workers).toHaveLength(4);
+});
+
+test("a pending write keeps its original commit receipt for the eventual result", async () => {
+  const api = await helper();
+  transport.mode = "pending";
+  vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
+  let failure: unknown;
+  try {
+    api.writeWindowsPrivateFileAtomicSync("journal.json", "notice");
+  } catch (error) {
+    failure = error;
+  }
+  expect(failure).toBeInstanceOf(api.WindowsPrivateFileReconciliationError);
+  const receipt = (failure as InstanceType<typeof api.WindowsPrivateFileReconciliationError>)
+    .receipt!;
+  expect(Atomics.load(receipt, 0)).toBe(0);
+  Atomics.store(new Int32Array(transport.buffer!), 0, -1);
+  expect(Atomics.load(receipt, 0)).toBe(-1);
 });

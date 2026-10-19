@@ -22,10 +22,16 @@ import {
   HostLinks,
   registerHostLinks,
   HostLinkError,
+  HostLinkStorageError,
   type HostLinkDelivery,
   type HostLinkRoleNotice,
   type HostLinkFinishDelivery,
 } from "./host-links.js";
+
+import {
+  WindowsPrivateFileReconciliationError,
+  waitForWindowsPrivateFilesSettled,
+} from "./windows-private-file.js";
 
 export interface HostLinkRuntimeInput {
   home: string;
@@ -62,69 +68,134 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
     );
   }
   let service: HostLinks | null = null;
+  let closed = false;
+  let reconciliation: Promise<void> | undefined;
+  const waiting = new Set<string>();
+  const noticeFailure = (agentId: string, error: unknown, eventType?: string) => {
+    if (eventType === "turn_started" || eventType === "permission_resolved") return;
+    service?.recordWorkerNoticeFailure(agentId, error);
+  };
+  const settled = () => {
+    if (!reconciliation) {
+      const run = waitForWindowsPrivateFilesSettled();
+      reconciliation = run;
+      void run
+        .finally(() => {
+          if (reconciliation === run) reconciliation = undefined;
+        })
+        .catch(() => {});
+    }
+    return reconciliation;
+  };
+  // Retry only journal persistence. Provider input never passes through this queue.
+  const persist = (
+    agentId: string,
+    eventType: string,
+    key: string,
+    operation: () => void,
+  ): void => {
+    if (closed) return;
+    try {
+      operation();
+    } catch (error) {
+      if (error instanceof WindowsPrivateFileReconciliationError) {
+        if (waiting.has(key)) return;
+        waiting.add(key);
+        void settled()
+          .then(() => {
+            waiting.delete(key);
+            if (closed) return;
+            if (!error.receipt) return persist(agentId, eventType, key, operation);
+            const outcome = Atomics.load(error.receipt, 0);
+            if (outcome === 1) {
+              if (["finished", "failed"].includes(eventType))
+                service?.clearWorkerNoticeFailure(agentId);
+              return;
+            }
+            if (outcome !== -1)
+              throw new Error("Windows receipt still needs reconciliation.", { cause: error });
+            const failure = new HostLinkStorageError("write");
+            noticeFailure(agentId, failure, eventType);
+            logger.error({ err: failure, agentId }, "Could not retain a host-link worker notice");
+            return undefined;
+          })
+          .catch((failure) => {
+            waiting.delete(key);
+            if (!closed)
+              logger.error(
+                { err: failure, agentId },
+                "Host-link receipt reconciliation needs owner repair",
+              );
+          });
+        return;
+      }
+      noticeFailure(agentId, error, eventType);
+      logger.error({ err: error, agentId }, "Could not retain a host-link worker notice");
+    }
+  };
+  const recordNotice = (...args: Parameters<HostLinks["recordWorkerNotice"]>) =>
+    persist(args[0], args[1], `${args[0]}:${args[1]}:${args[2]}`, () => {
+      if (service?.recordWorkerNotice(...args) === "retired")
+        logger.warn(
+          { agentId: args[0] },
+          "A retired host-link worker emitted a notice. Reconcile it before more work.",
+        );
+    });
   const unsubscribe = agentManager.subscribe(
     (event) => {
-      if (event.type === "agent_state" && !event.agent.internal) remember(event.agent);
-      if (event.type === "agent_state" && event.agent.lifecycle === "error" && service) {
-        try {
-          service.recordWorkerNotice(
+      try {
+        if (event.type === "agent_state" && !event.agent.internal) remember(event.agent);
+        if (event.type === "agent_state" && event.agent.lifecycle === "error" && service)
+          recordNotice(
             event.agent.id,
             "failed",
             "state-error",
             finishText(event.agent.id, event.agent.lastError ?? "The remote worker failed."),
           );
-        } catch (error) {
-          logger.error(
-            { err: error, agentId: event.agent.id },
-            "Could not retain a host-link worker error",
+        if (event.type !== "agent_stream" || !service) return;
+        const id = event.agentId;
+        const stream = event.event;
+        if (stream.type === "turn_started")
+          persist(id, stream.type, `${id}:start:${stream.turnId}`, () =>
+            service?.recordWorkerStarted(id, stream.turnId),
           );
-        }
-      }
-      if (event.type !== "agent_stream" || !service) return;
-      try {
-        if (event.event.type === "turn_started")
-          service.recordWorkerStarted(event.agentId, event.event.turnId);
-        else if (event.event.type === "turn_completed")
-          service.recordWorkerNotice(
-            event.agentId,
+        else if (stream.type === "turn_completed")
+          recordNotice(
+            id,
             "finished",
-            event.event.turnId ?? "initial",
-            finishText(
-              event.agentId,
-              `The remote worker finished its turn.\n${lastWorkerMessage(event.agentId)}`,
-            ),
-            event.event.turnId,
+            stream.turnId ?? "initial",
+            finishText(id, `The remote worker finished its turn.\n${lastWorkerMessage(id)}`),
+            stream.turnId,
           );
-        else if (event.event.type === "turn_failed")
-          service.recordWorkerNotice(
-            event.agentId,
+        else if (stream.type === "turn_failed")
+          recordNotice(
+            id,
             "failed",
-            event.event.turnId ?? "initial",
-            finishText(event.agentId, event.event.error),
-            event.event.turnId,
+            stream.turnId ?? "initial",
+            finishText(id, stream.error),
+            stream.turnId,
           );
-        else if (event.event.type === "turn_canceled")
-          service.recordWorkerNotice(
-            event.agentId,
+        else if (stream.type === "turn_canceled")
+          recordNotice(
+            id,
             "failed",
-            event.event.turnId ?? "initial",
-            finishText(event.agentId, `The remote turn stopped: ${event.event.reason}`),
-            event.event.turnId,
+            stream.turnId ?? "initial",
+            finishText(id, `The remote turn stopped: ${stream.reason}`),
+            stream.turnId,
           );
-        else if (event.event.type === "permission_resolved")
-          service.resolveWorkerPermission(event.agentId, event.event.requestId);
-        else if (event.event.type === "permission_requested")
-          service.recordWorkerNotice(
-            event.agentId,
+        else if (stream.type === "permission_resolved")
+          persist(id, stream.type, `${id}:permission:${stream.requestId}`, () =>
+            service?.resolveWorkerPermission(id, stream.requestId),
+          );
+        else if (stream.type === "permission_requested")
+          recordNotice(
+            id,
             "permission",
-            event.event.request.id,
-            `Permission request ${event.event.request.id}:\n${JSON.stringify(event.event.request)}`,
+            stream.request.id,
+            `Permission request ${stream.request.id}:\n${JSON.stringify(stream.request)}`,
           );
       } catch (error) {
-        logger.error(
-          { err: error, agentId: event.agentId },
-          "Could not retain a host-link worker notice",
-        );
+        logger.error({ err: error }, "Could not prepare a host-link worker notice");
       }
     },
     { replayState: false },
@@ -291,6 +362,7 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
         worker.pendingPermissions.has(requestId),
       );
     },
+    workerArchived: (id) => Boolean(directory.get(id)?.archivedAt),
     noticeError: (error) => logger.warn({ err: error }, "Host-link finish notice remains retained"),
     chat: async (id) => {
       const live = agentManager.getAgent(id);
@@ -414,7 +486,6 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
   const stopSharing = startHostLimitSharing(service, input.home, () =>
     logger.warn("Account limit sharing failed; the next pass will retry."),
   );
-  let closed = false;
   const recover = async () => {
     if (closed) return;
     try {

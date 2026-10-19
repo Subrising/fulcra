@@ -17,6 +17,7 @@ import type { Server } from "node:http";
 import { afterEach, expect, test, vi } from "vitest";
 import {
   HostLinkError,
+  HostLinkStorageError,
   HostLinks,
   type HostLinkChat,
   type HostLinkCreate,
@@ -45,7 +46,10 @@ import {
 import { createPoolUsage } from "../../../../control/orca-organization/server/pool-usage.js";
 import { writePrivateFileAtomicSync } from "./private-files.js";
 import { windowsAclIsSafe } from "./plugins/trusted-ownership.js";
-import { writeWindowsPrivateFileAtomicSync } from "./windows-private-file.js";
+import {
+  writeWindowsPrivateFileAtomicSync,
+  WindowsPrivateFileReconciliationError,
+} from "./windows-private-file.js";
 import {
   isAgentMcpRequestAuthorized,
   isBearerTokenValidAsync,
@@ -77,6 +81,7 @@ const chatToken = `hchat1.${"B".repeat(43)}`;
 const messageId = "11111111-1111-4111-8111-111111111111";
 const spawn = {
   kind: "spawn",
+  issuedAt: Date.parse("2026-10-15T12:00:00Z"),
   messageId,
   workload: "standard",
   workspace: "job",
@@ -360,6 +365,7 @@ test("real HTTP spawn retains one worker, restriction, parent, and per-worker co
   ).toBe(403);
   const prompt = {
     kind: "prompt",
+    issuedAt: spawn.issuedAt,
     agentId: receipt.agentId,
     messageId: "33333333-3333-4333-8333-333333333333",
     prompt: "Check the result.",
@@ -514,8 +520,8 @@ test("a directory flush failure stops effects and receipt acknowledgement", asyn
     if (fstatSync(fd).isDirectory()) throw new Error("Directory flush failed");
     realFsync(fd);
   });
-  await expect(f.target.receive(linkToken, f.wire)).rejects.toThrow("Directory flush failed");
-  await expect(f.target.receive(linkToken, f.wire)).rejects.toThrow("Directory flush failed");
+  await expect(f.target.receive(linkToken, f.wire)).rejects.toThrow("receipt write failed");
+  await expect(f.target.receive(linkToken, f.wire)).rejects.toThrow("receipt write failed");
   expect(f.created).toEqual([]);
   vi.mocked(fsyncSync).mockImplementation(realFsync);
   expect((await f.target.receive(linkToken, f.wire)).state).toBe("pending");
@@ -562,9 +568,7 @@ test("Windows write-through failure stops provider input and acknowledgement", a
   });
   try {
     Object.defineProperty(process, "platform", { value: "win32" });
-    await expect(f.target.receive(linkToken, f.wire)).rejects.toThrow(
-      "Windows durable file commit failed.",
-    );
+    await expect(f.target.receive(linkToken, f.wire)).rejects.toThrow("receipt write failed");
     expect(f.created).toEqual([]);
     expect(f.notices).toEqual([]);
   } finally {
@@ -575,7 +579,8 @@ test("Windows write-through failure stops provider input and acknowledgement", a
 
 test.each([
   ["win32", 1024 * 1024, true],
-  ["win32", 1024 * 1024 - 4096, false],
+  ["win32", 512 * 1024, true],
+  ["win32", 512 * 1024 - 4096, false],
   ["darwin", 1024 * 1024, false],
 ] as const)(
   "%s receipt capacity with %i bytes of retained data",
@@ -710,6 +715,7 @@ test("revocation and worker mode changes refuse subsequent per-chat prompts", as
   f.chats.get(receipt.agentId!)!.modeId = "full-access";
   const body = {
     kind: "prompt",
+    issuedAt: spawn.issuedAt,
     agentId: receipt.agentId,
     messageId: "77777777-7777-4777-8777-777777777777",
     prompt: "Next task.",
@@ -731,6 +737,7 @@ test("a worker credential cannot control a replacement model", async () => {
   f.chats.get(receipt.agentId!)!.model = "another-model";
   const result = await f.post(`${f.targetListener.url}/api/host-links/worker`, receipt.token!, {
     kind: "prompt",
+    issuedAt: spawn.issuedAt,
     agentId: receipt.agentId,
     messageId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
     prompt: "Next task.",
@@ -1138,169 +1145,220 @@ test("FU-170 reconciles a lost creation reply before returning the retained fini
   expect(f.created).toHaveLength(1);
 });
 
-test("FU-170 runtime carries a real worker finish across HTTP into the lead's provider", async () => {
-  const { AgentManager } = await import("./agent/agent-manager.js");
-  const { AgentStorage } = await import("./agent/agent-storage.js");
-  const { createHostLinkRuntime } = await import("./host-link-runtime.js");
-  const { createTestAgentClients } = await import("./test-utils/fake-agent-client.js");
-  const { createTestLogger } = await import("../test-utils/test-logger.js");
-  const { heldSendsFor } = await import("./held-sends.js");
-  const root = realpathSync(await mkdtemp(path.join(tmpdir(), "host-link-runtime-")));
-  cleanups.push(() => rm(root, { recursive: true, force: true }));
-  const logger = createTestLogger();
-  const leadInputs: unknown[] = [];
-  const workerInputs: unknown[] = [];
-  let noticeArrived!: () => void;
-  const notified = new Promise<void>((resolve) => {
-    noticeArrived = resolve;
-  });
-  const sourceHome = path.join(root, "source");
-  const targetHome = path.join(root, "target");
-  const sourceStorage = new AgentStorage(path.join(sourceHome, "agents"), logger);
-  const targetStorage = new AgentStorage(path.join(targetHome, "agents"), logger);
-  const sourceManager = new AgentManager({
-    clients: createTestAgentClients({
-      onStartTurn: (prompt) => {
-        leadInputs.push(prompt);
-        noticeArrived();
-      },
-    }),
-    registry: sourceStorage,
-    logger,
-  });
-  const targetManager = new AgentManager({
-    clients: createTestAgentClients({ onStartTurn: (prompt) => workerInputs.push(prompt) }),
-    registry: targetStorage,
-    logger,
-  });
-  const sourceRuntime = await createHostLinkRuntime({
-    home: sourceHome,
-    serverId: "source",
-    protected: () => true,
-    agentManager: sourceManager,
-    agentStorage: sourceStorage,
-    logger,
-    workspace: async () => "workspace-source",
-  });
-  const targetRuntime = await createHostLinkRuntime({
-    home: targetHome,
-    serverId: "target",
-    protected: () => true,
-    agentManager: targetManager,
-    agentStorage: targetStorage,
-    logger,
-    workspace: async () => "workspace-target",
-  });
-  cleanups.push(async () => {
-    sourceRuntime.close();
-    targetRuntime.close();
-    heldSendsFor(sourceManager, logger).close();
-    heldSendsFor(targetManager, logger).close();
-    for (const manager of [sourceManager, targetManager]) {
-      for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
-      await manager.flush();
-    }
-  });
-  const targetApp = express();
-  mountHostLinkRoutes(targetApp, () => targetRuntime.service);
-  const targetListener = await listen(targetApp);
-  const lead = await sourceManager.createAgent(
-    { provider: "codex", model: "gpt-test", modeId: "full-access", cwd: root },
-    undefined,
-    { workspaceId: "workspace-source" },
-  );
-  const sourceConfig = emptyConfig();
-  sourceConfig.chats.push({
-    agentId: lead.id,
-    token: chatToken,
-    operations: ["spawn"],
-    links: ["link"],
-    expiresAt: 2000000000000,
-    revoked: false,
-  });
-  sourceConfig.outgoing.push({
-    id: "link",
-    serverId: "target",
-    token: linkToken,
-    url: targetListener.url,
-    machine: "mac",
-    reporters: [],
-    expiresAt: 2000000000000,
-    revoked: false,
-  });
-  const targetConfig = emptyConfig();
-  targetConfig.incoming.push({
-    id: "link",
-    serverId: "source",
-    token: linkToken,
-    leads: [lead.id],
-    operations: ["spawn"],
-    workloads: ["standard"],
-    workspaces: { job: root },
-    profiles: {
-      worker: {
-        provider: "codex",
-        model: "gpt-test",
-        modeId: "full-access",
-        parents: ["codex:full-access"],
-      },
-    },
-    maxWorkers: 1,
-    expiresAt: 2000000000000,
-    revoked: false,
-  });
-  writePrivateFileAtomicSync(
-    path.join(sourceHome, "host-links.json"),
-    JSON.stringify(sourceConfig),
-  );
-  writePrivateFileAtomicSync(
-    path.join(targetHome, "host-links.json"),
-    JSON.stringify(targetConfig),
-  );
-  sourceRuntime.start();
-  let finish!: () => void;
-  const ended = new Promise<void>((resolve) => {
-    finish = resolve;
-  });
-  const unsubscribe = targetManager.subscribe(
-    (event) => {
-      if (event.type === "agent_stream" && event.event.type === "turn_completed") finish();
-    },
-    { replayState: false },
-  );
-  try {
-    const receipt = await sourceRuntime.service.spawnForAgent(lead.id, "target", {
-      ...spawn,
-      notifyOnFinish: true,
+test.each([false, true, "reconcile", "late-failure"] as const)(
+  "FU-170 runtime carries a worker notice into the lead provider (storage refused: %s)",
+  async (storageRefused) => {
+    const { AgentManager } = await import("./agent/agent-manager.js");
+    const { AgentStorage } = await import("./agent/agent-storage.js");
+    const { createHostLinkRuntime } = await import("./host-link-runtime.js");
+    const { createTestAgentClients } = await import("./test-utils/fake-agent-client.js");
+    const { createTestLogger } = await import("../test-utils/test-logger.js");
+    const { heldSendsFor } = await import("./held-sends.js");
+    const root = realpathSync(await mkdtemp(path.join(tmpdir(), "host-link-runtime-")));
+    cleanups.push(() => rm(root, { recursive: true, force: true }));
+    const logger = createTestLogger();
+    const leadInputs: unknown[] = [];
+    const workerInputs: unknown[] = [];
+    let noticeArrived!: () => void;
+    const notified = new Promise<void>((resolve) => {
+      noticeArrived = resolve;
     });
-    await ended;
-    await notified;
-    await sourceRuntime.service.flushNotificationDeliveries();
-    expect(leadInputs).toHaveLength(1);
-    await targetManager.setLabels(receipt.agentId!, { "fulcra.hold": "done" });
-    await expect(
-      targetRuntime.service.worker(receipt.token, {
-        kind: "prompt",
-        agentId: receipt.agentId,
-        messageId: "22222222-2222-4222-8222-222222222222",
-        prompt: "Start another task.",
+    const sourceHome = path.join(root, "source");
+    const targetHome = path.join(root, "target");
+    const sourceStorage = new AgentStorage(path.join(sourceHome, "agents"), logger);
+    const targetStorage = new AgentStorage(path.join(targetHome, "agents"), logger);
+    const sourceManager = new AgentManager({
+      clients: createTestAgentClients({
+        onStartTurn: (prompt) => {
+          leadInputs.push(prompt);
+          noticeArrived();
+        },
       }),
-    ).rejects.toMatchObject({
-      name: "HostLinkError",
-      code: "refused",
-      message: "The worker is held as done.",
+      registry: sourceStorage,
+      logger,
     });
-    expect(workerInputs).toHaveLength(1);
-    expect(String(leadInputs[0])).toContain(receipt.agentId!);
-    expect(String(leadInputs[0])).toContain("finished");
-    expect(retainedReturn(sourceHome).receivedNotices?.[0]?.state).toBe("delivered");
-    await sourceRuntime.service.syncNotifications();
-    await sourceRuntime.service.flushNotificationDeliveries();
-    expect(leadInputs).toHaveLength(1);
-  } finally {
-    unsubscribe();
-  }
-}, 30000);
+    const targetManager = new AgentManager({
+      clients: createTestAgentClients({ onStartTurn: (prompt) => workerInputs.push(prompt) }),
+      registry: targetStorage,
+      logger,
+    });
+    const sourceRuntime = await createHostLinkRuntime({
+      home: sourceHome,
+      serverId: "source",
+      protected: () => true,
+      agentManager: sourceManager,
+      agentStorage: sourceStorage,
+      logger,
+      workspace: async () => "workspace-source",
+    });
+    const targetRuntime = await createHostLinkRuntime({
+      home: targetHome,
+      serverId: "target",
+      protected: () => true,
+      agentManager: targetManager,
+      agentStorage: targetStorage,
+      logger,
+      workspace: async () => "workspace-target",
+    });
+    cleanups.push(async () => {
+      sourceRuntime.close();
+      targetRuntime.close();
+      heldSendsFor(sourceManager, logger).close();
+      heldSendsFor(targetManager, logger).close();
+      for (const manager of [sourceManager, targetManager]) {
+        for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
+        await manager.flush();
+      }
+    });
+    const targetApp = express();
+    mountHostLinkRoutes(targetApp, () => targetRuntime.service);
+    const targetListener = await listen(targetApp);
+    const lead = await sourceManager.createAgent(
+      { provider: "codex", model: "gpt-test", modeId: "full-access", cwd: root },
+      undefined,
+      { workspaceId: "workspace-source" },
+    );
+    const sourceConfig = emptyConfig();
+    sourceConfig.chats.push({
+      agentId: lead.id,
+      token: chatToken,
+      operations: ["spawn"],
+      links: ["link"],
+      expiresAt: 2000000000000,
+      revoked: false,
+    });
+    sourceConfig.outgoing.push({
+      id: "link",
+      serverId: "target",
+      token: linkToken,
+      url: targetListener.url,
+      machine: "mac",
+      reporters: [],
+      expiresAt: 2000000000000,
+      revoked: false,
+    });
+    const targetConfig = emptyConfig();
+    targetConfig.incoming.push({
+      id: "link",
+      serverId: "source",
+      token: linkToken,
+      leads: [lead.id],
+      operations: ["spawn"],
+      workloads: ["standard"],
+      workspaces: { job: root },
+      profiles: {
+        worker: {
+          provider: "codex",
+          model: "gpt-test",
+          modeId: "full-access",
+          parents: ["codex:full-access"],
+        },
+      },
+      maxWorkers: 1,
+      expiresAt: 2000000000000,
+      revoked: false,
+    });
+    writePrivateFileAtomicSync(
+      path.join(sourceHome, "host-links.json"),
+      JSON.stringify(sourceConfig),
+    );
+    writePrivateFileAtomicSync(
+      path.join(targetHome, "host-links.json"),
+      JSON.stringify(targetConfig),
+    );
+    if (storageRefused === true) {
+      const rejectNotice = vi
+        .spyOn(targetRuntime.service, "recordWorkerNotice")
+        .mockImplementation(() => {
+          throw new HostLinkStorageError("capacity");
+        });
+      cleanups.push(async () => {
+        rejectNotice.mockRestore();
+      });
+    }
+    if (storageRefused === "reconcile") {
+      const blocked = vi
+        .spyOn(targetRuntime.service, "recordWorkerNotice")
+        .mockImplementationOnce(() => {
+          throw new WindowsPrivateFileReconciliationError();
+        });
+      cleanups.push(async () => {
+        blocked.mockRestore();
+      });
+    }
+    if (storageRefused === "late-failure") {
+      const receipt = new Int32Array(new SharedArrayBuffer(4));
+      Atomics.store(receipt, 0, -1);
+      const failed = vi
+        .spyOn(targetRuntime.service, "recordWorkerNotice")
+        .mockImplementationOnce(() => {
+          throw new WindowsPrivateFileReconciliationError(receipt);
+        });
+      cleanups.push(async () => {
+        failed.mockRestore();
+      });
+    }
+    sourceRuntime.start();
+    let finish!: () => void;
+    const ended = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const unsubscribe = targetManager.subscribe(
+      (event) => {
+        if (event.type === "agent_stream" && event.event.type === "turn_completed") finish();
+      },
+      { replayState: false },
+    );
+    try {
+      const receipt = await sourceRuntime.service.spawnForAgent(lead.id, "target", {
+        ...spawn,
+        notifyOnFinish: true,
+      });
+      await ended;
+      if (storageRefused === "reconcile") {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        const result = (await targetRuntime.service.worker(receipt.token, {
+          kind: "notices",
+          agentId: receipt.agentId,
+        })) as { notices: { text: string }[] };
+        expect(result.notices.some((notice) => notice.text.includes("finished its turn"))).toBe(
+          true,
+        );
+      }
+      await notified;
+      await sourceRuntime.service.flushNotificationDeliveries();
+      expect(leadInputs).toHaveLength(1);
+      await targetManager.setLabels(receipt.agentId!, { "fulcra.hold": "done" });
+      await expect(
+        targetRuntime.service.worker(receipt.token, {
+          kind: "prompt",
+          issuedAt: spawn.issuedAt,
+          agentId: receipt.agentId,
+          messageId: "22222222-2222-4222-8222-222222222222",
+          prompt: "Start another task.",
+        }),
+      ).rejects.toMatchObject({
+        name: "HostLinkError",
+        code: "refused",
+        message: "The worker is held as done.",
+      });
+      expect(workerInputs).toHaveLength(1);
+      expect(String(leadInputs[0])).toContain(receipt.agentId!);
+      expect(String(leadInputs[0])).toContain(
+        storageRefused === true || storageRefused === "late-failure"
+          ? "could not save a worker notice"
+          : "finished",
+      );
+      expect(retainedReturn(sourceHome).receivedNotices?.[0]?.state).toBe("delivered");
+      await sourceRuntime.service.syncNotifications();
+      await sourceRuntime.service.flushNotificationDeliveries();
+      expect(leadInputs).toHaveLength(1);
+    } finally {
+      unsubscribe();
+    }
+  },
+  30000,
+);
 
 test("FU-170 crash recovery retains an attempted notice without replay", async () => {
   const f = await fixture();
@@ -1820,6 +1878,7 @@ test("remote parent follow-ups re-arm each turn and joined steers share one noti
     "33333333-3333-4333-8333-333333333333",
   ]) {
     await f.source.promptForAgent("lead", "target", {
+      issuedAt: spawn.issuedAt,
       agentId: child,
       prompt: "Follow-up.",
       messageId: id,
@@ -1842,7 +1901,12 @@ test("remote parent follow-ups re-arm each turn and joined steers share one noti
   expect(f.finishNotices[0]?.text).toContain("Session total spend: US$1.250000.");
   expect(f.finishNotices[1]?.text).toContain("Session total spend: US$4.000000.");
   await expect(
-    f.source.promptForAgent("other", "target", { agentId: child, prompt: "Refused.", messageId }),
+    f.source.promptForAgent("other", "target", {
+      issuedAt: spawn.issuedAt,
+      agentId: child,
+      prompt: "Refused.",
+      messageId,
+    }),
   ).rejects.toThrow("No unique retained remote worker grant");
 });
 
@@ -1853,6 +1917,7 @@ test("a remote follow-up can enable notices after creation opted out", async () 
     notifyOnFinish: false,
   });
   await f.source.promptForAgent("lead", "target", {
+    issuedAt: spawn.issuedAt,
     agentId: receipt.agentId!,
     prompt: "Follow-up.",
     messageId: "22222222-2222-4222-8222-222222222222",
@@ -1895,6 +1960,7 @@ test("a late prior-turn response cannot close a new remote notice watch", async 
     const stale = f.source.syncNotifications();
     await responseReady;
     await f.source.promptForAgent("lead", "target", {
+      issuedAt: spawn.issuedAt,
       agentId: receipt.agentId!,
       prompt: "Next task.",
       messageId: "22222222-2222-4222-8222-222222222222",
@@ -1947,6 +2013,7 @@ test("acknowledged history remains bounded beyond 128 results", async () => {
   writePrivateFileAtomicSync(outboxFile, JSON.stringify(outbox));
   for (let index = 0; index < 3; index++) {
     await f.source.promptForAgent("lead", "target", {
+      issuedAt: spawn.issuedAt,
       agentId: receipt.agentId!,
       prompt: "Next task.",
       messageId: `22222222-2222-4222-8222-${String(index).padStart(12, "0")}`,
@@ -1973,6 +2040,7 @@ test("failed remote admission settles the retained receipt and never retries the
     .spyOn(f.deps, "prompt")
     .mockRejectedValue(new HostLinkError("refused", "Fixture admission refused."));
   const request = {
+    issuedAt: spawn.issuedAt,
     agentId: receipt.agentId!,
     prompt: "Next task.",
     messageId: "22222222-2222-4222-8222-222222222222",
@@ -2001,6 +2069,7 @@ test("interrupted admission returns one uncertain result without replay", async 
   await f.source.flushNotificationDeliveries();
   const promptId = "22222222-2222-4222-8222-222222222222";
   await f.source.promptForAgent("lead", "target", {
+    issuedAt: spawn.issuedAt,
     agentId: receipt.agentId!,
     prompt: "Next task.",
     messageId: promptId,
@@ -2064,6 +2133,7 @@ test("history pruning fences an in-flight read from the new watch", async () => 
   });
   try {
     const prompt = f.source.promptForAgent("lead", "target", {
+      issuedAt: spawn.issuedAt,
       agentId: receipt.agentId!,
       prompt: "Next task.",
       messageId: "22222222-2222-4222-8222-222222222222",
@@ -2117,7 +2187,7 @@ test("Windows timeout after rename retains the pending identity on a same-id ret
     writeFileSync(file, data, { mode: 0o600 });
     if (fail) {
       fail = false;
-      throw new Error("Windows durable file commit requires reconciliation.");
+      throw new WindowsPrivateFileReconciliationError();
     }
   });
   try {
@@ -2151,4 +2221,600 @@ test("Windows readers refuse an unsafe ACL before using grants", async () => {
     vi.mocked(windowsAclIsSafe).mockReturnValue(true);
     vi.mocked(writeWindowsPrivateFileAtomicSync).mockRestore();
   }
+});
+
+test("archived acknowledged workers leave replay fences and release journal space", async () => {
+  const f = await fixture();
+  const request = { ...spawn, notifyOnFinish: true };
+  const receipt = await f.source.spawnForAgent("lead", "target", request);
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "gc-turn", "Completed result");
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  f.state.now += 10000;
+  await f.source.syncNotifications();
+  expect(
+    Object.keys(JSON.parse(readFileSync(path.join(f.deps.home, "host-links-inbox.json"), "utf8"))),
+  ).toHaveLength(1);
+  f.chats.get(receipt.agentId!)!.archived = true;
+  f.state.now += 10000;
+  await f.source.syncNotifications();
+  expect(
+    Object.keys(JSON.parse(readFileSync(path.join(f.deps.home, "host-links-inbox.json"), "utf8"))),
+  ).toHaveLength(0);
+  expect(
+    Object.keys(
+      JSON.parse(readFileSync(path.join(f.sourceHome, "host-links-outbox.json"), "utf8")),
+    ),
+  ).toHaveLength(0);
+  const source = f.restartSource();
+  const target = f.restartTarget();
+  expect(await source.spawnForAgent("lead", "target", request)).toEqual(receipt);
+  expect((await target.receive(linkToken, { ...f.wire, notifyOnFinish: true })).agentId).toBe(
+    receipt.agentId,
+  );
+  expect(f.created).toHaveLength(1);
+  await expect(
+    source
+      .spawnForAgent("lead", "target", { ...request, prompt: "Changed" })
+      .then(() => "admitted"),
+  ).rejects.toThrow("retained request");
+});
+
+test("a refused notice save reaches its source lead through the existing watch", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNoticeFailure(receipt.agentId!, new HostLinkStorageError("capacity"));
+  f.restartTarget();
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  expect(f.finishNotices[0]!.text).toContain("could not save a worker notice");
+  f.state.now += 10000;
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+});
+
+test("archive cleanup keeps unacknowledged and uncertain notices", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "unacked", "Retain this result");
+  f.chats.get(receipt.agentId!)!.archived = true;
+  f.state.failAfterHandoff = true;
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  f.state.now += 10000;
+  await f.source.syncNotifications();
+  expect(
+    Object.keys(JSON.parse(readFileSync(path.join(f.deps.home, "host-links-inbox.json"), "utf8"))),
+  ).toHaveLength(1);
+  expect(
+    Object.keys(
+      JSON.parse(readFileSync(path.join(f.sourceHome, "host-links-outbox.json"), "utf8")),
+    ),
+  ).toHaveLength(1);
+  expect(retainedReturn(f.sourceHome).receivedNotices?.[0]?.state).toBe("uncertain");
+});
+
+test("cleanup writes replay protection before an interrupted journal removal", async () => {
+  const f = await fixture();
+  const request = { ...spawn, notifyOnFinish: true };
+  const receipt = await f.source.spawnForAgent("lead", "target", request);
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "gc-interrupted", "Keep the outcome");
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  f.chats.get(receipt.agentId!)!.archived = true;
+  const file = path.join(f.deps.home, "host-links-inbox.json");
+  const rename = vi.mocked(renameSync).getMockImplementation()!;
+  vi.mocked(renameSync).mockImplementation((from, to) => {
+    if (to === file) throw new Error("Interrupted journal removal");
+    rename(from, to);
+  });
+  f.state.now += 10000;
+  await f.source.syncNotifications();
+  expect(Object.keys(JSON.parse(readFileSync(`${file}.replay`, "utf8")))).toHaveLength(1);
+  expect(Object.keys(JSON.parse(readFileSync(file, "utf8")))).toHaveLength(1);
+  vi.mocked(renameSync).mockRestore();
+  const target = f.restartTarget();
+  expect((await target.receive(linkToken, { ...f.wire, notifyOnFinish: true })).agentId).toBe(
+    receipt.agentId,
+  );
+  expect(f.created).toHaveLength(1);
+  f.state.now += 60000;
+  await f.source.syncNotifications();
+  expect(Object.keys(JSON.parse(readFileSync(file, "utf8")))).toHaveLength(0);
+});
+
+test("archive cleanup also removes workers that opted out of finish notices", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", spawn);
+  f.chats.get(receipt.agentId!)!.archived = true;
+  await f.source.syncNotifications();
+  expect(
+    Object.keys(
+      JSON.parse(readFileSync(path.join(f.sourceHome, "host-links-outbox.json"), "utf8")),
+    ),
+  ).toHaveLength(0);
+  expect(
+    Object.keys(JSON.parse(readFileSync(path.join(f.deps.home, "host-links-inbox.json"), "utf8"))),
+  ).toHaveLength(0);
+  expect(f.finishNotices).toHaveLength(0);
+});
+
+test("replay capacity refuses new spawns without dropping live replay protection", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", spawn);
+  f.chats.get(receipt.agentId!)!.archived = true;
+  await f.source.syncNotifications();
+  const file = path.join(f.sourceHome, "host-links-outbox.json.replay");
+  const replay = JSON.parse(readFileSync(file, "utf8"));
+  const first = Object.keys(replay)[0]!;
+  const padding = {
+    ...replay[first],
+    hash: "x".repeat(1024 * 1024),
+    retiredAt: f.state.now,
+  };
+  replay.padding = padding;
+  const original = JSON.stringify(replay);
+  writeFileSync(file, original, { mode: 0o600 });
+  await expect(
+    f.source
+      .spawnForAgent("lead", "target", {
+        ...spawn,
+        messageId: "22222222-2222-4222-8222-222222222222",
+      })
+      .then(() => "admitted"),
+  ).rejects.toThrow("replay storage is full");
+  expect(readFileSync(file, "utf8")).toBe(original);
+  expect((await f.source.spawnForAgent("lead", "target", spawn)).agentId).toBe(receipt.agentId);
+  // Record age permits removal even while the credential stays configured.
+  replay.padding.retiredAt = f.state.now - 31 * 86400000;
+  writeFileSync(file, JSON.stringify(replay), { mode: 0o600 });
+  expect(
+    (
+      await f.source.spawnForAgent("lead", "target", {
+        ...spawn,
+        messageId: "22222222-2222-4222-8222-222222222222",
+      })
+    ).state,
+  ).toBe("created");
+  expect(Object.keys(JSON.parse(readFileSync(file, "utf8")))).toEqual([first]);
+});
+
+test("Windows spawn headroom preserves room for an existing worker finish", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const file = path.join(f.deps.home, "host-links-inbox.json");
+  const journal = JSON.parse(readFileSync(file, "utf8"));
+  const key = Object.keys(journal)[0]!;
+  journal[key].hash = "x".repeat(512 * 1024);
+  writeFileSync(file, JSON.stringify(journal), { mode: 0o600 });
+  vi.mocked(writeWindowsPrivateFileAtomicSync).mockImplementation((target, data) =>
+    writeFileSync(target, data, { mode: 0o600 }),
+  );
+  try {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    await expect(
+      f.target
+        .receive(linkToken, { ...f.wire, messageId: "22222222-2222-4222-8222-222222222222" })
+        .then(() => "admitted"),
+    ).rejects.toThrow("Reserved space is for worker notices");
+    f.target.recordWorkerNotice(receipt.agentId!, "finished", "reserved", "Final result");
+    expect(JSON.parse(readFileSync(file, "utf8"))[key].notices[0].text).toBe("Final result");
+    expect(f.created).toHaveLength(1);
+  } finally {
+    Object.defineProperty(process, "platform", descriptor);
+    vi.mocked(writeWindowsPrivateFileAtomicSync).mockRestore();
+  }
+});
+
+test("a lost archive acknowledgement reply recovers without replaying a queued prompt", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  const promptId = "22222222-2222-4222-8222-222222222222";
+  await f.source.promptForAgent("lead", "target", {
+    issuedAt: spawn.issuedAt,
+    agentId: receipt.agentId!,
+    messageId: promptId,
+    prompt: "Next task",
+  });
+  f.target.recordWorkerStarted(receipt.agentId!);
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "archive-reply", "Final result");
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  f.chats.get(receipt.agentId!)!.archived = true;
+  const worker = f.target.worker.bind(f.target);
+  const lost = vi.spyOn(f.target, "worker").mockImplementation(async (token, raw) => {
+    const result = await worker(token, raw);
+    if ((raw as { kind: string }).kind === "acknowledge")
+      throw new Error("Archive acknowledgement reply lost");
+    return result;
+  });
+  f.state.now += 10000;
+  await f.source.syncNotifications();
+  expect(
+    Object.keys(JSON.parse(readFileSync(path.join(f.deps.home, "host-links-inbox.json"), "utf8"))),
+  ).toHaveLength(0);
+  expect(retainedReturn(f.sourceHome).pendingPromptIds).toEqual([]);
+  lost.mockRestore();
+  f.sourceConfig.outgoing[0]!.expiresAt += 1000;
+  f.targetConfig.incoming[0]!.expiresAt += 1000;
+  f.save();
+  const source = f.restartSource();
+  f.restartTarget();
+  f.state.now += 60000;
+  await source.syncNotifications();
+  expect(
+    Object.keys(
+      JSON.parse(readFileSync(path.join(f.sourceHome, "host-links-outbox.json"), "utf8")),
+    ),
+  ).toHaveLength(0);
+  expect(f.prompts).toHaveLength(1);
+  expect(f.created).toHaveLength(1);
+  expect(f.finishNotices).toHaveLength(1);
+});
+
+test("archive cleanup checks the current archive state after its identity lookup", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "archive-race", "Retain control");
+  f.chats.get(receipt.agentId!)!.archived = true;
+  const target = new HostLinks({ ...f.deps, workerArchived: () => false });
+  const journal = JSON.parse(readFileSync(path.join(f.deps.home, "host-links-inbox.json"), "utf8"));
+  const owner = Object.values(journal)[0] as { notices: { id: string }[] };
+  expect(
+    await target.worker(receipt.token, {
+      kind: "acknowledge",
+      agentId: receipt.agentId,
+      noticeIds: owner.notices.map((notice) => notice.id),
+    }),
+  ).toEqual({ archived: false });
+  expect(
+    Object.keys(JSON.parse(readFileSync(path.join(f.deps.home, "host-links-inbox.json"), "utf8"))),
+  ).toHaveLength(1);
+});
+
+test("archive acknowledgement failures retain a bounded retry count", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "cleanup-offline", "Delivered once");
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  const worker = f.target.worker.bind(f.target);
+  const unavailable = vi.spyOn(f.target, "worker").mockImplementation((token, raw) => {
+    if ((raw as { kind: string }).kind === "acknowledge")
+      return Promise.reject(new Error("Cleanup unavailable"));
+    return worker(token, raw);
+  });
+  for (let attempt = 0; attempt < 8; attempt++) {
+    f.state.now += 60000;
+    await f.source.syncNotifications();
+  }
+  expect(retainedReturn(f.sourceHome).watch?.failures).toBe(8);
+  const reads = f.state.noticeReads;
+  f.state.now += 60000;
+  await f.source.syncNotifications();
+  expect(f.state.noticeReads).toBe(reads);
+  expect(f.finishNotices).toHaveLength(1);
+  unavailable.mockRestore();
+});
+
+test("configured replay fences expire after their retention period", async () => {
+  const f = await fixture();
+  const first = await f.source.spawnForAgent("lead", "target", spawn);
+  const second = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    messageId: "22222222-2222-4222-8222-222222222222",
+  });
+  f.chats.get(first.agentId!)!.archived = true;
+  await f.source.syncNotifications();
+  const file = path.join(f.sourceHome, "host-links-outbox.json.replay");
+  expect(Object.keys(JSON.parse(readFileSync(file, "utf8")))).toHaveLength(1);
+  f.state.now += 31 * 86400000;
+  f.chats.get(second.agentId!)!.archived = true;
+  await f.source.syncNotifications();
+  const fences = Object.values(JSON.parse(readFileSync(file, "utf8"))) as {
+    receipt: { agentId: string };
+  }[];
+  expect(fences.map((entry) => entry.receipt.agentId)).toEqual([second.agentId]);
+});
+
+test("a retired worker event leaves a visible repair marker without restoring its grant", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", spawn);
+  f.chats.get(receipt.agentId!)!.archived = true;
+  await f.source.syncNotifications();
+  f.target.recordWorkerNotice(
+    receipt.agentId!,
+    "finished",
+    "restored-turn",
+    "Unexpected restored result",
+  );
+  const file = path.join(f.deps.home, "host-links-notice-failures.json");
+  let markers: Record<string, boolean> = {};
+  try {
+    markers = JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    /* Missing marker fails the assertion. */
+  }
+  expect(markers[receipt.agentId!]).toBe(true);
+  expect(
+    Object.keys(JSON.parse(readFileSync(path.join(f.deps.home, "host-links-inbox.json"), "utf8"))),
+  ).toHaveLength(0);
+});
+
+test("a short reconciliation fence does not set a failure marker or hide the real finish", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNoticeFailure(
+    receipt.agentId!,
+    new Error("Windows durable file commit requires reconciliation."),
+  );
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(0);
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "actual", "Actual result");
+  f.state.now += 10000;
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  expect(f.finishNotices[0]!.text).toContain("Actual result");
+});
+
+test("old spawn and prompt requests stay refused after replay records expire", async () => {
+  const f = await fixture();
+  const first = await f.source.spawnForAgent("lead", "target", spawn);
+  f.chats.get(first.agentId!)!.archived = true;
+  await f.source.syncNotifications();
+  f.state.now += 31 * 86400000;
+  const fresh = {
+    ...spawn,
+    issuedAt: f.state.now,
+    messageId: "22222222-2222-4222-8222-222222222222",
+  };
+  const second = await f.source.spawnForAgent("lead", "target", fresh);
+  await expect(
+    f.source.spawnForAgent("lead", "target", spawn).then(() => "admitted"),
+  ).rejects.toThrow("issuedAt");
+  await expect(f.target.receive(linkToken, f.wire).then(() => "admitted")).rejects.toThrow(
+    "issuedAt",
+  );
+  const prompt = {
+    agentId: second.agentId!,
+    prompt: "Old task",
+    messageId,
+    issuedAt: spawn.issuedAt,
+  };
+  await expect(f.source.promptForAgent("lead", "target", prompt)).rejects.toThrow("issuedAt");
+  await expect(f.target.worker(second.token, { ...prompt, kind: "prompt" })).rejects.toThrow(
+    "issuedAt",
+  );
+  expect(f.created).toHaveLength(2);
+  expect(f.prompts).toHaveLength(0);
+});
+
+test("source and receiver apply the same clock skew and request age boundary", async () => {
+  const f = await fixture();
+  const tooFuture = { ...spawn, issuedAt: f.state.now + 5 * 60000 + 1 };
+  await expect(
+    f.source.spawnForAgent("lead", "target", tooFuture).then(() => "admitted"),
+  ).rejects.toThrow("issuedAt");
+  await expect(
+    f.target.receive(linkToken, { ...f.wire, issuedAt: tooFuture.issuedAt }).then(() => "admitted"),
+  ).rejects.toThrow("issuedAt");
+  const edge = { ...spawn, issuedAt: f.state.now - (30 * 86400000 - 5 * 60000) + 1 };
+  expect((await f.source.spawnForAgent("lead", "target", edge)).state).toBe("created");
+  f.state.now++;
+  await expect(
+    f.source.spawnForAgent("lead", "target", edge).then(() => "admitted"),
+  ).rejects.toThrow("issuedAt");
+  await expect(
+    f.target.receive(linkToken, { ...f.wire, issuedAt: edge.issuedAt }).then(() => "admitted"),
+  ).rejects.toThrow("issuedAt");
+  expect(f.created).toHaveLength(1);
+});
+
+test("a committed real finish clears a capacity warning and keeps the result text", async () => {
+  const f = await fixture();
+  const request = { ...spawn, notifyOnFinish: true };
+  const receipt = await f.source.spawnForAgent("lead", "target", request);
+  f.target.recordWorkerNoticeFailure(receipt.agentId!, new HostLinkStorageError("capacity"));
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(retainedReturn(f.sourceHome).watch?.failures).toBe(8);
+  const reads = f.state.noticeReads;
+  f.state.now += 10000;
+  await f.source.syncNotifications();
+  expect(f.state.noticeReads).toBe(reads);
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "repaired", "The actual result");
+  expect(
+    JSON.parse(readFileSync(path.join(f.deps.home, "host-links-notice-failures.json"), "utf8"))[
+      receipt.agentId!
+    ],
+  ).toBeUndefined();
+  await f.source.spawnForAgent("lead", "target", request);
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(2);
+  expect(f.finishNotices[1]!.text).toContain("The actual result");
+});
+
+test("legacy active workers accept fresh prompts while timestamp-free pending requests never replay", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", spawn);
+  const file = path.join(f.sourceHome, "host-links-outbox.json");
+  const entries = JSON.parse(readFileSync(file, "utf8"));
+  const key = Object.keys(entries)[0]!;
+  delete entries[key].issuedAt;
+  delete entries[key].wire.issuedAt;
+  writeFileSync(file, JSON.stringify(entries), { mode: 0o600 });
+  await f.source.promptForAgent("lead", "target", {
+    agentId: receipt.agentId!,
+    messageId: "22222222-2222-4222-8222-222222222222",
+    prompt: "Fresh follow-up",
+    issuedAt: f.state.now,
+  });
+  expect(f.prompts).toEqual(["Fresh follow-up"]);
+  const pending = JSON.parse(readFileSync(file, "utf8"));
+  pending[key].receipt.state = "pending";
+  writeFileSync(file, JSON.stringify(pending), { mode: 0o600 });
+  const source = f.restartSource();
+  await source.syncNotifications();
+  expect(f.created).toHaveLength(1);
+  expect(retainedReturn(f.sourceHome).receipt.state).toBe("pending");
+  expect(retainedReturn(f.sourceHome).watch?.failures).toBe(1);
+});
+
+test("source stamps a missing spawn time once and reuses it after uncertainty and restart", async () => {
+  const f = await fixture();
+  const { issuedAt: _omitted, ...request } = spawn;
+  const receive = f.target.receive.bind(f.target);
+  const times: number[] = [];
+  const lost = vi.spyOn(f.target, "receive").mockImplementation(async (token, wire) => {
+    times.push((wire as { issuedAt: number }).issuedAt);
+    const receipt = await receive(token, wire);
+    if (times.length === 1) throw new Error("Created receipt reply lost");
+    return receipt;
+  });
+  await expect(f.source.spawnForAgent("lead", "target", request)).rejects.toThrow();
+  const original = f.state.now;
+  f.state.now += 60000;
+  const source = f.restartSource();
+  const receipt = await source.spawnForAgent("lead", "target", request);
+  expect(receipt.state).toBe("created");
+  expect(times).toEqual([original, original]);
+  expect(f.created).toHaveLength(1);
+  lost.mockRestore();
+  f.chats.get(receipt.agentId!)!.archived = true;
+  await source.syncNotifications();
+  f.state.now += 60000;
+  const replay = await f.restartSource().spawnForAgent("lead", "target", request);
+  expect(replay).toEqual(receipt);
+  expect(f.created).toHaveLength(1);
+});
+
+test("source refuses a changed spawn time while its UUID is active or retired", async () => {
+  const f = await fixture();
+  const { issuedAt: _omitted, ...request } = spawn;
+  const first = await f.source.spawnForAgent("lead", "target", request);
+  const changed = { ...request, issuedAt: f.state.now + 1 };
+  await expect(f.source.spawnForAgent("lead", "target", changed)).rejects.toMatchObject({
+    code: "conflict",
+  });
+  f.chats.get(first.agentId!)!.archived = true;
+  await f.source.syncNotifications();
+  await expect(f.restartSource().spawnForAgent("lead", "target", changed)).rejects.toMatchObject({
+    code: "conflict",
+  });
+  expect(f.created).toHaveLength(1);
+});
+
+test("a retired worker warning reaches the source after a lost cleanup reply", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "old-result", "Original result");
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  f.chats.get(receipt.agentId!)!.archived = true;
+  const worker = f.target.worker.bind(f.target);
+  const lost = vi.spyOn(f.target, "worker").mockImplementation(async (token, raw) => {
+    const result = await worker(token, raw);
+    if ((raw as { kind: string }).kind === "acknowledge") throw new Error("Cleanup reply lost");
+    return result;
+  });
+  f.state.now += 10000;
+  await f.source.syncNotifications();
+  lost.mockRestore();
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "restored-event", "Retired result");
+  f.state.now += 60000;
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(2);
+  expect(f.finishNotices[1]!.text).toContain("could not save a worker notice");
+  expect(f.created).toHaveLength(1);
+});
+
+test("a permission notice save keeps a previous terminal storage failure warning", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNoticeFailure(receipt.agentId!, new HostLinkStorageError("write"));
+  f.target.recordWorkerNotice(
+    receipt.agentId!,
+    "permission",
+    "later-permission",
+    "Permission request",
+  );
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(
+    f.finishNotices.some((notice) => notice.text.includes("could not save a worker notice")),
+  ).toBe(true);
+});
+
+test("the HTTP source stamps a spawn before its first dispatch", async () => {
+  const f = await fixture();
+  const { issuedAt: _omitted, ...request } = spawn;
+  expect((await f.dispatch(request)).status).toBe(200);
+  const retained = retainedReturn(f.sourceHome);
+  expect(retained.issuedAt).toBe(f.state.now);
+  f.state.now += 60000;
+  expect((await f.dispatch(request)).status).toBe(200);
+  expect(retainedReturn(f.sourceHome).issuedAt).toBe(retained.issuedAt);
+  expect((await f.dispatch({ ...request, issuedAt: f.state.now })).status).toBe(409);
+  expect(f.created).toHaveLength(1);
+});
+
+test("only acknowledgement of the storage warning clears its marker without a terminal save", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNoticeFailure(receipt.agentId!, new HostLinkStorageError("write"));
+  const query = () =>
+    f.target.worker(receipt.token, { kind: "notices", agentId: receipt.agentId }) as Promise<{
+      notices: { id: string }[];
+    }>;
+  const warning = (await query()).notices[0]!;
+  await f.target.worker(receipt.token, {
+    kind: "acknowledge",
+    agentId: receipt.agentId,
+    noticeIds: [],
+  });
+  expect((await query()).notices).toHaveLength(1);
+  await f.target.worker(receipt.token, {
+    kind: "acknowledge",
+    agentId: receipt.agentId,
+    noticeIds: [warning.id],
+  });
+  expect((await query()).notices).toHaveLength(0);
 });

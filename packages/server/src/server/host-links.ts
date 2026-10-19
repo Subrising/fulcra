@@ -4,15 +4,21 @@ import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync }
 import path from "node:path";
 import {
   HostLinkConfigSchema,
+  HOST_LINK_RETENTION_MS,
+  HOST_LINK_CLOCK_SKEW_MS,
   HostLinkDispatchSchema,
   HostLinkSpawnSchema,
   HostLinkJournalSchema,
+  HostLinkReplaySchema,
+  HostLinkCleanupSchema,
+  HostLinkNoticeFailuresSchema,
   HostLinkReceiptSchema,
   HostLinkWireSchema,
   HostLinkWorkerRequestSchema,
   HostLinkWorkerNoticesSchema,
   HostLinkWorkerNoticeSchema,
   type HostLinkWorkerNotice,
+  type HostLinkWorkerNotices,
   type HostLinkConfig,
   type HostLinkDispatch,
   type HostLinkJournal,
@@ -26,7 +32,10 @@ import {
 } from "./host-link-contracts.js";
 import { matchesHostLinkCredential } from "./host-link-credential.js";
 import { writePrivateFileAtomicSync } from "./private-files.js";
-import { assertWindowsPrivateFilesSettled } from "./windows-private-file.js";
+import {
+  assertWindowsPrivateFilesSettled,
+  WindowsPrivateFileReconciliationError,
+} from "./windows-private-file.js";
 import { windowsAclIsSafe, WINDOWS_PRIVATE_MASK } from "./plugins/trusted-ownership.js";
 import { HostAccountLimits } from "./host-account-limits.js";
 import { childModeClass } from "./agent/create-agent-mode.js";
@@ -40,6 +49,21 @@ export class HostLinkError extends Error {
   ) {
     super(message, options);
     this.name = "HostLinkError";
+  }
+}
+export class HostLinkStorageError extends HostLinkError {
+  constructor(
+    readonly kind: "capacity" | "write",
+    options?: ErrorOptions,
+  ) {
+    super(
+      kind === "capacity" ? "refused" : "uncertain",
+      kind === "capacity"
+        ? "Host-link receipt storage is full."
+        : "Host-link receipt write failed.",
+      options,
+    );
+    this.name = "HostLinkStorageError";
   }
 }
 export interface HostLinkChat {
@@ -95,6 +119,7 @@ export interface HostLinkDependencies {
   now?: () => number;
   finish?: (input: HostLinkFinishDelivery) => Promise<void | "suppressed">;
   permissionPending?: (workerId: string, requestId: string) => boolean;
+  workerArchived?: (workerId: string) => boolean;
   noticeError?: (error: unknown) => void;
 }
 function digest(value: unknown): string {
@@ -178,6 +203,8 @@ export class HostLinks {
   private readonly configFile: string;
   private readonly inboxFile: string;
   private readonly outboxFile: string;
+  private readonly noticeSaveFailures = new Set<string>();
+  private readonly noticeFailuresFile: string;
   private notificationsRecovered = false;
   private notificationsClosed = false;
   private notificationTimer?: ReturnType<typeof setTimeout>;
@@ -190,6 +217,7 @@ export class HostLinks {
   constructor(private readonly deps: HostLinkDependencies) {
     this.accountLimits = new HostAccountLimits(deps.home, privateJson, () => this.now());
     this.configFile = path.join(deps.home, "host-links.json");
+    this.noticeFailuresFile = path.join(deps.home, "host-links-notice-failures.json");
     this.inboxFile = path.join(deps.home, "host-links-inbox.json");
     this.outboxFile = path.join(deps.home, "host-links-outbox.json");
   }
@@ -238,12 +266,148 @@ export class HostLinks {
   private save(file: string, key: string, entry: HostLinkJournal[string]): void {
     const journal = this.journal(file);
     if (!Object.hasOwn(journal, key) && Object.keys(journal).length >= 1000)
-      throw new HostLinkError("refused", "Host-link receipt capacity is full.");
+      throw new HostLinkStorageError("capacity");
     journal[key] = entry;
     const data = JSON.stringify(journal);
     if (Buffer.byteLength(data) > (process.platform === "win32" ? 1 : 8) * 1024 * 1024)
-      throw new HostLinkError("refused", "Host-link receipt storage is full.");
-    writePrivateFileAtomicSync(file, data, { durable: true });
+      throw new HostLinkStorageError("capacity");
+    try {
+      writePrivateFileAtomicSync(file, data, { durable: true });
+    } catch (cause) {
+      if (cause instanceof WindowsPrivateFileReconciliationError) throw cause;
+      throw new HostLinkStorageError("write", { cause });
+    }
+  }
+  private requestCurrent(issuedAt: number | undefined): void {
+    if (
+      !Number.isSafeInteger(issuedAt) ||
+      issuedAt! > this.now() + HOST_LINK_CLOCK_SKEW_MS ||
+      this.now() - issuedAt! >= HOST_LINK_RETENTION_MS - HOST_LINK_CLOCK_SKEW_MS
+    )
+      throw new HostLinkError(
+        "refused",
+        "The request issuedAt is missing, expired, or outside the allowed clock skew.",
+      );
+  }
+  private replay(file: string) {
+    const result = HostLinkReplaySchema.safeParse(privateJson(`${file}.replay`) ?? {});
+    if (!result.success)
+      throw new HostLinkError("unavailable", "Host-link replay records require repair.");
+    return result.data;
+  }
+  private retained(
+    file: string,
+    key: string,
+    hash: string,
+    grant: string,
+  ): HostLinkReceipt | undefined {
+    const prior = this.replay(file)[key];
+    if (!prior) return undefined;
+    if (prior.hash !== hash || prior.grant !== grant)
+      throw new HostLinkError("conflict", "The retained request changed.");
+    return prior.receipt;
+  }
+  private spawnHeadroom(file: string, entry: HostLinkJournal[string]): void {
+    const limit = (process.platform === "win32" ? 0.5 : 4) * 1024 * 1024;
+    if (Buffer.byteLength(JSON.stringify({ ...this.journal(file), next: entry })) > limit)
+      throw new HostLinkError(
+        "refused",
+        "Host-link receipt storage is full. Reserved space is for worker notices.",
+      );
+    // Reserve replay capacity when admitting a new worker.
+    const replay = this.replay(file);
+    if (this.pruneReplay(replay))
+      writePrivateFileAtomicSync(`${file}.replay`, JSON.stringify(replay), { durable: true });
+    const reserved = Object.keys(this.journal(file)).length * 1024;
+    if (Buffer.byteLength(JSON.stringify(replay)) + reserved + 1024 > 1024 * 1024)
+      throw new HostLinkError(
+        "refused",
+        "Host-link replay storage is full. Wait for retained requests to expire before new work.",
+      );
+  }
+  private pruneReplay(replay: ReturnType<HostLinks["replay"]>): boolean {
+    const before = Object.keys(replay).length;
+    for (const [key, entry] of Object.entries(replay))
+      if (entry.retiredAt < this.now() - HOST_LINK_RETENTION_MS) delete replay[key];
+    return Object.keys(replay).length !== before;
+  }
+  private retire(file: string, keys: string[]): void {
+    const journal = this.journal(file);
+    const replay = this.replay(file);
+    const links =
+      file === this.inboxFile ? this.requiredConfig().incoming : this.requiredConfig().outgoing;
+    for (const key of keys) {
+      const entry = journal[key];
+      if (!entry) continue;
+      const link = links.find((candidate) => candidate.id === entry.linkId);
+      if (!link) throw new HostLinkError("refused", "The cleanup link changed.");
+      replay[key] = {
+        hash: entry.hash,
+        grant: entry.grant,
+        receipt: entry.receipt,
+        retiredAt: Math.max(this.now(), entry.issuedAt ?? this.now()),
+        credential: digest(link.token),
+        noticeGrant: authorityDigest(link),
+        ...(entry.issuedAt !== undefined ? { issuedAt: entry.issuedAt } : {}),
+      };
+    }
+    this.pruneReplay(replay);
+    const data = JSON.stringify(replay);
+    if (Buffer.byteLength(data) > 1024 * 1024)
+      throw new HostLinkError("refused", "Host-link replay storage is full.");
+    // Commit replay protection first. An interrupted cleanup can leave both copies safely.
+    writePrivateFileAtomicSync(`${file}.replay`, data, { durable: true });
+    for (const key of keys) delete journal[key];
+    writePrivateFileAtomicSync(file, JSON.stringify(journal), { durable: true });
+  }
+
+  private noticeFailed(agentId: string): boolean {
+    if (this.noticeSaveFailures.has(agentId)) return true;
+    return (
+      HostLinkNoticeFailuresSchema.parse(privateJson(this.noticeFailuresFile) ?? {})[agentId] ===
+      true
+    );
+  }
+  recordWorkerNoticeFailure(agentId: string, error: unknown): void {
+    if (!(error instanceof HostLinkStorageError)) return;
+    this.retainNoticeFailure(agentId);
+  }
+  private retainNoticeFailure(agentId: string): void {
+    this.noticeSaveFailures.add(agentId);
+    // A full active journal must not prevent a small, separate failure marker.
+    try {
+      const failures = HostLinkNoticeFailuresSchema.parse(
+        privateJson(this.noticeFailuresFile) ?? {},
+      );
+      failures[agentId] = true;
+      const data = JSON.stringify(failures);
+      if (Buffer.byteLength(data) > 128 * 1024) throw new Error("Failure marker capacity is full.");
+      writePrivateFileAtomicSync(this.noticeFailuresFile, data, { durable: true });
+      this.noticeSaveFailures.delete(agentId);
+    } catch {
+      this.deps.noticeError?.(
+        new HostLinkError(
+          "unavailable",
+          "Worker notice storage failure needs owner repair; its live warning remains available.",
+        ),
+      );
+    }
+  }
+  clearWorkerNoticeFailure(agentId: string): void {
+    try {
+      const failures = HostLinkNoticeFailuresSchema.parse(
+        privateJson(this.noticeFailuresFile) ?? {},
+      );
+      if (failures[agentId]) {
+        delete failures[agentId];
+        writePrivateFileAtomicSync(this.noticeFailuresFile, JSON.stringify(failures), {
+          durable: true,
+        });
+      }
+      this.noticeSaveFailures.delete(agentId);
+    } catch {
+      this.deps.noticeError?.(new Error("A retained worker notice failure needs owner repair."));
+    }
   }
   private incoming(token: string | null): IncomingHostLink {
     const link = this.requiredConfig().incoming.find((item) =>
@@ -328,7 +492,7 @@ export class HostLinks {
       throw new HostLinkError("refused", "The source grant changed.");
     this.live(current);
     const receipt = await this.forward(link, chat, input, "explicit");
-    if (input.notifyOnFinish) this.resumeNotificationRetries(`${id}:${input.messageId}`);
+    this.resumeNotificationRetries(`${id}:${input.messageId}`);
     return receipt;
   }
 
@@ -340,10 +504,12 @@ export class HostLinks {
       agentId: string;
       prompt: string;
       messageId: string;
+      issuedAt: number;
       notifyOnFinish?: boolean;
       steer?: boolean;
     },
   ): Promise<HostLinkReceipt> {
+    this.requestCurrent(input.issuedAt);
     const matches = Object.entries(this.journal(this.outboxFile)).filter(
       ([, entry]) =>
         entry.sender === parentId &&
@@ -470,7 +636,8 @@ export class HostLinks {
   }
 
   private resumeNotificationRetries(key: string): void {
-    const entry = this.journal(this.outboxFile)[key]!;
+    const entry = this.journal(this.outboxFile)[key];
+    if (!entry) return;
     let changed = false;
     if (entry.watch?.failures === 8) {
       entry.watch = { failures: 0, nextAt: 0 };
@@ -497,12 +664,26 @@ export class HostLinks {
     await this.forward(link, chat, { kind: "notice", messageId: randomUUID(), text }, kind);
     return true;
   }
+  private sourceIssuedAt(key: string, issuedAt: number | undefined): number {
+    const prior = this.journal(this.outboxFile)[key] ?? this.replay(this.outboxFile)[key];
+    const retainedTime = prior?.issuedAt;
+    if (retainedTime !== undefined && issuedAt !== undefined && issuedAt !== retainedTime)
+      throw new HostLinkError("conflict", "The retained request issuedAt changed.");
+    if (prior && retainedTime === undefined && issuedAt === undefined)
+      throw new HostLinkError("refused", "The retained request issuedAt requires reconciliation.");
+    const time = retainedTime ?? issuedAt ?? this.now();
+    this.requestCurrent(time);
+    return time;
+  }
   private async forward(
     link: OutgoingHostLink,
     chat: HostLinkChat,
     input: HostLinkDispatch,
     noticeKind: HostLinkNoticeKind,
   ): Promise<HostLinkReceipt> {
+    const key = `${chat.id}:${input.messageId}`;
+    if (input.kind === "spawn")
+      input = { ...input, issuedAt: this.sourceIssuedAt(key, input.issuedAt) };
     const origin = {
       destination: link.serverId,
       sender: chat.id,
@@ -514,7 +695,6 @@ export class HostLinks {
       ...origin,
       ...(input.kind === "notice" ? { noticeKind, isLead: this.isLead(chat) } : {}),
     });
-    const key = `${chat.id}:${input.messageId}`;
     if (
       input.kind === "spawn" &&
       input.notifyOnFinish &&
@@ -536,6 +716,7 @@ export class HostLinks {
       ...(input.kind === "spawn"
         ? {
             wire,
+            issuedAt: input.issuedAt,
             notifyOnFinish: input.notifyOnFinish ?? false,
             noticeGrant: authorityDigest(link),
             sourceSessionId: chat.sessionId ?? null,
@@ -547,10 +728,8 @@ export class HostLinks {
           }
         : {}),
     };
-    const retained = this.journal(this.outboxFile)[key];
-    if (retained && (retained.hash !== entry.hash || retained.grant !== entry.grant))
-      throw new HostLinkError("conflict", "The retained request or destination changed.");
-    this.save(this.outboxFile, key, retained ?? entry);
+    const replayed = this.prepareForwardReceipt(key, entry, input.kind === "spawn");
+    if (replayed) return replayed;
     const current = this.outgoing(this.requiredConfig(), link.id);
     if (digest(current) !== entry.grant)
       throw new HostLinkError("refused", "The outbound link changed.");
@@ -579,13 +758,28 @@ export class HostLinks {
     return this.retainForwardReceipt(key, receipt);
   }
 
+  private prepareForwardReceipt(
+    key: string,
+    entry: HostLinkJournal[string],
+    spawn: boolean,
+  ): HostLinkReceipt | undefined {
+    const retained = this.journal(this.outboxFile)[key];
+    if (retained && (retained.hash !== entry.hash || retained.grant !== entry.grant))
+      throw new HostLinkError("conflict", "The retained request or destination changed.");
+    const replayed = this.retained(this.outboxFile, key, entry.hash, entry.grant);
+    if (replayed) return replayed;
+    if (!retained && spawn) this.spawnHeadroom(this.outboxFile, entry);
+    this.save(this.outboxFile, key, retained ?? entry);
+    return undefined;
+  }
+
   private retainForwardReceipt(key: string, receipt: HostLinkReceipt): HostLinkReceipt {
     const latest = this.journal(this.outboxFile)[key];
     if (!latest) throw new HostLinkError("refused", "The retained forwarding receipt is missing.");
     const finalReceipt =
       latest.receipt.state === "created" && receipt.state === "pending" ? latest.receipt : receipt;
     this.save(this.outboxFile, key, { ...latest, receipt: finalReceipt });
-    if (latest.notifyOnFinish) this.scheduleNotifications(0);
+    if (latest.wire?.kind === "spawn") this.scheduleNotifications(0);
     return finalReceipt;
   }
   /** Failed links retry on the next pass. Remote observations are never forwarded. */
@@ -678,6 +872,7 @@ export class HostLinks {
         "refused",
         "The link cannot admit this destination, lead, or operation.",
       );
+    if (wire.kind === "spawn") this.requestCurrent(wire.issuedAt);
     const key = `${link.id}:${wire.sender}:${wire.messageId}`;
     const retained = this.journal(this.inboxFile)[key];
     if (retained) {
@@ -687,6 +882,15 @@ export class HostLinks {
       this.save(this.inboxFile, key, retained);
       return retained.receipt;
     }
+    const replayed = this.retained(this.inboxFile, key, digest(wire), digest(link));
+    if (replayed) return replayed;
+    return this.admit(link, wire, key, this.prepareIncoming(link, wire, key));
+  }
+  private prepareIncoming(
+    link: IncomingHostLink,
+    wire: Exclude<HostLinkWire, { kind: "account_limit" }>,
+    key: string,
+  ): HostLinkJournal[string] {
     const agentId = wire.kind === "spawn" ? randomUUID() : this.deps.mainAssistant();
     if (!agentId) throw new HostLinkError("refused", "The main assistant has no chat.");
     const entry: HostLinkJournal[string] = {
@@ -698,9 +902,8 @@ export class HostLinks {
       profile: null,
       cwd: null,
       receipt: this.receipt(wire.messageId, agentId),
-      ...(wire.kind === "spawn" && wire.notifyOnFinish
-        ? { noticeGrant: authorityDigest(link) }
-        : {}),
+      ...(wire.kind === "spawn" ? { issuedAt: wire.issuedAt } : {}),
+      ...(wire.kind === "spawn" ? { noticeGrant: authorityDigest(link) } : {}),
     };
     if (wire.kind === "spawn") {
       if (wire.notifyOnFinish && this.notificationsClosed)
@@ -715,8 +918,9 @@ export class HostLinks {
           complete: false,
         });
     }
+    if (wire.kind === "spawn") this.spawnHeadroom(this.inboxFile, entry);
     this.save(this.inboxFile, key, entry);
-    return this.admit(link, wire, key, entry);
+    return entry;
   }
   private prepareSpawn(
     link: IncomingHostLink,
@@ -814,21 +1018,22 @@ export class HostLinks {
     const entry = entries.find(
       (item) => item.receipt.token !== null && matchesHostLinkCredential(item.receipt.token, token),
     );
-    if (!entry || entry.receipt.agentId !== input.agentId || !entry.profile)
+    if (!entry) return this.retiredWorkerReply(token, input);
+    if (entry.receipt.agentId !== input.agentId || !entry.profile)
       throw new HostLinkError("refused", "The worker credential is invalid.");
     const link = this.requiredConfig().incoming.find((item) => item.id === entry.linkId);
+    const noticeRequest = ["notices", "acknowledge"].includes(input.kind);
     if (
       !link ||
-      (input.kind === "notices"
+      (noticeRequest && entry.noticeGrant
         ? authorityDigest(link) !== entry.noticeGrant
         : digest(link) !== entry.grant)
     )
       throw new HostLinkError("refused", "The worker grant changed.");
     this.recheck(link);
-    const chat =
-      input.kind === "notices"
-        ? await this.deps.chat(input.agentId)
-        : await this.sourceChat(input.agentId);
+    const chat = noticeRequest
+      ? await this.deps.chat(input.agentId)
+      : await this.sourceChat(input.agentId);
     if (!chat) throw new HostLinkError("refused", "The worker is unavailable.");
     if (
       chat.reportsTo !== `${entry.sender}@${entry.sourceServerId}` ||
@@ -837,11 +1042,13 @@ export class HostLinks {
       chat.modeId !== entry.profile.modeId
     )
       throw new HostLinkError("refused", "The worker identity or permission mode changed.");
+    if (input.kind === "acknowledge")
+      return this.acknowledgeArchive(input.agentId, input.noticeIds, entry, chat);
     if (input.kind === "notices")
       return HostLinkWorkerNoticesSchema.parse({
         serverId: this.deps.serverId,
         agentId: input.agentId,
-        complete: entry.complete ?? false,
+        complete: entry.complete === true || (chat.archived && !entry.notifyOnFinish),
         settledPromptIds: Object.values(this.journal(this.inboxFile))
           .filter(
             (candidate) =>
@@ -856,17 +1063,97 @@ export class HostLinks {
     if (input.kind === "inspect") return this.deps.inspect(input.agentId);
     return this.workerPrompt(link, entry, input);
   }
+  private retiredWorkerReply(token: string | null, input: HostLinkWorkerRequest): unknown {
+    if (input.kind !== "acknowledge" && input.kind !== "notices")
+      throw new HostLinkError("refused", "The worker credential is invalid.");
+    const prior = Object.values(this.replay(this.inboxFile)).find(
+      (item) =>
+        item.receipt.agentId === input.agentId &&
+        item.receipt.token !== null &&
+        matchesHostLinkCredential(item.receipt.token, token),
+    );
+    if (!prior) throw new HostLinkError("refused", "The worker credential is invalid.");
+    const link = this.requiredConfig().incoming.find(
+      (item) => authorityDigest(item) === prior.noticeGrant,
+    );
+    if (!link) throw new HostLinkError("refused", "The retired worker grant changed.");
+    this.recheck(link);
+    if (input.kind === "acknowledge") this.acknowledgeNoticeFailure(input.agentId, input.noticeIds);
+    return input.kind === "acknowledge"
+      ? { archived: true }
+      : {
+          serverId: this.deps.serverId,
+          agentId: input.agentId,
+          complete: true,
+          settledPromptIds: [],
+          notices: this.noticeFailed(input.agentId)
+            ? [this.noticeFailureWarning(input.agentId)]
+            : [],
+        };
+  }
+
+  private acknowledgeArchive(
+    agentId: string,
+    noticeIds: string[],
+    entry: HostLinkJournal[string],
+    chat: HostLinkChat,
+  ): { archived: boolean } {
+    const journal = this.journal(this.inboxFile);
+    const current = Object.values(journal).find(
+      (candidate) => candidate.receipt.token === entry.receipt.token,
+    );
+    if (!current || digest(current) !== digest(entry)) return { archived: false };
+    this.acknowledgeNoticeFailure(agentId, noticeIds);
+    const acknowledged = new Set(noticeIds);
+    const related = Object.entries(journal).filter(
+      ([, candidate]) => candidate.receipt.agentId === agentId,
+    );
+    const archived =
+      chat.archived &&
+      (this.deps.workerArchived?.(agentId) ?? chat.archived) &&
+      (entry.complete === true || !entry.notifyOnFinish) &&
+      !entry.pendingPromptIds?.length &&
+      !this.noticeFailed(agentId) &&
+      (entry.notices ?? []).every(
+        (notice) =>
+          acknowledged.has(notice.id) || (notice.kind === "permission" && notice.resolved),
+      ) &&
+      related.every(([, candidate]) => candidate.receipt.state !== "pending");
+    if (archived)
+      this.retire(
+        this.inboxFile,
+        related.map(([key]) => key),
+      );
+    return { archived };
+  }
+
   private availableWorkerNotices(
     entry: HostLinkJournal[string],
     agentId: string,
   ): HostLinkWorkerNotice[] {
-    return (entry.notices ?? [])
+    const notices = (entry.notices ?? [])
       .filter((notice) => {
         if (notice.kind !== "permission") return true;
         if (entry.complete || notice.resolved || (notice.notBefore ?? 0) > this.now()) return false;
         return this.deps.permissionPending?.(agentId, notice.permissionRequestId ?? "") ?? true;
       })
       .map(({ id, kind, text }) => ({ id, kind, text }));
+    if (this.noticeFailed(agentId) && notices.length < 128)
+      notices.push(this.noticeFailureWarning(agentId));
+    return notices;
+  }
+
+  private noticeFailureWarning(agentId: string): HostLinkWorkerNotice {
+    return {
+      id: digest([agentId, "notice-storage-failure"]),
+      kind: "failed",
+      text: "The remote host could not save a worker notice. Reconcile the worker and its receipt storage before more work.",
+    };
+  }
+
+  private acknowledgeNoticeFailure(agentId: string, noticeIds: string[]): void {
+    if (noticeIds.includes(this.noticeFailureWarning(agentId).id))
+      this.clearWorkerNoticeFailure(agentId);
   }
 
   resolveWorkerPermission(agentId: string, requestId: string): void {
@@ -907,8 +1194,22 @@ export class HostLinks {
     eventId: string,
     text: string,
     turnId?: string,
-  ): void {
-    for (const [key, entry] of Object.entries(this.journal(this.inboxFile))) {
+  ): void | "retired" {
+    const journal = this.journal(this.inboxFile);
+    if (
+      !Object.values(journal).some((entry) => entry.profile && entry.receipt.agentId === agentId)
+    ) {
+      if (
+        Object.values(this.replay(this.inboxFile)).some(
+          (entry) => entry.receipt.agentId === agentId,
+        )
+      ) {
+        this.retainNoticeFailure(agentId);
+        return "retired";
+      }
+      return;
+    }
+    for (const [key, entry] of Object.entries(journal)) {
       if (
         entry.receipt.agentId !== agentId ||
         !entry.profile ||
@@ -926,7 +1227,7 @@ export class HostLinks {
       const notices = entry.notices ?? [];
       if (notices.some((item) => item.id === notice.id)) continue;
       if (notices.length >= (kind === "permission" ? 127 : 128))
-        throw new HostLinkError("unavailable", "The worker notice journal is full.");
+        throw new HostLinkStorageError("capacity");
       this.save(this.inboxFile, key, {
         ...entry,
         notices: [
@@ -943,6 +1244,7 @@ export class HostLinks {
         complete: kind !== "permission" && !entry.pendingPromptIds?.length,
         finishArmed: kind === "permission",
       });
+      if (kind !== "permission") this.clearWorkerNoticeFailure(agentId);
     }
   }
 
@@ -970,13 +1272,20 @@ export class HostLinks {
     this.notificationTimer.unref?.();
   }
 
+  private watchesWorker(entry: HostLinkJournal[string]): boolean {
+    return (
+      entry.notifyOnFinish === true ||
+      (entry.wire?.kind === "spawn" && entry.receipt.state === "created")
+    );
+  }
+
   private scheduleNextNotifications(): void {
     if (this.notificationsStopped) return;
     try {
       const due: number[] = [];
       for (const [key, entry] of Object.entries(this.journal(this.outboxFile))) {
-        if (!entry.notifyOnFinish) continue;
-        if (!entry.complete && (entry.watch?.failures ?? 0) < 8) due.push(entry.watch?.nextAt ?? 0);
+        if (!this.watchesWorker(entry)) continue;
+        if ((entry.watch?.failures ?? 0) < 8) due.push(entry.watch?.nextAt ?? 0);
         for (const notice of entry.receivedNotices ?? []) {
           if (notice.state === "queued" && !this.notificationDeliveries.has(`${key}:${notice.id}`))
             due.push(notice.nextAt);
@@ -1007,8 +1316,8 @@ export class HostLinks {
 
   private async syncNotificationEntries(): Promise<void> {
     if (this.notificationsClosed) return;
-    const entries = Object.entries(this.journal(this.outboxFile)).filter(
-      ([, entry]) => entry.notifyOnFinish,
+    const entries = Object.entries(this.journal(this.outboxFile)).filter(([, entry]) =>
+      this.watchesWorker(entry),
     );
     if (!this.notificationsRecovered) {
       for (const [key, entry] of entries) {
@@ -1026,10 +1335,7 @@ export class HostLinks {
     for (const [key, entry] of entries) this.kickNoticeDeliveries(key, entry);
     const due = entries
       .filter(
-        ([, entry]) =>
-          !entry.complete &&
-          (entry.watch?.failures ?? 0) < 8 &&
-          (entry.watch?.nextAt ?? 0) <= this.now(),
+        ([, entry]) => (entry.watch?.failures ?? 0) < 8 && (entry.watch?.nextAt ?? 0) <= this.now(),
       )
       .slice(0, 4);
     await Promise.all(due.map(([key, entry]) => this.readWorkerNotices(key, entry)));
@@ -1062,9 +1368,15 @@ export class HostLinks {
     try {
       const { chat, link } = await this.notificationSource(captured);
       if (captured.receipt.state === "pending" && captured.wire?.kind === "spawn") {
-        await this.forward(link, chat, captured.wire, "explicit");
+        this.requestCurrent(captured.wire.issuedAt);
+        await this.forward(
+          link,
+          chat,
+          { ...captured.wire, issuedAt: captured.wire.issuedAt! },
+          "explicit",
+        );
       }
-      let entry = this.journal(this.outboxFile)[key]!;
+      const entry = this.journal(this.outboxFile)[key]!;
       if (!entry.receipt.token || !entry.receipt.agentId || entry.receipt.state !== "created")
         throw new HostLinkError("uncertain", "Remote creation needs receipt reconciliation.");
       // Persist the next attempt before network I/O, including attempts interrupted by restart.
@@ -1074,24 +1386,46 @@ export class HostLinks {
         watch: { failures, nextAt: this.now() + Math.min(60000, 1000 * 2 ** failures) },
       });
       const result = await this.fetchWorkerNotices(link, entry);
-      await this.notificationSource(captured);
-      entry = this.journal(this.outboxFile)[key]!;
-      if ((entry.generation ?? 0) !== (captured.generation ?? 0)) return;
-      const admitted = new Set(result.settledPromptIds ?? []);
-      const complete =
-        result.complete && (entry.pendingPromptIds ?? []).every((id) => admitted.has(id));
-      const received = this.mergeWorkerNotices(entry, result.notices);
-      const next = {
-        ...entry,
-        receivedNotices: received,
-        complete,
-        ...(complete ? { pendingPromptIds: [] } : {}),
-        watch: { failures: 0, nextAt: this.now() + 10000 },
-      };
-      this.save(this.outboxFile, key, next);
-      this.kickNoticeDeliveries(key, next);
+      await this.reconcileWorkerNotices(key, captured, link, result);
     } catch (error) {
       this.failWorkerNoticeRead(key, captured, error);
+    }
+  }
+
+  private async reconcileWorkerNotices(
+    key: string,
+    captured: HostLinkJournal[string],
+    link: OutgoingHostLink,
+    result: HostLinkWorkerNotices,
+  ): Promise<void> {
+    await this.notificationSource(captured);
+    const entry = this.journal(this.outboxFile)[key]!;
+    if ((entry.generation ?? 0) !== (captured.generation ?? 0)) return;
+    const admitted = new Set(result.settledPromptIds ?? []);
+    const complete =
+      result.complete && (entry.pendingPromptIds ?? []).every((id) => admitted.has(id));
+    const received = this.mergeWorkerNotices(entry, result.notices);
+    const cleanup =
+      complete && received.every((notice) => ["delivered", "suppressed"].includes(notice.state));
+    const healthyWatch = { failures: 0, nextAt: this.now() + 10000 };
+    const next = {
+      ...entry,
+      receivedNotices: received,
+      complete,
+      ...(complete ? { pendingPromptIds: [] } : {}),
+      // A cleanup failure retains this attempt's durable backoff and retry count.
+      watch: cleanup ? entry.watch! : healthyWatch,
+    };
+    // Settle prompts before acknowledging archive. A lost acknowledgement reply must be recoverable.
+    this.save(this.outboxFile, key, next);
+    this.kickNoticeDeliveries(key, next);
+    if (cleanup) {
+      const archived = await this.acknowledgeWorker(link, next);
+      await this.notificationSource(captured);
+      const current = this.journal(this.outboxFile)[key]!;
+      if ((current.generation ?? 0) !== (captured.generation ?? 0)) return;
+      if (archived) this.retire(this.outboxFile, [key]);
+      else this.save(this.outboxFile, key, { ...current, watch: healthyWatch });
     }
   }
 
@@ -1130,6 +1464,31 @@ export class HostLinks {
     if (result.serverId !== link.serverId || result.agentId !== entry.receipt.agentId)
       throw new HostLinkError("refused", "The worker notice identity changed.");
     return result;
+  }
+
+  private async acknowledgeWorker(
+    link: OutgoingHostLink,
+    entry: HostLinkJournal[string],
+  ): Promise<boolean> {
+    const response = await fetch(hostLinkUrl(link.url, "worker"), {
+      method: "POST",
+      redirect: "error",
+      signal: AbortSignal.timeout(15000),
+      headers: {
+        authorization: `Bearer ${entry.receipt.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        kind: "acknowledge",
+        agentId: entry.receipt.agentId,
+        noticeIds: (entry.receivedNotices ?? [])
+          .filter((notice) => ["delivered", "suppressed"].includes(notice.state))
+          .map((notice) => notice.id),
+      }),
+    });
+    if (!response.ok)
+      throw new HostLinkError("unavailable", "Remote receipt cleanup is unavailable.");
+    return HostLinkCleanupSchema.parse(await response.json()).archived;
   }
 
   private async permissionNoticeCurrent(key: string, id: string): Promise<boolean> {
@@ -1256,6 +1615,10 @@ export class HostLinks {
       this.updateNotice(key, id, (current) => {
         current.state = "delivered";
       });
+      if (id === digest([entry.receipt.agentId, "notice-storage-failure"])) {
+        const latest = this.journal(this.outboxFile)[key]!;
+        this.save(this.outboxFile, key, { ...latest, watch: { failures: 8, nextAt: 0 } });
+      }
     } catch (error) {
       if (this.notificationsClosed) return;
       this.updateNotice(key, id, (notice) => {
@@ -1304,8 +1667,7 @@ export class HostLinks {
       requests.some(([, item]) => item.notifyOnFinish) &&
       !notices.some((notice) => notice.id === id)
     ) {
-      if (notices.length >= 128)
-        throw new HostLinkError("unavailable", "The worker notice journal is full.");
+      if (notices.length >= 128) throw new HostLinkStorageError("capacity");
       notices.push({
         id,
         kind: "failed",
@@ -1410,6 +1772,7 @@ export class HostLinks {
     owner: HostLinkJournal[string],
     input: Extract<HostLinkWorkerRequest, { kind: "prompt" }>,
   ): Promise<HostLinkReceipt> {
+    this.requestCurrent(input.issuedAt);
     const key = `${link.id}:${input.agentId}:${input.messageId}`;
     const retained = this.journal(this.inboxFile)[key];
     if (retained) {
@@ -1427,6 +1790,7 @@ export class HostLinks {
       linkId: owner.linkId,
       sourceServerId: owner.sourceServerId,
       promptRequest: true,
+      issuedAt: input.issuedAt,
       notifyOnFinish: input.notifyOnFinish !== false,
       profile: null,
       cwd: owner.cwd,

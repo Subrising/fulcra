@@ -310,6 +310,7 @@ test("two isolated daemons create one remote worker and deliver a role notice th
     const body = {
       kind: "spawn",
       messageId: "88888888-8888-4888-8888-888888888888",
+      issuedAt: Date.now(),
       workload: "standard",
       workspace: "job",
       profile: "worker",
