@@ -615,8 +615,8 @@ export class SessionResources {
     while (!seen.has(row.pid)) {
       seen.add(row.pid);
       if (protectedSessionProcess(row)) return false;
-      if (row.pid === record.rootPid) return row.birth === record.rootBirth;
       if (roots.some((root) => root.pid === row.pid && (root.agentId !== record.agentId || root.instanceId !== record.instanceId))) return false;
+      if (row.pid === record.rootPid) return row.birth === record.rootBirth;
       if (row.ppid === 0 || row.ppid === 1) return true;
       const parent = byPid.get(row.ppid);
       if (!parent || !bornAfter(row.birth, parent.birth)) return false;

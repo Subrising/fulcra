@@ -3801,7 +3801,8 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   getProcessId(): number | null {
-    return this.client && !this.closed ? this.processId : null;
+    const child = this.appServerChild;
+    return this.client && !this.closed && child?.exitCode === null && child.signalCode === null ? this.processId : null;
   }
 
   private async establishConnection(): Promise<void> {
