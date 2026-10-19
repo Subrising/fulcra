@@ -140,7 +140,7 @@ test("dry-run logs the decision and preserves the owned process", async () => {
   expect(f.stopped).toEqual([]);
   expect(await readFile(f.options.file + ".stops.jsonl", "utf8")).toContain("dry-run-stop");
 });
-test("an unrelated tool event does not wait behind the cleanup queue", async () => {
+test.each(["echo hello", "xcrun clang -c hello.c"])("an unrelated tool event does not wait behind the cleanup queue: %s", async (command) => {
   const f = await fixture();
   let release!: () => void;
   const blocked = new Promise<void>((resolve) => {
@@ -158,7 +158,7 @@ test("an unrelated tool event does not wait behind the cleanup queue", async () 
     await Promise.race([
       tracker.observeTool(
         { agentId: "owner", instanceId: "generation", pid: 100 },
-        item("echo hello"),
+        item(command),
       ),
       new Promise((_, reject) => setTimeout(() => reject(new Error("tool event blocked")), 50)),
     ]);

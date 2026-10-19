@@ -277,6 +277,12 @@ function simulatorCommand(item: ToolCallTimelineItem): { action: string; udid: s
   return { action: match[1]!, udid: match[2]! };
 }
 
+function simulatorUseCommand(shell: string): boolean {
+  if (/\b(?:xcodebuild|simctl)\b|\bflutter\s+(?:run|test|drive)\b|\bcap(?:acitor)?\s+run\b|\bSimulator\b|[\w.-]*(?:ios|simulator)[\w.-]*\.sh/.test(shell)) return true;
+  if (!/\bxcrun\b/.test(shell)) return false;
+  return /-(?:destination|device|udid)\b|iphonesimulator/i.test(shell) || /[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}/.test(shell);
+}
+
 /** Observed descendants and narrowly admitted, unused test fixtures enter the ledger. */
 export class SessionResources {
   private readonly options: Options;
@@ -754,10 +760,7 @@ export class SessionResources {
     )
       this.logReaders.add(`${root.agentId}:${root.instanceId}`);
     const command = simulatorCommand(item);
-    const simulatorUse =
-      /\b(?:xcodebuild|xcrun|simctl)\b|\bflutter\s+(?:run|test|drive)\b|\bcap(?:acitor)?\s+run\b|\bSimulator\b|[\w.-]*(?:ios|simulator)[\w.-]*\.sh/.test(
-        shell,
-      );
+    const simulatorUse = simulatorUseCommand(shell);
     if (!command && !simulatorUse) return Promise.resolve();
     const ids = [...shell.matchAll(/[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}/g)].map(
       (m) => m[0].toUpperCase(),
