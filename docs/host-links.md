@@ -261,7 +261,7 @@ Real result text remains available. Only a successful terminal notice save or so
 The source stops its notice watch after delivering a storage warning. It does not poll that warning indefinitely.
 A separate private `host-links-notice-failures.json` file keeps warnings across restart when storage permits.
 Notices from a cleaned-up worker set a repair marker and a runtime log warning.
-The source can read this warning through the retired worker receipt.
+After source cleanup, the warning appears only in the worker host log and its marker file.
 Do not restore retired workers; create a new worker instead.
 After storage repair and worker reconciliation, stop the worker host daemon when idle.
 Keep it stopped while you clear only that worker's marker:
