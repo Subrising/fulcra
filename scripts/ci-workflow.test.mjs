@@ -16,7 +16,7 @@ import { join, matchesGlob } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { relative as relativePath } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { stripTypeScriptTypes } from "node:module";
 import { requiresFullSuite } from "./ci-shared-changes.mjs";
 import { selectPassedCI } from "../.github/scripts/ci-check.mjs";
 import { proveMerge, complete } from "../.github/scripts/ci-finished.mjs";
@@ -129,45 +129,36 @@ test("clean browser packaging omits absent optional plugins and requires tested 
 });
 
 test("prebuilt browser clients bypass Playwright transpilation while test source stays transformed", () => {
-  const root = mkdtempSync(join(tmpdir(), "browser-built-loader-"));
-  const checkout = fileURLToPath(repoRoot);
-  try {
-    writeFileSync(
-      join(root, "playwright.config.ts"),
-      `import original from ${JSON.stringify(join(checkout, "packages/app/playwright.config.ts"))};
-export default { ...original, globalSetup: undefined, testDir: ${JSON.stringify(root)},
-  testMatch: "loader.spec.ts", projects: [{ name: "loader" }], reporter: "list" };
-`,
+  // The changes job runs before npm install. Evaluate the actual config with Node only.
+  const source = stripTypeScriptTypes(
+    readFileSync(new URL("packages/app/playwright.config.ts", repoRoot), "utf8"),
+  )
+    .replace(/^import .+ from .+;$/gm, "")
+    .replace("export default defineConfig(", "configuration = defineConfig(");
+  const config = runInNewContext(source, {
+    defineConfig: (value) => value,
+    devices: { "Desktop Chrome": {} },
+    process: { env: {} },
+    configuration: null,
+  });
+  const external = config.build?.external ?? [];
+  for (const workspace of ["client", "protocol", "relay", "server"]) {
+    assert.ok(
+      external.some((pattern) =>
+        matchesGlob(`/checkout/packages/${workspace}/dist/index.js`, pattern),
+      ),
+      `${workspace} build must use the native loader`,
     );
-    writeFileSync(
-      join(root, "loader.spec.ts"),
-      `const assert = require("node:assert/strict");
-const { join } = require("node:path");
-const { test } = require(${JSON.stringify(join(checkout, "node_modules/@playwright/test"))});
-const { shouldTransform } = require(${JSON.stringify(join(checkout, "node_modules/playwright/lib/transform/transform.js"))});
-for (const workspace of ["client", "protocol", "relay", "server"]) {
-  assert.equal(shouldTransform(join(${JSON.stringify(checkout)}, "packages", workspace, "dist", "index.js")), false, workspace);
-}
-assert.equal(shouldTransform(${JSON.stringify(join(checkout, "packages/client/src/daemon-client.ts"))}), true);
-assert.equal(shouldTransform(${JSON.stringify(join(checkout, "packages/app/e2e/support/fixtures.ts"))}), true);
-test("compiled inputs use the native loader", () => {});
-`,
+  }
+  for (const file of [
+    "/checkout/packages/client/src/daemon-client.ts",
+    "/checkout/packages/app/e2e/support/fixtures.ts",
+  ]) {
+    assert.equal(
+      external.some((pattern) => matchesGlob(file, pattern)),
+      false,
+      file,
     );
-    const result = spawnSync(
-      process.execPath,
-      [
-        join(checkout, "node_modules/playwright/cli.js"),
-        "test",
-        "--config",
-        join(root, "playwright.config.ts"),
-        "--list",
-      ],
-      { cwd: checkout, encoding: "utf8", timeout: 30_000 },
-    );
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /compiled inputs use the native loader/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
   }
 });
 
