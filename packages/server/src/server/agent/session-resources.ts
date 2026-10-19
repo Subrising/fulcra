@@ -588,7 +588,7 @@ export class SessionResources {
   }
   private simulatorAdmitted(record: SimulatorRecord, admitted: (record: SimulatorRecord) => boolean): boolean {
     return this.mode() !== "off" && admitted(record) && !this.simulatorInUse(record) &&
-      !record.users.some((user) => user.agentId !== record.agentId && this.options.ownerState(user.agentId) !== "inactive");
+      !record.users.some((user) => (user.agentId !== record.agentId || user.instanceId !== record.instanceId) && this.options.ownerState(user.agentId) !== "inactive");
   }
   private simulatorMatches(record: SimulatorRecord, state: {booted: boolean; pid: number | null; birth: string | null}): boolean {
     return state.booted && state.pid === record.pid && state.birth === record.birth;
@@ -620,7 +620,7 @@ export class SessionResources {
     return [this.simulatorUsers.get(record.udid), this.simulatorUsers.get("*")].some((users) =>
       [...(users?.values() ?? [])].some(
         (user) =>
-          user.agentId !== record.agentId && this.options.ownerState(user.agentId) !== "inactive",
+          (user.agentId !== record.agentId || user.instanceId !== record.instanceId) && this.options.ownerState(user.agentId) !== "inactive",
       ),
     );
   }
