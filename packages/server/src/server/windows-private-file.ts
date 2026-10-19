@@ -159,9 +159,11 @@ parentPort.on('message', (request) => {
 `;
 
 export class WindowsPrivateFileReconciliationError extends Error {
-  constructor(readonly receipt?: Int32Array) {
+  readonly receipt?: Int32Array;
+  constructor(receipt?: Int32Array) {
     super("Windows durable file commit requires reconciliation.");
     this.name = "WindowsPrivateFileReconciliationError";
+    this.receipt = receipt;
   }
 }
 let helper: Worker | undefined;

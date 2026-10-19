@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { spawnSync } from "node:child_process";
 import { afterEach, expect, test, vi } from "vitest";
 
 const transport = vi.hoisted(() => ({
@@ -52,6 +53,21 @@ async function helper(logger = { warn: vi.fn() }) {
   await api.initializeWindowsPrivateFiles(logger);
   return api;
 }
+test("the helper loads with Node strip-only TypeScript support", () => {
+  const source = new URL("./windows-private-file.ts", import.meta.url).href;
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--experimental-strip-types",
+      "--input-type=module",
+      "-e",
+      `await import(${JSON.stringify(source)})`,
+    ],
+    { encoding: "utf8", env: { ...process.env, NODE_OPTIONS: "" } },
+  );
+  expect(result.stderr).not.toContain("ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX");
+  expect(result.status).toBe(0);
+});
 test.each([2, 8])("Windows line transport accepts %i MiB without a JSON parser", async (mib) => {
   const api = await helper();
   const bytes = Buffer.alloc(mib * 1024 * 1024, 120);
