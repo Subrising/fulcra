@@ -61,34 +61,43 @@ export function SchedulesScreen(): ReactElement {
   return <SchedulesScreenContent />;
 }
 
+/**
+ * Per-host agent-directory readiness from the runtime, not the aggregate agent
+ * flag: the aggregate `isInitialLoad` flips false as soon as *any* host has
+ * agents, so a still-loading host would falsely mark its agent-target
+ * schedules "gone". `hasEverLoadedAgentDirectory` is true only once that
+ * host's directory has loaded at least once.
+ */
+export function useAgentDirectoryReadyHosts(hosts: readonly { serverId: string }[]): Set<string> {
+  const runtime = getHostRuntimeStore();
+  // A primitive snapshot, not a version-keyed memo: the React Compiler drops a `void version`
+  // read as a memo input, so the set never refreshed (schedules-agent-directory-ready.compiler.test.tsx).
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => runtime.subscribeAll(onStoreChange),
+    [runtime],
+  );
+  const readReadyServerIds = useCallback(
+    () =>
+      hosts
+        .filter((host) => runtime.getSnapshot(host.serverId)?.hasEverLoadedAgentDirectory)
+        .map((host) => host.serverId)
+        .join("\n"),
+    [hosts, runtime],
+  );
+  const readyServerIds = useSyncExternalStore(subscribe, readReadyServerIds, readReadyServerIds);
+  return useMemo(
+    () => new Set(readyServerIds.length > 0 ? readyServerIds.split("\n") : []),
+    [readyServerIds],
+  );
+}
+
 function SchedulesScreenContent(): ReactElement {
   const { loadState, hostErrors, isError, refetch } = useSchedules();
   const schedules = loadState.status === "loaded" ? loadState.data : EMPTY_SCHEDULES;
   const { agents } = useAggregatedAgents({ includeArchived: true });
   const { projects } = useProjects();
   const hosts = useHosts();
-  const runtime = getHostRuntimeStore();
-  const runtimeVersion = useSyncExternalStore(
-    (onStoreChange) => runtime.subscribeAll(onStoreChange),
-    () => runtime.getVersion(),
-    () => runtime.getVersion(),
-  );
-
-  // Per-host agent-directory readiness from the runtime, not the aggregate agent
-  // flag: the aggregate `isInitialLoad` flips false as soon as *any* host has
-  // agents, so a still-loading host would falsely mark its agent-target
-  // schedules "gone". `hasEverLoadedAgentDirectory` is true only once that
-  // host's directory has loaded at least once.
-  const agentDirReadyHosts = useMemo(() => {
-    void runtimeVersion;
-    const ready = new Set<string>();
-    for (const host of hosts) {
-      if (runtime.getSnapshot(host.serverId)?.hasEverLoadedAgentDirectory) {
-        ready.add(host.serverId);
-      }
-    }
-    return ready;
-  }, [hosts, runtime, runtimeVersion]);
+  const agentDirReadyHosts = useAgentDirectoryReadyHosts(hosts);
 
   const [form, setForm] = useState<FormState>({ mode: "closed" });
   const [selectedHost, setSelectedHost] = useState(ALL_HOSTS_OPTION_ID);

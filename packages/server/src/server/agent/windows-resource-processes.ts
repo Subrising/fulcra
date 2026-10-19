@@ -66,13 +66,17 @@ const snapshotSchema = z.object({
   ),
 });
 
-export function parseWindowsResourceSnapshot(output: string): ResourceProcess[] {
+export function parseWindowsResourceSnapshot(
+  output: string,
+  onStaleInstallRoot?: (root: { pid: number; birth: string }) => void,
+): ResourceProcess[] {
   const snapshot = snapshotSchema.parse(JSON.parse(output.trim().replace(/^\uFEFF/, "")));
   const protectedPids = new Set<number>();
   let unknownInstall = !snapshot.installRoots;
   for (const root of snapshot.installRoots ?? []) {
+    // A root whose process has exited protects nothing; ignore only that entry.
     if (!snapshot.processes.some((row) => row.Id === root.pid && row.StartTicks === root.birth))
-      unknownInstall = true;
+      onStaleInstallRoot?.(root);
     else protectedPids.add(root.pid);
   }
   for (let pass = 0; pass < snapshot.processes.length; pass++) {
@@ -106,6 +110,7 @@ export function parseWindowsResourceSnapshot(output: string): ResourceProcess[] 
 
 export async function readWindowsResourceProcesses(
   policyFile?: string,
+  onStaleInstallRoot?: (root: { pid: number; birth: string }) => void,
 ): Promise<ResourceProcess[]> {
   const directory = await fs.mkdtemp(path.join(tmpdir(), "session-resource-table-"));
   const script = path.join(directory, "read.ps1");
@@ -126,7 +131,7 @@ export async function readWindowsResourceProcesses(
       { timeout: 15_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true },
     );
     pending.child.stdin?.end();
-    return parseWindowsResourceSnapshot((await pending).stdout);
+    return parseWindowsResourceSnapshot((await pending).stdout, onStaleInstallRoot);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }

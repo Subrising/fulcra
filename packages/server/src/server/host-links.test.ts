@@ -694,6 +694,23 @@ test("a remote notice resolves the current main assistant again before input", a
   ).toBe("delivered");
   expect(f.notices[2]).toBe("new-main:Host notice from lead@source:\nWorker finished.");
 });
+test("delivered remote notices carry issuedAt and retire from the receiver journal by age", async () => {
+  const f = await fixture();
+  const file = path.join(f.deps.home, "host-links-inbox.json");
+  const ids = [1, 2].map((n) => `7777777${n}-7777-4777-8777-777777777777`);
+  const notice = { kind: "notice", text: "Worker finished." };
+  await f.dispatch({ ...notice, messageId: ids[0] });
+  const first = HostLinkJournalSchema.parse(JSON.parse(readFileSync(file, "utf8")));
+  expect(Object.values(first)[0]!.issuedAt).toBeTypeOf("number");
+  f.state.now += 25 * 3600000;
+  await f.dispatch({ ...notice, messageId: ids[1] });
+  const later = HostLinkJournalSchema.parse(JSON.parse(readFileSync(file, "utf8")));
+  expect(Object.values(later).map((entry) => entry.receipt.messageId)).toEqual([ids[1]]);
+  // The retired notice still replays without a second delivery.
+  const count = f.notices.length;
+  await f.dispatch({ ...notice, messageId: ids[0] });
+  expect(f.notices).toHaveLength(count);
+});
 test("lead success suppression remains in force while failed lead notices cross the link", async () => {
   const f = await fixture();
   f.chats.get("lead")!.isLead = true;
