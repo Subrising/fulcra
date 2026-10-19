@@ -1,7 +1,15 @@
 import { removeWithCleanupGuard } from "./cleanup-guard.js";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { constants as fsConstants, existsSync, mkdirSync, realpathSync, statSync } from "fs";
+import {
+  constants as fsConstants,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+} from "fs";
 import { copyFile } from "fs/promises";
 import { join, basename, dirname, isAbsolute, resolve, sep } from "path";
 import net from "node:net";
@@ -32,7 +40,7 @@ import {
   writePaseoWorktreeMetadata,
   writePaseoWorktreeRuntimeMetadata,
 } from "./worktree-metadata.js";
-import { runGitCommand } from "./run-git-command.js";
+import { GitCommandTimeoutError, runGitCommand } from "./run-git-command.js";
 import { spawnProcess } from "./spawn.js";
 import { resolvePaseoHome } from "../server/paseo-home.js";
 import { createExternalProcessEnv } from "../server/paseo-env.js";
@@ -1141,6 +1149,86 @@ export async function rollbackCreatedPaseoWorktree(
   throw cause;
 }
 
+// A full checkout on a slow (USB) disk takes minutes. The old 120 s limit killed it part-way (FU-372).
+const WORKTREE_CHECKOUT_TIMEOUT_MS = 30 * 60_000;
+const WORKTREE_FETCH_TIMEOUT_MS = 10 * 60_000;
+
+function readLinkedWorktreeGitDir(worktreePath: string): string | null {
+  try {
+    const match = /^gitdir: (.+)$/m.exec(readFileSync(join(worktreePath, ".git"), "utf8"));
+    if (!match) return null;
+    return resolve(worktreePath, match[1]!.trim());
+  } catch {
+    return null;
+  }
+}
+
+/** This path's git admin dir, only while git's own "initializing" lock from `worktree add` is still there. */
+function readInterruptedWorktreeAdmin(worktreePath: string): string | null {
+  const gitDir = readLinkedWorktreeGitDir(worktreePath);
+  if (!gitDir || !existsSync(join(gitDir, "HEAD"))) return null;
+  try {
+    if (!readFileSync(join(gitDir, "locked"), "utf8").includes("initializing")) return null;
+    const backLink = readFileSync(join(gitDir, "gitdir"), "utf8").trim();
+    if (realpathSync(dirname(backLink)) !== realpathSync(worktreePath)) return null;
+  } catch {
+    return null;
+  }
+  return gitDir;
+}
+
+/**
+ * A `git worktree add` killed by its timeout leaves a registered worktree that is still locked ("initializing"), an
+ * index.lock from its checkout child and a partial file set. Finish that checkout so the caller still gets its
+ * worktree. Every other failure is git's own answer and is rethrown untouched: the path can belong to another create.
+ */
+export async function finishInterruptedWorktreeAdd(options: {
+  cwd: string;
+  worktreePath: string;
+  paseoHome?: string;
+  worktreesRoot?: string;
+  cause: unknown;
+}): Promise<void> {
+  const { cwd, worktreePath, cause } = options;
+  if (!(cause instanceof GitCommandTimeoutError)) throw cause;
+  try {
+    await cause.stopped;
+  } catch {
+    // The old git may still be writing. Leave its files alone.
+    throw cause;
+  }
+  const rollback = async (error: unknown): Promise<never> => {
+    if (!existsSync(worktreePath)) throw error;
+    return rollbackCreatedPaseoWorktree(
+      {
+        cwd,
+        worktreePath,
+        paseoHome: options.paseoHome,
+        worktreesBaseRoot: options.worktreesRoot,
+      },
+      error,
+    );
+  };
+  const gitDir = readInterruptedWorktreeAdmin(worktreePath);
+  if (!gitDir) return rollback(cause);
+  try {
+    // The timed-out tree is killed, so these locks have no owner.
+    rmSync(join(gitDir, "index.lock"), { force: true });
+    rmSync(join(gitDir, "locked"), { force: true });
+    await runGitCommand(["reset", "--hard", "--quiet", "--no-recurse-submodules"], {
+      cwd: worktreePath,
+      timeout: WORKTREE_CHECKOUT_TIMEOUT_MS,
+    });
+  } catch (resumeError) {
+    const resumeMessage = resumeError instanceof Error ? resumeError.message : String(resumeError);
+    await rollback(
+      new Error(`${cause.message}; finishing the partial checkout also failed: ${resumeMessage}`, {
+        cause,
+      }),
+    );
+  }
+}
+
 /**
  * Create a git worktree with proper naming conventions
  */
@@ -1165,10 +1253,20 @@ export const createWorktree = async ({
   }
 
   // Primitive owner for `git worktree add`; callers route through createWorktreeCore.
-  await runGitCommand(["worktree", "add", finalWorktreePath, ...sourcePlan.addArguments], {
-    cwd,
-    timeout: 120_000,
-  });
+  try {
+    await runGitCommand(["worktree", "add", finalWorktreePath, ...sourcePlan.addArguments], {
+      cwd,
+      timeout: WORKTREE_CHECKOUT_TIMEOUT_MS,
+    });
+  } catch (error) {
+    await finishInterruptedWorktreeAdd({
+      cwd,
+      worktreePath: finalWorktreePath,
+      paseoHome,
+      worktreesRoot,
+      cause: error,
+    });
+  }
   worktreePath = normalizePathForOwnership(finalWorktreePath);
 
   if (sourcePlan.pushRemote) {
@@ -1479,7 +1577,7 @@ async function fetchWorktreeCheckoutRefs(options: {
       ],
       {
         cwd: options.cwd,
-        timeout: 120_000,
+        timeout: WORKTREE_FETCH_TIMEOUT_MS,
         acceptExitCodes: [0, 1, 128],
         retryFetch: checkoutRef === options.checkoutRefs[0],
         allowFetchRefFallback: true,
@@ -1510,7 +1608,7 @@ async function tryFetchWorktreeTrackingRemote(options: {
     ],
     {
       cwd: options.cwd,
-      timeout: 120_000,
+      timeout: WORKTREE_FETCH_TIMEOUT_MS,
       acceptExitCodes: [0, 1, 128],
       retryFetch: true,
     },
@@ -1678,7 +1776,7 @@ async function ensureLocalBranch(cwd: string, branchName: string): Promise<void>
     await runGitCommand(["fetch", "origin", `${branchName}:${branchName}`], {
       retryFetch: true,
       cwd,
-      timeout: 120_000,
+      timeout: WORKTREE_FETCH_TIMEOUT_MS,
     });
   } catch {
     throw new UnknownBranchError({ branchName, cwd });

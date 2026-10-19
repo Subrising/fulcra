@@ -269,3 +269,19 @@ test("supervised Unix git groups remain owned until their pipes close", async ()
     vi.unstubAllEnvs();
   }
 });
+
+// FU-372: a worktree checkout on a slow disk needs more than two minutes. The cap must not cut a longer request.
+test("a long requested timeout reaches the owned git child unchanged", async () => {
+  const cwd = await repo();
+  const child = spawnGitProcess(
+    ["-c", 'alias.deadline=!printf %s "$FULCRA_GIT_TIMEOUT_MS"', "deadline"],
+    { cwd, stdio: "pipe", timeout: 300_000 },
+  );
+  let stdout = "";
+  child.stdout!.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
+  await new Promise<void>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", () => resolve());
+  });
+  expect(stdout).toBe("300000");
+});

@@ -227,6 +227,8 @@ async function loadRunGitCommand(concurrency: number) {
   return import("./run-git-command.js");
 }
 
+const killControl = vi.hoisted(() => ({ fail: false }));
+
 vi.mock("@getpaseo/plugin/server/git", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@getpaseo/plugin/server/git")>();
   const childProcess = await import("node:child_process");
@@ -236,6 +238,7 @@ vi.mock("@getpaseo/plugin/server/git", async (importOriginal) => {
     spawnGitProcess: (args: string[], options: import("node:child_process").SpawnOptions) =>
       childProcess.spawn("git", args, options),
     terminateGitProcess: async (child: { kill: (signal: string) => void }) => {
+      if (killControl.fail) throw new Error("kill failed");
       child.kill("SIGKILL");
     },
   };
@@ -323,6 +326,25 @@ describe("runGitCommand", () => {
 
     expect(fakeSpawnController.peakActiveCount).toBe(2);
     expect(fakeSpawnController.activeCount).toBe(0);
+  });
+
+  // FU-372 review: a caller deletes the old command's locks after `stopped`. A failed kill must not look like a stop.
+  it("rejects the timeout's stopped promise when the tree could not be killed", async () => {
+    const { runGitCommand, GitCommandTimeoutError } = await loadRunGitCommand(1);
+    enqueueSpawnBehaviors({ delayMs: 300 });
+    killControl.fail = true;
+    try {
+      const error = await runGitCommand(["status"], { cwd: process.cwd(), timeout: 50 }).catch(
+        (failure: unknown) => failure,
+      );
+
+      expect(error).toBeInstanceOf(GitCommandTimeoutError);
+      await expect((error as InstanceType<typeof GitCommandTimeoutError>).stopped).rejects.toThrow(
+        "kill failed",
+      );
+    } finally {
+      killControl.fail = false;
+    }
   });
 
   it("kills timed out processes and releases the limiter slot", async () => {

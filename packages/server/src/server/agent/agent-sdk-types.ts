@@ -562,6 +562,8 @@ export type AgentPermissionResponse =
       selectedActionId?: string;
       message?: string;
       interrupt?: boolean;
+      /** Daemon only: text the agent reads when a dismissal must explain itself (FU-373). Not on the wire. */
+      agentNotice?: string;
     };
 
 export interface AgentRunResult {

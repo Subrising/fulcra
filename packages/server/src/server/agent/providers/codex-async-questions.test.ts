@@ -388,6 +388,42 @@ test("keeps a failed answer pending for retry", async () => {
   }
 });
 
+// FU-373 review: a steer refused because the turn changed left the question open, and it blocked every turn again.
+test("an answer whose turn changed goes out as a follow-up and the question closes", async () => {
+  const { session, ask } = await setup();
+  try {
+    await ask();
+    const [permission] = session.getPendingPermissions();
+    vi.spyOn(session, "steerActiveTurn").mockResolvedValue({ status: "unavailable" });
+
+    const result = await session.respondToPermission(permission.id, answer);
+
+    expect(result).toMatchObject({ followUpPrompt: expect.stringContaining("Green") });
+    expect(session.getPendingPermissions()).toEqual([]);
+  } finally {
+    await session.close();
+  }
+});
+
+test("a worker dismissal closes the question even when its steer fails", async () => {
+  const { session, ask } = await setup(undefined, true);
+  try {
+    await ask();
+    const [permission] = session.getPendingPermissions();
+
+    const result = await session.respondToPermission(permission.id, {
+      behavior: "deny",
+      message: "Dismissed: no person watches a worker chat",
+      agentNotice: "No person watches this chat.",
+    });
+
+    expect(result).toEqual({ followUpPrompt: "No person watches this chat." });
+    expect(session.getPendingPermissions()).toEqual([]);
+  } finally {
+    await session.close();
+  }
+});
+
 test("Stop dismisses async questions before cancellation and keeps them dismissed after resume", async () => {
   const first = await setup();
   let metadata: Record<string, unknown> | undefined;

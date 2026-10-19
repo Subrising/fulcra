@@ -158,6 +158,8 @@ export class CodexAsyncQuestions {
         record.item.questions
           .map((question, index) => `${question.title}\n${values[index]}`)
           .join("\n\n");
+    } else if (response.agentNotice) {
+      prompt = response.agentNotice;
     }
     return {
       prompt,

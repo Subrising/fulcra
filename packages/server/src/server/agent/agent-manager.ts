@@ -258,6 +258,7 @@ import { IdleSleep } from "./agent-idle-sleep.js";
 const RELOAD_SESSION_CLOSE_TIMEOUT_MS = 3_000;
 const INTERRUPT_SESSION_TIMEOUT_MS = 2_000;
 const IMPORTABLE_SESSION_LIST_TIMEOUT_MS = 90_000;
+const FAILED_MCP_CLOSE_ERROR = "MCP refresh failed; explicit close recovery required";
 const STORED_AGENT_CAPABILITIES: AgentCapabilityFlags = {
   supportsStreaming: false,
   supportsSessionPersistence: true,
@@ -3546,12 +3547,12 @@ export class AgentManager {
     return createHmac("sha256", this.mcpRevisionKey).update(JSON.stringify(value)).digest("hex");
   }
 
-  private supportsQuietMcpRefresh(agent: ActiveManagedAgent): boolean {
+  private supportsQuietMcpRefresh(agent: ActiveManagedAgent, closeRecovery = false): boolean {
     return Boolean(
       agent.persistence?.sessionId &&
       agent.persistence.provider === agent.provider &&
       ["claude", "codex"].includes(agent.provider) &&
-      !this.failedMcpRefreshCloses.has(agent.session) &&
+      (closeRecovery || !this.failedMcpRefreshCloses.has(agent.session)) &&
       agent.session.capabilities.supportsMcpServers &&
       agent.session.capabilities.supportsSessionPersistence,
     );
@@ -3621,6 +3622,34 @@ export class AgentManager {
       lifecycle: live.lifecycle,
       supported: this.supportsQuietMcpRefresh(live),
       mcpServerNames: Object.keys(live.config.mcpServers ?? {}).sort(),
+    };
+  }
+
+  /** The resumed runtime keeps the old lastError; after a close recovery it no longer applies. */
+  private async clearRecoveredCloseError(agentId: string): Promise<void> {
+    const recovered = this.agents.get(agentId);
+    if (!recovered || recovered.lastError !== FAILED_MCP_CLOSE_ERROR) return;
+    recovered.lastError = undefined;
+    await this.persistSnapshot(recovered);
+    this.emitState(recovered);
+  }
+
+  /** FU-230: a fenced reconnect on a retained failed-close runtime; `moved` is true once that exact runtime changed. */
+  private captureCloseRecovery(
+    reconnect: boolean,
+    existing: ActiveManagedAgent,
+  ): { moved(): boolean } | null {
+    const retainedSession = existing.session;
+    if (
+      !reconnect ||
+      existing.lifecycle !== "error" ||
+      !this.failedMcpRefreshCloses.has(retainedSession) ||
+      !this.supportsQuietMcpRefresh(existing, true)
+    )
+      return null;
+    return {
+      moved: () =>
+        this.agents.get(existing.id) !== existing || existing.session !== retainedSession,
     };
   }
 
@@ -3733,21 +3762,26 @@ export class AgentManager {
         // A history runtime can be resident for an archived record.
         if (await this.isAgentArchived(agentId)) return refused("not_resident");
         if (!existing?.session) return this.reconnectDormantAgent(request, state, quietGuard);
-        if (!state?.supported) return refused("unsupported");
+        // FU-230: native close recovery. A failed close retains its writer in "error" and refuses every operation. Only
+        // a fenced reconnect may close that exact runtime again and resume the same session with its history, so the
+        // controller can finish the original account-switch receipt and keep the chat.
+        const closeRecovery = this.captureCloseRecovery(request.reconnect === true, existing);
+        if (!state?.supported && !closeRecovery) return refused("unsupported");
         const stale = () =>
           !state ||
           state.provider !== expected.provider ||
           state.sessionId !== expected.sessionId ||
-          state.configRevision !== expected.configRevision;
+          state.configRevision !== expected.configRevision ||
+          closeRecovery?.moved() === true;
         if (stale()) return refused("stale");
         // Update-7 (and H7's provider recovery): a RECONNECT may restart a session whose provider turn failed (lifecycle
         // "error": a usage limit, a lost login), which is exactly what it is for -- the runtime is replaced and the
-        // same session resumed with its history. Never one whose previous runtime could not be closed (explicit close
-        // recovery), and nothing else changes: every other busy condition still refuses.
+        // same session resumed with its history. A runtime that could not be closed takes the close recovery above, and
+        // nothing else changes: every other busy condition still refuses.
         const restartable = () =>
           request.reconnect === true &&
           existing.lifecycle === "error" &&
-          !this.failedMcpRefreshCloses.has(existing.session);
+          (closeRecovery !== null || !this.failedMcpRefreshCloses.has(existing.session));
         const busy = () =>
           (existing.lifecycle !== "idle" && !restartable()) ||
           this.hasInFlightRun(agentId) ||
@@ -3789,6 +3823,7 @@ export class AgentManager {
               closeStarted = true;
             };
           });
+          if (closeRecovery) await this.clearRecoveredCloseError(agentId);
           return {
             outcome: "refreshed",
             reason: null,
@@ -3982,7 +4017,7 @@ export class AgentManager {
       session,
       lifecycle: "error",
       activeForegroundTurnId: null,
-      lastError: "MCP refresh failed; explicit close recovery required",
+      lastError: FAILED_MCP_CLOSE_ERROR,
     };
     this.failedMcpRefreshCloses.add(session);
     this.agents.set(existing.id, retained);

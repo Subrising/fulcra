@@ -49,6 +49,12 @@ export declare function formatPermissionNotice(input: {
   request: PermissionRequest;
   cwd: string | null;
 }): string;
+export declare function formatWorkerQuestionNotice(input: {
+  worker: ReportAgent;
+  request: PermissionRequest;
+  cwd: string | null;
+}): string;
+export declare function formatWorkerQuestionRefusal(input: { copied: boolean }): string;
 export declare function formatCombinedNotice(items: readonly PendingFinish[]): string;
 export declare function titleOf(agent: ReportAgent): string;
 export declare function formatReportUpNotice(input: {

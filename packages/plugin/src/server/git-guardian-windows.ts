@@ -27,7 +27,7 @@ public class FulcraGitGuardian {
  static Exception Failure(string action){return new Exception(action+" failed: "+Marshal.GetLastWin32Error());}
  public static int Main(string[] args) {
   IntPtr job=IntPtr.Zero; ProcessInfo info=new ProcessInfo();
-  uint deadline; if(!UInt32.TryParse(Environment.GetEnvironmentVariable("FULCRA_GIT_TIMEOUT_MS"),out deadline)||deadline<1||deadline>120000)deadline=30000;
+  uint deadline; if(!UInt32.TryParse(Environment.GetEnvironmentVariable("FULCRA_GIT_TIMEOUT_MS"),out deadline)||deadline<1||deadline>1800000)deadline=30000;
   var clock=Stopwatch.StartNew();
   try {
    job=CreateJobObject(IntPtr.Zero,null);if(job==IntPtr.Zero)throw Failure("CreateJobObject");

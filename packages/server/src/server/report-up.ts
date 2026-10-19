@@ -23,7 +23,6 @@ export type {
 } from "../../../../plugins/fulcra-agent-policy/server/report-notices.mjs";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { isArchiveLead } from "./agent/archive-policy.js";
 import path from "node:path";
 import { writePrivateFileAtomicSync } from "./private-files.js";
 import type { Logger } from "pino";
@@ -58,6 +57,8 @@ import {
 import { CodexAppServerRpcError } from "./agent/providers/codex/app-server-transport.js";
 import type { DaemonConfigStore } from "./daemon-config-store.js";
 import { heldSendsFor } from "./held-sends.js";
+import { isArchiveLead } from "./agent/archive-policy.js";
+import { respondToAgentPermission } from "./agent/permission-response.js";
 import {
   defaultLedgerDir,
   readOpenLedgerRows,
@@ -90,6 +91,8 @@ const {
   permissionCommandOf,
   formatNudge,
   formatPermissionNotice,
+  formatWorkerQuestionNotice,
+  formatWorkerQuestionRefusal,
   formatCombinedNotice,
   titleOf,
   formatReportUpNotice,
@@ -194,6 +197,22 @@ interface PersistedState {
   nudgeDeliveredAt?: Record<string, number>;
 }
 
+const ASYNC_QUESTION_TOOL = "request_user_input_async";
+
+/**
+ * A worker by its labels: it reports to a chat, holds no seat or lead role, and does not report to the main assistant
+ * (project leads do, with fulcra.role=implementation). The caller also excludes chats that have workers.
+ */
+function looksLikeWorker(worker: LineAgent): boolean {
+  const line = reportsTo(worker);
+  return (
+    Boolean(line) &&
+    line !== REPORTS_TO_OWNER &&
+    !line!.startsWith(`${ROLE_REF_PREFIX}${MAIN_ASSISTANT_ROLE}`) &&
+    !isArchiveLead({ labels: worker.labels ?? {} })
+  );
+}
+
 /** A chat's lead chat on this computer (fulcra.reports-to, else its parent), or the reason there is none. */
 export async function leadChatOf(
   store: LineStore,
@@ -275,7 +294,7 @@ export class ReportUpService {
       onPermission: (id, request) => {
         // Bypass and hook answers can resolve a request before a person can act on it.
         this.schedule(() => {
-          void this.notifyPermission(id, request).catch((err: unknown) =>
+          void this.onPermissionRequest(id, request).catch((err: unknown) =>
             this.deps.logger.warn({ err, agentId: id }, "Permission notice failed"),
           );
         }, PERMISSION_NOTICE_GRACE_MS);
@@ -1354,6 +1373,12 @@ export class ReportUpService {
     }
   }
 
+  private async onPermissionRequest(workerId: string, request: PermissionRequest): Promise<void> {
+    const current = () => this.permissionCurrent(workerId, request);
+    if (!current() || (await this.redirectWorkerQuestion(workerId, request, current))) return;
+    await this.notifyPermission(workerId, request);
+  }
+
   /** Tells the lead once that a chat is waiting for permission. Nothing is allowed or denied here. */
   private async notifyPermission(workerId: string, request: PermissionRequest): Promise<void> {
     const current = () => this.permissionCurrent(workerId, request);
@@ -1394,6 +1419,61 @@ export class ReportUpService {
         requestId: request.id,
       },
     );
+  }
+
+  /**
+   * FU-373: a worker's request_user_input_async stays open until a person answers, and an open question refuses every
+   * new turn. No person watches a worker, so the lead gets the question text and the worker gets a dismissal that
+   * tells it to continue or report DECISION/BLOCKED.
+   */
+  private async redirectWorkerQuestion(
+    workerId: string,
+    request: PermissionRequest,
+    current: () => boolean,
+  ): Promise<boolean> {
+    if (request.name !== ASYNC_QUESTION_TOOL) return false;
+    const live = this.deps.agentManager.getAgent(workerId);
+    const worker = await this.store.get(workerId);
+    if (!worker || worker.archivedAt || live?.internal || !looksLikeWorker(worker)) return false;
+    if (await this.hasWorkers(workerId)) return false;
+    if (!current()) return true;
+    let copied = false;
+    try {
+      copied = await this.copyWorkerQuestion(worker, request, live?.cwd ?? null);
+    } catch (err) {
+      this.deps.logger.warn({ err, agentId: workerId }, "Worker question notice failed");
+    }
+    if (current())
+      await respondToAgentPermission({
+        agentManager: this.deps.agentManager,
+        agentId: workerId,
+        requestId: request.id,
+        response: {
+          behavior: "deny",
+          message: "Dismissed: no person watches a worker chat",
+          agentNotice: formatWorkerQuestionRefusal({ copied }),
+        },
+        logger: this.deps.logger,
+      });
+    return true;
+  }
+
+  /** True only when the question went to the lead's remote host or into the lead's notice queue. */
+  private async copyWorkerQuestion(
+    worker: LineAgent,
+    request: PermissionRequest,
+    cwd: string | null,
+  ): Promise<boolean> {
+    const prompt = formatSystemNotificationPrompt(
+      formatWorkerQuestionNotice({ worker, request, cwd }),
+    );
+    if (await this.deps.remoteNotice?.(worker.id, prompt, "permission")) return true;
+    const lead = await this.leadOf(worker);
+    if ("skip" in lead) return false;
+    const leadAgent = await this.store.get(lead.id);
+    if (!leadAgent || leadAgent.archivedAt) return false;
+    if (!(await this.reportingLineAllows(worker.id, lead.id))) return false;
+    return this.toLead(worker.id, lead.id, prompt, "permission");
   }
 
   private now(): number {
@@ -1466,8 +1546,8 @@ export class ReportUpService {
     kind: NoticeKind = "report-up",
     current: () => boolean = () => true,
     permission?: HeldReport["permission"],
-  ): Promise<void> {
-    if (!this.noticeEnabled(kind) || !current()) return;
+  ): Promise<boolean> {
+    if (!this.noticeEnabled(kind) || !current()) return false;
     const leadLimit = this.limitOf(leadId);
     if (leadLimit) {
       const held = this.held.get(leadId) ?? [];
@@ -1481,11 +1561,11 @@ export class ReportUpService {
       );
       const delay = Math.max(0, leadLimit.until - this.now()) + 1000;
       this.schedule(() => this.releaseHeld(leadId), delay);
-      return;
+      return true;
     }
     if (this.deps.deliver) {
       await this.deps.deliver(leadId, prompt);
-      return;
+      return true;
     }
     // Held until the lead's turn ends, one queue per lead, in order (held-sends.ts).
     heldSendsFor(this.deps.agentManager, this.deps.logger).hold(leadId, async () => {
@@ -1493,6 +1573,7 @@ export class ReportUpService {
       await this.send(leadId, prompt, kind, current);
       this.deps.logger.info({ agentId: workerId, lead: leadId, kind }, "Report-up delivered");
     });
+    return true;
   }
 
   /** The held reports for a lead go out as one notice, once the lead is no longer at a limit. */

@@ -3194,7 +3194,8 @@ async function quietMcpFixture(
       config?: Partial<AgentSessionConfig>,
       launchContext?: AgentLaunchContext,
     ) {
-      expect(this.sessions[0].closeCount).toBe(1);
+      // The old writer was closed before any resume (a close recovery closes it a second time).
+      expect(this.sessions[0].closeCount).toBeGreaterThan(0);
       this.resumeOverrides.push(config);
       if (this.failResume) throw new Error("secret resume diagnostic");
       const session = await this.createSession(
@@ -3697,6 +3698,72 @@ test("quiet MCP refresh retains ownership on close failure and never opens a sec
       "explicit close recovery",
     );
     expect(f.manager.getAgent(f.created.id)?.config).toEqual(f.created.config);
+  } finally {
+    f.client.sessions[0].failClose = false;
+    await f.cleanup();
+  }
+});
+
+// FU-230: a failed close left the chat in "explicit close recovery" with no way out. The controller's fenced
+// reconnect (the account-switch reconcile) was refused, so the switch receipt stayed uncertain and the chat stuck.
+test("a fenced reconnect finishes close recovery and resumes the same session with its history", async () => {
+  const f = await quietMcpFixture();
+  try {
+    const before = await f.timeline.fetchCommitted(f.created.id);
+    f.client.sessions[0].failClose = true;
+    expect(await f.manager.refreshAgentMcp(f.input)).toMatchObject({ outcome: "failed" });
+    const retained = await f.manager.getAgentMcpRefreshState(f.created.id);
+    const reconnect = {
+      agentId: f.created.id,
+      expected: {
+        provider: retained!.provider,
+        sessionId: retained!.sessionId!,
+        configRevision: retained!.configRevision,
+      },
+      changes: {},
+      reconnect: true,
+    };
+
+    // The fences hold: another revision is refused before the retained writer is touched again.
+    expect(
+      await f.manager.refreshAgentMcp({
+        ...reconnect,
+        expected: { ...reconnect.expected, configRevision: "0".repeat(64) },
+      }),
+    ).toMatchObject({ outcome: "refused", reason: "stale" });
+    expect(
+      await f.manager.refreshAgentMcp({
+        ...reconnect,
+        expected: { ...reconnect.expected, sessionId: "another-native-session" },
+      }),
+    ).toMatchObject({ outcome: "refused", reason: "stale" });
+    expect(f.client.sessions[0].closeCount).toBe(1);
+    // A still-failing close keeps the retained writer and the error state.
+    expect(await f.manager.refreshAgentMcp(reconnect)).toMatchObject({
+      outcome: "failed",
+      reason: "close_failed",
+    });
+    expect(f.manager.getAgent(f.created.id)?.session).toBe(f.client.sessions[0]);
+    expect(f.client.resumeOverrides).toEqual([]);
+
+    f.client.sessions[0].failClose = false;
+    const again = await f.manager.getAgentMcpRefreshState(f.created.id);
+    expect(
+      await f.manager.refreshAgentMcp({
+        ...reconnect,
+        expected: { ...reconnect.expected, configRevision: again!.configRevision },
+      }),
+    ).toMatchObject({
+      outcome: "refreshed",
+      state: { sessionId: f.created.persistence!.sessionId, supported: true },
+    });
+    expect(f.manager.getAgent(f.created.id)?.session).toBe(f.client.sessions[1]);
+    expect(f.manager.getAgent(f.created.id)?.lastError).toBeUndefined();
+    expect(f.manager.getAgent(f.created.id)?.config.mcpServers).toEqual(
+      f.created.config.mcpServers,
+    );
+    expect(await f.timeline.fetchCommitted(f.created.id)).toEqual(before);
+    expect(() => f.manager.streamAgent(f.created.id, "after recovery")).not.toThrow();
   } finally {
     f.client.sessions[0].failClose = false;
     await f.cleanup();

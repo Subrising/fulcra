@@ -3,6 +3,7 @@ import {
   createWorktree as createWorktreePrimitive,
   deriveWorktreeProjectHash,
   deletePaseoWorktree,
+  finishInterruptedWorktreeAdd,
   isPaseoOwnedWorktreeCwd,
   mapWorkspaceCwdToWorktree,
   slugify,
@@ -15,6 +16,8 @@ import {
   mkdirSync,
   rmSync,
   existsSync,
+  chmodSync,
+  readFileSync,
   realpathSync,
   symlinkSync,
   writeFileSync,
@@ -23,6 +26,7 @@ import { join } from "path";
 import { createServer, type AddressInfo, type Socket } from "net";
 import { tmpdir } from "os";
 import { createRealpathAwarePathMatcher } from "./path";
+import { GitCommandTimeoutError, runGitCommand } from "./run-git-command";
 
 interface LegacyCreateWorktreeTestOptions {
   branchName: string;
@@ -120,6 +124,121 @@ describe("paseo worktree manager", () => {
       allowed: true,
       worktreePath: created.worktreePath,
     });
+  });
+
+  // FU-372: a slow disk made `git worktree add` outlive its limit. The kill left a locked worktree, an index.lock
+  // and a partial file set, and no agent was created.
+  it("finishes a worktree checkout that a timeout killed part-way", async () => {
+    writeFileSync(join(repoDir, ".gitattributes"), "*.slow filter=slow\n");
+    writeFileSync(join(repoDir, "a.txt"), "first\n");
+    writeFileSync(join(repoDir, "b.slow"), "second\n");
+    execFileSync("git", ["add", "."], { cwd: repoDir });
+    execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "slow file"], {
+      cwd: repoDir,
+    });
+    execFileSync("git", ["config", "filter.slow.clean", "cat"], { cwd: repoDir });
+    execFileSync("git", ["config", "filter.slow.smudge", "sleep 30; cat"], { cwd: repoDir });
+    const worktreePath = join(tempDir, "interrupted");
+
+    const timedOut = await runGitCommand(
+      ["worktree", "add", "-b", "interrupted-branch", worktreePath, "main"],
+      { cwd: repoDir, timeout: 1500 },
+    ).catch((error: unknown) => error);
+    expect(timedOut).toBeInstanceOf(GitCommandTimeoutError);
+    await (timedOut as GitCommandTimeoutError).stopped;
+    const adminDir = join(repoDir, ".git", "worktrees", "interrupted");
+    expect(existsSync(join(adminDir, "locked"))).toBe(true);
+    expect(existsSync(join(worktreePath, "b.slow"))).toBe(false);
+
+    execFileSync("git", ["config", "filter.slow.smudge", "cat"], { cwd: repoDir });
+    await finishInterruptedWorktreeAdd({
+      cwd: repoDir,
+      worktreePath,
+      paseoHome,
+      cause: timedOut,
+    });
+
+    expect(existsSync(join(adminDir, "locked"))).toBe(false);
+    expect(existsSync(join(adminDir, "index.lock"))).toBe(false);
+    expect(execFileSync("git", ["status", "--porcelain"], { cwd: worktreePath }).toString()).toBe(
+      "",
+    );
+    expect(
+      execFileSync("git", ["branch", "--show-current"], { cwd: worktreePath }).toString().trim(),
+    ).toBe("interrupted-branch");
+    expect(existsSync(join(worktreePath, "b.slow"))).toBe(true);
+  }, 30_000);
+
+  // FU-372 review: a second create with the same slug fails at once ("branch already exists"). It must not take over
+  // the first create's checkout: remove its locks, reset its files, and report success.
+  it("leaves an existing worktree untouched after a failure that is not a timeout", async () => {
+    const worktreePath = join(tempDir, "busy");
+    execFileSync("git", ["worktree", "add", "-b", "busy-branch", worktreePath, "main"], {
+      cwd: repoDir,
+    });
+    const adminDir = join(repoDir, ".git", "worktrees", "busy");
+    writeFileSync(join(adminDir, "locked"), "initializing\n");
+    writeFileSync(join(adminDir, "index.lock"), "");
+    writeFileSync(join(worktreePath, "file.txt"), "work in progress\n");
+    const cause = new Error("fatal: a branch named 'busy-branch' already exists");
+
+    await expect(
+      finishInterruptedWorktreeAdd({ cwd: repoDir, worktreePath, paseoHome, cause }),
+    ).rejects.toBe(cause);
+
+    expect(existsSync(join(adminDir, "locked"))).toBe(true);
+    expect(existsSync(join(adminDir, "index.lock"))).toBe(true);
+    expect(readFileSync(join(worktreePath, "file.txt"), "utf8")).toBe("work in progress\n");
+  });
+
+  it("leaves the locks of a timed-out add whose tree could not be killed", async () => {
+    const worktreePath = join(tempDir, "unkilled");
+    execFileSync("git", ["worktree", "add", "-b", "unkilled-branch", worktreePath, "main"], {
+      cwd: repoDir,
+    });
+    const adminDir = join(repoDir, ".git", "worktrees", "unkilled");
+    writeFileSync(join(adminDir, "locked"), "initializing\n");
+    writeFileSync(join(adminDir, "index.lock"), "");
+    const stopped = Promise.reject(new Error("kill failed"));
+    stopped.catch(() => undefined);
+    const cause = new GitCommandTimeoutError("Git command timed out", stopped);
+
+    await expect(
+      finishInterruptedWorktreeAdd({ cwd: repoDir, worktreePath, paseoHome, cause }),
+    ).rejects.toBe(cause);
+
+    expect(existsSync(join(adminDir, "index.lock"))).toBe(true);
+    expect(existsSync(join(adminDir, "locked"))).toBe(true);
+  });
+
+  // Review finding 6: a failed post-checkout hook fails the create, as it did before FU-372.
+  it("fails the create when the post-checkout hook fails", async () => {
+    const hook = join(repoDir, ".git", "hooks", "post-checkout");
+    writeFileSync(hook, "#!/bin/sh\nexit 1\n");
+    chmodSync(hook, 0o755);
+
+    await expect(
+      createLegacyWorktreeForTest({
+        branchName: "hook-fails",
+        cwd: repoDir,
+        baseBranch: "main",
+        worktreeSlug: "hook-fails",
+        runSetup: false,
+        paseoHome,
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("keeps the first error when a failed worktree add left nothing to finish", async () => {
+    const cause = new GitCommandTimeoutError("Git command timed out", Promise.resolve());
+    await expect(
+      finishInterruptedWorktreeAdd({
+        cwd: repoDir,
+        worktreePath: join(tempDir, "never-created"),
+        paseoHome,
+        cause,
+      }),
+    ).rejects.toBe(cause);
   });
 
   it("rejects paths that are not under the paseo worktrees root", async () => {
