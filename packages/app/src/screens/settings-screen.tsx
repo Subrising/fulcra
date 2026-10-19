@@ -1236,6 +1236,12 @@ function SettingsSidebar({
     );
   };
 
+  const everydayRows = (
+    <>
+      {accountsRow}
+      {itemsFor(EVERYDAY_SECTIONS).map((item) => renderSection(item, true))}
+    </>
+  );
   const advancedChevron = advancedOpen ? (
     <ChevronDown size={theme.iconSize.md} color={theme.colors.foregroundMuted} />
   ) : (
@@ -1245,12 +1251,13 @@ function SettingsSidebar({
   // Advanced toggle reads as a row (full-contrast title, chevron on the trailing edge).
   const sidebarBody = (
     <>
-      <View style={isCompact ? sidebarStyles.compactCard : sidebarStyles.list}>
-        <View style={isCompact ? sidebarStyles.compactCardBody : null}>
-          {accountsRow}
-          {itemsFor(EVERYDAY_SECTIONS).map((item) => renderSection(item, true))}
+      {isCompact ? (
+        <View style={sidebarStyles.compactCard}>
+          <View style={sidebarStyles.compactCardBody}>{everydayRows}</View>
         </View>
-      </View>
+      ) : (
+        <View style={sidebarStyles.list}>{everydayRows}</View>
+      )}
       {isCompact ? null : <SidebarSeparator />}
       <View style={isCompact ? sidebarStyles.compactAdvanced : sidebarStyles.list}>
         <Pressable
