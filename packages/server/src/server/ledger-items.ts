@@ -33,7 +33,7 @@ export function parseOpenRows(project: string, text: string): LedgerRow[] {
     if (cells.length < 7) continue;
     const [id, , kind, owner, status] = cells;
     if (!id || !/^[A-Za-z][A-Za-z0-9]*-\d+$/.test(id)) continue;
-    if (/^(DONE|MOVED)\b/.test(status ?? "")) continue;
+    if (/^(DONE|MOVED)\b/i.test(status ?? "")) continue;
     rows.push({ project, id, owner: owner ?? "", status: status ?? "", kind: kind ?? "" });
   }
   return rows;
@@ -103,6 +103,32 @@ export function rowsOwnedBy(
       )
     );
   });
+}
+
+/** Transfer must not remove another session's ownership or guess between identical titles. */
+export function isSoleLedgerOwner(
+  row: LedgerRow,
+  chat: { id: string; title: string },
+  records: readonly { id: string; title?: string | null; archivedAt?: string | null }[],
+): boolean {
+  const owner = row.owner.trim().toLowerCase();
+  const id = chat.id.toLowerCase();
+  if (owner === id) return true;
+  const ids =
+    owner.match(/(?<=\()[a-f0-9]{8}(?=\))|\b[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\b/g) ?? [];
+  if (ids.length)
+    return (
+      ids.length === 1 && [id, id.slice(0, 8)].includes(ids[0]!) && owner.includes(`(${ids[0]})`)
+    );
+  const title = chat.title.trim().toLowerCase();
+  return (
+    !!title &&
+    owner === title &&
+    !records.some(
+      (other) =>
+        other.id !== chat.id && !other.archivedAt && other.title?.trim().toLowerCase() === title,
+    )
+  );
 }
 
 interface NudgeRowSelection {

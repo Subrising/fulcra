@@ -992,3 +992,41 @@ test("FU-370: real MCP archive keeps open rows until the worker's lead transfers
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test.each(["websocket", "MCP"])(
+  "FU-370 review: %s force without agent identity keeps the row guard",
+  async (route) => {
+    const { mkdir, readFile } = await import("node:fs/promises");
+    const root = await mkdtemp(path.join(tmpdir(), "archive-owner-force-http-"));
+    vi.stubEnv("FULCRA_LEDGER_DIR", root);
+    const f = await fixture();
+    try {
+      await mkdir(path.join(root, "fixture"));
+      const file = path.join(root, "fixture", "OPEN-ITEMS.md");
+      const original = `| FX-1 | Work | FIX | ${f.worker.id} | OPEN | proof | source |\n`;
+      await writeFile(file, original);
+      const force = async () => {
+        if (route === "websocket")
+          return f.client.archiveAgent(f.worker.id, { transferLedgerOwnership: true });
+        const result = await mcpCall(
+          f.daemon.port,
+          "",
+          f.manager.getMcpAuthToken()!,
+          "archive_agent",
+          { agentId: f.worker.id, force: true },
+        );
+        if (!result.ok) throw new Error(result.text);
+        return result;
+      };
+      await expect(force()).rejects.toThrow("ledger close fixture FX-1");
+      expect((await f.storage.get(f.worker.id))?.archivedAt).toBeFalsy();
+      expect(await readFile(file, "utf8")).toBe(original);
+      await writeFile(file, "");
+      await expect(force()).resolves.toBeDefined();
+      expect((await f.storage.get(f.worker.id))?.archivedAt).toEqual(expect.any(String));
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

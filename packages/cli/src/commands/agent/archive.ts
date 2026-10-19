@@ -32,7 +32,7 @@ export function addArchiveOptions(cmd: Command): Command {
     .argument("<id>", "Agent ID, prefix, or name")
     .option(
       "--force",
-      "Transfer open ledger items to the calling lead, then archive (interrupts an active run)",
+      "Interrupt an active run and archive; a verified lead also transfers solely owned ledger items",
     );
 }
 

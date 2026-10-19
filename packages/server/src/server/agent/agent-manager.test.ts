@@ -13,6 +13,9 @@ vi.mock("./host-public-baseline.js", async (importOriginal) => {
   return { ...actual, readHostPublicCodexBaseline: async () => null };
 });
 import { Session } from "../session.js";
+import { createPaseoToolCatalog } from "./tools/paseo-tools.js";
+import { ProviderSnapshotManager } from "./provider-snapshot-manager.js";
+import * as archiveLedger from "../ledger-routing/ledger.js";
 import { SessionAuthorization, OWNER_PERMISSIONS } from "../authorization/index.js";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
@@ -1805,6 +1808,7 @@ interface ControlledInterruptFixture {
   agentId: string;
   manager: AgentManager;
   session: ControlledInterruptSession;
+  storage: AgentStorage;
   startForegroundRun(): Promise<void>;
   cleanup(): Promise<void>;
 }
@@ -1814,6 +1818,7 @@ async function createControlledInterruptFixture(options: {
   agentId: string;
   turnId: string;
   interrupt: (session: ControlledInterruptSession) => Promise<void>;
+  archiveLedgerDirectory?: string;
 }): Promise<ControlledInterruptFixture> {
   const workdir = mkdtempSync(join(tmpdir(), `agent-manager-${options.name}-`));
   const session = new ControlledInterruptSession(
@@ -1826,10 +1831,12 @@ async function createControlledInterruptFixture(options: {
       return session;
     }
   })();
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
   const manager = new AgentManager({
     clients: { codex: client },
-    registry: new AgentStorage(join(workdir, "agents"), logger),
+    registry: storage,
     logger,
+    archiveLedgerDirectory: options.archiveLedgerDirectory,
     rescueTimeouts: { interruptSessionMs: 10 },
     idFactory: () => options.agentId,
   });
@@ -1841,6 +1848,7 @@ async function createControlledInterruptFixture(options: {
     agentId: agent.id,
     manager,
     session,
+    storage,
     async startForegroundRun() {
       const run = manager.streamAgent(agent.id, "exercise cancellation");
       void (async () => {
@@ -16110,7 +16118,7 @@ test.each([
     if (mode === "normal" || mode === "transfer") {
       const offer = await manager.archiveLedgerTransferOffer(worker.id);
       expect(offer).toContain("FX-1");
-      expect(offer).toContain(`fulcra archive ${worker.id} --force`);
+      expect(offer).toContain(`Transfer and archive: fulcra archive ${worker.id} --force.`);
       expect(readFileSync(file, "utf8")).toBe(original);
     }
     if (mode === "normal") await expect(run()).rejects.toThrow("ledger close fixture FX-1");
@@ -16148,3 +16156,253 @@ test.each([
     rmSync(workdir, { recursive: true, force: true });
   }
 });
+
+async function archiveReviewFixture(mode: string) {
+  const workdir = mkdtempSync(join(tmpdir(), "archive-review-"));
+  const ledger = join(workdir, "ledgers");
+  mkdirSync(join(ledger, "fixture"), { recursive: true });
+  const file = join(ledger, "fixture", "OPEN-ITEMS.md");
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const client = new NativeArchiveRecordingClient();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: storage,
+    logger,
+    archiveLedgerDirectory: ledger,
+  });
+  registerArchiveReportCount(manager, () => 0);
+  let transferSpy: { mockRestore(): void } | undefined;
+  const cleanup = async () => {
+    transferSpy?.mockRestore();
+    for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
+    await manager.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  };
+  try {
+    const lead = await manager.createAgent(
+      { provider: "codex", cwd: workdir, title: "Fixture lead" },
+      undefined,
+      { labels: { "fulcra.role": "orchestration" } },
+    );
+    const projectLabels = ["worker-project-labels", "lead-project-labels"].includes(mode);
+    const title =
+      mode === "unique-title-with-date" ? "Finished worker 20261019" : "Finished worker";
+    const worker = await manager.createAgent(
+      { provider: "codex", cwd: workdir, title },
+      undefined,
+      {
+        labels: {
+          "fulcra.reports-to": lead.id,
+          ...(mode === "lead-project-labels" ? { "fulcra.role": "orchestration" } : {}),
+          ...(projectLabels ? { project: "fixture", "fulcra.project": "fixture" } : {}),
+        },
+      },
+    );
+    let owner = projectLabels ? "fixture" : title;
+    if (
+      [
+        "co-owned",
+        "co-owned-full-id",
+        "same-title",
+        "same-title-archived",
+        "same-title-short-id",
+      ].includes(mode)
+    ) {
+      const other = await manager.createAgent(
+        { provider: "codex", cwd: workdir, title: "Finished worker" },
+        undefined,
+        {},
+      );
+      if (mode === "co-owned")
+        owner = `First worker (${worker.id.slice(0, 8)}), Second worker (${other.id.slice(0, 8)}) ...`;
+      if (mode === "co-owned-full-id")
+        owner = `First worker (${worker.id.slice(0, 8)}), Second worker ${other.id}`;
+      if (mode === "same-title-short-id") owner = `Worker (${worker.id.slice(0, 8)})`;
+      if (mode === "same-title-archived")
+        await storage.upsert({
+          ...(await storage.get(other.id))!,
+          archivedAt: new Date().toISOString(),
+        });
+    }
+    if (mode === "sole-short-id") owner = `Worker (${worker.id.slice(0, 8)})`;
+    if (mode === "sole-full-id") owner = worker.id;
+    if (mode === "sole-parenthesized-full-id") owner = `Worker (${worker.id})`;
+    const partial = ["partial-failure", "partial-throw"].includes(mode);
+    const original =
+      `| FX-1 | Work | FIX | ${owner} | ${mode === "lowercase-done" ? "done" : "OPEN"} | retained evidence | retained source |\n` +
+      (partial
+        ? "| FX-2 | Work | FIX | Finished worker | OPEN | proof | source |\n| FX-3 | Work | FIX | Finished worker | OPEN | proof | source |\n"
+        : "");
+    writeFileSync(file, original);
+    if (partial) {
+      const transaction = archiveLedger.ledgerTransaction;
+      transferSpy = vi
+        .spyOn(archiveLedger, "ledgerTransaction")
+        .mockImplementation(async (input) => {
+          if (input.item === "FX-2") {
+            if (mode === "partial-throw") throw new Error("second row failed");
+            return { ok: false, reason: "second row refused" };
+          }
+          return transaction(input);
+        });
+    }
+    const run = () =>
+      archiveSafetyCommand({ agentManager: manager, agentStorage: storage, logger }, worker.id);
+    const force = () =>
+      manager.withAgentCaller(lead.id, () => manager.withArchiveLedgerTransfer(worker.id, run));
+    return {
+      lead,
+      worker,
+      title,
+      manager,
+      storage,
+      client,
+      file,
+      original,
+      run,
+      force,
+      cleanup,
+      transferCalls: () => transferSpy,
+    };
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
+}
+
+test.each(["co-owned", "co-owned-full-id", "same-title", "lead-project-labels"])(
+  "FU-370 review: refuse shared or protected ownership: %s",
+  async (mode) => {
+    const f = await archiveReviewFixture(mode);
+    try {
+      const message =
+        mode === "lead-project-labels"
+          ? "A lead or owner session cannot be force-archived."
+          : `ledger set fixture FX-1 --owner 'Fixture lead (${f.lead.id.slice(0, 8)})'`;
+      expect((await f.manager.getArchiveProtection(f.worker.id)).reasons.join(" ")).toContain(
+        "FX-1",
+      );
+      await expect(f.force()).rejects.toThrow(message);
+      expect((await f.storage.get(f.worker.id))?.archivedAt).toBeFalsy();
+      expect(readFileSync(f.file, "utf8")).toBe(f.original);
+      expect(f.client.archivedHandles).toHaveLength(0);
+    } finally {
+      await f.cleanup();
+    }
+  },
+);
+
+test.each([
+  "same-title-archived",
+  "same-title-short-id",
+  "sole-short-id",
+  "sole-full-id",
+  "sole-parenthesized-full-id",
+  "unique-title-with-date",
+])("FU-370 review: transfer only a sole owner: %s", async (mode) => {
+  const f = await archiveReviewFixture(mode);
+  try {
+    const result = await f.force();
+    expect(result.transferredLedgerItems).toEqual(["fixture/FX-1"]);
+    expect((await f.storage.get(f.worker.id))?.archivedAt).toEqual(expect.any(String));
+    const text = readFileSync(f.file, "utf8");
+    expect(text).toContain(`Fixture lead (${f.lead.id.slice(0, 8)})`);
+    expect(text).toContain(`moved from ${f.title} (${f.worker.id.slice(0, 8)}) at archive`);
+    expect(text).toContain("retained evidence | retained source");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test.each(["worker-project-labels", "lowercase-done"])(
+  "FU-370 review: inherited labels and closed rows do not own a worker: %s",
+  async (mode) => {
+    const f = await archiveReviewFixture(mode);
+    try {
+      expect((await f.manager.getArchiveProtection(f.worker.id)).reasons).toEqual([]);
+      await expect(f.run()).resolves.toBeDefined();
+      expect(readFileSync(f.file, "utf8")).toBe(f.original);
+    } finally {
+      await f.cleanup();
+    }
+  },
+);
+
+test.each(["partial-failure", "partial-throw"])(
+  "FU-370 review: row two of three fails: %s",
+  async (mode) => {
+    const f = await archiveReviewFixture(mode);
+    try {
+      await expect(f.force()).rejects.toThrow("Transferred items: fixture/FX-1");
+      expect(f.transferCalls()).toHaveBeenCalledTimes(2);
+      expect((await f.storage.get(f.worker.id))?.archivedAt).toBeFalsy();
+      const text = readFileSync(f.file, "utf8");
+      expect(text).toContain(`Fixture lead (${f.lead.id.slice(0, 8)})`);
+      expect(text).toContain("| FX-2 | Work | FIX | Finished worker | OPEN |");
+      expect(text).toContain("| FX-3 | Work | FIX | Finished worker | OPEN |");
+      expect(f.client.archivedHandles).toHaveLength(0);
+    } finally {
+      await f.cleanup();
+    }
+  },
+);
+
+test.each(["terminal", "human", "MCP terminal", "MCP human"])(
+  "FU-370 review: force from %s keeps interruption and the row guard",
+  async (caller) => {
+    for (const ownsRow of [false, true]) {
+      const root = mkdtempSync(join(tmpdir(), "archive-force-caller-"));
+      mkdirSync(join(root, "fixture"));
+      const f = await createControlledInterruptFixture({
+        name: "archive-force",
+        agentId: randomUUID(),
+        turnId: "archive-force-turn",
+        archiveLedgerDirectory: root,
+        interrupt: async (session) => {
+          session.pushEvent({ type: "turn_completed", provider: "codex", turnId: session.turnId });
+        },
+      });
+      registerArchiveReportCount(f.manager, () => 0);
+      const file = join(root, "fixture", "OPEN-ITEMS.md");
+      const before = ownsRow
+        ? `| FX-1 | Work | FIX | ${f.agentId} | OPEN | proof | source |\n`
+        : "";
+      writeFileSync(file, before);
+      try {
+        await f.startForegroundRun();
+        expect(f.manager.getAgent(f.agentId)?.lifecycle).toBe("running");
+        const archive = () =>
+          archiveSafetyCommand(
+            { agentManager: f.manager, agentStorage: f.storage, logger },
+            f.agentId,
+          );
+        const execute = () =>
+          caller.startsWith("MCP")
+            ? createPaseoToolCatalog({
+                agentManager: f.manager,
+                agentStorage: f.storage,
+                providerSnapshotManager: Object.create(ProviderSnapshotManager.prototype),
+                logger,
+              }).executeTool("archive_agent", { agentId: f.agentId, force: true })
+            : f.manager.withArchiveLedgerTransfer(f.agentId, archive);
+        const result = caller.endsWith("human")
+          ? f.manager.trustedPlugins.rpc(undefined, execute)
+          : f.manager.withAgentCaller(undefined, execute);
+        if (ownsRow) {
+          await expect(result).rejects.toThrow("ledger close fixture FX-1");
+          expect(f.session.interruptCalled).toBe(false);
+          expect((await f.storage.get(f.agentId))?.archivedAt).toBeFalsy();
+        } else {
+          await expect(result).resolves.toBeDefined();
+          expect(f.session.interruptCalled).toBe(true);
+          expect((await f.storage.get(f.agentId))?.archivedAt).toEqual(expect.any(String));
+        }
+        expect(readFileSync(file, "utf8")).toBe(before);
+      } finally {
+        await f.manager.cancelAgentRun(f.agentId).catch(() => undefined);
+        await f.cleanup();
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  },
+);

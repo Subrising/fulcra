@@ -20,6 +20,7 @@ import {
   defaultLedgerDir,
   readOpenLedgerRows,
   rowsOwnedBy,
+  isSoleLedgerOwner,
   type LedgerRow,
 } from "../ledger-items.js";
 import { ledgerTransaction } from "../ledger-routing/ledger.js";
@@ -4649,7 +4650,11 @@ export class AgentManager {
 
   private async archiveLedgerRows(record: StoredAgentRecord) {
     const rows = await readOpenLedgerRows(this.archiveLedgerDirectory ?? defaultLedgerDir(), true);
-    return rowsOwnedBy(rows, { id: record.id, title: record.title ?? "", labels: record.labels });
+    return rowsOwnedBy(rows, {
+      id: record.id,
+      title: record.title ?? "",
+      labels: isArchiveLead(record) ? record.labels : undefined,
+    });
   }
 
   private ownsProjectLedger(record: StoredAgentRecord, rows: readonly LedgerRow[]): boolean {
@@ -4682,7 +4687,7 @@ export class AgentManager {
     if (!record || record.archivedAt || isArchiveLead(record)) return "";
     const rows = await this.archiveLedgerRows(record);
     if (!rows.length || this.ownsProjectLedger(record, rows)) return "";
-    return `Open ledger items remain: ${rows.map((row) => `${row.project}/${row.id}`).join(", ")}. Your lead can transfer these items to itself and archive this worker: fulcra archive ${agentId} --force. Normal archive stays blocked.`;
+    return `Open ledger items remain: ${rows.map((row) => `${row.project}/${row.id}`).join(", ")}. Transfer and archive: fulcra archive ${agentId} --force. Normal archive stays blocked.`;
   }
 
   private async assertArchiveTransferLead(
@@ -4693,6 +4698,8 @@ export class AgentManager {
     caller?.validate?.();
     const registry = this.requireRegistry();
     const [worker, lead] = await Promise.all([registry.get(agentId), registry.get(leadId)]);
+    if (worker && isArchiveLead(worker))
+      throw new Error("A lead or owner session cannot be force-archived.");
     if (
       caller?.agentId !== leadId ||
       !worker ||
@@ -4700,15 +4707,23 @@ export class AgentManager {
       !lead ||
       lead.archivedAt ||
       !isArchiveLead(lead) ||
-      isArchiveLead(worker) ||
       !reportsToArchiveParent(lead, worker, this.archiveServerId)
     )
-      throw new Error(
-        "Archive transfer requires this worker's current lead. Project leads cannot use forced archive.",
-      );
+      throw new Error("Archive transfer requires this worker's current lead.");
     const rows = await this.archiveLedgerRows(worker);
     if (this.ownsProjectLedger(worker, rows))
       throw new Error("Archive refused: this session owns a whole project's ledger.");
+    const records = await registry.list();
+    const shared = rows.filter(
+      (row) => !isSoleLedgerOwner(row, { id: worker.id, title: worker.title ?? "" }, records),
+    );
+    if (shared.length) {
+      const owner = `${lead.title?.trim() || "Lead"} (${lead.id.slice(0, 8)})`;
+      const ownerArg = `'${owner.replaceAll("'", "'\\''")}'`;
+      throw new Error(
+        `Archive refused: co-owned or ambiguous ledger items cannot transfer automatically. Review all owners before using these commands: ${shared.map((row) => `${row.project}/${row.id} (${row.owner}): ledger set ${row.project} ${row.id} --owner ${ownerArg}`).join("; ")}.`,
+      );
+    }
     return worker;
   }
 
@@ -4716,8 +4731,20 @@ export class AgentManager {
     agentId: string,
     operation: () => Promise<T>,
   ): Promise<{ result: T; transferredLedgerItems: string[] }> {
-    const leadId = this.agentCallers.getStore()?.agentId;
-    if (!leadId) throw new Error("Archive transfer requires the worker's lead.");
+    const caller = this.agentCallers.getStore();
+    caller?.validate?.();
+    const leadId = caller?.agentId;
+    const record = await this.requireRegistry().get(agentId);
+    if (record && isArchiveLead(record))
+      throw new Error("A lead or owner session cannot be force-archived.");
+    // Human force keeps interruption semantics. Only an agent lead can transfer owned rows.
+    if (!leadId || (record && !(await this.archiveLedgerRows(record)).length)) {
+      if (record) {
+        const blockers = await this.archivePendingBlockers(agentId, record, true);
+        if (blockers.length) throw new Error(`Archive refused: ${blockers.join(" ")}`);
+      }
+      return { result: await operation(), transferredLedgerItems: [] };
+    }
     return this.withInput(
       agentId,
       "archive",
@@ -4733,22 +4760,27 @@ export class AgentManager {
           const note = `${new Date().toISOString()} moved from ${worker.title?.trim() || "Worker"} (${worker.id.slice(0, 8)}) at archive`;
           const transferredLedgerItems: string[] = [];
           for (const row of rows) {
-            await this.assertArchiveTransferLead(agentId, leadId);
-            const transfer = await ledgerTransaction({
-              action: "archive-transfer",
-              root,
-              project: row.project,
-              item: row.id,
-              expectedOwner: row.owner,
-              expectedStatus: row.status,
-              owner,
-              note,
-            });
-            if (!transfer.ok)
+            try {
+              await this.assertArchiveTransferLead(agentId, leadId);
+              const transfer = await ledgerTransaction({
+                action: "archive-transfer",
+                root,
+                project: row.project,
+                item: row.id,
+                expectedOwner: row.owner,
+                expectedStatus: row.status,
+                owner,
+                note,
+              });
+              if (!transfer.ok) throw new Error(transfer.reason ?? "ledger refused the transfer");
+              transferredLedgerItems.push(`${row.project}/${row.id}`);
+            } catch (error) {
+              const reason = error instanceof Error ? error.message : String(error);
               throw new Error(
-                `Archive refused: transfer failed for ${row.project}/${row.id}: ${transfer.reason}. Transferred items: ${transferredLedgerItems.join(", ") || "none"}.`,
+                `Archive refused: transfer failed for ${row.project}/${row.id}: ${reason}. Transferred items: ${transferredLedgerItems.join(", ") || "none"}.`,
+                { cause: error },
               );
-            transferredLedgerItems.push(`${row.project}/${row.id}`);
+            }
           }
           this.archiveLedgerTransfers.getStore()!.transferring = false;
           await this.assertArchiveSafe(agentId, []);
