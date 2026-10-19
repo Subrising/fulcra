@@ -1,4 +1,4 @@
-import { selectPassedCI } from "./ci-check.mjs";
+import { assertPRHead, selectPassedCI } from "./ci-check.mjs";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -41,14 +41,8 @@ export async function proveMerge(run, api) {
   if (!match) throw new Error("Missing merge operation identity");
   const [, number, sha] = match;
   const pr = await api(`/pulls/${number}`);
-  if (
-    !pr.merged ||
-    pr.base.ref !== "main" ||
-    pr.head.sha !== sha ||
-    pr.base.repo.full_name !== repository ||
-    pr.head.repo.full_name !== repository ||
-    !shaPattern.test(pr.merge_commit_sha)
-  )
+  assertPRHead(pr, sha);
+  if (!pr.merged || pr.base.ref !== "main" || !shaPattern.test(pr.merge_commit_sha))
     throw new Error("Merged PR differs");
   const merge = await api(`/commits/${pr.merge_commit_sha}`);
   const head = await api(`/commits/${sha}`);

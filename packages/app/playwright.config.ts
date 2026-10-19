@@ -14,6 +14,8 @@ function videoMode(): "off" | "on" | "on-first-retry" | "retain-on-failure" {
 }
 
 export default defineConfig({
+  // Workspace builds are native ESM. Rewriting them delays each worker's first connection.
+  build: { external: ["**/packages/*/dist/**"] },
   testDir: "./e2e/browser",
   globalSetup: "./e2e/support/global-setup.ts",
   timeout: 60_000,

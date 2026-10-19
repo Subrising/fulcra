@@ -49,6 +49,7 @@ function fixture(
   options: {
     enabled?: boolean;
     routing?: ReportUpDeps["routing"];
+    transferOffer?: string;
     deliver?: (leadId: string, prompt: string) => Promise<void>;
     /** The permission, limit and idle-lead notices; default on, as the service does. */
     otherEnabled?: boolean;
@@ -80,6 +81,7 @@ function fixture(
     getPendingPermissions: (id: string) => [...(pending.get(id)?.values() ?? [])],
     getLastAssistantMessage: async (id: string) => byId.get(id)?.lastMessage ?? null,
     nativeReportOwnsFinish: () => false,
+    archiveLedgerTransferOffer: async () => options.transferOffer ?? "",
   } as unknown as AgentManager;
   const storage = {
     get: async (id: string) => byId.get(id) ?? null,
@@ -2707,3 +2709,29 @@ test("ledger-routed worker results include spend without an owned finish notice"
     f.service.stop();
   }
 });
+
+test.each(["DONE", "BLOCKED"])(
+  "FU-370: %s finish offers ledger transfer only for DONE",
+  async (state) => {
+    const f = fixture(
+      [
+        { id: LEAD, title: "Lead", labels: {} },
+        {
+          id: WORKER,
+          title: "Worker",
+          labels: { [REPORTS_TO_LABEL]: LEAD },
+          lastMessage: `${state} checked result`,
+        },
+      ],
+      { transferOffer: "Transfer FX-1 to the lead with --force." },
+    );
+    try {
+      f.turn(WORKER);
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+      expect(f.delivered[0]!.prompt.includes("Transfer FX-1")).toBe(state === "DONE");
+    } finally {
+      f.service.stop();
+    }
+  },
+);

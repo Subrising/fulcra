@@ -584,10 +584,14 @@ describe("agent storage reopen after restart", () => {
 });
 
 describe("revive session reads", () => {
-  function reads(record: Partial<StoredAgentRecord> | null) {
+  function reads(
+    record: Partial<StoredAgentRecord> | null,
+    liveMessageAt: Date | null | false = null,
+  ) {
     const deps = {
       agentManager: {
-        getAgent: () => (record ? { lastUserMessageAt: null } : null),
+        getAgent: () =>
+          record && liveMessageAt !== false ? { lastUserMessageAt: liveMessageAt } : null,
       } as unknown as AgentManager,
       agentStorage: {
         get: async () => (record ? ({ id: RUNNING, ...record } as StoredAgentRecord) : null),
@@ -599,6 +603,22 @@ describe("revive session reads", () => {
     } satisfies ReviveDeps;
     return defaultSessions(deps);
   }
+
+  test("FU-332: an unloaded session uses its saved timestamp until load", async () => {
+    const cutAt = "2026-10-11T09:42:00.000Z";
+    const record = { lastStatus: "idle" as const, lastUserMessageAt: cutAt };
+    expect(await reads(record, false).changedSince(RUNNING, cutAt)).toBeNull();
+    expect(await reads(record, new Date(cutAt)).changedSince(RUNNING, cutAt)).toBeNull();
+    expect(await reads(record, null).changedSince(RUNNING, cutAt)).toBe(
+      "a new message arrived since the restart",
+    );
+    expect(
+      await reads(record, new Date("2026-10-11T09:43:00.000Z")).changedSince(RUNNING, cutAt),
+    ).toBe("a new message arrived since the restart");
+    expect(
+      await reads({ ...record, lastUserMessageAt: null }, false).changedSince(RUNNING, cutAt),
+    ).toBe("a new message arrived since the restart");
+  });
 
   test("a session closed by hand, archived or removed since the restart is changed; an idle one is not", async () => {
     expect(await reads({ lastStatus: "closed" }).changedSince(RUNNING, null)).toBe(

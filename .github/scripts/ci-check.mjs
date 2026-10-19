@@ -1,5 +1,14 @@
 const repository = "Subrising/fulcra";
 
+export function assertPRHead(pr, sha) {
+  if (
+    pr?.head?.sha !== sha ||
+    pr.head.repo?.full_name !== repository ||
+    pr.base?.repo?.full_name !== repository
+  )
+    throw new Error("PR head or repository differs");
+}
+
 // Shared by the trusted merge workflow and its tested-tree proof handler.
 export async function selectPassedCI(checks, sha, api) {
   if (

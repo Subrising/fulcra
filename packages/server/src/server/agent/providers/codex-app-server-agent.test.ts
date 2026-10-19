@@ -2271,6 +2271,34 @@ describe("Codex app-server provider", () => {
     }
   });
 
+  test("FU-313: cancellation returns an action for a non-computer MCP elicitation", async () => {
+    const appServer = createFakeCodexAppServer();
+    const session = new CodexAppServerAgentSession(
+      createConfig({ cwd: "/workspace/project" }),
+      null,
+      createTestLogger(),
+      async () => appServer.child,
+    );
+    await session.connect();
+    try {
+      const requested = waitForNextPermission(session);
+      appServer.requestMcpElicitation({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        serverName: "example",
+        message: "Continue?",
+        requestedSchema: { type: "object", properties: {} },
+      });
+      await requested;
+      const decision = appServer.waitForMcpElicitationDecision();
+      castInternals<{ clearPendingPermissions(): void }>(session).clearPendingPermissions();
+      expect(await decision).toEqual({ action: "cancel", content: null, _meta: null });
+      expect(session.getPendingPermissions()).toEqual([]);
+    } finally {
+      await session.close();
+    }
+  });
+
   test("surfaces an MCP elicitation and returns Codex's required approval action", async () => {
     const appServer = createFakeCodexAppServer();
     const session = new CodexAppServerAgentSession(

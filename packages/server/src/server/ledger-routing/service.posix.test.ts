@@ -567,3 +567,32 @@ test("2,5: abandonment cannot free a running turn's physical slot", async () => 
   await f.routing.changed();
   expect(f.createAgent).toHaveBeenCalledTimes(2);
 });
+
+test("FU-370 archive transfer checks the current ledger owner and status under its lock", async () => {
+  const f = await setup();
+  await f.ledger([row("JOB-1", "OPEN", "Work", "FIX", "Worker")]);
+  const before = await readFile(f.file, "utf8");
+  const transfer = {
+    action: "archive-transfer",
+    root: path.dirname(path.dirname(f.file)),
+    project: path.basename(path.dirname(f.file)),
+    item: "JOB-1",
+    expectedOwner: "Worker",
+    expectedStatus: "OPEN",
+    owner: "Lead (11111111)",
+    note: "2026-10-19 moved from Worker (22222222) at archive",
+  };
+  for (const changed of [
+    { expectedOwner: "Other" },
+    { expectedStatus: "DONE" },
+    { owner: "Lead|injected" },
+  ]) {
+    expect((await ledgerTransaction({ ...transfer, ...changed })).ok).toBe(false);
+    expect(await readFile(f.file, "utf8")).toBe(before);
+  }
+  expect(await ledgerTransaction(transfer)).toEqual({ ok: true });
+  const moved = parseDispatchRows(await readFile(f.file, "utf8"))[0]!;
+  expect(moved.owner).toBe("Lead (11111111)");
+  expect(moved.status).toBe("OPEN; 2026-10-19 moved from Worker (22222222) at archive");
+  expect((await ledgerTransaction(transfer)).ok).toBe(false);
+});

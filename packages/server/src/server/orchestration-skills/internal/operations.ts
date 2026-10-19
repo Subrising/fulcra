@@ -110,6 +110,17 @@ async function hashSkills(rootDir: string, names: readonly string[]): Promise<Ta
   return out;
 }
 
+async function hashLegacyCodexSkills(
+  targets: SkillTargets,
+  names: readonly string[],
+): Promise<TargetSkills> {
+  const copies: string[] = [];
+  for (const name of names) {
+    if (await isLegacyCodexCopy(name, targets)) copies.push(name);
+  }
+  return hashSkills(targets.codexDir, copies);
+}
+
 /** Locally edited files are intentional overrides, not pending bundle updates. */
 async function hashInstalledSkills(
   rootDir: string,
@@ -201,7 +212,7 @@ export async function getSkillsStatus(
   const [agentsDisk, claudeDisk, codexDisk] = await Promise.all([
     hashInstalledSkills(targets.agentsDir, names, bundle, shippedHashes),
     hashInstalledSkills(targets.claudeDir, names, bundle, shippedHashes),
-    hashSkills(targets.codexDir, names),
+    hashLegacyCodexSkills(targets, names),
   ]);
   const disks = [agentsDisk, claudeDisk];
   const desired = resolveDesiredSkills(selection, available);

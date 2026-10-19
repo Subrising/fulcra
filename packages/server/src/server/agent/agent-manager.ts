@@ -16,7 +16,14 @@ import {
   type WorkAcceptanceStore,
 } from "./work-acceptance.js";
 import { isArchiveLead, isArchiveChild, reportsToArchiveParent } from "./archive-policy.js";
-import { defaultLedgerDir, readOpenLedgerRows, rowsOwnedBy } from "../ledger-items.js";
+import {
+  defaultLedgerDir,
+  readOpenLedgerRows,
+  rowsOwnedBy,
+  isSoleLedgerOwner,
+  type LedgerRow,
+} from "../ledger-items.js";
+import { ledgerTransaction } from "../ledger-routing/ledger.js";
 import { archiveReportCount } from "../archive-observation.js";
 import { currentLeadEvent, recordAcceptedLeadTurn } from "../lead-events.js";
 import {
@@ -2223,6 +2230,11 @@ export class AgentManager {
   private readonly mcpRefreshAdmission?: AgentManagerOptions["mcpRefreshAdmission"];
   private readonly persistenceRestoreContext = new AsyncLocalStorage<string>();
   private readonly persistenceRestores = new Map<string, Promise<unknown>>();
+  private readonly archiveLedgerTransfers = new AsyncLocalStorage<{
+    agentId: string;
+    leadId: string;
+    transferring: boolean;
+  }>();
   private readonly archiveConfirmations = new AsyncLocalStorage<string>();
   private readonly restoreConfirmations = new AsyncLocalStorage<string>();
   private readonly archiveServerId?: string;
@@ -4636,6 +4648,25 @@ export class AgentManager {
     throw new WorkAcceptanceError("unauthorised", "Review needs a lead session or the owner.");
   }
 
+  private async archiveLedgerRows(record: StoredAgentRecord) {
+    const rows = await readOpenLedgerRows(this.archiveLedgerDirectory ?? defaultLedgerDir(), true);
+    return rowsOwnedBy(rows, {
+      id: record.id,
+      title: record.title ?? "",
+      labels: isArchiveLead(record) ? record.labels : undefined,
+    });
+  }
+
+  private ownsProjectLedger(record: StoredAgentRecord, rows: readonly LedgerRow[]): boolean {
+    return rows.some(
+      (row) =>
+        row.owner.trim().toLowerCase() === row.project.toLowerCase() ||
+        [record.labels?.["fulcra.project"], record.labels?.project].some(
+          (label) => label?.trim().toLowerCase() === row.owner.trim().toLowerCase(),
+        ),
+    );
+  }
+
   async getArchiveProtection(
     agentId: string,
   ): Promise<{ confirmationRequired: boolean; reasons: string[] }> {
@@ -4643,13 +4674,124 @@ export class AgentManager {
     if (!record) throw new Error(`Agent not found: ${agentId}`);
     const reasons: string[] = [];
     if (isArchiveLead(record)) reasons.push("This session is a lead or owner.");
-    const rows = await readOpenLedgerRows(this.archiveLedgerDirectory ?? defaultLedgerDir(), true);
-    const ownedRows = rowsOwnedBy(rows, { id: record.id, title: record.title ?? "" });
+    const ownedRows = await this.archiveLedgerRows(record);
     for (const row of ownedRows)
       reasons.push(
-        `This session owns open ledger item ${row.id} in ${row.project}. Close it: ledger close ${row.project} ${row.id} --evidence <result>. Or transfer it: ledger set ${row.project} ${row.id} --owner <lead>. The --force option does not bypass ledger protection.`,
+        `This session owns open ledger item ${row.id} in ${row.project}. Close it: ledger close ${row.project} ${row.id} --evidence <result>. Or transfer it: ledger set ${row.project} ${row.id} --owner <lead>. Open ledger ownership must be transferred before archive.`,
       );
     return { confirmationRequired: reasons.length > 0, reasons };
+  }
+
+  async archiveLedgerTransferOffer(agentId: string): Promise<string> {
+    const record = await this.requireRegistry().get(agentId);
+    if (!record || record.archivedAt || isArchiveLead(record)) return "";
+    const rows = await this.archiveLedgerRows(record);
+    if (!rows.length || this.ownsProjectLedger(record, rows)) return "";
+    return `Open ledger items remain: ${rows.map((row) => `${row.project}/${row.id}`).join(", ")}. Transfer and archive: fulcra archive ${agentId} --force. Normal archive stays blocked.`;
+  }
+
+  private async assertArchiveTransferLead(
+    agentId: string,
+    leadId: string,
+  ): Promise<StoredAgentRecord> {
+    const caller = this.agentCallers.getStore();
+    caller?.validate?.();
+    const registry = this.requireRegistry();
+    const [worker, lead] = await Promise.all([registry.get(agentId), registry.get(leadId)]);
+    if (worker && isArchiveLead(worker))
+      throw new Error("A lead or owner session cannot be force-archived.");
+    if (
+      caller?.agentId !== leadId ||
+      !worker ||
+      worker.archivedAt ||
+      !lead ||
+      lead.archivedAt ||
+      !isArchiveLead(lead) ||
+      !reportsToArchiveParent(lead, worker, this.archiveServerId)
+    )
+      throw new Error("Archive transfer requires this worker's current lead.");
+    const rows = await this.archiveLedgerRows(worker);
+    if (this.ownsProjectLedger(worker, rows))
+      throw new Error("Archive refused: this session owns a whole project's ledger.");
+    const records = await registry.list();
+    const shared = rows.filter(
+      (row) => !isSoleLedgerOwner(row, { id: worker.id, title: worker.title ?? "" }, records),
+    );
+    if (shared.length) {
+      const owner = `${lead.title?.trim() || "Lead"} (${lead.id.slice(0, 8)})`;
+      const ownerArg = `'${owner.replaceAll("'", "'\\''")}'`;
+      throw new Error(
+        `Archive refused: co-owned or ambiguous ledger items cannot transfer automatically. Review all owners before using these commands: ${shared.map((row) => `${row.project}/${row.id} (${row.owner}): ledger set ${row.project} ${row.id} --owner ${ownerArg}`).join("; ")}.`,
+      );
+    }
+    return worker;
+  }
+
+  async withArchiveLedgerTransfer<T>(
+    agentId: string,
+    operation: () => Promise<T>,
+  ): Promise<{ result: T; transferredLedgerItems: string[] }> {
+    const caller = this.agentCallers.getStore();
+    caller?.validate?.();
+    const leadId = caller?.agentId;
+    if (!leadId) return { result: await operation(), transferredLedgerItems: [] };
+    const record = await this.requireRegistry().get(agentId);
+    if (record && isArchiveLead(record))
+      throw new Error("A lead or owner session cannot be force-archived.");
+    // Only an agent lead can transfer owned rows. Human force uses the ordinary archive guards.
+    if (record && !(await this.archiveLedgerRows(record)).length) {
+      const blockers = await this.archivePendingBlockers(agentId, record, true);
+      if (blockers.length) throw new Error(`Archive refused: ${blockers.join(" ")}`);
+      return { result: await operation(), transferredLedgerItems: [] };
+    }
+    return this.withInput(
+      agentId,
+      "archive",
+      undefined,
+      () =>
+        this.archiveLedgerTransfers.run({ agentId, leadId, transferring: true }, async () => {
+          const worker = await this.assertArchiveTransferLead(agentId, leadId);
+          await this.assertArchiveSafe(agentId, []);
+          const root = this.archiveLedgerDirectory ?? defaultLedgerDir();
+          const rows = await this.archiveLedgerRows(worker);
+          const lead = (await this.requireRegistry().get(leadId))!;
+          const owner = `${lead.title?.trim() || "Lead"} (${lead.id.slice(0, 8)})`;
+          const movedAt = new Date().toISOString();
+          const transferredLedgerItems: string[] = [];
+          for (const row of rows) {
+            try {
+              await this.assertArchiveTransferLead(agentId, leadId);
+              const transfer = await ledgerTransaction({
+                action: "archive-transfer",
+                root,
+                project: row.project,
+                item: row.id,
+                expectedOwner: row.owner,
+                expectedStatus: row.status,
+                owner,
+                note: `${movedAt} moved from '${row.owner}' at archive`,
+              });
+              if (!transfer.ok) throw new Error(transfer.reason ?? "ledger refused the transfer");
+              transferredLedgerItems.push(`${row.project}/${row.id}`);
+            } catch (error) {
+              const reason = error instanceof Error ? error.message : String(error);
+              throw new Error(
+                `Archive refused: transfer failed for ${row.project}/${row.id}: ${reason}. Transferred items: ${transferredLedgerItems.join(", ") || "none"}.`,
+                { cause: error },
+              );
+            }
+          }
+          this.archiveLedgerTransfers.getStore()!.transferring = false;
+          await this.assertArchiveSafe(agentId, []);
+          this.logger.info(
+            { agentId, leadId, transferredLedgerItems },
+            "Ledger ownership transferred before archive",
+          );
+          const result = await operation();
+          return { result, transferredLedgerItems };
+        }),
+      commandPayload("archive"),
+    );
   }
 
   assertDispatchOwner(): void {
@@ -4693,11 +4835,59 @@ export class AgentManager {
       throw new Error(`Restore refused: ${protection.reasons.join(" ")} Confirm in the app.`);
   }
 
+  private async archivePendingBlockers(
+    agentId: string,
+    record: StoredAgentRecord,
+    forced: boolean,
+  ): Promise<string[]> {
+    await this.prepareNativeArchiveObservation();
+    const reports = archiveReportCount(this, agentId);
+    const queue = queuedAgentMessagesFor({
+      agentManager: this,
+      agentStorage: this.requireRegistry(),
+      logger: this.logger,
+    });
+    await queue.prepareArchiveObservation();
+    const native = this.nativeArchivePending(agentId);
+    const queued = queue.archivePending(agentId);
+    const held = heldSendsFor(this, this.logger).archivePending(agentId);
+    const messages = native === null || queued === null ? null : native + queued + held;
+    if (reports === null || messages === null)
+      throw new Error("Archive refused: report or message state is unavailable.");
+    const blockers: string[] = [];
+    if (reports > 0)
+      blockers.push(`This session has ${reports} unread reports. Read and acknowledge them first.`);
+    if (messages > 0)
+      blockers.push(`This session has ${messages} pending messages. Resolve them before archive.`);
+    if (record.requiresAttention && (!forced || record.attentionReason !== "finished"))
+      blockers.push(
+        `This session needs attention (${record.attentionReason ?? "unspecified"}). Read its result or resolve its permission request.`,
+      );
+    const runningProviderChildren = this.listProviderSubagentActivity().filter(
+      (child) => child.parentAgentId === agentId && child.status === "running",
+    );
+    if (runningProviderChildren.length)
+      blockers.push("This session has running provider subagents. Wait for them to finish.");
+    return blockers;
+  }
+
   private async assertArchiveSafe(agentId: string, records: StoredAgentRecord[]): Promise<void> {
+    const transfer = this.archiveLedgerTransfers.getStore();
+    const forced = transfer?.agentId === agentId ? transfer : undefined;
+    if (forced) await this.assertArchiveTransferLead(agentId, forced.leadId);
     const protection = await this.getArchiveProtection(agentId);
+    if (forced?.transferring) {
+      protection.confirmationRequired = false;
+      protection.reasons = [];
+    }
     records = await this.requireRegistry().list();
     const record = records.find((candidate) => candidate.id === agentId);
     if (!record || record.archivedAt) return;
+    // App confirmation protects lead seats. It never abandons open ledger ownership.
+    if (!forced?.transferring) {
+      const rows = await this.archiveLedgerRows(record);
+      if (rows.length) throw new Error(`Archive refused: ${protection.reasons.join(" ")}`);
+    }
     // FU-349: no route archives a worker whose result is not approved. Cancel records CANCELLED instead.
     await this.workAcceptance?.assertCanClose(agentId);
     const workers = records.filter(
@@ -4705,44 +4895,14 @@ export class AgentManager {
     );
     if (workers.length)
       throw new Error("Archive refused: this session has live workers. Archive the workers first.");
-    if (protection.confirmationRequired) {
-      await this.prepareNativeArchiveObservation();
-      const reports = archiveReportCount(this, agentId);
-      const queue = queuedAgentMessagesFor({
-        agentManager: this,
-        agentStorage: this.requireRegistry(),
-        logger: this.logger,
-      });
-      await queue.prepareArchiveObservation();
-      const native = this.nativeArchivePending(agentId);
-      const queued = queue.archivePending(agentId);
-      const held = heldSendsFor(this, this.logger).archivePending(agentId);
-      const messages = native === null || queued === null ? null : native + queued + held;
-      if (reports === null || messages === null)
-        throw new Error("Archive refused: report or message state is unavailable.");
-      const blockers = [...protection.reasons];
-      if (reports > 0)
-        blockers.push(
-          `This session has ${reports} unread reports. Read and acknowledge them first.`,
-        );
-      if (messages > 0)
-        blockers.push(
-          `This session has ${messages} pending messages. Resolve them before archive.`,
-        );
-      if (record.requiresAttention)
-        blockers.push(
-          `This session needs attention (${record.attentionReason ?? "unspecified"}). Read its result or resolve its permission request.`,
-        );
-      const runningProviderChildren = this.listProviderSubagentActivity().filter(
-        (child) => child.parentAgentId === agentId && child.status === "running",
-      );
-      if (runningProviderChildren.length)
-        blockers.push("This session has running provider subagents. Wait for them to finish.");
-      if (blockers.length > protection.reasons.length)
-        throw new Error(`Archive refused: ${blockers.join(" ")}`);
+    if (protection.confirmationRequired || forced) {
+      const blockers = await this.archivePendingBlockers(agentId, record, Boolean(forced));
+      if (blockers.length)
+        throw new Error(`Archive refused: ${[...protection.reasons, ...blockers].join(" ")}`);
       if (
-        this.archiveConfirmations.getStore() !== agentId ||
-        this.trustedPlugins.currentInputSource() !== "human"
+        protection.confirmationRequired &&
+        (this.archiveConfirmations.getStore() !== agentId ||
+          this.trustedPlugins.currentInputSource() !== "human")
       )
         throw new Error(`Archive refused: ${protection.reasons.join(" ")} Confirm in the app.`);
     }

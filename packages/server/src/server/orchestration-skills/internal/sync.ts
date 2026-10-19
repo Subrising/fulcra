@@ -293,7 +293,9 @@ export async function removeSkill(skillName: string, targets: RemoveSkillTargets
   const paths = [
     path.join(targets.agentsDir, skillName),
     path.join(targets.claudeDir, skillName),
-    path.join(targets.codexDir, skillName),
+    ...((await isLegacyCodexCopy(skillName, targets))
+      ? [path.join(targets.codexDir, skillName)]
+      : []),
   ];
   for (const p of paths) {
     await fs.rm(p, { recursive: true, force: true });
@@ -315,6 +317,12 @@ export async function isLegacyCodexCopy(
   targets: RemoveSkillTargets,
 ): Promise<boolean> {
   const codexSkillDir = path.join(targets.codexDir, skillName);
+  // Linked roots and individual skill folders belong to the user. Never retire
+  // or offer updates through them, including links to external skill catalogs.
+  for (const candidate of [targets.codexDir, codexSkillDir]) {
+    const info = await fs.lstat(candidate).catch(() => null);
+    if (info?.isSymbolicLink()) return false;
+  }
   for (const root of [targets.agentsDir, targets.claudeDir]) {
     if (await isSameDirectory(codexSkillDir, path.join(root, skillName))) return false;
   }

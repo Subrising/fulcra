@@ -1075,6 +1075,7 @@ export const DeleteAgentRequestMessageSchema = z.object({
 export const ArchiveAgentRequestMessageSchema = z.object({
   inputProvenance: z.string().optional(),
   type: z.literal("archive_agent_request"),
+  transferLedgerOwnership: z.boolean().optional(),
   confirmed: z.boolean().optional(),
   agentId: z.string(),
   requestId: z.string(),
@@ -4348,6 +4349,7 @@ export const ServerInfoStatusPayloadSchema = z
         // COMPAT(deviceAccountsManage): added 2026-09-30 (U7); a daemon without it has no accounts.manage grant.
         deviceAccountsManage: z.boolean().optional(),
         agentArchiveSafety: z.boolean().optional(),
+        agentArchiveLedgerTransfer: z.boolean().optional(),
         agentMcpRefresh: z.boolean().optional(),
         agentContextRotation: z.boolean().optional(),
         agentMcpReconnect: z.boolean().optional(),
@@ -6049,6 +6051,7 @@ export const AgentDeletedMessageSchema = z.object({
 export const AgentArchivedMessageSchema = z.object({
   type: z.literal("agent_archived"),
   payload: z.object({
+    transferredLedgerItems: z.array(z.string()).optional(),
     agentId: z.string(),
     archivedAt: z.string(),
     requestId: z.string(),

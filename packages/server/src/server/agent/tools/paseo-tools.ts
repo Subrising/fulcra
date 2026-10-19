@@ -2665,23 +2665,34 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         "Archive an agent (soft-delete). The agent is interrupted if running and removed from the active list.",
       inputSchema: {
         agentId: z.string(),
+        force: z.boolean().optional(),
       },
       outputSchema: {
         success: z.boolean(),
+        transferredLedgerItems: z.array(z.string()).optional(),
       },
     },
-    async ({ agentId }) => {
-      await archiveAgentCommand(
-        {
-          agentManager,
-          agentStorage,
-          logger: childLogger,
-        },
-        agentId,
-      );
+    async ({ agentId, force }) => {
+      const archive = () =>
+        archiveAgentCommand(
+          {
+            agentManager,
+            agentStorage,
+            logger: childLogger,
+          },
+          agentId,
+        );
+      if (force) verifiedWorkCaller();
+      const transferred = force
+        ? await agentManager.withArchiveLedgerTransfer(agentId, archive)
+        : undefined;
+      if (!force) await archive();
       return {
         content: [],
-        structuredContent: ensureValidJson({ success: true }),
+        structuredContent: ensureValidJson({
+          success: true,
+          ...(transferred ? { transferredLedgerItems: transferred.transferredLedgerItems } : {}),
+        }),
       };
     },
   );

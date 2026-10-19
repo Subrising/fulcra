@@ -574,12 +574,22 @@ export class ReportUpService {
           input.agentId,
           lead.id,
           formatSystemNotificationPrompt(
-            `${routed.result.line}\n${formatSessionSpend(this.workerWithSpend(worker).sessionCost)}`,
+            `${routed.result.line}\n${formatSessionSpend(this.workerWithSpend(worker).sessionCost)}${routed.result.state === "DONE" ? await this.transferOffer(worker.id) : ""}`,
           ),
           "owned-finish",
         );
     }
     return true;
+  }
+
+  private async transferOffer(agentId: string): Promise<string> {
+    try {
+      const offer = await this.deps.agentManager.archiveLedgerTransferOffer(agentId);
+      return offer ? `\n${offer}` : "";
+    } catch (err) {
+      this.deps.logger.warn({ err, agentId }, "Cannot read ledger transfer offer");
+      return "";
+    }
   }
 
   private stopNudge(agentId: string): void {
@@ -842,14 +852,16 @@ export class ReportUpService {
       notice.reason === "finished" && this.deps.routing?.enabledForLead(notice.parentId)
         ? parseWorkerResult(lastMessage)
         : null;
+    const offer =
+      parseWorkerResult(lastMessage)?.state === "DONE" ? await this.transferOffer(worker.id) : "";
     return formatSystemNotificationPrompt(
-      result
+      (result
         ? `${result.line}\n${spend}`
         : formatReportUpNotice({
             worker: reportedWorker,
             failed: notice.reason === "errored",
             lastMessage,
-          }),
+          })) + offer,
     );
   }
 
@@ -1634,7 +1646,10 @@ export class ReportUpService {
         ? await this.deps.agentManager.getLastAssistantMessage(worker.id).catch(() => null)
         : observedLast;
     const prompt = formatSystemNotificationPrompt(
-      formatReportUpNotice({ worker: this.workerWithSpend(worker), failed, lastMessage }),
+      formatReportUpNotice({ worker: this.workerWithSpend(worker), failed, lastMessage }) +
+        (!failed && parseWorkerResult(lastMessage)?.state === "DONE"
+          ? await this.transferOffer(worker.id)
+          : ""),
     );
     return this.deps.remoteNotice(worker.id, prompt, failed ? "failed" : "finished");
   }
@@ -1668,7 +1683,14 @@ export class ReportUpService {
     if (this.limitOf(leadId)) {
       // A limited lead keeps its own held-report path (persisted, one notice after the reset).
       const prompt = formatSystemNotificationPrompt(
-        formatReportUpNotice({ worker: item.worker, failed: false, lastMessage: item.lastMessage }),
+        formatReportUpNotice({
+          worker: item.worker,
+          failed: false,
+          lastMessage: item.lastMessage,
+        }) +
+          (parseWorkerResult(item.lastMessage)?.state === "DONE"
+            ? await this.transferOffer(item.workerId)
+            : ""),
       );
       await this.toLead(item.workerId, leadId, prompt, "finished-turn");
       return;
@@ -1732,7 +1754,12 @@ export class ReportUpService {
   private async deliverCombined(leadId: string, items: readonly PendingFinish[]): Promise<void> {
     // Reload can disable finished turns after flushFinished queues delivery for a busy lead.
     if (!this.deps.isEnabled()) return;
-    const prompt = formatSystemNotificationPrompt(formatCombinedNotice(items));
+    const offers = await Promise.all(
+      items
+        .filter((item) => parseWorkerResult(item.lastMessage)?.state === "DONE")
+        .map((item) => this.transferOffer(item.workerId)),
+    );
+    const prompt = formatSystemNotificationPrompt(formatCombinedNotice(items) + offers.join(""));
     if (this.limitOf(leadId)) {
       await this.toLead(items[0]!.workerId, leadId, prompt, "finished-turn");
       return;

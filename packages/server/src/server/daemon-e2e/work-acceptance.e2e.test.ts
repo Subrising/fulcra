@@ -24,13 +24,25 @@ afterEach(async () => {
 
 const GOOD = { passed: true, checks: [{ command: "npm test", exitCode: 0 }], evidence: "ok 12/12" };
 
-async function fixture() {
+async function fixture(options: { captureMcp?: boolean } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), "work-accept-e2e-"));
   const prompts: string[] = [];
+  const witnesses: string[] = [];
   const provider = createTestAgentClient("codex", {
+    supportsMcpServers: options.captureMcp,
     onStartTurn: (prompt) =>
       prompts.push(typeof prompt === "string" ? prompt : JSON.stringify(prompt)),
   });
+  if (options.captureMcp) {
+    const create = provider.createSession.bind(provider);
+    provider.createSession = async (config, context) => {
+      const server = config.mcpServers?.paseo;
+      const witness =
+        server?.type === "http" ? server.headers?.["X-Paseo-Report-Origin"] : undefined;
+      if (witness) witnesses.push(witness);
+      return create(config, context);
+    };
+  }
   const daemon = await createTestPaseoDaemon({
     paseoHomeRoot: root,
     agentClients: { codex: provider },
@@ -110,6 +122,7 @@ async function fixture() {
     submit,
     approve,
     prompts,
+    witnesses,
   };
 }
 
@@ -637,13 +650,15 @@ async function mcpCall(
   token: string,
   name: string,
   args: Record<string, unknown>,
-): Promise<{ ok: boolean; text: string }> {
+  witness?: string,
+): Promise<{ ok: boolean; text: string; data?: Record<string, unknown> }> {
   const response = await fetch(
     `http://127.0.0.1:${port}/mcp/agents?callerAgentId=${callerAgentId}`,
     {
       method: "POST",
       headers: {
         authorization: `Bearer ${token}`,
+        ...(witness ? { "X-Paseo-Report-Origin": witness } : {}),
         "content-type": "application/json",
         accept: "application/json, text/event-stream",
       },
@@ -658,12 +673,20 @@ async function mcpCall(
   const body = await response.text();
   const data = body.split("\n").find((line) => line.startsWith("data:"));
   const message = JSON.parse(data ? data.slice(5) : body) as {
-    result?: { isError?: boolean; content?: Array<{ text?: string }> };
+    result?: {
+      isError?: boolean;
+      content?: Array<{ text?: string }>;
+      structuredContent?: Record<string, unknown>;
+    };
     error?: { message: string };
   };
   const text =
     message.result?.content?.map((c) => c.text ?? "").join(" ") ?? message.error?.message ?? "";
-  return { ok: response.ok && !message.error && !message.result?.isError, text };
+  return {
+    ok: response.ok && !message.error && !message.result?.isError,
+    text,
+    data: message.result?.structuredContent,
+  };
 }
 
 test("B2: a caller id in the URL cannot forge a review; only the agent's own token proves it", async () => {
@@ -888,3 +911,120 @@ test("only the assigning lead or the owner can retry a pending rejection", async
   );
   expect(f.store.get("FU-1")?.rejections).toMatchObject([{ delivered: true }]);
 });
+
+test("FU-370: real MCP archive keeps open rows until the worker's lead transfers them", async () => {
+  const { mkdir, readFile } = await import("node:fs/promises");
+  const root = await mkdtemp(path.join(tmpdir(), "archive-transfer-http-"));
+  vi.stubEnv("FULCRA_LEDGER_DIR", root);
+  const f = await fixture({ captureMcp: true });
+  let delegatedClient: DaemonClient | undefined;
+  try {
+    expect(f.witnesses.length).toBe(2);
+    await f.manager.setLabels(f.lead.id, { "fulcra.role": "orchestration" });
+    await f.manager.setLabels(f.worker.id, { "fulcra.reports-to": f.lead.id });
+    await mkdir(path.join(root, "fixture"));
+    const file = path.join(root, "fixture", "OPEN-ITEMS.md");
+    const before = `| FX-1 | Work | FIX | Worker | OPEN | proof | source |\n`;
+    await writeFile(file, before);
+    const master = f.manager.getMcpAuthToken()!;
+    const token = agentMcpToken(master, f.lead.id);
+    const refused = await mcpCall(
+      f.daemon.port,
+      f.lead.id,
+      token,
+      "archive_agent",
+      { agentId: f.worker.id },
+      f.witnesses[0],
+    );
+    expect(refused.ok).toBe(false);
+    expect(refused.text).toContain("ledger close fixture FX-1");
+    const wrongCaller = await mcpCall(
+      f.daemon.port,
+      f.worker.id,
+      agentMcpToken(master, f.worker.id),
+      "archive_agent",
+      { agentId: f.worker.id, force: true },
+      f.witnesses[1],
+    );
+    expect(wrongCaller.ok).toBe(false);
+    expect(await readFile(file, "utf8")).toBe(before);
+    expect((await f.storage.get(f.worker.id))?.archivedAt).toBeFalsy();
+    const archived = await mcpCall(
+      f.daemon.port,
+      f.lead.id,
+      token,
+      "archive_agent",
+      {
+        agentId: f.worker.id,
+        force: true,
+      },
+      f.witnesses[0],
+    );
+    expect(archived.ok, archived.text).toBe(true);
+    expect(archived.data?.transferredLedgerItems).toEqual(["fixture/FX-1"]);
+    expect(await readFile(file, "utf8")).toContain(`Lead (${f.lead.id.slice(0, 8)})`);
+    expect((await f.storage.get(f.worker.id))?.archivedAt).toEqual(expect.any(String));
+    const second = await f.manager.createAgent(
+      { provider: "codex", cwd: f.root, title: "Second worker" },
+      undefined,
+      { labels: { "fulcra.reports-to": f.lead.id } },
+    );
+    await writeFile(
+      file,
+      `${await readFile(file, "utf8")}| FX-2 | Work | FIX | Second worker | OPEN | proof | source |\n`,
+    );
+    delegatedClient = new DaemonClient({
+      url: `ws://127.0.0.1:${f.daemon.port}/ws`,
+      callerAgentId: f.lead.id,
+      callerAgentWitness: f.witnesses[0],
+      clientType: "cli",
+    });
+    await delegatedClient.connect();
+    const result = await delegatedClient.archiveAgent(second.id, { transferLedgerOwnership: true });
+    expect(result.transferredLedgerItems).toEqual(["fixture/FX-2"]);
+    expect((await f.storage.get(second.id))?.archivedAt).toEqual(expect.any(String));
+    expect(await readFile(file, "utf8")).toContain("moved from 'Second worker' at archive");
+  } finally {
+    await delegatedClient?.close();
+    vi.unstubAllEnvs();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test.each(["websocket", "MCP"])(
+  "FU-370 review: %s force without agent identity keeps the row guard",
+  async (route) => {
+    const { mkdir, readFile } = await import("node:fs/promises");
+    const root = await mkdtemp(path.join(tmpdir(), "archive-owner-force-http-"));
+    vi.stubEnv("FULCRA_LEDGER_DIR", root);
+    const f = await fixture();
+    try {
+      await mkdir(path.join(root, "fixture"));
+      const file = path.join(root, "fixture", "OPEN-ITEMS.md");
+      const original = `| FX-1 | Work | FIX | ${f.worker.id} | OPEN | proof | source |\n`;
+      await writeFile(file, original);
+      const force = async () => {
+        if (route === "websocket")
+          return f.client.archiveAgent(f.worker.id, { transferLedgerOwnership: true });
+        const result = await mcpCall(
+          f.daemon.port,
+          "",
+          f.manager.getMcpAuthToken()!,
+          "archive_agent",
+          { agentId: f.worker.id, force: true },
+        );
+        if (!result.ok) throw new Error(result.text);
+        return result;
+      };
+      await expect(force()).rejects.toThrow("ledger close fixture FX-1");
+      expect((await f.storage.get(f.worker.id))?.archivedAt).toBeFalsy();
+      expect(await readFile(file, "utf8")).toBe(original);
+      await writeFile(file, "");
+      await expect(force()).resolves.toBeDefined();
+      expect((await f.storage.get(f.worker.id))?.archivedAt).toEqual(expect.any(String));
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

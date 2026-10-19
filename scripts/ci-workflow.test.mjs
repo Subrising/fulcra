@@ -16,6 +16,7 @@ import { join, matchesGlob } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { relative as relativePath } from "node:path";
 import test from "node:test";
+import { stripTypeScriptTypes } from "node:module";
 import { requiresFullSuite } from "./ci-shared-changes.mjs";
 import { selectPassedCI } from "../.github/scripts/ci-check.mjs";
 import { proveMerge, complete } from "../.github/scripts/ci-finished.mjs";
@@ -124,6 +125,40 @@ test("clean browser packaging omits absent optional plugins and requires tested 
     assert.throws(() => browserInputPaths(root), /Missing browser input/);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("prebuilt browser clients bypass Playwright transpilation while test source stays transformed", () => {
+  // The changes job runs before npm install. Evaluate the actual config with Node only.
+  const source = stripTypeScriptTypes(
+    readFileSync(new URL("packages/app/playwright.config.ts", repoRoot), "utf8"),
+  )
+    .replace(/^import .+ from .+;$/gm, "")
+    .replace("export default defineConfig(", "configuration = defineConfig(");
+  const config = runInNewContext(source, {
+    defineConfig: (value) => value,
+    devices: { "Desktop Chrome": {} },
+    process: { env: {} },
+    configuration: null,
+  });
+  const external = config.build?.external ?? [];
+  for (const workspace of ["client", "protocol", "relay", "server"]) {
+    assert.ok(
+      external.some((pattern) =>
+        matchesGlob(`/checkout/packages/${workspace}/dist/index.js`, pattern),
+      ),
+      `${workspace} build must use the native loader`,
+    );
+  }
+  for (const file of [
+    "/checkout/packages/client/src/daemon-client.ts",
+    "/checkout/packages/app/e2e/support/fixtures.ts",
+  ]) {
+    assert.equal(
+      external.some((pattern) => matchesGlob(file, pattern)),
+      false,
+      file,
+    );
   }
 });
 
@@ -984,8 +1019,8 @@ console.log(JSON.stringify(a.includes('PUT') ? f.merged : a.some(x=>x.includes('
     const base = {
       pr: {
         state: "open",
-        base: { ref: "main" },
-        head: { sha },
+        base: { ref: "main", repo: { full_name: "Subrising/fulcra" } },
+        head: { sha, repo: { full_name: "Subrising/fulcra" } },
         draft: false,
         title: "Safe title",
       },
@@ -1105,6 +1140,10 @@ console.log(JSON.stringify(a.includes('PUT') ? f.merged : a.some(x=>x.includes('
       assert.notEqual(run("Check the PR, tested SHA, and merge title", dispatched), 0);
     }
     for (const change of [
+      (f) => (f.pr.head.repo.full_name = "outside/fork"),
+      (f) => (f.pr.head.repo = null),
+      (f) => delete f.pr.head.repo,
+      (f) => (f.pr.base.repo.full_name = "outside/fork"),
       (f) => (f.ci.path = ".github/workflows/other.yml"),
       (f) => (f.ci.head_sha = "c".repeat(40)),
       (f) => (f.ci.event = "workflow_dispatch"),
@@ -1702,6 +1741,19 @@ test("prebuilt web server serves SPA routes without masking missing bundle asset
     await server.close();
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("FU-371: shared merge admission rejects a fork PR even with the tested SHA", async () => {
+  const { assertPRHead } = await import("../.github/scripts/ci-check.mjs");
+  const { pr } = proofFixture().data;
+  assert.doesNotThrow(() => assertPRHead(pr, pr.head.sha));
+  for (const repo of [{ full_name: "outside/fork" }, null, undefined]) {
+    assert.throws(() => assertPRHead({ ...pr, head: { ...pr.head, repo } }, pr.head.sha));
+  }
+  assert.throws(() =>
+    assertPRHead({ ...pr, base: { ...pr.base, repo: { full_name: "outside/fork" } } }, pr.head.sha),
+  );
+  assert.throws(() => assertPRHead(pr, "f".repeat(40)));
 });
 
 test("CI selection ignores cancelled runs and refuses failures or incomplete checks", async () => {
