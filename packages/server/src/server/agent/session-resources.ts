@@ -99,6 +99,21 @@ export function resourceKind(row: ResourceProcess, logTail: boolean): ProcessRec
   return logTail ? "unbounded-log-tail" : "process";
 }
 
+/** True when the ppid chain from a record cannot reach its root or init (a parent exited). */
+function lineageBroken(record: ProcessRecord, byPid: Map<number, ResourceProcess>): boolean {
+  if (record.kind === "test-fixture") return false;
+  const seen = new Set<number>();
+  let row = byPid.get(record.pid);
+  while (row && !seen.has(row.pid)) {
+    seen.add(row.pid);
+    if (row.pid === record.rootPid || row.ppid === 0 || row.ppid === 1) return false;
+    const parent = byPid.get(row.ppid);
+    if (!parent || !bornAfter(row.birth, parent.birth)) return true;
+    row = parent;
+  }
+  return false;
+}
+
 export interface SimulatorTable {
   inspect(udid: string): Promise<{ booted: boolean; pid: number | null; birth: string | null }>;
   shutdown(udid: string): Promise<void>;
@@ -142,8 +157,10 @@ export function protectedSessionProcess(row: ResourceProcess): boolean {
 /** Read identities and program names only. Never collect arguments or environments. */
 export async function readResourceProcesses(
   windowsPolicyFile?: string,
+  onStaleInstallRoot?: (root: { pid: number; birth: string }) => void,
 ): Promise<ResourceProcess[]> {
-  if (process.platform === "win32") return readWindowsResourceProcesses(windowsPolicyFile);
+  if (process.platform === "win32")
+    return readWindowsResourceProcesses(windowsPolicyFile, onStaleInstallRoot);
   const identities = await readOwnedProcessTable();
   const { stdout } = await exec("ps", ["-axo", "pid=,ppid=,etime=,rss=,comm="], {
     timeout: 5_000,
@@ -325,7 +342,19 @@ export class SessionResources {
 
   constructor(options: Options) {
     this.options = options;
-    this.read = options.readProcesses ?? (() => readResourceProcesses(options.windowsPolicyFile));
+    const warnedStale = new Set<string>();
+    this.read =
+      options.readProcesses ??
+      (() =>
+        readResourceProcesses(options.windowsPolicyFile, (root) => {
+          const key = `${root.pid}:${root.birth}`;
+          if (warnedStale.has(key)) return;
+          warnedStale.add(key);
+          options.logger.warn(
+            { pid: root.pid },
+            "Ignoring a stale install root in the Windows resource policy",
+          );
+        }));
     this.signal = options.signal ?? process.kill;
     this.now = options.now ?? Date.now;
     this.simulators = options.simulators ?? systemSimulators();
@@ -397,7 +426,26 @@ export class SessionResources {
       const byPid = new Map(rows.map((row) => [row.pid, row]));
       ledger.processes = ledger.processes.filter((record) => {
         const row = byPid.get(record.pid);
-        return row && !row.zombie && row.birth === record.birth;
+        if (!row || row.zombie || row.birth !== record.birth) return false;
+        // Windows never reparents: a record whose middle parent exited can never be proven
+        // owned, so stop tracking it after the orphan delay. It is never signalled.
+        return !(
+          this.now() - record.observedAt > ORPHAN_INTERVAL_MS && lineageBroken(record, byPid)
+        );
+      });
+      const liveRoots = this.options.roots();
+      ledger.roots = ledger.roots.filter((binding) => {
+        if (
+          liveRoots.some(
+            (r) =>
+              r.agentId === binding.agentId &&
+              r.instanceId === binding.instanceId &&
+              r.pid === binding.pid,
+          )
+        )
+          return true;
+        const row = byPid.get(binding.pid);
+        return Boolean(row && !row.zombie && row.birth === binding.birth);
       });
       const fresh = new Map((await this.read()).map((row) => [row.pid, row]));
       const currentRoots = this.options.roots();
