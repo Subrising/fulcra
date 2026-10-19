@@ -3,7 +3,7 @@ import {
   windowsAclIsSafe,
   WINDOWS_PRIVATE_MASK,
   writePrivateFileAtomicSync,
-} from "@getpaseo/server";
+} from "@getpaseo/server/private-files";
 import { connectToDaemon } from "../utils/client.js";
 import { resolveSender } from "../utils/send-sender.js";
 import { Command } from "commander";

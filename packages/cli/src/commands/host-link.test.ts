@@ -1,4 +1,4 @@
-import { windowsAclIsSafe } from "@getpaseo/server";
+import { windowsAclIsSafe } from "@getpaseo/server/private-files";
 import { mkdtemp, rm, stat, writeFile, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,8 +10,8 @@ import {
   saveHostLinkReceipt,
 } from "./host-link.js";
 
-vi.mock("@getpaseo/server", async (original) => ({
-  ...(await original<typeof import("@getpaseo/server")>()),
+vi.mock("@getpaseo/server/private-files", async (original) => ({
+  ...(await original<typeof import("@getpaseo/server/private-files")>()),
   initializeWindowsPrivateFiles: vi.fn(async () => {}),
   windowsAclIsSafe: vi.fn(() => true),
 }));
