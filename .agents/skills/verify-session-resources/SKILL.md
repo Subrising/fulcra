@@ -9,8 +9,8 @@ From `packages/server`, run:
 
 ```sh
 npx vitest run src/server/agent/providers/omp/omp-harness-cleanup.test.ts src/server/agent/providers/omp/mcp-bridge.test.ts src/server/agent/providers/omp/agent.test.ts --maxWorkers=1
-npx vitest run src/server/agent/session-resources.test.ts src/server/agent/windows-resource-processes.test.ts src/utils/tree-kill.test.ts --maxWorkers=1
-npx vitest run src/server/agent/agent-manager.test.ts --maxWorkers=1 -t 'stops a session-owned detached process|archiveAgent cascade closes|provider close failure retains'
+npx vitest run src/server/agent/session-resources.review.test.ts src/server/agent/test-fixture-ownership.test.ts src/server/agent/session-resources.test.ts src/server/agent/windows-resource-processes.test.ts src/utils/tree-kill.test.ts --maxWorkers=1
+npx vitest run src/server/agent/agent-manager.test.ts --maxWorkers=1 -t 'H2 resource errors|stops a session-owned detached process|archiveAgent cascade closes|provider close failure retains'
 npm run typecheck
 npm run build
 ```
@@ -41,3 +41,11 @@ Simulator fixtures use an injected adapter. They do not prove a native simulator
 For a separate authorized native simulator check, use one owned device UUID and an exit handler.
 Never shut down all booted devices. Confirm the device has no other live owner before stopping it.
 Scripts that hide boot commands must retain their own simulator exit handlers.
+
+Review repair checks must cover stale roots, child-before-parent births, EPERM continuation, and corrupt-ledger quarantine.
+Both close and archive must complete when resource capture or cleanup fails.
+Check `FULCRA_SESSION_RESOURCE_CLEANUP=off` and `dry-run`. Neither mode may send resource signals or shut down simulators.
+Ordinary tool events, including `xcrun clang`, must return without waiting for the cleanup queue.
+Check simulator use from destinations, aliases, scripts, and GUI users. Live users keep the device.
+Windows proof needs explicit `installRoots` in its private fixture policy. Missing or stale roots keep all targets.
+Old fixture proof requires an exact helper/worker lease. Directory names alone cannot authorize a stop.
