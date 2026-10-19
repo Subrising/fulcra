@@ -26,6 +26,8 @@ import {
 } from "./host-link-contracts.js";
 import { matchesHostLinkCredential } from "./host-link-credential.js";
 import { writePrivateFileAtomicSync } from "./private-files.js";
+import { assertWindowsPrivateFilesSettled } from "./windows-private-file.js";
+import { windowsAclIsSafe, WINDOWS_PRIVATE_MASK } from "./plugins/trusted-ownership.js";
 import { HostAccountLimits } from "./host-account-limits.js";
 import { childModeClass } from "./agent/create-agent-mode.js";
 import { noteAgentMessage } from "./agent-message-log.js";
@@ -111,6 +113,7 @@ function authorityDigest(grant: {
   return digest(authority);
 }
 function privateJson(file: string): unknown | null {
+  if (process.platform === "win32") assertWindowsPrivateFilesSettled();
   let fd: number;
   try {
     fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -121,8 +124,9 @@ function privateJson(file: string): unknown | null {
   try {
     const stat = fstatSync(fd);
     const wrongMode =
-      process.platform !== "win32" &&
-      ((stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.());
+      process.platform === "win32"
+        ? !windowsAclIsSafe(file, WINDOWS_PRIVATE_MASK)
+        : (stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.();
     if (!stat.isFile() || wrongMode || stat.size > 8 * 1024 * 1024)
       throw new HostLinkError("refused", "A private host-link file is required.");
     const contents = readFileSync(fd, "utf8");
@@ -213,11 +217,6 @@ export class HostLinks {
     return cfg;
   }
   private requiredConfig(): HostLinkConfig {
-    if (process.platform === "win32")
-      throw new HostLinkError(
-        "unavailable",
-        "Durable host-link operations are unavailable on Windows.",
-      );
     const cfg = this.config();
     if (!cfg) throw new HostLinkError("unavailable", "Host links are not configured.");
     if (!this.deps.protected())
@@ -242,7 +241,7 @@ export class HostLinks {
       throw new HostLinkError("refused", "Host-link receipt capacity is full.");
     journal[key] = entry;
     const data = JSON.stringify(journal);
-    if (Buffer.byteLength(data) > 8 * 1024 * 1024)
+    if (Buffer.byteLength(data) > (process.platform === "win32" ? 1 : 8) * 1024 * 1024)
       throw new HostLinkError("refused", "Host-link receipt storage is full.");
     writePrivateFileAtomicSync(file, data, { durable: true });
   }
@@ -948,8 +947,7 @@ export class HostLinks {
   }
 
   startNotifications(): void {
-    if (process.platform === "win32" || this.notificationsClosed || !this.notificationsStopped)
-      return;
+    if (this.notificationsClosed || !this.notificationsStopped) return;
     this.notificationsStopped = false;
     this.scheduleNotifications(0);
   }

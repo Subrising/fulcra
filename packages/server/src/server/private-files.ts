@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { writeWindowsPrivateFileAtomicSync } from "./windows-private-file.js";
 
 export const PRIVATE_DIRECTORY_MODE = 0o700;
 export const PRIVATE_FILE_MODE = 0o600;
@@ -37,9 +38,11 @@ export function writePrivateFileAtomicSync(
   data: string | NodeJS.ArrayBufferView,
   options: { durable?: boolean } = {},
 ): void {
-  if (options.durable && process.platform === "win32")
-    throw new Error("Durable host-link operations are unavailable on Windows.");
   ensurePrivateDirectory(path.dirname(filePath));
+  if (options.durable && process.platform === "win32") {
+    writeWindowsPrivateFileAtomicSync(filePath, data);
+    return;
+  }
   const parent = path.dirname(filePath);
   const temporary = path.join(parent, `.${path.basename(filePath)}.${process.pid}.${randomUUID()}`);
   try {

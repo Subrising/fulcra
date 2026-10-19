@@ -46,8 +46,21 @@ The `fulcra.hold=done` label refuses later worker prompts.
 ## Configuration
 
 Use private files with mode `0600` on POSIX systems.
-Host-link operations refuse Windows because Node cannot flush directory entries there.
-They require a durable journal before provider input or receipt acknowledgement.
+Host-link operations require a durable journal before provider input or receipt acknowledgement.
+On Windows, one retained PowerShell helper creates each journal file with an owner-only ACL.
+It flushes the temporary file, renames it with `MoveFileExW`, then opens and flushes the destination.
+`WRITE_THROUGH` alone does not guarantee a same-volume rename commit.
+The helper retries access and sharing locks for one second.
+Windows journals stop at 1 MiB before writing; POSIX journals retain the 8 MiB limit.
+Cold compilation runs outside the daemon event loop. Helper waits use 50 ms plus 15 ms per MiB, capped at 250 ms.
+After a pending receipt times out, reconcile its original write, then use a new message id.
+Readers check Windows ownership and reject ACLs that expose content or mutation rights to other users.
+The temporary file stays in the destination directory. Cross-volume copies are disabled.
+A missing PowerShell executable, constrained language policy, flush failure, or rename failure refuses the operation.
+No native Node addon or live host installation is required.
+POSIX systems retain file flush, rename, and parent directory flush.
+See Microsoft's [move contract](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw)
+and [file flush contract](https://learn.microsoft.com/en-us/dotnet/api/system.io.filestream.flush).
 Generate each credential from 32 random bytes encoded with base64url, after its prefix.
 Keep credentials out of shell arguments and terminal output.
 
@@ -96,6 +109,50 @@ Use the provider's canonical model ID; a plugin cannot replace it during creatio
 The journals also cap retained requests at 1,000 entries and 8 MiB.
 Keep receipts through reconciliation. Do not delete a pending receipt to retry creation.
 
+## Provision a Mac-to-PC link
+
+Run `node --import tsx scripts/provision-host-link.ts prepare PLAN OUTPUT` on the source Mac.
+Use a private plan file with these fields:
+
+```json
+{
+  "sourceServerId": "mini-server-id",
+  "targetServerId": "pc-server-id",
+  "leadId": "lead-agent-id",
+  "linkId": "main-pc",
+  "url": "https://pc.example.test",
+  "expiresAt": 2000000000000,
+  "workspace": "job",
+  "directory": "D:\\jobs",
+  "profile": "haiku",
+  "worker": {
+    "provider": "claude",
+    "model": "claude-haiku-5-5",
+    "modeId": "bypassPermissions",
+    "parents": ["claude:bypassPermissions"]
+  },
+  "maxWorkers": 1
+}
+```
+
+Replace host IDs, expiry, model, source mode, and workspace with the owner's selected values.
+The command creates a new directory with mode `0700` and two fragments with mode `0600`.
+Each new identity gets a credential from 32 random bytes. Credentials never appear in command arguments or output.
+
+After release, apply `source.json` on the Mini and `target.json` on the PC.
+Run `node --import tsx scripts/provision-host-link.ts apply HOME`, with the fragment on stdin.
+Use the release source checkout on each host. Pipe the target fragment through authenticated SSH stdin.
+Do not copy it into a public Windows temporary file.
+The Windows writer creates the destination file with a protected, owner-only ACL before writing its contents.
+The source writer uses mode `0600`.
+Existing chat credentials and workload routes stay in place. Existing link IDs cause refusal.
+If either apply fails, retain both fragments. Inspect both files before retrying; a timeout can follow a completed rename.
+The two-host update is not a distributed transaction. A half-applied link cannot authenticate at the other host.
+
+Repeat preparation with another link ID and target server ID for another PC.
+These commands do not restart daemons or test live provider access.
+The lead must perform the create, finish-notice, and archive acceptance check after both hosts have the release.
+
 ## Use from a lead
 
 Prepare a private JSON request with one retained UUID:
@@ -121,7 +178,7 @@ fulcra host-link prompt --receipt-file worker-receipt.json \
 ```
 
 The CLI stores the worker credential in the private receipt file. It does not print that credential.
-The receiver flushes the temporary receipt file, renames it, and flushes its parent directory before provider creation.
+The receiver commits the private receipt with the platform durability method before provider creation.
 A flush failure stops the operation. Retained retries repeat the flush before acknowledgement.
 An identical retry returns the retained receipt. A changed body or destination under that UUID fails.
 `created` means the initial prompt reached the provider. It does not mean the task finished.
@@ -208,11 +265,12 @@ Each pass has a 15-second network deadline per link.
 It never forwards a remote observation.
 A receiver accepts at most eight days until reset and one minute of clock skew.
 Keep paired host clocks synchronized.
-The existing Windows durability restriction also applies to limit sharing.
+Limit sharing uses the same durable private-file commit.
 
 ## Verification boundary
 
 Run focused tests through the existing test scripts and queue.
+Use the [Windows verification skill](../.agents/skills/verify-windows-host-links/SKILL.md) for the real-PC durability check.
 The source tests use real HTTP, private files, durable receipts, and isolated agent runtimes with test providers.
 They cover admission, initial input, credential refusal, permission restrictions, retries, response loss, and role moves during held delivery.
 Return-notice cases cover finish, error, permission, restart, link recovery, duplicate suppression, and the real runtime-to-provider handoff.
