@@ -44,6 +44,8 @@ import {
 } from "../../../../control/orca-organization/server/accounts.mjs";
 import { createPoolUsage } from "../../../../control/orca-organization/server/pool-usage.js";
 import { writePrivateFileAtomicSync } from "./private-files.js";
+import { windowsAclIsSafe } from "./plugins/trusted-ownership.js";
+import { writeWindowsPrivateFileAtomicSync } from "./windows-private-file.js";
 import {
   isAgentMcpRequestAuthorized,
   isBearerTokenValidAsync,
@@ -55,6 +57,20 @@ vi.mock("node:fs", async (importOriginal) => {
   const fs = await importOriginal<typeof import("node:fs")>();
   return { ...fs, fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync) };
 });
+
+vi.mock("./windows-private-file.js", async (importOriginal) => {
+  const windows = await importOriginal<typeof import("./windows-private-file.js")>();
+  return {
+    ...windows,
+    assertWindowsPrivateFilesSettled: vi.fn(),
+    writeWindowsPrivateFileAtomicSync: vi.fn(windows.writeWindowsPrivateFileAtomicSync),
+  };
+});
+
+vi.mock("./plugins/trusted-ownership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugins/trusted-ownership.js")>()),
+  windowsAclIsSafe: vi.fn(() => true),
+}));
 
 const linkToken = `hlink1.${"A".repeat(43)}`;
 const chatToken = `hchat1.${"B".repeat(43)}`;
@@ -506,18 +522,72 @@ test("a directory flush failure stops effects and receipt acknowledgement", asyn
   expect(f.created).toEqual([]);
 });
 
-test("Windows refuses host-link effects without a durable journal", async () => {
+test("Windows commits a worker receipt before provider input and returns it on retry", async () => {
   const f = await fixture();
   const platform = process.platform;
+  const writes: string[] = [];
+  vi.mocked(writeWindowsPrivateFileAtomicSync).mockImplementation((file, data) => {
+    // Use real private files on this POSIX host; the PC proof checks the Windows primitive.
+    writes.push(file);
+    writeFileSync(file, data, { mode: 0o600 });
+  });
+  try {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    const request = { ...spawn, notifyOnFinish: true };
+    const receipt = await f.source.spawnForAgent("lead", "target", request);
+    expect(receipt.state).toBe("created");
+    expect(writes.length).toBeGreaterThan(0);
+    expect(f.created).toHaveLength(1);
+    f.target.recordWorkerNotice(receipt.agentId!, "finished", "windows-turn", "Task complete.");
+    await f.source.syncNotifications();
+    await f.source.flushNotificationDeliveries();
+    expect(f.finishNotices).toHaveLength(1);
+    expect(f.finishNotices[0]).toMatchObject({
+      agentId: "lead",
+      text: expect.stringContaining("Task complete."),
+    });
+    expect(await f.source.spawnForAgent("lead", "target", request)).toEqual(receipt);
+    expect(f.created).toHaveLength(1);
+  } finally {
+    Object.defineProperty(process, "platform", { value: platform });
+    vi.mocked(writeWindowsPrivateFileAtomicSync).mockRestore();
+  }
+});
+
+test("Windows write-through failure stops provider input and acknowledgement", async () => {
+  const f = await fixture();
+  const platform = process.platform;
+  vi.mocked(writeWindowsPrivateFileAtomicSync).mockImplementation(() => {
+    throw new Error("Windows durable file commit failed.");
+  });
   try {
     Object.defineProperty(process, "platform", { value: "win32" });
     await expect(f.target.receive(linkToken, f.wire)).rejects.toThrow(
-      "Durable host-link operations are unavailable on Windows.",
+      "Windows durable file commit failed.",
     );
     expect(f.created).toEqual([]);
     expect(f.notices).toEqual([]);
   } finally {
     Object.defineProperty(process, "platform", { value: platform });
+    vi.mocked(writeWindowsPrivateFileAtomicSync).mockRestore();
+  }
+});
+
+test("Windows starts the retained return-notice scheduler", async () => {
+  const f = await fixture();
+  const platform = process.platform;
+  const sync = vi.spyOn(f.source, "syncNotifications").mockResolvedValue();
+  try {
+    vi.useFakeTimers();
+    Object.defineProperty(process, "platform", { value: "win32" });
+    f.source.startNotifications();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sync).toHaveBeenCalledOnce();
+  } finally {
+    f.source.stopNotifications();
+    vi.useRealTimers();
+    Object.defineProperty(process, "platform", { value: platform });
+    sync.mockRestore();
   }
 });
 
@@ -1984,4 +2054,48 @@ test("long remote failures retain spend after target restart and delivery", asyn
   await f.source.flushNotificationDeliveries();
   expect(f.finishNotices).toHaveLength(1);
   expect(f.finishNotices[0]!.text).toContain("Session total spend: US$17.520000.");
+});
+
+test("Windows timeout after rename retains the pending identity on a same-id retry", async () => {
+  const f = await fixture();
+  const platform = process.platform;
+  let fail = true;
+  vi.mocked(writeWindowsPrivateFileAtomicSync).mockImplementation((file, data) => {
+    writeFileSync(file, data, { mode: 0o600 });
+    if (fail) {
+      fail = false;
+      throw new Error("Windows durable file commit requires reconciliation.");
+    }
+  });
+  try {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    await expect(f.target.receive(linkToken, f.wire)).rejects.toThrow("requires reconciliation");
+    const saved = JSON.parse(readFileSync(path.join(f.deps.home, "host-links-inbox.json"), "utf8"));
+    const pending = Object.values(saved)[0] as { receipt: unknown };
+    expect(await f.target.receive(linkToken, f.wire)).toEqual(pending.receipt);
+    expect(f.created).toHaveLength(0);
+  } finally {
+    Object.defineProperty(process, "platform", { value: platform });
+    vi.mocked(writeWindowsPrivateFileAtomicSync).mockRestore();
+  }
+});
+
+test("Windows readers refuse an unsafe ACL before using grants", async () => {
+  const f = await fixture();
+  const platform = process.platform;
+  vi.mocked(writeWindowsPrivateFileAtomicSync).mockImplementation((file, data) =>
+    writeFileSync(file, data, { mode: 0o600 }),
+  );
+  vi.mocked(windowsAclIsSafe).mockReturnValue(false);
+  try {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    await expect(f.target.receive(linkToken, f.wire)).rejects.toThrow(
+      "A private host-link file is required",
+    );
+    expect(f.created).toHaveLength(0);
+  } finally {
+    Object.defineProperty(process, "platform", { value: platform });
+    vi.mocked(windowsAclIsSafe).mockReturnValue(true);
+    vi.mocked(writeWindowsPrivateFileAtomicSync).mockRestore();
+  }
 });

@@ -25,6 +25,7 @@ test.each([
   ["supervisor", "../../scripts/supervisor-entrypoint.ts"],
   ["daemon control", "@getpaseo/server/daemon-control"],
   ["configuration without the session admission resolver", "@getpaseo/server/configuration"],
+  ["private file helpers", "@getpaseo/server/private-files"],
 ])("%s does not load the daemon runtime or wire schemas", async (_name, entry) => {
   const inputs = await runtimeDependencies(entry);
   expect(inputs.filter((file) => /\/(?:bootstrap|messages)\.[jt]s$/.test(file))).toEqual([]);

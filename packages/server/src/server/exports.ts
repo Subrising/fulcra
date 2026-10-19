@@ -115,4 +115,6 @@ export {
 } from "./persisted-config.js";
 export { resolveConfigFromPersisted } from "./config.js";
 
-export { ensurePrivateDirectory } from "./private-files.js";
+export { ensurePrivateDirectory, writePrivateFileAtomicSync } from "./private-files.js";
+export { initializeWindowsPrivateFiles } from "./windows-private-file.js";
+export { windowsAclIsSafe, WINDOWS_PRIVATE_MASK } from "./plugins/trusted-ownership.js";

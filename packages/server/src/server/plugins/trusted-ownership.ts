@@ -1,12 +1,14 @@
 import { execFileSync } from "node:child_process";
 import type { Stats } from "node:fs";
 import path from "node:path";
+import { windowsPrivateFilesReady, windowsPrivateFileAclIsSafe } from "../windows-private-file.js";
 
 // Windows files carry no POSIX uid or mode, so ownership is proved from the ACL instead: the owner must be this user,
 // SYSTEM, Administrators or TrustedInstaller (root or this user on POSIX), and no other principal may hold a write,
 // delete, change-permissions or take-ownership right, including GENERIC_ALL and GENERIC_WRITE. SIDs only, no name
 // translation (language independent; an unresolvable principal cannot throw); InheritOnly entries (flag 2, tested as an integer) are skipped.
 export const WINDOWS_WRITE_MASK = 852310 + 0x10000000 + 0x40000000;
+export const WINDOWS_PRIVATE_MASK = WINDOWS_WRITE_MASK + 1 + 0x80000000;
 const WINDOWS_ACL_SCRIPT = `
 $ErrorActionPreference = 'Stop'
 $p = $env:FULCRA_TRUST_PATH
@@ -40,7 +42,8 @@ export function windowsPowershell(env: NodeJS.ProcessEnv = process.env): string 
 export type WindowsAclProbe = (file: string) => boolean;
 
 /** True when the Windows ACL says only this user or the OS can change `file`. Fails closed. */
-export const windowsAclIsSafe: WindowsAclProbe = (file) => {
+export const windowsAclIsSafe = (file: string, mask = WINDOWS_WRITE_MASK): boolean => {
+  if (windowsPrivateFilesReady()) return windowsPrivateFileAclIsSafe(file, mask);
   try {
     const out = execFileSync(
       windowsPowershell(),
@@ -56,7 +59,7 @@ export const windowsAclIsSafe: WindowsAclProbe = (file) => {
         env: {
           ...process.env,
           FULCRA_TRUST_PATH: file,
-          FULCRA_TRUST_MASK: String(WINDOWS_WRITE_MASK),
+          FULCRA_TRUST_MASK: String(mask),
         },
         encoding: "utf8",
         timeout: 20000,

@@ -43,6 +43,11 @@
       "source": "./src/server/config.ts",
       "default": "./dist/server/server/config.js"
     },
+    "./private-files": {
+      "types": "./dist/server/server/private-file-exports.d.ts",
+      "source": "./src/server/private-file-exports.ts",
+      "default": "./dist/server/server/private-file-exports.js"
+    },
     "./process": {
       "types": "./dist/server/utils/spawn.d.ts",
       "source": "./src/utils/spawn.ts",

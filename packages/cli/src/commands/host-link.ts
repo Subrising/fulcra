@@ -1,3 +1,9 @@
+import {
+  initializeWindowsPrivateFiles,
+  windowsAclIsSafe,
+  WINDOWS_PRIVATE_MASK,
+  writePrivateFileAtomicSync,
+} from "@getpaseo/server/private-files";
 import { connectToDaemon } from "../utils/client.js";
 import { resolveSender } from "../utils/send-sender.js";
 import { Command } from "commander";
@@ -47,12 +53,14 @@ export function hostLinkEndpoint(raw: string, operation: "dispatch" | "worker"):
   return url.href;
 }
 async function privateRead(file: string, maxBytes = 256 * 1024): Promise<string> {
+  await initializeWindowsPrivateFiles();
   const handle = await open(resolve(file), constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const stat = await handle.stat();
     const wrongMode =
-      process.platform !== "win32" &&
-      ((stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.());
+      process.platform === "win32"
+        ? !windowsAclIsSafe(resolve(file), WINDOWS_PRIVATE_MASK)
+        : (stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.();
     if (!stat.isFile() || wrongMode || stat.size > maxBytes)
       throw new Error("Use a private, bounded host-link file.");
     return await handle.readFile("utf8");
@@ -119,6 +127,11 @@ export async function saveHostLinkReceipt(
   receipt: HostLinkCliReceipt,
 ): Promise<void> {
   const target = resolve(file);
+  if (process.platform === "win32") {
+    await initializeWindowsPrivateFiles();
+    writePrivateFileAtomicSync(target, JSON.stringify(receipt), { durable: true });
+    return;
+  }
   await mkdir(dirname(target), { recursive: true, mode: 0o700 });
   const temporary = `${target}.${randomUUID()}.tmp`;
   try {
