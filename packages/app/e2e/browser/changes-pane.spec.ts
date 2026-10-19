@@ -13,6 +13,7 @@ import { getServerId } from "../support/helpers/server-id";
 import { connectSeedClient } from "../support/helpers/seed-client";
 import { createTempGitRepo } from "../support/helpers/workspace";
 import { openChangesPanel, waitForWorkspaceTabsVisible } from "../support/helpers/workspace-tabs";
+import { isCompactViewport } from "../support/helpers/compact-viewport";
 
 interface DirtyWorkspace {
   id: string;
@@ -911,7 +912,7 @@ test.describe("pane toolbars on touch screens", () => {
       await useUnwrappedDiffLines(page);
       await openWorkspaceChanges(page, workspace);
       await page.setViewportSize(size);
-      const compact = size.width < 720;
+      const compact = isCompactViewport(size);
       const explorer = page
         .getByTestId(compact ? "explorer-content-area" : "workspace-explorer-sidebar")
         .filter({ visible: true });
@@ -934,7 +935,7 @@ test.describe("pane toolbars on touch screens", () => {
         await page.keyboard.press("Escape");
         await expect(page.getByTestId("changes-options-menu-content")).toHaveCount(0);
       });
-      if (size.width < 720) {
+      if (compact) {
         const actions = explorer.getByTestId("changes-actions-menu-trigger");
         await expectToolbarContainsTouchControls(
           explorer.getByTestId("changes-repository-header"),

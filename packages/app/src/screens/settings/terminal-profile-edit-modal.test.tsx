@@ -28,7 +28,7 @@ vi.mock("react-native-unistyles", () => ({
   StyleSheet: {
     create: (factory: unknown) => (typeof factory === "function" ? factory(theme) : factory),
   },
-  useUnistyles: () => ({ theme }),
+  useUnistyles: () => ({ theme, rt: { breakpoint: "lg", screen: { width: 1440, height: 900 } } }),
 }));
 
 vi.mock("@/constants/platform", () => ({

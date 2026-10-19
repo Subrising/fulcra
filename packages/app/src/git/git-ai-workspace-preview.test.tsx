@@ -66,7 +66,7 @@ vi.mock("react-native", () => ({
 vi.mock("react-native-unistyles", () => ({
   StyleSheet: { create: () => ({ root: {} }) },
   // A desktop layout; the touch-target hook reads the breakpoint.
-  useUnistyles: () => ({ rt: { breakpoint: "lg" } }),
+  useUnistyles: () => ({ rt: { breakpoint: "lg", screen: { width: 1440, height: 900 } } }),
 }));
 vi.mock("@/components/ui/button", () => ({
   Button: ({

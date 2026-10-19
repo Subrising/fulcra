@@ -44,7 +44,10 @@ vi.mock("lucide-react-native", () => {
 });
 
 vi.mock("react-native-unistyles", () => ({
-  useUnistyles: () => ({ theme: mockTheme, rt: { breakpoint: "lg" } }),
+  useUnistyles: () => ({
+    theme: mockTheme,
+    rt: { breakpoint: "lg", screen: { width: 1440, height: 900 } },
+  }),
   StyleSheet: {
     create: (factory: unknown) =>
       typeof factory === "function" ? (factory as (theme: unknown) => unknown)(mockTheme) : factory,

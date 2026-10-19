@@ -5,6 +5,7 @@ import { seedWorkspace } from "../support/helpers/seed-client";
 import { waitForSidebarHydration } from "../support/helpers/workspace-ui";
 import { daemonWsRoutePattern } from "../support/helpers/daemon-port";
 import { selectSidebarStatusGrouping } from "../support/helpers/sidebar";
+import { isCompactViewport } from "../support/helpers/compact-viewport";
 
 interface SessionEnvelope {
   type?: string;
@@ -390,7 +391,7 @@ test.describe("Workspace labels", () => {
         const key = `${getServerId()}:${seeded.workspaceId}`;
         try {
           await gotoAppShell(page);
-          if (viewport.width < 720)
+          if (isCompactViewport(viewport))
             await page.getByRole("button", { name: "Open menu", exact: true }).click();
           await waitForSidebarHydration(page);
 
@@ -415,6 +416,8 @@ test.describe("Workspace labels", () => {
                 position: { x: target.width - 4, y: target.height - 4 },
               });
               const labels = page.getByTestId(`sidebar-workspace-menu-labels-${key}`);
+              // A phone held sideways is shorter than the action sheet: the item must scroll into view.
+              if (viewport.height < 500) await labels.scrollIntoViewIfNeeded();
               await expect(labels).toBeInViewport({ ratio: 1 });
               expect((await size(labels)).height).toBeGreaterThanOrEqual(48);
               if (rowType === "project" && !assigned)
@@ -424,7 +427,7 @@ test.describe("Workspace labels", () => {
                   ),
                   fullPage: true,
                 });
-              if (viewport.width < 720)
+              if (isCompactViewport(viewport))
                 await page
                   .getByRole("button", { name: "Bottom sheet backdrop" })
                   .first()

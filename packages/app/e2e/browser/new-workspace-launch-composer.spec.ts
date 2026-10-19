@@ -1,6 +1,7 @@
 import { DEFAULT_TERMINAL_PROFILES } from "@getpaseo/protocol/terminal-profiles";
 import { writeFile } from "node:fs/promises";
 import { expect, test, type Page } from "../support/fixtures";
+import { isCompactViewport } from "../support/helpers/compact-viewport";
 import type { Locator } from "@playwright/test";
 import { getE2EDaemonPort } from "../support/helpers/daemon-port";
 import { seedMockAgentWorkspace, openAgentRoute } from "../support/helpers/mock-agent";
@@ -442,9 +443,11 @@ test.describe("Session touch targets", () => {
         await history.scrollIntoViewIfNeeded();
         await history.tap();
         await expect(page.getByTestId("sessions-search-input")).toBeVisible();
-        if (width === 375) await expect(page.getByTestId("sidebar-close")).not.toBeInViewport();
+        // The compact sidebar is an overlay that closes on navigation; the pinned one stays.
+        const compact = isCompactViewport({ width, height });
+        if (compact) await expect(page.getByTestId("sidebar-close")).not.toBeInViewport();
         // Reset the shared sidebar scroll after navigation in the short window.
-        if (width !== 375) await newChat.scrollIntoViewIfNeeded();
+        if (!compact) await newChat.scrollIntoViewIfNeeded();
         const historyRow = page.locator('[data-testid^="agent-row-"][role="button"]').first();
         expect(await historyRow.evaluate((row) => row.scrollWidth <= row.clientWidth + 1)).toBe(
           true,

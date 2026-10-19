@@ -34,7 +34,10 @@ vi.mock("react-native-unistyles", async () => {
           ...(uniProps ? uniProps(theme.current) : {}),
         }),
     UnistylesRuntime: { setTheme: () => undefined, themeName: "light" },
-    useUnistyles: () => ({ theme: theme.current, rt: { themeName: "dark" } }),
+    useUnistyles: () => ({
+      theme: theme.current,
+      rt: { themeName: "dark", screen: { width: 1440, height: 900 } },
+    }),
   };
 });
 
