@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -47,5 +47,23 @@ describe("runGitCommand fsmonitor isolation", () => {
     const result = await runGitCommand(["config", "--get", "core.fsmonitor"], { cwd: repo });
 
     expect(result.stdout.trim()).toBe("false");
+  });
+});
+
+// FU-372: a caller repairs what a timed-out command left (index.lock). The killed tree must be gone first.
+describe("runGitCommand timeout", () => {
+  it("rejects only after the timed-out process tree has stopped", async () => {
+    const repo = makeTempRepo();
+    await runGitCommand(["init"], { cwd: repo });
+    const pidPath = path.join(repo, "child.pid");
+    await runGitCommand(
+      ["config", "alias.hang", `!sh -c 'echo $$ > "${pidPath}"; exec sleep 30'`],
+      { cwd: repo },
+    );
+    const started = runGitCommand(["hang"], { cwd: repo, timeout: 1000 });
+
+    await expect(started).rejects.toThrow("timed out");
+    const pid = Number(readFileSync(pidPath, "utf8"));
+    expect(() => process.kill(pid, 0)).toThrow();
   });
 });

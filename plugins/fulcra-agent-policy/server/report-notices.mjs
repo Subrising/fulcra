@@ -57,6 +57,36 @@ export function formatPermissionNotice(input) {
     `Request: ${input.request.id}`,
   ].join("\n");
 }
+/** FU-373: the questions of a worker's request_user_input_async, for its lead. */
+export function formatWorkerQuestionNotice(input) {
+  const questions = Array.isArray(input.request.input?.questions)
+    ? input.request.input.questions
+    : [];
+  const lines = questions.map((question, index) => {
+    const text = typeof question?.question === "string" ? question.question.trim() : "";
+    const options = Array.isArray(question?.options)
+      ? question.options.map((option) => option?.label).filter((label) => typeof label === "string")
+      : [];
+    return [
+      `Question ${index + 1}: ${text || "(no text)"}`,
+      ...(options.length ? [`Options: ${options.join(", ")}`] : []),
+    ].join("\n");
+  });
+  return [
+    `Worker ${titleOf(input.worker)} (${input.worker.id}) asked a question with request_user_input.`,
+    "No person watches a worker chat, so Fulcra dismissed the question. An open question stops every new turn of the worker.",
+    "If the worker needs an answer, send it to the worker in a message.",
+    ...lines,
+    `Folder: ${input.cwd ?? "unknown"}`,
+  ].join("\n");
+}
+/** FU-373: what the worker reads when Fulcra dismisses its question. */
+export const WORKER_QUESTION_REFUSAL = [
+  "Fulcra dismissed your request_user_input question. No person watches this chat, and an open question stops every new turn.",
+  "Fulcra sent a copy of the question to your lead.",
+  "Do not use request_user_input to wait for an answer or an event.",
+  "Continue the work. If you cannot continue, end your turn with DECISION <question> or BLOCKED <reason>.",
+].join("\n");
 export function formatCombinedNotice(items) {
   const only = items.length === 1 ? items[0] : undefined;
   if (only)

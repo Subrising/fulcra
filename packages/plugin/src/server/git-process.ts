@@ -18,6 +18,8 @@ import { promisify } from "node:util";
 const execute = promisify(execFile);
 export const GIT_CHILD_LIMIT = 8;
 export const GIT_TIMEOUT_MS = 30_000;
+/** A caller may ask for more time, never more than this. A worktree checkout on a slow disk needs minutes. */
+export const GIT_MAX_TIMEOUT_MS = 30 * 60_000;
 interface FetchState {
   failures: number;
   nextAt: number;
@@ -218,7 +220,7 @@ export function spawnGitProcess(args: string[], options: SpawnOptions = {}): Chi
   if (children.size >= GIT_CHILD_LIMIT) throw new Error("Fulcra git child limit reached");
   const timeout = Math.min(
     options.timeout && options.timeout > 0 ? options.timeout : GIT_TIMEOUT_MS,
-    120_000,
+    GIT_MAX_TIMEOUT_MS,
   );
   const child = spawn(gitExecutable(), gitArguments(args), {
     ...options,
@@ -467,7 +469,7 @@ export function execGitCommand(
           },
           Math.min(
             options.timeout && options.timeout > 0 ? options.timeout : GIT_TIMEOUT_MS,
-            120_000,
+            GIT_MAX_TIMEOUT_MS,
           ),
         );
         child.stdout!.setEncoding("utf8");
@@ -528,7 +530,7 @@ export function execGitCommandSync(
   if (children.size >= GIT_CHILD_LIMIT) throw new Error("Fulcra git child limit reached");
   const timeout = Math.min(
     options.timeout && options.timeout > 0 ? options.timeout : GIT_TIMEOUT_MS,
-    120_000,
+    GIT_MAX_TIMEOUT_MS,
   );
   const invocation = gitInvocation(args, options.cwd?.toString() ?? process.cwd());
   let state: FetchState | undefined;

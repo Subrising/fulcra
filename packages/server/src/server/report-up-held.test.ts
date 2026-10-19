@@ -20,6 +20,7 @@ import {
 } from "./report-up.js";
 
 const sent: Array<{ agentId: string; prompt: string }> = [];
+const responses: Array<{ agentId: string; requestId: string; response: object }> = [];
 let beforeSend: (() => void | Promise<void>) | undefined;
 let afterHandoff: (() => void | Promise<void>) | undefined;
 vi.mock("./agent/agent-prompt.js", async (importOriginal) => ({
@@ -52,6 +53,7 @@ function setup(
   } = {},
 ) {
   sent.length = 0;
+  responses.length = 0;
   beforeSend = undefined;
   afterHandoff = undefined;
   const chats = new Map(
@@ -79,6 +81,10 @@ function setup(
       return () => undefined;
     },
     trustedPlugins: { daemon: async (run: () => Promise<void>) => run() },
+    respondToPermission: async (id: string, requestId: string, response: object) => {
+      responses.push({ agentId: id, requestId, response });
+      pending.get(id)?.delete(requestId);
+    },
   } as unknown as AgentManager;
   const storage = {
     get: async (id: string) => chats.get(id) ?? null,
@@ -703,3 +709,49 @@ test.each([false, true])(
     }
   },
 );
+
+// FU-373: a Codex worker used request_user_input_async as a wait. The open question refused every new turn for hours,
+// and the lead saw only "waiting for permission" with no question text.
+describe("worker questions", () => {
+  const question = {
+    id: "permission-q1",
+    name: "request_user_input_async",
+    kind: "question",
+    input: {
+      questions: [{ id: "0", question: "Is the PC install done?", options: [{ label: "Yes" }] }],
+    },
+  };
+
+  test("a worker's question goes to its lead and is dismissed with a reason the worker reads", async () => {
+    const f = setup();
+    f.stream(A, { type: "permission_requested", request: question });
+    f.flushPermissionGrace();
+    await settle();
+
+    expect(responses).toEqual([
+      {
+        agentId: A,
+        requestId: "permission-q1",
+        response: expect.objectContaining({
+          behavior: "deny",
+          agentNotice: expect.stringContaining("Do not use request_user_input to wait"),
+        }),
+      },
+    ]);
+    f.leadTurnEnds();
+    await settle();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.agentId).toBe(LEAD);
+    expect(sent[0]!.prompt).toContain("Is the PC install done?");
+    expect(sent[0]!.prompt).toContain("Options: Yes");
+  });
+
+  test("a chat with no lead keeps its question for the person who watches it", async () => {
+    const f = setup();
+    f.stream(LEAD, { type: "permission_requested", request: question });
+    f.flushPermissionGrace();
+    await settle();
+
+    expect(responses).toEqual([]);
+  });
+});

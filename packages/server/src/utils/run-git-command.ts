@@ -467,8 +467,12 @@ function executeGitCommand<Output>(
 
       timer = setTimeout(() => {
         timeoutError = new Error(`Git command timed out after ${timeout}ms: ${command}`);
-        stopChild();
-        settle(() => reject(timeoutError));
+        // Reject after the tree is killed: a caller may repair what the command left (FU-372).
+        void terminateGitProcess(child)
+          .catch((cleanupError) => {
+            processError = cleanupError;
+          })
+          .finally(() => settle(() => reject(timeoutError)));
         if (processExit) {
           settleTimeoutTrace(processExit.exitCode, processExit.signal);
         }

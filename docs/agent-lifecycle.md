@@ -116,7 +116,11 @@ authority. Hosts without an external controller retain the normal permission/ide
 Treat `refused` as no adoption and inspect again before deciding what to do. `unchanged` means the
 requested entries already match. A failed resume normally leaves the original saved configuration
 closed with its history intact. A failed close or replacement cleanup retains the uncertain writer
-in an error state and blocks prompts until explicit close recovery. If registration fails after
+in an error state and blocks prompts until explicit close recovery. Close recovery is a fenced
+reconnect (`reconnect: true`) with the retained runtime's current revision: it closes that exact
+runtime again and resumes the same session with its history. The controller's account-switch
+reconcile uses it, so the original switch receipt finishes and the chat stays. A close that fails
+again keeps the writer and the error state. If registration fails after
 resume, the retained error-state configuration may already contain the requested entries. The response's state reports
 which identity/revision remains; provider diagnostics and MCP secrets are not returned here.
 

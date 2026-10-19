@@ -23,7 +23,6 @@ export type {
 } from "../../../../plugins/fulcra-agent-policy/server/report-notices.mjs";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { isArchiveLead } from "./agent/archive-policy.js";
 import path from "node:path";
 import { writePrivateFileAtomicSync } from "./private-files.js";
 import type { Logger } from "pino";
@@ -58,6 +57,8 @@ import {
 import { CodexAppServerRpcError } from "./agent/providers/codex/app-server-transport.js";
 import type { DaemonConfigStore } from "./daemon-config-store.js";
 import { heldSendsFor } from "./held-sends.js";
+import { isArchiveLead } from "./agent/archive-policy.js";
+import { respondToAgentPermission } from "./agent/permission-response.js";
 import {
   defaultLedgerDir,
   readOpenLedgerRows,
@@ -90,6 +91,8 @@ const {
   permissionCommandOf,
   formatNudge,
   formatPermissionNotice,
+  formatWorkerQuestionNotice,
+  WORKER_QUESTION_REFUSAL,
   formatCombinedNotice,
   titleOf,
   formatReportUpNotice,
@@ -195,6 +198,16 @@ interface PersistedState {
 }
 
 /** A chat's lead chat on this computer (fulcra.reports-to, else its parent), or the reason there is none. */
+const ASYNC_QUESTION_TOOL = "request_user_input_async";
+
+/** A worker: it reports to a chat, and it holds no seat or lead role that a person talks to. */
+function hasNoHumanSeat(worker: LineAgent): boolean {
+  const line = reportsTo(worker);
+  return (
+    Boolean(line) && line !== REPORTS_TO_OWNER && !isArchiveLead({ labels: worker.labels ?? {} })
+  );
+}
+
 export async function leadChatOf(
   store: LineStore,
   worker: LineAgent,
@@ -275,7 +288,7 @@ export class ReportUpService {
       onPermission: (id, request) => {
         // Bypass and hook answers can resolve a request before a person can act on it.
         this.schedule(() => {
-          void this.notifyPermission(id, request).catch((err: unknown) =>
+          void this.onPermissionRequest(id, request).catch((err: unknown) =>
             this.deps.logger.warn({ err, agentId: id }, "Permission notice failed"),
           );
         }, PERMISSION_NOTICE_GRACE_MS);
@@ -1354,6 +1367,12 @@ export class ReportUpService {
     }
   }
 
+  private async onPermissionRequest(workerId: string, request: PermissionRequest): Promise<void> {
+    const current = () => this.permissionCurrent(workerId, request);
+    if (!current() || (await this.redirectWorkerQuestion(workerId, request, current))) return;
+    await this.notifyPermission(workerId, request);
+  }
+
   /** Tells the lead once that a chat is waiting for permission. Nothing is allowed or denied here. */
   private async notifyPermission(workerId: string, request: PermissionRequest): Promise<void> {
     const current = () => this.permissionCurrent(workerId, request);
@@ -1394,6 +1413,49 @@ export class ReportUpService {
         requestId: request.id,
       },
     );
+  }
+
+  /**
+   * FU-373: a worker's request_user_input_async stays open until a person answers, and an open question refuses every
+   * new turn. No person watches a worker, so the lead gets the question text and the worker gets a dismissal that
+   * tells it to continue or report DECISION/BLOCKED.
+   */
+  private async redirectWorkerQuestion(
+    workerId: string,
+    request: PermissionRequest,
+    current: () => boolean,
+  ): Promise<boolean> {
+    if (request.name !== ASYNC_QUESTION_TOOL) return false;
+    const live = this.deps.agentManager.getAgent(workerId);
+    const worker = await this.store.get(workerId);
+    if (!worker || worker.archivedAt || live?.internal || !hasNoHumanSeat(worker)) return false;
+    const prompt = formatSystemNotificationPrompt(
+      formatWorkerQuestionNotice({ worker, request, cwd: live?.cwd ?? null }),
+    );
+    if (!current()) return true;
+    try {
+      if (!(await this.deps.remoteNotice?.(workerId, prompt, "permission"))) {
+        const lead = await this.leadOf(worker);
+        if ("id" in lead && (await this.reportingLineAllows(workerId, lead.id)))
+          void this.toLead(workerId, lead.id, prompt, "permission").catch((err: unknown) =>
+            this.deps.logger.warn({ err, agentId: workerId }, "Worker question notice failed"),
+          );
+      }
+    } finally {
+      if (current())
+        await respondToAgentPermission({
+          agentManager: this.deps.agentManager,
+          agentId: workerId,
+          requestId: request.id,
+          response: {
+            behavior: "deny",
+            message: "Dismissed: no person watches a worker chat",
+            agentNotice: WORKER_QUESTION_REFUSAL,
+          },
+          logger: this.deps.logger,
+        });
+    }
+    return true;
   }
 
   private now(): number {

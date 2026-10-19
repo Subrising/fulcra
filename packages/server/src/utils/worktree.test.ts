@@ -3,6 +3,7 @@ import {
   createWorktree as createWorktreePrimitive,
   deriveWorktreeProjectHash,
   deletePaseoWorktree,
+  finishInterruptedWorktreeAdd,
   isPaseoOwnedWorktreeCwd,
   mapWorkspaceCwdToWorktree,
   slugify,
@@ -23,6 +24,7 @@ import { join } from "path";
 import { createServer, type AddressInfo, type Socket } from "net";
 import { tmpdir } from "os";
 import { createRealpathAwarePathMatcher } from "./path";
+import { runGitCommand } from "./run-git-command";
 
 interface LegacyCreateWorktreeTestOptions {
   branchName: string;
@@ -120,6 +122,61 @@ describe("paseo worktree manager", () => {
       allowed: true,
       worktreePath: created.worktreePath,
     });
+  });
+
+  // FU-372: a slow disk made `git worktree add` outlive its limit. The kill left a locked worktree, an index.lock
+  // and a partial file set, and no agent was created.
+  it("finishes a worktree checkout that a timeout killed part-way", async () => {
+    writeFileSync(join(repoDir, ".gitattributes"), "*.slow filter=slow\n");
+    writeFileSync(join(repoDir, "a.txt"), "first\n");
+    writeFileSync(join(repoDir, "b.slow"), "second\n");
+    execFileSync("git", ["add", "."], { cwd: repoDir });
+    execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "slow file"], {
+      cwd: repoDir,
+    });
+    execFileSync("git", ["config", "filter.slow.clean", "cat"], { cwd: repoDir });
+    execFileSync("git", ["config", "filter.slow.smudge", "sleep 30; cat"], { cwd: repoDir });
+    const worktreePath = join(tempDir, "interrupted");
+
+    await expect(
+      runGitCommand(["worktree", "add", "-b", "interrupted-branch", worktreePath, "main"], {
+        cwd: repoDir,
+        timeout: 1500,
+      }),
+    ).rejects.toThrow("timed out");
+    const adminDir = join(repoDir, ".git", "worktrees", "interrupted");
+    expect(existsSync(join(adminDir, "locked"))).toBe(true);
+    expect(existsSync(join(worktreePath, "b.slow"))).toBe(false);
+
+    execFileSync("git", ["config", "filter.slow.smudge", "cat"], { cwd: repoDir });
+    await finishInterruptedWorktreeAdd({
+      cwd: repoDir,
+      worktreePath,
+      paseoHome,
+      cause: new Error("timed out"),
+    });
+
+    expect(existsSync(join(adminDir, "locked"))).toBe(false);
+    expect(existsSync(join(adminDir, "index.lock"))).toBe(false);
+    expect(execFileSync("git", ["status", "--porcelain"], { cwd: worktreePath }).toString()).toBe(
+      "",
+    );
+    expect(
+      execFileSync("git", ["branch", "--show-current"], { cwd: worktreePath }).toString().trim(),
+    ).toBe("interrupted-branch");
+    expect(existsSync(join(worktreePath, "b.slow"))).toBe(true);
+  }, 30_000);
+
+  it("keeps the first error when a failed worktree add left nothing to finish", async () => {
+    const cause = new Error("fatal: invalid reference: missing");
+    await expect(
+      finishInterruptedWorktreeAdd({
+        cwd: repoDir,
+        worktreePath: join(tempDir, "never-created"),
+        paseoHome,
+        cause,
+      }),
+    ).rejects.toBe(cause);
   });
 
   it("rejects paths that are not under the paseo worktrees root", async () => {
