@@ -1,4 +1,5 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { recordTestFixtureOwner } from "../../../test-fixture-ownership.js";
+import { mkdtemp, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as waitForImmediate } from "node:timers/promises";
@@ -102,6 +103,14 @@ export class OmpHarness {
     paseoTools?: PaseoToolCatalog,
     env?: Record<string, string>,
   ): Promise<void> {
+    config = {...config, mcpServers: config.mcpServers ? Object.fromEntries(Object.entries(config.mcpServers).map(([name, server]) => [name, {...server, ...(server.type === "stdio" ? {env: {...server.env}} : {})}])) : undefined};
+    const pidFiles: string[] = [];
+    for (const server of Object.values(config.mcpServers ?? {})) {
+      if (server.type !== "stdio" || !server.args?.some((arg) => arg.endsWith("echo-mcp-server.mjs"))) continue;
+      const file = server.env?.OMP_MCP_PID_FILE ?? join(await mkdtemp(join(tmpdir(), "omp-helper-")), "pid");
+      server.env = {...server.env, OMP_MCP_PID_FILE: file};
+      pidFiles.push(file);
+    }
     const session = await this.client.createSession(
       { provider: "omp", cwd: CWD, ...config },
       paseoTools || env ? { paseoTools, env } : undefined,
@@ -110,6 +119,9 @@ export class OmpHarness {
       throw new Error("OMP client returned a non-OMP session");
     }
     this.session = session;
+    for (const file of pidFiles) {
+      await recordTestFixtureOwner(config.cwd ?? CWD, Number(await readFile(file, "utf8")));
+    }
     this.session.subscribe((event) => this.events.push(event));
   }
 

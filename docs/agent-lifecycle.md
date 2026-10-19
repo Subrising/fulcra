@@ -580,3 +580,28 @@ Live or unreadable session state prevents the stop.
 Each signal checks the native birth identity and current directory again.
 The scan inspects at most 128 old detached Node candidates. It never reads arguments or environments.
 OMP test harnesses register teardown before start. Teardown closes native helpers after failed assertions.
+
+### Cleanup controls and ownership safeguards
+
+`FULCRA_SESSION_RESOURCE_CLEANUP` controls resource cleanup. The default is `on`.
+Set it to `off` to disable collection and cleanup. Set it to `dry-run` to record decisions without signals or simulator shutdown.
+Other values disable cleanup. Set the environment before starting the daemon.
+
+Each sampled root is bound to its native birth identity. Reused roots cannot acquire new children under the old binding.
+Child and parent births must agree across snapshots. A child cannot be older than its recorded parent.
+Missing ancestry keeps the target. Cleanup errors keep affected targets and cannot block session close or archive.
+Corrupt ledgers are preserved under a `.corrupt-<UUID>` name. The current operation then performs no cleanup.
+Warnings for repeated collection failures are limited to one per five minutes.
+
+Windows policy must include `installRoots`: an array of exact `{ "pid": 123, "birth": "native ticks" }` identities.
+An empty array explicitly declares no installation in progress. Missing or stale installation identities prevent stops.
+Installation roots and their descendants stay protected, including generic Node and PowerShell children.
+
+Old fixture cleanup also requires an exact helper/owner lease under `.fulcra-fixture-owners` in the fixture directory.
+OMP echo test helpers publish this proof. A live test worker keeps its helper, even during a long soak test.
+Missing or invalid proof keeps the process. Unrecorded fixtures from older test runs need an operator ownership check.
+
+Simulator use includes destination UUIDs from `xcodebuild`, other `xcrun` commands, and Flutter or Capacitor runs.
+Ambiguous device commands keep all owned devices while the user session is live.
+Visible Simulator.app or active Xcode/Flutter processes prevent automated shutdown.
+Ordinary tool events do not enter the cleanup queue.

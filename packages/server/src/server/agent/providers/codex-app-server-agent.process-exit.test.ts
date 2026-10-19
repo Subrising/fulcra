@@ -683,3 +683,11 @@ test("session close disposes a provider that arrives from an in-flight reconnect
     rmSync(workdir, { recursive: true, force: true });
   }
 });
+
+test("H1 clears the native root PID and client on unexpected termination",async()=>{
+ const dir=mkdtempSync(join(tmpdir(),"codex-root-retire-")),server=createFakeCodexAppServer();
+ Object.defineProperty(server.child,"pid",{value:43210,configurable:true});
+ const session=await new ProcessExitCodexClient([server]).createSession({provider:"codex",cwd:dir});
+ try {expect(session.getProcessId?.()).toBe(43210);Object.defineProperty(server.child,"exitCode",{value:17,configurable:true});server.child.emit("exit",17,null);expect(session.getProcessId?.()).toBeNull();}
+ finally {Object.defineProperty(server.child,"pid",{value:undefined,configurable:true});Object.defineProperty(server.child,"exitCode",{value:17,configurable:true});await session.close();rmSync(dir,{recursive:true,force:true});}
+});

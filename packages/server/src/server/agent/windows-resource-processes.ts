@@ -13,11 +13,17 @@ const exec = promisify(execFile);
 export const WINDOWS_RESOURCE_SCRIPT = String.raw`param([string]$PolicyPath)
 $ErrorActionPreference = 'Stop'
 $queueState = 'unknown'
+$installRoots = $null
 if ($PolicyPath -and (Test-Path -LiteralPath $PolicyPath)) {
   try {
     $policyItem = Get-Item -LiteralPath $PolicyPath
     if ($policyItem.Length -gt 65536) { throw 'Policy too large' }
     $policy = Get-Content -LiteralPath $PolicyPath -Raw | ConvertFrom-Json
+    if ($null -eq $policy.installRoots -or @($policy.installRoots).Count -gt 128) { throw 'Unknown install roots' }
+    $installRoots = @($policy.installRoots | ForEach-Object {
+      if ($_.pid -le 0 -or [string]$_.birth -notmatch '^\d+$') { throw 'Invalid install identity' }
+      [pscustomobject]@{pid=[int]$_.pid; birth=[string]$_.birth}
+    })
     $directory = [string]$policy.queueReceiptDirectory
     if ($policy.version -ne 1 -or $directory -notmatch '^[a-zA-Z]:\\' -or $directory -match '(?i)(^|\\)(Games|Videos|Steam)(\\|$)|song-studio|video-studio') { throw 'Invalid queue policy' }
     $item = Get-Item -LiteralPath $directory
@@ -38,11 +44,12 @@ $rows = @(Get-Process | ForEach-Object {
   try { $ticks=$_.StartTime.ToUniversalTime().Ticks.ToString() } catch {}
   [pscustomobject]@{ Id=$_.Id; Name=$_.ProcessName; StartTicks=$ticks; Parent=$parents[[int]$_.Id]; WorkingSet64=$_.WorkingSet64; PrivateMemorySize64=$_.PrivateMemorySize64 }
 })
-[pscustomobject]@{ queueState=$queueState; processes=$rows } | ConvertTo-Json -Depth 4 -Compress
+[pscustomobject]@{ queueState=$queueState; installRoots=$installRoots; processes=$rows } | ConvertTo-Json -Depth 4 -Compress
 `;
 
 const snapshotSchema = z.object({
   queueState: z.enum(["clear", "open", "unknown"]),
+  installRoots: z.array(z.object({pid: z.number().int().positive(), birth: z.string().regex(/^\d+$/)})).max(128).nullable().optional(),
   processes: z.array(
     z.object({
       Id: z.number().int().nonnegative(),
@@ -57,6 +64,17 @@ const snapshotSchema = z.object({
 
 export function parseWindowsResourceSnapshot(output: string): ResourceProcess[] {
   const snapshot = snapshotSchema.parse(JSON.parse(output.trim().replace(/^\uFEFF/, "")));
+  const protectedPids = new Set<number>();
+  let unknownInstall = !snapshot.installRoots;
+  for (const root of snapshot.installRoots ?? []) {
+    if (!snapshot.processes.some((row) => row.Id === root.pid && row.StartTicks === root.birth)) unknownInstall = true;
+    else protectedPids.add(root.pid);
+  }
+  for (let pass = 0; pass < snapshot.processes.length; pass++) {
+    const size = protectedPids.size;
+    for (const row of snapshot.processes) if (row.Parent !== null && protectedPids.has(row.Parent)) protectedPids.add(row.Id);
+    if (size === protectedPids.size) break;
+  }
   return snapshot.processes.flatMap((row) => {
     if (!row.Id || !row.StartTicks || row.Parent === null) return [];
     return [
@@ -71,7 +89,7 @@ export function parseWindowsResourceSnapshot(output: string): ResourceProcess[] 
         rssKiB: row.WorkingSet64 / 1024,
         privateMemoryBytes: row.PrivateMemorySize64,
         protectionReason:
-          snapshot.queueState === "clear" ? undefined : `queue-${snapshot.queueState}`,
+          protectedPids.has(row.Id) ? "install-tree" : unknownInstall ? "install-unknown" : snapshot.queueState === "clear" ? undefined : `queue-${snapshot.queueState}`,
       },
     ];
   });
@@ -108,6 +126,8 @@ export async function readWindowsResourceProcesses(
 export function protectedSessionDirectory(cwd: string, title?: string | null): boolean {
   return (
     /\b(?:Song|Video) Studio\b/i.test(title ?? "") ||
+    /Fulcra.*(?:install|release|update)|(?:install|release).*Fulcra/i.test(title ?? "") ||
+    /(?:^|[\\/])(?:orca-service-releases[^\\/]*|fulcra-(?:releases?|installer?|updates?))(?:[\\/]|$)/i.test(cwd) ||
     /(?:^|[\\/])(?:song-studio|video-studio)(?:[\\/]|$)/i.test(cwd) ||
     /^[A-Za-z]:[\\/](?:Games|Videos|Steam)(?:[\\/]|$)/i.test(cwd)
   );

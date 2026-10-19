@@ -1,3 +1,4 @@
+import { testFixtureInUse } from "./test-fixture-ownership.js";
 import { withCleanupAdmission } from "../../utils/cleanup-admission.js";
 import {
   assertComputerUseLabels,
@@ -531,6 +532,7 @@ export interface CreateAgentOptions {
 
 export interface AgentManagerOptions {
   sessionResourcesFile?: string;
+  sessionResourceMode?: () => import("./session-resources.js").ResourceCleanupMode;
   costOutboxFile?: string;
   archiveServerId?: string;
   archiveLedgerDirectory?: string;
@@ -2308,7 +2310,7 @@ export class AgentManager {
     this.resolvePaseoToolPolicy = options.resolvePaseoToolPolicy ?? (() => undefined);
     this.appendSystemPrompt = options.appendSystemPrompt ?? "";
     this.logger = options.logger.child({ module: "agent", component: "agent-manager" });
-    this.sessionResources = this.createSessionResources(options.sessionResourcesFile);
+    this.sessionResources = this.createSessionResources(options.sessionResourcesFile, options.sessionResourceMode);
     this.idleSleep = new IdleSleep({
       logger: this.logger,
       minutes: () => this.idleSleepMinutes(),
@@ -2349,11 +2351,12 @@ export class AgentManager {
     });
   }
 
-  private createSessionResources(file?: string): SessionResources | undefined {
+  private createSessionResources(file?: string, mode?: () => import("./session-resources.js").ResourceCleanupMode): SessionResources | undefined {
     if (!file) return undefined;
     return new SessionResources({
       file,
       logger: this.logger,
+      mode,
       windowsPolicyFile: join(dirname(file), "session-resource-policy.json"),
       roots: () =>
         [...this.agents.values()].flatMap((agent) => {
@@ -2369,14 +2372,13 @@ export class AgentManager {
             ? [{ agentId: agent.id, instanceId: agent.instanceId, pid }]
             : [];
         }),
-      fixtureInUse: async (cwd) => {
+      fixtureInUse: async (cwd, pid, birth) => {
         if (!this.acceptingAgentRegistrations || !this.registry) return true;
         const canonical = (value: string) => value.replace(/^\/private\/tmp\//, "/tmp/");
         const matches = (value: string) => canonical(value) === canonical(cwd);
         if ([...this.agents.values()].some((agent) => matches(agent.cwd))) return true;
-        return (await this.registry.list()).some(
-          (record) => matches(record.cwd) && !record.archivedAt && record.lastStatus !== "closed",
-        );
+        if ((await this.registry.list()).some((record) => matches(record.cwd) && !record.archivedAt && record.lastStatus !== "closed")) return true;
+        return testFixtureInUse(cwd, pid, birth);
       },
       ownerState: (id) => {
         if (!this.acceptingAgentRegistrations) return "unknown";
@@ -4560,16 +4562,27 @@ export class AgentManager {
     // native writer, so publishing a resumable closed snapshot would orphan it.
     this.invokeReportRelaunchGuard(requireRetiringIdentity);
     // Capture before the provider closes stdin or releases its root process.
-    if (this.acceptingAgentRegistrations) await this.sessionResources?.sample();
+    if (this.acceptingAgentRegistrations) {
+      try { await this.sessionResources?.sample(); }
+      catch { this.logger.warn({agentId}, "Resource capture failed; close will continue"); }
+    }
     this.invokeReportRelaunchGuard(requireRetiringIdentity);
+    // Windows retains stale parent numbers after exit. Use the verified live root boundary first.
+    if (process.platform === "win32" && this.acceptingAgentRegistrations && agent.instanceId) {
+      const instanceId = agent.instanceId;
+      try { await this.sessionResources?.closeOwner(agentId, instanceId, () => this.agents.get(agentId) === agent && agent.instanceId === instanceId); }
+      catch { this.logger.warn({agentId}, "Resource cleanup failed; close will continue"); }
+    }
     await nativeDispatch(() => agent.session.close());
     if (this.acceptingAgentRegistrations && agent.instanceId) {
       const instanceId = agent.instanceId;
+      try {
       await this.sessionResources?.closeOwner(
         agentId,
         instanceId,
         () => this.agents.get(agentId) === agent && agent.instanceId === instanceId,
       );
+      } catch { this.logger.warn({agentId}, "Resource cleanup failed; close will continue"); }
     }
     this.cancelRunningProviderSubagents(agentId);
     const closedAgent = await this.prepareAgentForClosure(agent, "agent closed");

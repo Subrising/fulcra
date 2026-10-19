@@ -16,7 +16,7 @@ import { createTestLogger } from "../../test-utils/test-logger.js";
 const root: ResourceProcess = {
   pid: 100,
   ppid: 1,
-  birth: "root",
+  birth: "10000",
   groupId: 100,
   detached: true,
   zombie: false,
@@ -27,7 +27,7 @@ const child: ResourceProcess = {
   ...root,
   pid: 101,
   ppid: 100,
-  birth: "child",
+  birth: "20000",
   command: "/bin/node",
 };
 const directories: string[] = [];
@@ -178,6 +178,7 @@ describe("session resource cleanup", () => {
     expect(f.stopped).toEqual([101]);
     expect(JSON.parse(await readFile(f.options.file, "utf8"))).toEqual({
       version: 1,
+      roots: [{agentId: "owner", instanceId: "generation", pid: 100, birth: "10000"}],
       processes: [],
       simulators: [],
     });
@@ -273,10 +274,10 @@ describe("session resource cleanup", () => {
     f.setLive(false);
     f.setNow(ORPHAN_INTERVAL_MS + 1);
     await mkdir(`${f.options.file}.stops.jsonl`);
-    await expect(f.tracker.sweep()).rejects.toThrow();
+    await expect(f.tracker.sweep()).resolves.toBeUndefined();
     expect(f.stopped).toEqual([]);
     await writeFile(f.options.file, "invalid ledger");
-    await expect(f.tracker.sweep()).rejects.toThrow();
+    await expect(f.tracker.sweep()).resolves.toBeUndefined();
     expect(f.stopped).toEqual([]);
   });
 
