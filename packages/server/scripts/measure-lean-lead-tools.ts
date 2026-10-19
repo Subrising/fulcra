@@ -43,6 +43,9 @@ const provider = new ClaudeAgentClient({
           }
         : {}),
       ANTHROPIC_BASE_URL: process.env.LEAN_MEASURE_RELAY,
+      // A non-Anthropic base URL turns off deferred tool loading in the Claude CLI.
+      // Keep it on so the capture matches live sessions, which defer MCP tools.
+      ENABLE_TOOL_SEARCH: "true",
     },
   },
 });

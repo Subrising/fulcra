@@ -20,6 +20,8 @@ For a real provider capture, use `packages/server/scripts/measure-lean-lead-tool
 Supply the same task JSON, model, relay, and provider home for both `on` and `lead`.
 The task JSON contains `scratch`, `model`, and `prompts`.
 Set `LEAN_MEASURE_RELAY` to the local capture relay.
+The script sets `ENABLE_TOOL_SEARCH=true`. Without it, the relay URL turns off deferred tool loading, and the capture sends every MCP tool in full.
+Use the same setting for any other relay capture of a Claude session.
 Set `LEAN_MEASURE_PROVIDER_HOME` to the authorized provider home.
 Supply an authorized credential in `LEAN_MEASURE_CREDENTIAL` only when native login is unavailable.
 Keep credentials in memory. Do not write credentials or request headers to reports.
