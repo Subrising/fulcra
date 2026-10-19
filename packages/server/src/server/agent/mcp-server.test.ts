@@ -6707,6 +6707,7 @@ describe("FU-170 native host selection", () => {
     title: "Remote worker",
     initialPrompt: "Check the task.",
     hostLink: {
+      issuedAt: 1792065600000,
       messageId: "11111111-1111-4111-8111-111111111111",
       workload: "standard",
       workspace: "job",

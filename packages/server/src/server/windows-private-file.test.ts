@@ -112,7 +112,7 @@ test("a terminated helper blocks reconciliation before its exit message is proce
   const api = await helper();
   transport.mode = "fatal";
   expect(() => api.writeWindowsPrivateFileAtomicSync("journal.json", "value")).toThrow(
-    "Windows durable file commit failed",
+    "requires reconciliation",
   );
   expect(() => api.assertWindowsPrivateFilesSettled()).toThrow("requires reconciliation");
   await expect(api.waitForWindowsPrivateFilesSettled()).rejects.toThrow("helper is unavailable");
@@ -173,4 +173,20 @@ test("an exit with an uncertain commit logs and keeps its fence without restart"
   );
   expect(transport.posts).toBe(1);
   await expect(api.waitForWindowsPrivateFilesSettled()).rejects.toThrow("helper is unavailable");
+});
+
+test("ten healthy minutes reset the helper restart delay", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  await helper();
+  transport.workers[0]!.emit("exit", 1);
+  await vi.advanceTimersByTimeAsync(1000);
+  transport.workers[1]!.emit("exit", 1);
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(transport.workers).toHaveLength(3);
+  await vi.advanceTimersByTimeAsync(10 * 60000);
+  transport.workers[2]!.emit("exit", 1);
+  await vi.advanceTimersByTimeAsync(999);
+  expect(transport.workers).toHaveLength(3);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(transport.workers).toHaveLength(4);
 });

@@ -62,6 +62,10 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
     );
   }
   let service: HostLinks | null = null;
+  const noticeFailure = (agentId: string, error: unknown, eventType?: string) => {
+    if (eventType === "turn_started" || eventType === "permission_resolved") return;
+    service?.recordWorkerNoticeFailure(agentId, error);
+  };
   const unsubscribe = agentManager.subscribe(
     (event) => {
       if (event.type === "agent_state" && !event.agent.internal) remember(event.agent);
@@ -74,7 +78,7 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
             finishText(event.agent.id, event.agent.lastError ?? "The remote worker failed."),
           );
         } catch (error) {
-          service.recordWorkerNoticeFailure(event.agent.id);
+          noticeFailure(event.agent.id, error);
           logger.error(
             { err: error, agentId: event.agent.id },
             "Could not retain a host-link worker error",
@@ -122,7 +126,7 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
             `Permission request ${event.event.request.id}:\n${JSON.stringify(event.event.request)}`,
           );
       } catch (error) {
-        service.recordWorkerNoticeFailure(event.agentId);
+        noticeFailure(event.agentId, error, event.event.type);
         logger.error(
           { err: error, agentId: event.agentId },
           "Could not retain a host-link worker notice",

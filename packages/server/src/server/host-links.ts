@@ -4,6 +4,8 @@ import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync }
 import path from "node:path";
 import {
   HostLinkConfigSchema,
+  HOST_LINK_RETENTION_MS,
+  HOST_LINK_CLOCK_SKEW_MS,
   HostLinkDispatchSchema,
   HostLinkSpawnSchema,
   HostLinkJournalSchema,
@@ -30,7 +32,10 @@ import {
 } from "./host-link-contracts.js";
 import { matchesHostLinkCredential } from "./host-link-credential.js";
 import { writePrivateFileAtomicSync } from "./private-files.js";
-import { assertWindowsPrivateFilesSettled } from "./windows-private-file.js";
+import {
+  assertWindowsPrivateFilesSettled,
+  WindowsPrivateFileReconciliationError,
+} from "./windows-private-file.js";
 import { windowsAclIsSafe, WINDOWS_PRIVATE_MASK } from "./plugins/trusted-ownership.js";
 import { HostAccountLimits } from "./host-account-limits.js";
 import { childModeClass } from "./agent/create-agent-mode.js";
@@ -44,6 +49,21 @@ export class HostLinkError extends Error {
   ) {
     super(message, options);
     this.name = "HostLinkError";
+  }
+}
+export class HostLinkStorageError extends HostLinkError {
+  constructor(
+    readonly kind: "capacity" | "write",
+    options?: ErrorOptions,
+  ) {
+    super(
+      kind === "capacity" ? "refused" : "uncertain",
+      kind === "capacity"
+        ? "Host-link receipt storage is full."
+        : "Host-link receipt write failed.",
+      options,
+    );
+    this.name = "HostLinkStorageError";
   }
 }
 export interface HostLinkChat {
@@ -246,12 +266,28 @@ export class HostLinks {
   private save(file: string, key: string, entry: HostLinkJournal[string]): void {
     const journal = this.journal(file);
     if (!Object.hasOwn(journal, key) && Object.keys(journal).length >= 1000)
-      throw new HostLinkError("refused", "Host-link receipt capacity is full.");
+      throw new HostLinkStorageError("capacity");
     journal[key] = entry;
     const data = JSON.stringify(journal);
     if (Buffer.byteLength(data) > (process.platform === "win32" ? 1 : 8) * 1024 * 1024)
-      throw new HostLinkError("refused", "Host-link receipt storage is full.");
-    writePrivateFileAtomicSync(file, data, { durable: true });
+      throw new HostLinkStorageError("capacity");
+    try {
+      writePrivateFileAtomicSync(file, data, { durable: true });
+    } catch (cause) {
+      if (cause instanceof WindowsPrivateFileReconciliationError) throw cause;
+      throw new HostLinkStorageError("write", { cause });
+    }
+  }
+  private requestCurrent(issuedAt: number | undefined): void {
+    if (
+      !Number.isSafeInteger(issuedAt) ||
+      issuedAt! > this.now() + HOST_LINK_CLOCK_SKEW_MS ||
+      this.now() - issuedAt! >= HOST_LINK_RETENTION_MS - HOST_LINK_CLOCK_SKEW_MS
+    )
+      throw new HostLinkError(
+        "refused",
+        "The request issuedAt is missing, expired, or outside the allowed clock skew.",
+      );
   }
   private replay(file: string) {
     const result = HostLinkReplaySchema.safeParse(privateJson(`${file}.replay`) ?? {});
@@ -286,19 +322,13 @@ export class HostLinks {
     if (Buffer.byteLength(JSON.stringify(replay)) + reserved + 1024 > 1024 * 1024)
       throw new HostLinkError(
         "refused",
-        "Host-link replay storage is full. Rotate the inactive link grant before new work.",
+        "Host-link replay storage is full. Wait for retained requests to expire before new work.",
       );
   }
   private pruneReplay(replay: ReturnType<HostLinks["replay"]>): boolean {
     const before = Object.keys(replay).length;
-    const cfg = this.requiredConfig();
-    // Keep fences while the credential is configured, including expiry renewal or revocation reversal.
-    const credentials = new Set(
-      [...cfg.incoming, ...cfg.outgoing].map((grant) => digest(grant.token)),
-    );
     for (const [key, entry] of Object.entries(replay))
-      if (!credentials.has(entry.credential) && entry.retiredAt < this.now() - 30 * 86400000)
-        delete replay[key];
+      if (entry.retiredAt < this.now() - HOST_LINK_RETENTION_MS) delete replay[key];
     return Object.keys(replay).length !== before;
   }
   private retire(file: string, keys: string[]): void {
@@ -315,7 +345,7 @@ export class HostLinks {
         hash: entry.hash,
         grant: entry.grant,
         receipt: entry.receipt,
-        retiredAt: this.now(),
+        retiredAt: Math.max(this.now(), entry.issuedAt ?? this.now()),
         credential: digest(link.token),
         noticeGrant: authorityDigest(link),
       };
@@ -337,7 +367,11 @@ export class HostLinks {
       true
     );
   }
-  recordWorkerNoticeFailure(agentId: string): void {
+  recordWorkerNoticeFailure(agentId: string, error: unknown): void {
+    if (!(error instanceof HostLinkStorageError)) return;
+    this.retainNoticeFailure(agentId);
+  }
+  private retainNoticeFailure(agentId: string): void {
     this.noticeSaveFailures.add(agentId);
     // A full active journal must not prevent a small, separate failure marker.
     try {
@@ -348,6 +382,7 @@ export class HostLinks {
       const data = JSON.stringify(failures);
       if (Buffer.byteLength(data) > 128 * 1024) throw new Error("Failure marker capacity is full.");
       writePrivateFileAtomicSync(this.noticeFailuresFile, data, { durable: true });
+      this.noticeSaveFailures.delete(agentId);
     } catch {
       this.deps.noticeError?.(
         new HostLinkError(
@@ -355,6 +390,22 @@ export class HostLinks {
           "Worker notice storage failure needs owner repair; its live warning remains available.",
         ),
       );
+    }
+  }
+  private clearNoticeFailure(agentId: string): void {
+    try {
+      const failures = HostLinkNoticeFailuresSchema.parse(
+        privateJson(this.noticeFailuresFile) ?? {},
+      );
+      if (failures[agentId]) {
+        delete failures[agentId];
+        writePrivateFileAtomicSync(this.noticeFailuresFile, JSON.stringify(failures), {
+          durable: true,
+        });
+      }
+      this.noticeSaveFailures.delete(agentId);
+    } catch {
+      this.deps.noticeError?.(new Error("A retained worker notice failure needs owner repair."));
     }
   }
   private incoming(token: string | null): IncomingHostLink {
@@ -452,10 +503,12 @@ export class HostLinks {
       agentId: string;
       prompt: string;
       messageId: string;
+      issuedAt: number;
       notifyOnFinish?: boolean;
       steer?: boolean;
     },
   ): Promise<HostLinkReceipt> {
+    this.requestCurrent(input.issuedAt);
     const matches = Object.entries(this.journal(this.outboxFile)).filter(
       ([, entry]) =>
         entry.sender === parentId &&
@@ -616,6 +669,7 @@ export class HostLinks {
     input: HostLinkDispatch,
     noticeKind: HostLinkNoticeKind,
   ): Promise<HostLinkReceipt> {
+    if (input.kind === "spawn") this.requestCurrent(input.issuedAt);
     const origin = {
       destination: link.serverId,
       sender: chat.id,
@@ -649,6 +703,7 @@ export class HostLinks {
       ...(input.kind === "spawn"
         ? {
             wire,
+            issuedAt: input.issuedAt,
             notifyOnFinish: input.notifyOnFinish ?? false,
             noticeGrant: authorityDigest(link),
             sourceSessionId: chat.sessionId ?? null,
@@ -804,6 +859,7 @@ export class HostLinks {
         "refused",
         "The link cannot admit this destination, lead, or operation.",
       );
+    if (wire.kind === "spawn") this.requestCurrent(wire.issuedAt);
     const key = `${link.id}:${wire.sender}:${wire.messageId}`;
     const retained = this.journal(this.inboxFile)[key];
     if (retained) {
@@ -815,6 +871,13 @@ export class HostLinks {
     }
     const replayed = this.retained(this.inboxFile, key, digest(wire), digest(link));
     if (replayed) return replayed;
+    return this.admit(link, wire, key, this.prepareIncoming(link, wire, key));
+  }
+  private prepareIncoming(
+    link: IncomingHostLink,
+    wire: Exclude<HostLinkWire, { kind: "account_limit" }>,
+    key: string,
+  ): HostLinkJournal[string] {
     const agentId = wire.kind === "spawn" ? randomUUID() : this.deps.mainAssistant();
     if (!agentId) throw new HostLinkError("refused", "The main assistant has no chat.");
     const entry: HostLinkJournal[string] = {
@@ -826,6 +889,7 @@ export class HostLinks {
       profile: null,
       cwd: null,
       receipt: this.receipt(wire.messageId, agentId),
+      ...(wire.kind === "spawn" ? { issuedAt: wire.issuedAt } : {}),
       ...(wire.kind === "spawn" ? { noticeGrant: authorityDigest(link) } : {}),
     };
     if (wire.kind === "spawn") {
@@ -843,7 +907,7 @@ export class HostLinks {
     }
     if (wire.kind === "spawn") this.spawnHeadroom(this.inboxFile, entry);
     this.save(this.inboxFile, key, entry);
-    return this.admit(link, wire, key, entry);
+    return entry;
   }
   private prepareSpawn(
     link: IncomingHostLink,
@@ -1050,21 +1114,20 @@ export class HostLinks {
     entry: HostLinkJournal[string],
     agentId: string,
   ): HostLinkWorkerNotice[] {
-    if (this.noticeFailed(agentId))
-      return [
-        {
-          id: digest([agentId, "notice-storage-failure"]),
-          kind: "failed",
-          text: "The remote host could not save a worker notice. Reconcile the worker and its receipt storage before more work.",
-        },
-      ];
-    return (entry.notices ?? [])
+    const notices = (entry.notices ?? [])
       .filter((notice) => {
         if (notice.kind !== "permission") return true;
         if (entry.complete || notice.resolved || (notice.notBefore ?? 0) > this.now()) return false;
         return this.deps.permissionPending?.(agentId, notice.permissionRequestId ?? "") ?? true;
       })
       .map(({ id, kind, text }) => ({ id, kind, text }));
+    if (this.noticeFailed(agentId) && notices.length < 128)
+      notices.push({
+        id: digest([agentId, "notice-storage-failure"]),
+        kind: "failed",
+        text: "The remote host could not save a worker notice. Reconcile the worker and its receipt storage before more work.",
+      });
+    return notices;
   }
 
   resolveWorkerPermission(agentId: string, requestId: string): void {
@@ -1106,7 +1169,19 @@ export class HostLinks {
     text: string,
     turnId?: string,
   ): void {
-    for (const [key, entry] of Object.entries(this.journal(this.inboxFile))) {
+    const journal = this.journal(this.inboxFile);
+    if (
+      !Object.values(journal).some((entry) => entry.profile && entry.receipt.agentId === agentId)
+    ) {
+      if (
+        Object.values(this.replay(this.inboxFile)).some(
+          (entry) => entry.receipt.agentId === agentId,
+        )
+      )
+        this.retainNoticeFailure(agentId);
+      return;
+    }
+    for (const [key, entry] of Object.entries(journal)) {
       if (
         entry.receipt.agentId !== agentId ||
         !entry.profile ||
@@ -1124,7 +1199,7 @@ export class HostLinks {
       const notices = entry.notices ?? [];
       if (notices.some((item) => item.id === notice.id)) continue;
       if (notices.length >= (kind === "permission" ? 127 : 128))
-        throw new HostLinkError("unavailable", "The worker notice journal is full.");
+        throw new HostLinkStorageError("capacity");
       this.save(this.inboxFile, key, {
         ...entry,
         notices: [
@@ -1141,6 +1216,7 @@ export class HostLinks {
         complete: kind !== "permission" && !entry.pendingPromptIds?.length,
         finishArmed: kind === "permission",
       });
+      this.clearNoticeFailure(agentId);
     }
   }
 
@@ -1264,7 +1340,13 @@ export class HostLinks {
     try {
       const { chat, link } = await this.notificationSource(captured);
       if (captured.receipt.state === "pending" && captured.wire?.kind === "spawn") {
-        await this.forward(link, chat, captured.wire, "explicit");
+        this.requestCurrent(captured.wire.issuedAt);
+        await this.forward(
+          link,
+          chat,
+          { ...captured.wire, issuedAt: captured.wire.issuedAt! },
+          "explicit",
+        );
       }
       const entry = this.journal(this.outboxFile)[key]!;
       if (!entry.receipt.token || !entry.receipt.agentId || entry.receipt.state !== "created")
@@ -1505,6 +1587,10 @@ export class HostLinks {
       this.updateNotice(key, id, (current) => {
         current.state = "delivered";
       });
+      if (id === digest([entry.receipt.agentId, "notice-storage-failure"])) {
+        const latest = this.journal(this.outboxFile)[key]!;
+        this.save(this.outboxFile, key, { ...latest, watch: { failures: 8, nextAt: 0 } });
+      }
     } catch (error) {
       if (this.notificationsClosed) return;
       this.updateNotice(key, id, (notice) => {
@@ -1553,8 +1639,7 @@ export class HostLinks {
       requests.some(([, item]) => item.notifyOnFinish) &&
       !notices.some((notice) => notice.id === id)
     ) {
-      if (notices.length >= 128)
-        throw new HostLinkError("unavailable", "The worker notice journal is full.");
+      if (notices.length >= 128) throw new HostLinkStorageError("capacity");
       notices.push({
         id,
         kind: "failed",
@@ -1659,6 +1744,7 @@ export class HostLinks {
     owner: HostLinkJournal[string],
     input: Extract<HostLinkWorkerRequest, { kind: "prompt" }>,
   ): Promise<HostLinkReceipt> {
+    this.requestCurrent(input.issuedAt);
     const key = `${link.id}:${input.agentId}:${input.messageId}`;
     const retained = this.journal(this.inboxFile)[key];
     if (retained) {
@@ -1676,6 +1762,7 @@ export class HostLinks {
       linkId: owner.linkId,
       sourceServerId: owner.sourceServerId,
       promptRequest: true,
+      issuedAt: input.issuedAt,
       notifyOnFinish: input.notifyOnFinish !== false,
       profile: null,
       cwd: owner.cwd,

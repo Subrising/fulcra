@@ -17,6 +17,7 @@ import type { Server } from "node:http";
 import { afterEach, expect, test, vi } from "vitest";
 import {
   HostLinkError,
+  HostLinkStorageError,
   HostLinks,
   type HostLinkChat,
   type HostLinkCreate,
@@ -45,7 +46,10 @@ import {
 import { createPoolUsage } from "../../../../control/orca-organization/server/pool-usage.js";
 import { writePrivateFileAtomicSync } from "./private-files.js";
 import { windowsAclIsSafe } from "./plugins/trusted-ownership.js";
-import { writeWindowsPrivateFileAtomicSync } from "./windows-private-file.js";
+import {
+  writeWindowsPrivateFileAtomicSync,
+  WindowsPrivateFileReconciliationError,
+} from "./windows-private-file.js";
 import {
   isAgentMcpRequestAuthorized,
   isBearerTokenValidAsync,
@@ -77,6 +81,7 @@ const chatToken = `hchat1.${"B".repeat(43)}`;
 const messageId = "11111111-1111-4111-8111-111111111111";
 const spawn = {
   kind: "spawn",
+  issuedAt: Date.parse("2026-10-15T12:00:00Z"),
   messageId,
   workload: "standard",
   workspace: "job",
@@ -360,6 +365,7 @@ test("real HTTP spawn retains one worker, restriction, parent, and per-worker co
   ).toBe(403);
   const prompt = {
     kind: "prompt",
+    issuedAt: spawn.issuedAt,
     agentId: receipt.agentId,
     messageId: "33333333-3333-4333-8333-333333333333",
     prompt: "Check the result.",
@@ -514,8 +520,8 @@ test("a directory flush failure stops effects and receipt acknowledgement", asyn
     if (fstatSync(fd).isDirectory()) throw new Error("Directory flush failed");
     realFsync(fd);
   });
-  await expect(f.target.receive(linkToken, f.wire)).rejects.toThrow("Directory flush failed");
-  await expect(f.target.receive(linkToken, f.wire)).rejects.toThrow("Directory flush failed");
+  await expect(f.target.receive(linkToken, f.wire)).rejects.toThrow("receipt write failed");
+  await expect(f.target.receive(linkToken, f.wire)).rejects.toThrow("receipt write failed");
   expect(f.created).toEqual([]);
   vi.mocked(fsyncSync).mockImplementation(realFsync);
   expect((await f.target.receive(linkToken, f.wire)).state).toBe("pending");
@@ -562,9 +568,7 @@ test("Windows write-through failure stops provider input and acknowledgement", a
   });
   try {
     Object.defineProperty(process, "platform", { value: "win32" });
-    await expect(f.target.receive(linkToken, f.wire)).rejects.toThrow(
-      "Windows durable file commit failed.",
-    );
+    await expect(f.target.receive(linkToken, f.wire)).rejects.toThrow("receipt write failed");
     expect(f.created).toEqual([]);
     expect(f.notices).toEqual([]);
   } finally {
@@ -711,6 +715,7 @@ test("revocation and worker mode changes refuse subsequent per-chat prompts", as
   f.chats.get(receipt.agentId!)!.modeId = "full-access";
   const body = {
     kind: "prompt",
+    issuedAt: spawn.issuedAt,
     agentId: receipt.agentId,
     messageId: "77777777-7777-4777-8777-777777777777",
     prompt: "Next task.",
@@ -732,6 +737,7 @@ test("a worker credential cannot control a replacement model", async () => {
   f.chats.get(receipt.agentId!)!.model = "another-model";
   const result = await f.post(`${f.targetListener.url}/api/host-links/worker`, receipt.token!, {
     kind: "prompt",
+    issuedAt: spawn.issuedAt,
     agentId: receipt.agentId,
     messageId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
     prompt: "Next task.",
@@ -1264,7 +1270,7 @@ test.each([false, true])(
       const rejectNotice = vi
         .spyOn(targetRuntime.service, "recordWorkerNotice")
         .mockImplementation(() => {
-          throw new HostLinkError("refused", "Host-link receipt storage is full.");
+          throw new HostLinkStorageError("capacity");
         });
       cleanups.push(async () => {
         rejectNotice.mockRestore();
@@ -1294,6 +1300,7 @@ test.each([false, true])(
       await expect(
         targetRuntime.service.worker(receipt.token, {
           kind: "prompt",
+          issuedAt: spawn.issuedAt,
           agentId: receipt.agentId,
           messageId: "22222222-2222-4222-8222-222222222222",
           prompt: "Start another task.",
@@ -1837,6 +1844,7 @@ test("remote parent follow-ups re-arm each turn and joined steers share one noti
     "33333333-3333-4333-8333-333333333333",
   ]) {
     await f.source.promptForAgent("lead", "target", {
+      issuedAt: spawn.issuedAt,
       agentId: child,
       prompt: "Follow-up.",
       messageId: id,
@@ -1859,7 +1867,12 @@ test("remote parent follow-ups re-arm each turn and joined steers share one noti
   expect(f.finishNotices[0]?.text).toContain("Session total spend: US$1.250000.");
   expect(f.finishNotices[1]?.text).toContain("Session total spend: US$4.000000.");
   await expect(
-    f.source.promptForAgent("other", "target", { agentId: child, prompt: "Refused.", messageId }),
+    f.source.promptForAgent("other", "target", {
+      issuedAt: spawn.issuedAt,
+      agentId: child,
+      prompt: "Refused.",
+      messageId,
+    }),
   ).rejects.toThrow("No unique retained remote worker grant");
 });
 
@@ -1870,6 +1883,7 @@ test("a remote follow-up can enable notices after creation opted out", async () 
     notifyOnFinish: false,
   });
   await f.source.promptForAgent("lead", "target", {
+    issuedAt: spawn.issuedAt,
     agentId: receipt.agentId!,
     prompt: "Follow-up.",
     messageId: "22222222-2222-4222-8222-222222222222",
@@ -1912,6 +1926,7 @@ test("a late prior-turn response cannot close a new remote notice watch", async 
     const stale = f.source.syncNotifications();
     await responseReady;
     await f.source.promptForAgent("lead", "target", {
+      issuedAt: spawn.issuedAt,
       agentId: receipt.agentId!,
       prompt: "Next task.",
       messageId: "22222222-2222-4222-8222-222222222222",
@@ -1964,6 +1979,7 @@ test("acknowledged history remains bounded beyond 128 results", async () => {
   writePrivateFileAtomicSync(outboxFile, JSON.stringify(outbox));
   for (let index = 0; index < 3; index++) {
     await f.source.promptForAgent("lead", "target", {
+      issuedAt: spawn.issuedAt,
       agentId: receipt.agentId!,
       prompt: "Next task.",
       messageId: `22222222-2222-4222-8222-${String(index).padStart(12, "0")}`,
@@ -1990,6 +2006,7 @@ test("failed remote admission settles the retained receipt and never retries the
     .spyOn(f.deps, "prompt")
     .mockRejectedValue(new HostLinkError("refused", "Fixture admission refused."));
   const request = {
+    issuedAt: spawn.issuedAt,
     agentId: receipt.agentId!,
     prompt: "Next task.",
     messageId: "22222222-2222-4222-8222-222222222222",
@@ -2018,6 +2035,7 @@ test("interrupted admission returns one uncertain result without replay", async 
   await f.source.flushNotificationDeliveries();
   const promptId = "22222222-2222-4222-8222-222222222222";
   await f.source.promptForAgent("lead", "target", {
+    issuedAt: spawn.issuedAt,
     agentId: receipt.agentId!,
     prompt: "Next task.",
     messageId: promptId,
@@ -2081,6 +2099,7 @@ test("history pruning fences an in-flight read from the new watch", async () => 
   });
   try {
     const prompt = f.source.promptForAgent("lead", "target", {
+      issuedAt: spawn.issuedAt,
       agentId: receipt.agentId!,
       prompt: "Next task.",
       messageId: "22222222-2222-4222-8222-222222222222",
@@ -2134,7 +2153,7 @@ test("Windows timeout after rename retains the pending identity on a same-id ret
     writeFileSync(file, data, { mode: 0o600 });
     if (fail) {
       fail = false;
-      throw new Error("Windows durable file commit requires reconciliation.");
+      throw new WindowsPrivateFileReconciliationError();
     }
   });
   try {
@@ -2214,7 +2233,7 @@ test("a refused notice save reaches its source lead through the existing watch",
     ...spawn,
     notifyOnFinish: true,
   });
-  f.target.recordWorkerNoticeFailure(receipt.agentId!);
+  f.target.recordWorkerNoticeFailure(receipt.agentId!, new HostLinkStorageError("capacity"));
   f.restartTarget();
   await f.source.syncNotifications();
   await f.source.flushNotificationDeliveries();
@@ -2306,7 +2325,7 @@ test("replay capacity refuses new spawns without dropping live replay protection
   const padding = {
     ...replay[first],
     hash: "x".repeat(1024 * 1024),
-    retiredAt: f.state.now - 31 * 86400000,
+    retiredAt: f.state.now,
   };
   replay.padding = padding;
   const original = JSON.stringify(replay);
@@ -2321,8 +2340,8 @@ test("replay capacity refuses new spawns without dropping live replay protection
   ).rejects.toThrow("replay storage is full");
   expect(readFileSync(file, "utf8")).toBe(original);
   expect((await f.source.spawnForAgent("lead", "target", spawn)).agentId).toBe(receipt.agentId);
-  // Only an inactive authority permits old records to leave.
-  replay.padding.credential = "removed-credential";
+  // Record age permits removal even while the credential stays configured.
+  replay.padding.retiredAt = f.state.now - 31 * 86400000;
   writeFileSync(file, JSON.stringify(replay), { mode: 0o600 });
   expect(
     (
@@ -2374,6 +2393,7 @@ test("a lost archive acknowledgement reply recovers without replaying a queued p
   });
   const promptId = "22222222-2222-4222-8222-222222222222";
   await f.source.promptForAgent("lead", "target", {
+    issuedAt: spawn.issuedAt,
     agentId: receipt.agentId!,
     messageId: promptId,
     prompt: "Next task",
@@ -2463,4 +2483,173 @@ test("archive acknowledgement failures retain a bounded retry count", async () =
   expect(f.state.noticeReads).toBe(reads);
   expect(f.finishNotices).toHaveLength(1);
   unavailable.mockRestore();
+});
+
+test("configured replay fences expire after their retention period", async () => {
+  const f = await fixture();
+  const first = await f.source.spawnForAgent("lead", "target", spawn);
+  const second = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    messageId: "22222222-2222-4222-8222-222222222222",
+  });
+  f.chats.get(first.agentId!)!.archived = true;
+  await f.source.syncNotifications();
+  const file = path.join(f.sourceHome, "host-links-outbox.json.replay");
+  expect(Object.keys(JSON.parse(readFileSync(file, "utf8")))).toHaveLength(1);
+  f.state.now += 31 * 86400000;
+  f.chats.get(second.agentId!)!.archived = true;
+  await f.source.syncNotifications();
+  const fences = Object.values(JSON.parse(readFileSync(file, "utf8"))) as {
+    receipt: { agentId: string };
+  }[];
+  expect(fences.map((entry) => entry.receipt.agentId)).toEqual([second.agentId]);
+});
+
+test("a retired worker event leaves a visible repair marker without restoring its grant", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", spawn);
+  f.chats.get(receipt.agentId!)!.archived = true;
+  await f.source.syncNotifications();
+  f.target.recordWorkerNotice(
+    receipt.agentId!,
+    "finished",
+    "restored-turn",
+    "Unexpected restored result",
+  );
+  const file = path.join(f.deps.home, "host-links-notice-failures.json");
+  let markers: Record<string, boolean> = {};
+  try {
+    markers = JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    /* Missing marker fails the assertion. */
+  }
+  expect(markers[receipt.agentId!]).toBe(true);
+  expect(
+    Object.keys(JSON.parse(readFileSync(path.join(f.deps.home, "host-links-inbox.json"), "utf8"))),
+  ).toHaveLength(0);
+});
+
+test("a short reconciliation fence does not set a failure marker or hide the real finish", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNoticeFailure(
+    receipt.agentId!,
+    new Error("Windows durable file commit requires reconciliation."),
+  );
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(0);
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "actual", "Actual result");
+  f.state.now += 10000;
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  expect(f.finishNotices[0]!.text).toContain("Actual result");
+});
+
+test("old spawn and prompt requests stay refused after replay records expire", async () => {
+  const f = await fixture();
+  const first = await f.source.spawnForAgent("lead", "target", spawn);
+  f.chats.get(first.agentId!)!.archived = true;
+  await f.source.syncNotifications();
+  f.state.now += 31 * 86400000;
+  const fresh = {
+    ...spawn,
+    issuedAt: f.state.now,
+    messageId: "22222222-2222-4222-8222-222222222222",
+  };
+  const second = await f.source.spawnForAgent("lead", "target", fresh);
+  await expect(
+    f.source.spawnForAgent("lead", "target", spawn).then(() => "admitted"),
+  ).rejects.toThrow("issuedAt");
+  await expect(f.target.receive(linkToken, f.wire).then(() => "admitted")).rejects.toThrow(
+    "issuedAt",
+  );
+  const prompt = {
+    agentId: second.agentId!,
+    prompt: "Old task",
+    messageId,
+    issuedAt: spawn.issuedAt,
+  };
+  await expect(f.source.promptForAgent("lead", "target", prompt)).rejects.toThrow("issuedAt");
+  await expect(f.target.worker(second.token, { ...prompt, kind: "prompt" })).rejects.toThrow(
+    "issuedAt",
+  );
+  expect(f.created).toHaveLength(2);
+  expect(f.prompts).toHaveLength(0);
+});
+
+test("source and receiver apply the same clock skew and request age boundary", async () => {
+  const f = await fixture();
+  const tooFuture = { ...spawn, issuedAt: f.state.now + 5 * 60000 + 1 };
+  await expect(
+    f.source.spawnForAgent("lead", "target", tooFuture).then(() => "admitted"),
+  ).rejects.toThrow("issuedAt");
+  await expect(
+    f.target.receive(linkToken, { ...f.wire, issuedAt: tooFuture.issuedAt }).then(() => "admitted"),
+  ).rejects.toThrow("issuedAt");
+  const edge = { ...spawn, issuedAt: f.state.now - (30 * 86400000 - 5 * 60000) + 1 };
+  expect((await f.source.spawnForAgent("lead", "target", edge)).state).toBe("created");
+  f.state.now++;
+  await expect(
+    f.source.spawnForAgent("lead", "target", edge).then(() => "admitted"),
+  ).rejects.toThrow("issuedAt");
+  await expect(
+    f.target.receive(linkToken, { ...f.wire, issuedAt: edge.issuedAt }).then(() => "admitted"),
+  ).rejects.toThrow("issuedAt");
+  expect(f.created).toHaveLength(1);
+});
+
+test("a committed real finish clears a capacity warning and keeps the result text", async () => {
+  const f = await fixture();
+  const request = { ...spawn, notifyOnFinish: true };
+  const receipt = await f.source.spawnForAgent("lead", "target", request);
+  f.target.recordWorkerNoticeFailure(receipt.agentId!, new HostLinkStorageError("capacity"));
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(retainedReturn(f.sourceHome).watch?.failures).toBe(8);
+  const reads = f.state.noticeReads;
+  f.state.now += 10000;
+  await f.source.syncNotifications();
+  expect(f.state.noticeReads).toBe(reads);
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "repaired", "The actual result");
+  expect(
+    JSON.parse(readFileSync(path.join(f.deps.home, "host-links-notice-failures.json"), "utf8"))[
+      receipt.agentId!
+    ],
+  ).toBeUndefined();
+  await f.source.spawnForAgent("lead", "target", request);
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(2);
+  expect(f.finishNotices[1]!.text).toContain("The actual result");
+});
+
+test("legacy active workers accept fresh prompts while timestamp-free pending requests never replay", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", spawn);
+  const file = path.join(f.sourceHome, "host-links-outbox.json");
+  const entries = JSON.parse(readFileSync(file, "utf8"));
+  const key = Object.keys(entries)[0]!;
+  delete entries[key].issuedAt;
+  delete entries[key].wire.issuedAt;
+  writeFileSync(file, JSON.stringify(entries), { mode: 0o600 });
+  await f.source.promptForAgent("lead", "target", {
+    agentId: receipt.agentId!,
+    messageId: "22222222-2222-4222-8222-222222222222",
+    prompt: "Fresh follow-up",
+    issuedAt: f.state.now,
+  });
+  expect(f.prompts).toEqual(["Fresh follow-up"]);
+  const pending = JSON.parse(readFileSync(file, "utf8"));
+  pending[key].receipt.state = "pending";
+  writeFileSync(file, JSON.stringify(pending), { mode: 0o600 });
+  const source = f.restartSource();
+  await source.syncNotifications();
+  expect(f.created).toHaveLength(1);
+  expect(retainedReturn(f.sourceHome).receipt.state).toBe("pending");
+  expect(retainedReturn(f.sourceHome).watch?.failures).toBe(1);
 });

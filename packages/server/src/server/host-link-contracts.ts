@@ -85,11 +85,15 @@ export const HostLinkConfigSchema = z
 export type HostLinkConfig = z.infer<typeof HostLinkConfigSchema>;
 export type IncomingHostLink = HostLinkConfig["incoming"][number];
 export type OutgoingHostLink = HostLinkConfig["outgoing"][number];
+export const HOST_LINK_RETENTION_MS = 30 * 86400000;
+export const HOST_LINK_CLOCK_SKEW_MS = 5 * 60000;
+const issuedAt = z.number().int().nonnegative();
 const identity = { messageId: z.string().uuid() };
 export const HostLinkSpawnSchema = z
   .object({
     kind: z.literal("spawn"),
     ...identity,
+    issuedAt,
     workload: z.enum(["standard", "heavy", "gpu"]),
     workspace: name,
     profile: name,
@@ -138,14 +142,22 @@ export const HostAccountLimitWireSchema = HostAccountLimitSchema.extend({
   ...identity,
   destination: name,
 }).strict();
+const spawnWire = HostLinkSpawnSchema.extend(origin).strict();
+const noticeWire = HostLinkNoticeSchema.extend({
+  ...origin,
+  noticeKind: z.enum(["explicit", "finished", "failed", "permission", "limit"]),
+  isLead: z.boolean(),
+}).strict();
 export const HostLinkWireSchema = z.discriminatedUnion("kind", [
   HostAccountLimitWireSchema,
-  HostLinkSpawnSchema.extend(origin).strict(),
-  HostLinkNoticeSchema.extend({
-    ...origin,
-    noticeKind: z.enum(["explicit", "finished", "failed", "permission", "limit"]),
-    isLead: z.boolean(),
-  }).strict(),
+  spawnWire,
+  noticeWire,
+]);
+// COMPAT(hostLinkIssuedAt): added v0.2.26; read legacy retained workers until 2027-04-19. Never replay timestamp-free pending requests.
+const storedWire = z.discriminatedUnion("kind", [
+  HostAccountLimitWireSchema,
+  spawnWire.extend({ issuedAt: issuedAt.optional() }),
+  noticeWire,
 ]);
 export type HostLinkWire = z.infer<typeof HostLinkWireSchema>;
 export type HostLinkNoticeKind = Extract<HostLinkWire, { kind: "notice" }>["noticeKind"];
@@ -153,6 +165,7 @@ export const HostLinkWorkerRequestSchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("prompt"),
+      issuedAt,
       notifyOnFinish: z.boolean().optional(),
       steer: z.boolean().optional(),
       acknowledgedNoticeIds: z.array(name).max(128).optional(),
@@ -223,7 +236,8 @@ export const HostLinkJournalSchema = z.record(
       profile: HostLinkProfileSchema.nullable(),
       cwd: z.string().nullable(),
       receipt: HostLinkReceiptSchema,
-      wire: HostLinkWireSchema.optional(),
+      wire: storedWire.optional(),
+      issuedAt: issuedAt.optional(),
       sourceSessionId: z.string().nullable().optional(),
       sourceGrant: z.string().optional(),
       noticeGrant: z.string().optional(),

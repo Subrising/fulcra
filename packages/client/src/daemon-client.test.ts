@@ -9166,3 +9166,35 @@ test("reporting-line checks correlate the source decision without sending agent 
   expect(await pending).toEqual(output);
   expect(nativeQueueRequests(mock)).toHaveLength(0);
 });
+
+test("remote messages retain their original issuedAt and never refresh a caller message ID", async () => {
+  const { client, mock } = await nativeQueueClient(false);
+  await expect(
+    client.sendAgentMessage("11111111-1111-4111-8111-111111111111@host", "old task", {
+      messageId: "retained-id",
+    }),
+  ).rejects.toThrow("issuedAt");
+  expect(nativeQueueRequests(mock)).toHaveLength(0);
+  const issuedAt = 1792065600000;
+  const pending = client.sendAgentMessage(
+    "11111111-1111-4111-8111-111111111111@host",
+    "retained task",
+    {
+      messageId: "retained-id",
+      issuedAt,
+    },
+  );
+  const request = nativeQueueRequests(mock)[0];
+  expect(request.issuedAt).toBe(issuedAt);
+  nativeQueueResponse(mock, request);
+  await pending;
+});
+
+test("local titles with an at sign keep their ordinary message shape", async () => {
+  const { client, mock } = await nativeQueueClient(false);
+  const pending = client.sendAgentMessage("local@title", "local task", { messageId: "local-id" });
+  const request = nativeQueueRequests(mock)[0];
+  expect(request).not.toHaveProperty("issuedAt");
+  nativeQueueResponse(mock, request);
+  await pending;
+});

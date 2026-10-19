@@ -801,3 +801,18 @@ test("FU-370: archive transfer fields remain optional on legacy messages", () =>
     payload: { ...response.payload, transferredLedgerItems: ["fixture/FX-1"] },
   });
 });
+
+test("remote request time remains optional for legacy local messages", () => {
+  const legacy = {
+    type: "send_agent_message_request",
+    requestId: "time",
+    agentId: "local",
+    text: "Task",
+    messageId: "retained",
+  };
+  expect(SessionInboundMessageSchema.safeParse(legacy).success).toBe(true);
+  expect(SessionInboundMessageSchema.parse({ ...legacy, issuedAt: 1792065600000 })).toMatchObject({
+    issuedAt: 1792065600000,
+  });
+  expect(SessionInboundMessageSchema.safeParse({ ...legacy, issuedAt: -1 }).success).toBe(false);
+});

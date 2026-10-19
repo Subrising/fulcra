@@ -1,10 +1,11 @@
 import { windowsAclIsSafe } from "@getpaseo/server/private-files";
-import { mkdtemp, rm, stat, writeFile, chmod } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile, chmod, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import {
   createHostLinkCommand,
+  clearHostLinkNoticeFailure,
   hostLinkEndpoint,
   hostLinkNoticeStatus,
   saveHostLinkReceipt,
@@ -120,6 +121,21 @@ test("host-link CLI refuses a Windows credential journal with an unsafe ACL", as
   } finally {
     Object.defineProperty(process, "platform", { value: platform });
     vi.mocked(windowsAclIsSafe).mockReturnValue(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("notice repair clears only the reconciled worker warning", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "host-link-repair-"));
+  const worker = "11111111-1111-4111-8111-111111111111";
+  const other = "22222222-2222-4222-8222-222222222222";
+  const file = path.join(root, "host-links-notice-failures.json");
+  try {
+    await writeFile(file, JSON.stringify({ [worker]: true, [other]: true }), { mode: 0o600 });
+    await clearHostLinkNoticeFailure(root, worker);
+    expect(JSON.parse(await readFile(file, "utf8"))).toEqual({ [other]: true });
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });

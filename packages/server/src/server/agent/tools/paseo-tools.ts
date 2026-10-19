@@ -1087,13 +1087,14 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       .describe("Destination host ID. Omit for local creation."),
     hostLink: HostLinkSpawnSchema.pick({
       messageId: true,
+      issuedAt: true,
       workload: true,
       workspace: true,
       profile: true,
     })
       .optional()
       .describe(
-        "Remote grant identifiers and retained request UUID. Remote finish notices default to enabled.",
+        "Remote grant identifiers, retained request UUID, and original issuedAt in Unix milliseconds. Remote finish notices default to enabled.",
       ),
   };
   const remoteCreateAgentArgsSchema = z
@@ -2129,6 +2130,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       agentId: remote[0]!,
       prompt,
       messageId: randomUUID(),
+      issuedAt: Date.now(),
       notifyOnFinish,
     });
     return {
