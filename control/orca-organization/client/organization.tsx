@@ -132,12 +132,20 @@ export function OrganizationSurface(
       accessibilityState={{ selected }}
       onPress={onPress}
     >
-      <View testID={legacyKey ? tabTestId(legacyKey) : undefined}>
+      {/* FU-396: the selected tab is underlined in the accent, so both tab rows read as one tab bar. */}
+      <View
+        testID={legacyKey ? tabTestId(legacyKey) : undefined}
+        style={{
+          paddingVertical: 10,
+          borderBottomWidth: 2,
+          borderBottomColor: selected ? c.accent : "transparent",
+        }}
+      >
         <Text
           style={{
             color: selected ? c.foreground : c.foregroundMuted,
             fontSize: size,
-            fontWeight: selected ? "700" : "400",
+            fontWeight: selected ? "600" : "400",
           }}
         >
           {label}
@@ -214,46 +222,65 @@ export function OrganizationSurface(
     flexDirection: "row" as const,
     flexWrap: "wrap" as const,
     alignItems: "center" as const,
-    paddingHorizontal: 12,
-    paddingBottom: 8,
-    gap: 16,
+    paddingHorizontal: props.layout.compact ? 12 : 24,
+    gap: 20,
     borderBottomWidth: 1,
     borderColor: c.border,
   };
   return (
-    <View style={{ flex: 1, backgroundColor: c.surface0 }}>
-      {/* Today says the same thing in plain words ("the computer restarted …") and links here. */}
-      {pillar !== "today" && (
-        <View style={{ paddingHorizontal: 12, paddingTop: 12 }}>
-          <RecoveryBanner
-            theme={props.theme}
-            navigation={props.navigation}
-            host={props.host}
-            once
-          />
-        </View>
-      )}
-      <View style={{ flexDirection: "row", flexWrap: "wrap", padding: 12, gap: 20 }}>
-        {primaryPillars().map((p) =>
-          tab(
-            p.key,
-            p.label,
-            pillar === p.key,
-            () => {
-              setPillar(p.key);
-              setSheetFrom(null);
-            },
-            p.legacyKey,
-            17,
-          ),
+    <View style={{ flex: 1, backgroundColor: c.surface0, alignItems: "center" }}>
+      {/* FU-396: every tab shares one centred column, so wide screens keep one left edge and no stretched rows. */}
+      <View style={{ flex: 1, width: "100%", maxWidth: 1360 }}>
+        {/* Today says the same thing in plain words ("the computer restarted …") and links here. */}
+        {pillar !== "today" && (
+          <View style={{ paddingHorizontal: 24 }}>
+            <RecoveryBanner
+              theme={props.theme}
+              navigation={props.navigation}
+              host={props.host}
+              once
+            />
+          </View>
         )}
-      </View>
-      <View style={{ paddingHorizontal: 12, gap: 10, paddingBottom: 10 }}>
-        <WorkButton
-          theme={props.theme}
-          label={moreOpen ? "Hide more views" : "More views"}
-          onPress={() => setMoreOpen((open) => !open)}
-        />
+        {/* FU-396: one tab bar. "More" sits at the end of the main tabs and opens the other views in the row below. */}
+        <View
+          style={{
+            flexDirection: "row",
+            flexWrap: "wrap",
+            alignItems: "center",
+            paddingHorizontal: props.layout.compact ? 12 : 24,
+            paddingTop: 4,
+            columnGap: 24,
+            borderBottomWidth: moreOpen ? 0 : 1,
+            borderColor: c.border,
+          }}
+        >
+          {primaryPillars().map((p) =>
+            tab(
+              p.key,
+              p.label,
+              pillar === p.key,
+              () => {
+                setPillar(p.key);
+                setSheetFrom(null);
+              },
+              p.legacyKey,
+              16,
+            ),
+          )}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={moreOpen ? "Hide more views" : "More views"}
+            accessibilityState={{ expanded: moreOpen }}
+            aria-expanded={moreOpen}
+            onPress={() => setMoreOpen((open) => !open)}
+            style={{ minHeight: 48, justifyContent: "center" }}
+          >
+            <Text style={{ color: c.foregroundMuted, fontSize: 16 }}>
+              {moreOpen ? "Less ▴" : "More ▾"}
+            </Text>
+          </Pressable>
+        </View>
         {moreOpen && (
           <View style={subStrip}>
             {extraPillars().map((p) =>
@@ -266,66 +293,66 @@ export function OrganizationSurface(
                   setSheetFrom(null);
                 },
                 p.legacyKey,
-                15,
+                14,
               ),
             )}
           </View>
         )}
-      </View>
-      {pillar === "organisation" && (
-        <View style={subStrip}>
-          {/* J0-8: while the sheet is open, Back returns to where it was opened from, the views stay one tap away, and
+        {pillar === "organisation" && (
+          <View style={subStrip}>
+            {/* J0-8: while the sheet is open, Back returns to where it was opened from, the views stay one tap away, and
           the Manage task id stays on the strip, selected. */}
-          {sheet && (
-            <Pressable
-              testID="organization-sheet-back"
-              accessibilityRole="button"
-              accessibilityLabel={`Back to ${PILLARS.find((p) => p.key === sheetFrom)?.label ?? "Organisation"}`}
-              onPress={closeSheet}
-            >
-              <Text style={{ color: c.foreground, fontSize: 15 }}>‹ Back</Text>
-            </Pressable>
-          )}
-          {ORGANISATION_VIEWS.map((v) =>
-            tab(
-              v.key,
-              v.label,
-              !sheet && view === v.key,
+            {sheet && (
+              <Pressable
+                testID="organization-sheet-back"
+                accessibilityRole="button"
+                accessibilityLabel={`Back to ${PILLARS.find((p) => p.key === sheetFrom)?.label ?? "Organisation"}`}
+                onPress={closeSheet}
+              >
+                <Text style={{ color: c.foreground, fontSize: 15 }}>‹ Back</Text>
+              </Pressable>
+            )}
+            {ORGANISATION_VIEWS.map((v) =>
+              tab(
+                v.key,
+                v.label,
+                !sheet && view === v.key,
+                () => {
+                  setView(v.key);
+                  setSheetFrom(null);
+                },
+                null,
+                14,
+              ),
+            )}
+            {tab(
+              MANAGE_TASK_KEY,
+              "Manage task",
+              sheet,
               () => {
-                setView(v.key);
-                setSheetFrom(null);
+                if (!sheet) setSheetFrom("organisation");
               },
               null,
-              15,
-            ),
-          )}
-          {tab(
-            MANAGE_TASK_KEY,
-            "Manage task",
-            sheet,
-            () => {
-              if (!sheet) setSheetFrom("organisation");
-            },
-            null,
-            15,
-          )}
-        </View>
-      )}
-      {pillar === "settings" && (
-        <View style={subStrip}>
-          {SETTINGS_VIEWS.filter((v) => v.key === "accounts").map((v) =>
-            tab(v.key, v.label, settings === v.key, () => setSettings(v.key), null, 15),
-          )}
-          <Details theme={props.theme} label="Advanced settings">
-            {SETTINGS_VIEWS.filter((v) => v.key !== "accounts").map((v) =>
-              tab(v.key, v.label, settings === v.key, () => setSettings(v.key), null, 15),
+              14,
             )}
-          </Details>
-        </View>
-      )}
-      <TabBoundary key={`${pillar}:${view}:${settings}:${sheet}`} theme={props.theme}>
-        {body}
-      </TabBoundary>
+          </View>
+        )}
+        {pillar === "settings" && (
+          <View style={subStrip}>
+            {SETTINGS_VIEWS.filter((v) => v.key === "accounts").map((v) =>
+              tab(v.key, v.label, settings === v.key, () => setSettings(v.key), null, 14),
+            )}
+            <Details theme={props.theme} label="Advanced settings">
+              {SETTINGS_VIEWS.filter((v) => v.key !== "accounts").map((v) =>
+                tab(v.key, v.label, settings === v.key, () => setSettings(v.key), null, 14),
+              )}
+            </Details>
+          </View>
+        )}
+        <TabBoundary key={`${pillar}:${view}:${settings}:${sheet}`} theme={props.theme}>
+          {body}
+        </TabBoundary>
+      </View>
     </View>
   );
 }
@@ -335,7 +362,7 @@ function TeamSurface(props: PluginSurfaceProps & { onTask: (id: string) => void 
   if (map)
     return (
       <View style={{ flex: 1 }}>
-        <View style={{ paddingHorizontal: 12, paddingTop: 8, flexDirection: "row" }}>
+        <View style={{ paddingHorizontal: 24, paddingTop: 8, flexDirection: "row" }}>
           <WorkButton
             theme={props.theme}
             label="Back to who is in charge"
@@ -353,7 +380,7 @@ function TeamSurface(props: PluginSurfaceProps & { onTask: (id: string) => void 
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: props.theme.colors.surface0 }}
-      contentContainerStyle={{ padding: props.layout.compact ? 16 : 28, gap: 16 }}
+      contentContainerStyle={{ padding: props.layout.compact ? 16 : 24, gap: 16 }}
     >
       <TeamTreeSection theme={props.theme} host={props.host} navigation={props.navigation} />
       <View style={{ flexDirection: "row" }}>

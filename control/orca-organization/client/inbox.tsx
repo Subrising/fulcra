@@ -320,9 +320,8 @@ export function InboxSurface({
       contentContainerStyle={{
         padding: pad,
         gap: 16,
-        maxWidth: 760,
+        // FU-396: the Command Centre column sets the width, so every tab starts on one left edge.
         width: "100%",
-        alignSelf: "center",
       }}
     >
       <View style={{ gap: 4 }}>
@@ -345,7 +344,7 @@ export function InboxSurface({
               ? `${attention.confirmed.length} open ${attention.confirmed.length === 1 ? "decision is" : "decisions are"} addressed to you`
               : "No confirmed unresolved decision is addressed to you in this observation."}
         </Text>
-        <Text style={{ color: c.foregroundMuted }}>
+        <Text style={{ color: c.foregroundMuted, fontSize: 12, lineHeight: 18 }}>
           Source: {host?.label ?? "Selected company organisation"}. This shows Inbox items only;
           Home also shows role and permission needs.
           {d

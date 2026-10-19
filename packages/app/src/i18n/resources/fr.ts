@@ -245,6 +245,8 @@ export const fr: TranslationResources = {
   },
   agentStream: {
     empty: "Commencez à discuter avec cet agent…",
+    emptyHint:
+      "Décrivez une tâche à planifier, créer ou relire. Tapez @ pour ajouter des fichiers et / pour les commandes.",
     scrollToBottom: "Faire défiler vers le bas",
     historyLoadFailed: "Impossible de charger l’historique de l’agent",
     messageCapped: "Ce message a été tronqué ({{bytes}} octets).",

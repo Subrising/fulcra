@@ -316,6 +316,7 @@ export function TeamRolePanel({
       </Text>
       <WorkButton
         theme={theme}
+        primary
         label="Make main assistant"
         disabled={write.busy}
         onPress={() => void write.run({ action: "main-assistant", sessionId: agentId })}
@@ -443,6 +444,7 @@ function ModeBody({
       ) : null}
       <WorkButton
         theme={theme}
+        primary
         label={mode === "main" ? "Make main assistant" : "Make lead"}
         disabled={write.busy || !sessionId || (mode === "lead" && !lead)}
         onPress={() => {

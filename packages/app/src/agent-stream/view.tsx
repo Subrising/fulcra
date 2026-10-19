@@ -203,6 +203,7 @@ function renderListEmptyComponent(input: {
   renderModel: AgentStreamRenderModel;
   emptyStateStyle: StyleProp<ViewStyle>;
   emptyText: string;
+  emptyHint: string;
 }): ReactNode {
   if (
     input.renderModel.boundary.hasVirtualizedHistory ||
@@ -217,6 +218,7 @@ function renderListEmptyComponent(input: {
   return (
     <View style={input.emptyStateStyle}>
       <Text style={stylesheet.emptyStateText}>{input.emptyText}</Text>
+      <Text style={stylesheet.emptyStateHint}>{input.emptyHint}</Text>
     </View>
   );
 }
@@ -1004,6 +1006,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           renderModel,
           emptyStateStyle,
           emptyText: t("agentStream.empty"),
+          emptyHint: t("agentStream.emptyHint"),
         }),
       [renderModel, emptyStateStyle, t],
     );
@@ -1691,8 +1694,16 @@ const stylesheet = StyleSheet.create((theme) => ({
     width: "100%",
   },
   emptyStateText: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.lg,
+    fontWeight: theme.fontWeight.medium,
+    textAlign: "center",
+  },
+  // FU-396: a lone muted line in an empty pane read as broken; the hint says what to do next.
+  emptyStateHint: {
+    marginTop: theme.spacing[2],
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.base,
+    fontSize: theme.fontSize.sm,
     textAlign: "center",
   },
   scrollToBottomContainer: {

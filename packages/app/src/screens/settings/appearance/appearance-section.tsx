@@ -40,8 +40,6 @@ import {
   DEFAULT_THEME_PREFERENCE,
 } from "@/hooks/use-settings";
 import {
-  DEFAULT_MONO_FONT_STACK,
-  DEFAULT_UI_FONT_STACK,
   ICON_SIZE,
   PLUGIN_THEME_PREFERENCE,
   THEME_OPTIONS,
@@ -69,14 +67,6 @@ type BuiltInThemePreference = Exclude<AppSettings["theme"], typeof PLUGIN_THEME_
 
 function getThemeLabel(t: TFunction, value: BuiltInThemePreference): string {
   return t(`settings.appearance.theme.options.${value}`);
-}
-
-// Platform default stacks can be the bare native tokens ("normal"/"monospace");
-// those read as a bug, so show a human label in the placeholder instead.
-const BARE_DEFAULT_STACKS: ReadonlySet<string> = new Set(["normal", "monospace"]);
-
-function resolveDefaultStackPlaceholder(t: TFunction, stack: string): string {
-  return BARE_DEFAULT_STACKS.has(stack) ? t("settings.appearance.fonts.systemDefault") : stack;
 }
 
 // Local size string (digits only) -> preview override number. Empty/invalid
@@ -483,8 +473,9 @@ export function AppearanceSection() {
     select: selectPluginTheme,
   } = useContributedThemes();
   const showInterfaceFontFamilyRow = !isNative;
-  const uiFontPlaceholder = resolveDefaultStackPlaceholder(t, DEFAULT_UI_FONT_STACK);
-  const monoFontPlaceholder = resolveDefaultStackPlaceholder(t, DEFAULT_MONO_FONT_STACK);
+  // FU-396: an empty font field means the system default, so it says so; the raw CSS stack was cut off mid-name.
+  const uiFontPlaceholder = t("settings.appearance.fonts.systemDefault");
+  const monoFontPlaceholder = uiFontPlaceholder;
 
   const [uiFontDraft, setUiFontDraft] = useState(settings.uiFontFamily);
   const [monoFontDraft, setMonoFontDraft] = useState(settings.monoFontFamily);

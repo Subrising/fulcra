@@ -278,7 +278,7 @@ export function OrganisationSurface(
       <View style={{ gap: 4 }}>
         <Text
           accessibilityRole="header"
-          style={{ color: c.foreground, fontSize: compact ? 26 : 30, fontWeight: "700" }}
+          style={{ color: c.foreground, fontSize: compact ? 24 : 26, fontWeight: "600" }}
         >
           Organisation
         </Text>

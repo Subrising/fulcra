@@ -288,6 +288,7 @@ export function TrackerProjectPanel({
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
               <WorkButton
                 theme={theme}
+                quiet
                 label={`Open ${item.ref} in tracker`}
                 onPress={() => {
                   openTrackerUrl(item.url);

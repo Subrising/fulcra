@@ -138,7 +138,10 @@ function Link({
       hitSlop={8}
       style={{ minHeight: 32, justifyContent: "center", alignSelf: "flex-start" }}
     >
-      <Text style={{ color: colors.accent, fontWeight: "600" }}>{label}</Text>
+      {/* FU-396: the accent green was too dark to read on the cards; the success green passes contrast. */}
+      <Text style={{ color: colors.statusSuccess ?? colors.accent, fontWeight: "600" }}>
+        {label}
+      </Text>
     </Pressable>
   );
 }
@@ -616,16 +619,14 @@ export function TodaySurface({
       contentContainerStyle={{
         padding: compact ? 14 : 24,
         gap: 20,
-        maxWidth: 1280,
         width: "100%",
-        alignSelf: "center",
       }}
     >
       <View style={{ gap: 6 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
           <Text
             accessibilityRole="header"
-            style={{ color: c.foreground, fontSize: compact ? 28 : 32, fontWeight: "700", flex: 1 }}
+            style={{ color: c.foreground, fontSize: compact ? 24 : 26, fontWeight: "600", flex: 1 }}
           >
             Home
           </Text>
@@ -639,34 +640,31 @@ export function TodaySurface({
         <Text style={{ color: c.foregroundMuted }}>{sinceLine}</Text>
         <View
           testID="today-counts"
-          style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, paddingTop: 4 }}
+          style={{
+            flexDirection: "row",
+            flexWrap: "wrap",
+            columnGap: 32,
+            rowGap: 8,
+            paddingTop: 8,
+          }}
         >
+          {/* FU-396: plain stats, not pills that look like buttons; a zero is shown quietly. */}
           {counts.map(([n, label]) => (
-            <View
-              key={label}
-              style={{
-                paddingHorizontal: 12,
-                paddingVertical: 6,
-                borderRadius: 999,
-                backgroundColor: c.surface2,
-                borderWidth: 1,
-                borderColor: c.border,
-              }}
-            >
-              <Text style={{ color: c.foreground, fontWeight: "600" }}>
-                {n} {label}
-              </Text>
-            </View>
+            <Text key={label} style={{ color: c.foregroundMuted, fontSize: 13 }}>
+              <Text
+                style={{
+                  color: Number(n) ? c.foreground : c.foregroundMuted,
+                  fontSize: 22,
+                  fontWeight: "600",
+                }}
+              >
+                {n}
+              </Text>{" "}
+              {label}
+            </Text>
           ))}
         </View>
       </View>
-      <Text style={{ color: c.foregroundMuted }}>
-        Source: {host?.label ?? "Selected company organisation"}. Home also includes permission
-        requests, role needs and saved updates; Inbox counts Inbox items only.
-        {inbox.data
-          ? ` ${inbox.data.counts.held} held messages are kept for review; they are not counted as urgent just because they are held.`
-          : " The Inbox could not be read."}
-      </Text>
       {today.gaps.map((g) => (
         <Notice key={g} colors={c} tone="warning" testID="today-gap">
           {g}
@@ -799,6 +797,14 @@ export function TodaySurface({
           {stories}
         </View>
       )}
+      {/* FU-396: where the numbers come from is a footnote, under the content it explains. */}
+      <Text style={{ color: c.foregroundMuted, fontSize: 12, lineHeight: 18 }}>
+        Source: {host?.label ?? "Selected company organisation"}. Home also includes permission
+        requests, role needs and saved updates; Inbox counts Inbox items only.
+        {inbox.data
+          ? ` ${inbox.data.counts.held} held messages are kept for review; they are not counted as urgent just because they are held.`
+          : " The Inbox could not be read."}
+      </Text>
     </ScrollView>
   );
 }

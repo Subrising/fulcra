@@ -548,6 +548,7 @@ function ItemRow({
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
         <WorkButton
           theme={theme}
+          quiet
           label={`Open ${item.ref} in the tracker`}
           onPress={() => {
             openTrackerUrl(item.url, undefined, refSite(item.key));
@@ -557,6 +558,7 @@ function ItemRow({
         </WorkButton>
         <WorkButton
           theme={theme}
+          quiet
           label={`Correct who worked on ${item.ref}`}
           expanded={open}
           onPress={() => setOpen(!open)}
