@@ -912,7 +912,7 @@ test.describe("pane toolbars on touch screens", () => {
       await useUnwrappedDiffLines(page);
       await openWorkspaceChanges(page, workspace);
       await page.setViewportSize(size);
-      const compact = isCompactViewport(size);
+      const compact = isCompactViewport(size, true);
       const explorer = page
         .getByTestId(compact ? "explorer-content-area" : "workspace-explorer-sidebar")
         .filter({ visible: true });

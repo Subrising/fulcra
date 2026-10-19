@@ -36,7 +36,6 @@ import {
   addDirectHostFromSettings,
   expectHostOnlineWithoutError,
 } from "../support/helpers/settings";
-import { isCompactViewport } from "../support/helpers/compact-viewport";
 
 const emptyHome = path.join(tmpdir(), `pool-usage-home-${randomUUID()}`);
 test.use({
@@ -215,7 +214,7 @@ test.describe("Native pooled Usage", () => {
     ]) {
       await page.setViewportSize(viewport);
       await gotoAppShell(page);
-      if (isCompactViewport(viewport)) await openCompactSidebar(page);
+      if (viewport.width < 720) await openCompactSidebar(page);
       await openUsageFromIcon(page);
       await expect(
         page.getByText("This pooled account is disabled.", { exact: true }),

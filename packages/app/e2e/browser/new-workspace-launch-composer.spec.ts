@@ -444,7 +444,7 @@ test.describe("Session touch targets", () => {
         await history.tap();
         await expect(page.getByTestId("sessions-search-input")).toBeVisible();
         // The compact sidebar is an overlay that closes on navigation; the pinned one stays.
-        const compact = isCompactViewport({ width, height });
+        const compact = isCompactViewport({ width, height }, true);
         if (compact) await expect(page.getByTestId("sidebar-close")).not.toBeInViewport();
         // Reset the shared sidebar scroll after navigation in the short window.
         if (!compact) await newChat.scrollIntoViewIfNeeded();

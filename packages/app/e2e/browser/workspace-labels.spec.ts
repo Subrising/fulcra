@@ -391,7 +391,7 @@ test.describe("Workspace labels", () => {
         const key = `${getServerId()}:${seeded.workspaceId}`;
         try {
           await gotoAppShell(page);
-          if (isCompactViewport(viewport))
+          if (isCompactViewport(viewport, true))
             await page.getByRole("button", { name: "Open menu", exact: true }).click();
           await waitForSidebarHydration(page);
 
@@ -427,7 +427,7 @@ test.describe("Workspace labels", () => {
                   ),
                   fullPage: true,
                 });
-              if (isCompactViewport(viewport))
+              if (isCompactViewport(viewport, true))
                 await page
                   .getByRole("button", { name: "Bottom sheet backdrop" })
                   .first()

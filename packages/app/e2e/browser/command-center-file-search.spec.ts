@@ -46,8 +46,7 @@ test("workspace file search stays geometrically stable through delayed loading a
   page,
 }) => {
   test.setTimeout(120_000);
-  // A short desktop window: 844x390 is a phone held sideways, which gets the compact layout.
-  await page.setViewportSize({ width: 1000, height: 390 });
+  await page.setViewportSize({ width: 844, height: 390 });
   const seeded = await seedWorkspace({
     repoPrefix: "command-center-file-search-",
     title: "Paseo-shaped file search",
