@@ -159,6 +159,8 @@ parentPort.on('message', (request) => {
 `;
 
 let helper: Worker | undefined;
+let restartDelay = 1000;
+let restartScheduled = false;
 let preparation: Promise<void> | undefined;
 let pending: Int32Array | undefined;
 let pendingOperation: "W" | "A" | undefined;
@@ -170,7 +172,7 @@ export function initializeWindowsPrivateFiles(
   logger: { warn(message: string): void } = console,
 ): Promise<void> {
   if (process.platform !== "win32") return Promise.resolve();
-  if (preparation) return preparation;
+  if (preparation || restartScheduled) return preparation ?? Promise.resolve();
   preparation = new Promise<void>((resolve, reject) => {
     const systemRoot = process.env.SystemRoot;
     if (!systemRoot) return reject(new Error("Windows SystemRoot is unavailable."));
@@ -212,11 +214,15 @@ export function initializeWindowsPrivateFiles(
         pending = undefined;
         pendingOperation = undefined;
         preparation = undefined;
-        queueMicrotask(() => {
+        restartScheduled = true;
+        const delay = restartDelay;
+        restartDelay = Math.min(60000, restartDelay * 2);
+        setTimeout(() => {
+          restartScheduled = false;
           if (helper !== worker) return;
           helper = undefined;
           void initializeWindowsPrivateFiles(logger).catch(() => {});
-        });
+        }, delay).unref();
       }
     };
     worker.on("error", failed);

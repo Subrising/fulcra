@@ -575,7 +575,8 @@ test("Windows write-through failure stops provider input and acknowledgement", a
 
 test.each([
   ["win32", 1024 * 1024, true],
-  ["win32", 1024 * 1024 - 4096, false],
+  ["win32", 512 * 1024, true],
+  ["win32", 512 * 1024 - 4096, false],
   ["darwin", 1024 * 1024, false],
 ] as const)(
   "%s receipt capacity with %i bytes of retained data",
@@ -1138,169 +1139,185 @@ test("FU-170 reconciles a lost creation reply before returning the retained fini
   expect(f.created).toHaveLength(1);
 });
 
-test("FU-170 runtime carries a real worker finish across HTTP into the lead's provider", async () => {
-  const { AgentManager } = await import("./agent/agent-manager.js");
-  const { AgentStorage } = await import("./agent/agent-storage.js");
-  const { createHostLinkRuntime } = await import("./host-link-runtime.js");
-  const { createTestAgentClients } = await import("./test-utils/fake-agent-client.js");
-  const { createTestLogger } = await import("../test-utils/test-logger.js");
-  const { heldSendsFor } = await import("./held-sends.js");
-  const root = realpathSync(await mkdtemp(path.join(tmpdir(), "host-link-runtime-")));
-  cleanups.push(() => rm(root, { recursive: true, force: true }));
-  const logger = createTestLogger();
-  const leadInputs: unknown[] = [];
-  const workerInputs: unknown[] = [];
-  let noticeArrived!: () => void;
-  const notified = new Promise<void>((resolve) => {
-    noticeArrived = resolve;
-  });
-  const sourceHome = path.join(root, "source");
-  const targetHome = path.join(root, "target");
-  const sourceStorage = new AgentStorage(path.join(sourceHome, "agents"), logger);
-  const targetStorage = new AgentStorage(path.join(targetHome, "agents"), logger);
-  const sourceManager = new AgentManager({
-    clients: createTestAgentClients({
-      onStartTurn: (prompt) => {
-        leadInputs.push(prompt);
-        noticeArrived();
-      },
-    }),
-    registry: sourceStorage,
-    logger,
-  });
-  const targetManager = new AgentManager({
-    clients: createTestAgentClients({ onStartTurn: (prompt) => workerInputs.push(prompt) }),
-    registry: targetStorage,
-    logger,
-  });
-  const sourceRuntime = await createHostLinkRuntime({
-    home: sourceHome,
-    serverId: "source",
-    protected: () => true,
-    agentManager: sourceManager,
-    agentStorage: sourceStorage,
-    logger,
-    workspace: async () => "workspace-source",
-  });
-  const targetRuntime = await createHostLinkRuntime({
-    home: targetHome,
-    serverId: "target",
-    protected: () => true,
-    agentManager: targetManager,
-    agentStorage: targetStorage,
-    logger,
-    workspace: async () => "workspace-target",
-  });
-  cleanups.push(async () => {
-    sourceRuntime.close();
-    targetRuntime.close();
-    heldSendsFor(sourceManager, logger).close();
-    heldSendsFor(targetManager, logger).close();
-    for (const manager of [sourceManager, targetManager]) {
-      for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
-      await manager.flush();
-    }
-  });
-  const targetApp = express();
-  mountHostLinkRoutes(targetApp, () => targetRuntime.service);
-  const targetListener = await listen(targetApp);
-  const lead = await sourceManager.createAgent(
-    { provider: "codex", model: "gpt-test", modeId: "full-access", cwd: root },
-    undefined,
-    { workspaceId: "workspace-source" },
-  );
-  const sourceConfig = emptyConfig();
-  sourceConfig.chats.push({
-    agentId: lead.id,
-    token: chatToken,
-    operations: ["spawn"],
-    links: ["link"],
-    expiresAt: 2000000000000,
-    revoked: false,
-  });
-  sourceConfig.outgoing.push({
-    id: "link",
-    serverId: "target",
-    token: linkToken,
-    url: targetListener.url,
-    machine: "mac",
-    reporters: [],
-    expiresAt: 2000000000000,
-    revoked: false,
-  });
-  const targetConfig = emptyConfig();
-  targetConfig.incoming.push({
-    id: "link",
-    serverId: "source",
-    token: linkToken,
-    leads: [lead.id],
-    operations: ["spawn"],
-    workloads: ["standard"],
-    workspaces: { job: root },
-    profiles: {
-      worker: {
-        provider: "codex",
-        model: "gpt-test",
-        modeId: "full-access",
-        parents: ["codex:full-access"],
-      },
-    },
-    maxWorkers: 1,
-    expiresAt: 2000000000000,
-    revoked: false,
-  });
-  writePrivateFileAtomicSync(
-    path.join(sourceHome, "host-links.json"),
-    JSON.stringify(sourceConfig),
-  );
-  writePrivateFileAtomicSync(
-    path.join(targetHome, "host-links.json"),
-    JSON.stringify(targetConfig),
-  );
-  sourceRuntime.start();
-  let finish!: () => void;
-  const ended = new Promise<void>((resolve) => {
-    finish = resolve;
-  });
-  const unsubscribe = targetManager.subscribe(
-    (event) => {
-      if (event.type === "agent_stream" && event.event.type === "turn_completed") finish();
-    },
-    { replayState: false },
-  );
-  try {
-    const receipt = await sourceRuntime.service.spawnForAgent(lead.id, "target", {
-      ...spawn,
-      notifyOnFinish: true,
+test.each([false, true])(
+  "FU-170 runtime carries a worker notice into the lead provider (storage refused: %s)",
+  async (storageRefused) => {
+    const { AgentManager } = await import("./agent/agent-manager.js");
+    const { AgentStorage } = await import("./agent/agent-storage.js");
+    const { createHostLinkRuntime } = await import("./host-link-runtime.js");
+    const { createTestAgentClients } = await import("./test-utils/fake-agent-client.js");
+    const { createTestLogger } = await import("../test-utils/test-logger.js");
+    const { heldSendsFor } = await import("./held-sends.js");
+    const root = realpathSync(await mkdtemp(path.join(tmpdir(), "host-link-runtime-")));
+    cleanups.push(() => rm(root, { recursive: true, force: true }));
+    const logger = createTestLogger();
+    const leadInputs: unknown[] = [];
+    const workerInputs: unknown[] = [];
+    let noticeArrived!: () => void;
+    const notified = new Promise<void>((resolve) => {
+      noticeArrived = resolve;
     });
-    await ended;
-    await notified;
-    await sourceRuntime.service.flushNotificationDeliveries();
-    expect(leadInputs).toHaveLength(1);
-    await targetManager.setLabels(receipt.agentId!, { "fulcra.hold": "done" });
-    await expect(
-      targetRuntime.service.worker(receipt.token, {
-        kind: "prompt",
-        agentId: receipt.agentId,
-        messageId: "22222222-2222-4222-8222-222222222222",
-        prompt: "Start another task.",
+    const sourceHome = path.join(root, "source");
+    const targetHome = path.join(root, "target");
+    const sourceStorage = new AgentStorage(path.join(sourceHome, "agents"), logger);
+    const targetStorage = new AgentStorage(path.join(targetHome, "agents"), logger);
+    const sourceManager = new AgentManager({
+      clients: createTestAgentClients({
+        onStartTurn: (prompt) => {
+          leadInputs.push(prompt);
+          noticeArrived();
+        },
       }),
-    ).rejects.toMatchObject({
-      name: "HostLinkError",
-      code: "refused",
-      message: "The worker is held as done.",
+      registry: sourceStorage,
+      logger,
     });
-    expect(workerInputs).toHaveLength(1);
-    expect(String(leadInputs[0])).toContain(receipt.agentId!);
-    expect(String(leadInputs[0])).toContain("finished");
-    expect(retainedReturn(sourceHome).receivedNotices?.[0]?.state).toBe("delivered");
-    await sourceRuntime.service.syncNotifications();
-    await sourceRuntime.service.flushNotificationDeliveries();
-    expect(leadInputs).toHaveLength(1);
-  } finally {
-    unsubscribe();
-  }
-}, 30000);
+    const targetManager = new AgentManager({
+      clients: createTestAgentClients({ onStartTurn: (prompt) => workerInputs.push(prompt) }),
+      registry: targetStorage,
+      logger,
+    });
+    const sourceRuntime = await createHostLinkRuntime({
+      home: sourceHome,
+      serverId: "source",
+      protected: () => true,
+      agentManager: sourceManager,
+      agentStorage: sourceStorage,
+      logger,
+      workspace: async () => "workspace-source",
+    });
+    const targetRuntime = await createHostLinkRuntime({
+      home: targetHome,
+      serverId: "target",
+      protected: () => true,
+      agentManager: targetManager,
+      agentStorage: targetStorage,
+      logger,
+      workspace: async () => "workspace-target",
+    });
+    cleanups.push(async () => {
+      sourceRuntime.close();
+      targetRuntime.close();
+      heldSendsFor(sourceManager, logger).close();
+      heldSendsFor(targetManager, logger).close();
+      for (const manager of [sourceManager, targetManager]) {
+        for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
+        await manager.flush();
+      }
+    });
+    const targetApp = express();
+    mountHostLinkRoutes(targetApp, () => targetRuntime.service);
+    const targetListener = await listen(targetApp);
+    const lead = await sourceManager.createAgent(
+      { provider: "codex", model: "gpt-test", modeId: "full-access", cwd: root },
+      undefined,
+      { workspaceId: "workspace-source" },
+    );
+    const sourceConfig = emptyConfig();
+    sourceConfig.chats.push({
+      agentId: lead.id,
+      token: chatToken,
+      operations: ["spawn"],
+      links: ["link"],
+      expiresAt: 2000000000000,
+      revoked: false,
+    });
+    sourceConfig.outgoing.push({
+      id: "link",
+      serverId: "target",
+      token: linkToken,
+      url: targetListener.url,
+      machine: "mac",
+      reporters: [],
+      expiresAt: 2000000000000,
+      revoked: false,
+    });
+    const targetConfig = emptyConfig();
+    targetConfig.incoming.push({
+      id: "link",
+      serverId: "source",
+      token: linkToken,
+      leads: [lead.id],
+      operations: ["spawn"],
+      workloads: ["standard"],
+      workspaces: { job: root },
+      profiles: {
+        worker: {
+          provider: "codex",
+          model: "gpt-test",
+          modeId: "full-access",
+          parents: ["codex:full-access"],
+        },
+      },
+      maxWorkers: 1,
+      expiresAt: 2000000000000,
+      revoked: false,
+    });
+    writePrivateFileAtomicSync(
+      path.join(sourceHome, "host-links.json"),
+      JSON.stringify(sourceConfig),
+    );
+    writePrivateFileAtomicSync(
+      path.join(targetHome, "host-links.json"),
+      JSON.stringify(targetConfig),
+    );
+    if (storageRefused) {
+      const rejectNotice = vi
+        .spyOn(targetRuntime.service, "recordWorkerNotice")
+        .mockImplementation(() => {
+          throw new HostLinkError("refused", "Host-link receipt storage is full.");
+        });
+      cleanups.push(async () => {
+        rejectNotice.mockRestore();
+      });
+    }
+    sourceRuntime.start();
+    let finish!: () => void;
+    const ended = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const unsubscribe = targetManager.subscribe(
+      (event) => {
+        if (event.type === "agent_stream" && event.event.type === "turn_completed") finish();
+      },
+      { replayState: false },
+    );
+    try {
+      const receipt = await sourceRuntime.service.spawnForAgent(lead.id, "target", {
+        ...spawn,
+        notifyOnFinish: true,
+      });
+      await ended;
+      await notified;
+      await sourceRuntime.service.flushNotificationDeliveries();
+      expect(leadInputs).toHaveLength(1);
+      await targetManager.setLabels(receipt.agentId!, { "fulcra.hold": "done" });
+      await expect(
+        targetRuntime.service.worker(receipt.token, {
+          kind: "prompt",
+          agentId: receipt.agentId,
+          messageId: "22222222-2222-4222-8222-222222222222",
+          prompt: "Start another task.",
+        }),
+      ).rejects.toMatchObject({
+        name: "HostLinkError",
+        code: "refused",
+        message: "The worker is held as done.",
+      });
+      expect(workerInputs).toHaveLength(1);
+      expect(String(leadInputs[0])).toContain(receipt.agentId!);
+      expect(String(leadInputs[0])).toContain(
+        storageRefused ? "could not save a worker notice" : "finished",
+      );
+      expect(retainedReturn(sourceHome).receivedNotices?.[0]?.state).toBe("delivered");
+      await sourceRuntime.service.syncNotifications();
+      await sourceRuntime.service.flushNotificationDeliveries();
+      expect(leadInputs).toHaveLength(1);
+    } finally {
+      unsubscribe();
+    }
+  },
+  30000,
+);
 
 test("FU-170 crash recovery retains an attempted notice without replay", async () => {
   const f = await fixture();
@@ -2151,4 +2168,299 @@ test("Windows readers refuse an unsafe ACL before using grants", async () => {
     vi.mocked(windowsAclIsSafe).mockReturnValue(true);
     vi.mocked(writeWindowsPrivateFileAtomicSync).mockRestore();
   }
+});
+
+test("archived acknowledged workers leave replay fences and release journal space", async () => {
+  const f = await fixture();
+  const request = { ...spawn, notifyOnFinish: true };
+  const receipt = await f.source.spawnForAgent("lead", "target", request);
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "gc-turn", "Completed result");
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  f.state.now += 10000;
+  await f.source.syncNotifications();
+  expect(
+    Object.keys(JSON.parse(readFileSync(path.join(f.deps.home, "host-links-inbox.json"), "utf8"))),
+  ).toHaveLength(1);
+  f.chats.get(receipt.agentId!)!.archived = true;
+  f.state.now += 10000;
+  await f.source.syncNotifications();
+  expect(
+    Object.keys(JSON.parse(readFileSync(path.join(f.deps.home, "host-links-inbox.json"), "utf8"))),
+  ).toHaveLength(0);
+  expect(
+    Object.keys(
+      JSON.parse(readFileSync(path.join(f.sourceHome, "host-links-outbox.json"), "utf8")),
+    ),
+  ).toHaveLength(0);
+  const source = f.restartSource();
+  const target = f.restartTarget();
+  expect(await source.spawnForAgent("lead", "target", request)).toEqual(receipt);
+  expect((await target.receive(linkToken, { ...f.wire, notifyOnFinish: true })).agentId).toBe(
+    receipt.agentId,
+  );
+  expect(f.created).toHaveLength(1);
+  await expect(
+    source
+      .spawnForAgent("lead", "target", { ...request, prompt: "Changed" })
+      .then(() => "admitted"),
+  ).rejects.toThrow("retained request");
+});
+
+test("a refused notice save reaches its source lead through the existing watch", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNoticeFailure(receipt.agentId!);
+  f.restartTarget();
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  expect(f.finishNotices[0]!.text).toContain("could not save a worker notice");
+  f.state.now += 10000;
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+});
+
+test("archive cleanup keeps unacknowledged and uncertain notices", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "unacked", "Retain this result");
+  f.chats.get(receipt.agentId!)!.archived = true;
+  f.state.failAfterHandoff = true;
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  f.state.now += 10000;
+  await f.source.syncNotifications();
+  expect(
+    Object.keys(JSON.parse(readFileSync(path.join(f.deps.home, "host-links-inbox.json"), "utf8"))),
+  ).toHaveLength(1);
+  expect(
+    Object.keys(
+      JSON.parse(readFileSync(path.join(f.sourceHome, "host-links-outbox.json"), "utf8")),
+    ),
+  ).toHaveLength(1);
+  expect(retainedReturn(f.sourceHome).receivedNotices?.[0]?.state).toBe("uncertain");
+});
+
+test("cleanup writes replay protection before an interrupted journal removal", async () => {
+  const f = await fixture();
+  const request = { ...spawn, notifyOnFinish: true };
+  const receipt = await f.source.spawnForAgent("lead", "target", request);
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "gc-interrupted", "Keep the outcome");
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  f.chats.get(receipt.agentId!)!.archived = true;
+  const file = path.join(f.deps.home, "host-links-inbox.json");
+  const rename = vi.mocked(renameSync).getMockImplementation()!;
+  vi.mocked(renameSync).mockImplementation((from, to) => {
+    if (to === file) throw new Error("Interrupted journal removal");
+    rename(from, to);
+  });
+  f.state.now += 10000;
+  await f.source.syncNotifications();
+  expect(Object.keys(JSON.parse(readFileSync(`${file}.replay`, "utf8")))).toHaveLength(1);
+  expect(Object.keys(JSON.parse(readFileSync(file, "utf8")))).toHaveLength(1);
+  vi.mocked(renameSync).mockRestore();
+  const target = f.restartTarget();
+  expect((await target.receive(linkToken, { ...f.wire, notifyOnFinish: true })).agentId).toBe(
+    receipt.agentId,
+  );
+  expect(f.created).toHaveLength(1);
+  f.state.now += 60000;
+  await f.source.syncNotifications();
+  expect(Object.keys(JSON.parse(readFileSync(file, "utf8")))).toHaveLength(0);
+});
+
+test("archive cleanup also removes workers that opted out of finish notices", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", spawn);
+  f.chats.get(receipt.agentId!)!.archived = true;
+  await f.source.syncNotifications();
+  expect(
+    Object.keys(
+      JSON.parse(readFileSync(path.join(f.sourceHome, "host-links-outbox.json"), "utf8")),
+    ),
+  ).toHaveLength(0);
+  expect(
+    Object.keys(JSON.parse(readFileSync(path.join(f.deps.home, "host-links-inbox.json"), "utf8"))),
+  ).toHaveLength(0);
+  expect(f.finishNotices).toHaveLength(0);
+});
+
+test("replay capacity refuses new spawns without dropping live replay protection", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", spawn);
+  f.chats.get(receipt.agentId!)!.archived = true;
+  await f.source.syncNotifications();
+  const file = path.join(f.sourceHome, "host-links-outbox.json.replay");
+  const replay = JSON.parse(readFileSync(file, "utf8"));
+  const first = Object.keys(replay)[0]!;
+  const padding = {
+    ...replay[first],
+    hash: "x".repeat(1024 * 1024),
+    retiredAt: f.state.now - 31 * 86400000,
+  };
+  replay.padding = padding;
+  const original = JSON.stringify(replay);
+  writeFileSync(file, original, { mode: 0o600 });
+  await expect(
+    f.source
+      .spawnForAgent("lead", "target", {
+        ...spawn,
+        messageId: "22222222-2222-4222-8222-222222222222",
+      })
+      .then(() => "admitted"),
+  ).rejects.toThrow("replay storage is full");
+  expect(readFileSync(file, "utf8")).toBe(original);
+  expect((await f.source.spawnForAgent("lead", "target", spawn)).agentId).toBe(receipt.agentId);
+  // Only an inactive authority permits old records to leave.
+  replay.padding.credential = "removed-credential";
+  writeFileSync(file, JSON.stringify(replay), { mode: 0o600 });
+  expect(
+    (
+      await f.source.spawnForAgent("lead", "target", {
+        ...spawn,
+        messageId: "22222222-2222-4222-8222-222222222222",
+      })
+    ).state,
+  ).toBe("created");
+  expect(Object.keys(JSON.parse(readFileSync(file, "utf8")))).toEqual([first]);
+});
+
+test("Windows spawn headroom preserves room for an existing worker finish", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const file = path.join(f.deps.home, "host-links-inbox.json");
+  const journal = JSON.parse(readFileSync(file, "utf8"));
+  const key = Object.keys(journal)[0]!;
+  journal[key].hash = "x".repeat(512 * 1024);
+  writeFileSync(file, JSON.stringify(journal), { mode: 0o600 });
+  vi.mocked(writeWindowsPrivateFileAtomicSync).mockImplementation((target, data) =>
+    writeFileSync(target, data, { mode: 0o600 }),
+  );
+  try {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    await expect(
+      f.target
+        .receive(linkToken, { ...f.wire, messageId: "22222222-2222-4222-8222-222222222222" })
+        .then(() => "admitted"),
+    ).rejects.toThrow("Reserved space is for worker notices");
+    f.target.recordWorkerNotice(receipt.agentId!, "finished", "reserved", "Final result");
+    expect(JSON.parse(readFileSync(file, "utf8"))[key].notices[0].text).toBe("Final result");
+    expect(f.created).toHaveLength(1);
+  } finally {
+    Object.defineProperty(process, "platform", descriptor);
+    vi.mocked(writeWindowsPrivateFileAtomicSync).mockRestore();
+  }
+});
+
+test("a lost archive acknowledgement reply recovers without replaying a queued prompt", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  const promptId = "22222222-2222-4222-8222-222222222222";
+  await f.source.promptForAgent("lead", "target", {
+    agentId: receipt.agentId!,
+    messageId: promptId,
+    prompt: "Next task",
+  });
+  f.target.recordWorkerStarted(receipt.agentId!);
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "archive-reply", "Final result");
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  f.chats.get(receipt.agentId!)!.archived = true;
+  const worker = f.target.worker.bind(f.target);
+  const lost = vi.spyOn(f.target, "worker").mockImplementation(async (token, raw) => {
+    const result = await worker(token, raw);
+    if ((raw as { kind: string }).kind === "acknowledge")
+      throw new Error("Archive acknowledgement reply lost");
+    return result;
+  });
+  f.state.now += 10000;
+  await f.source.syncNotifications();
+  expect(
+    Object.keys(JSON.parse(readFileSync(path.join(f.deps.home, "host-links-inbox.json"), "utf8"))),
+  ).toHaveLength(0);
+  expect(retainedReturn(f.sourceHome).pendingPromptIds).toEqual([]);
+  lost.mockRestore();
+  f.sourceConfig.outgoing[0]!.expiresAt += 1000;
+  f.targetConfig.incoming[0]!.expiresAt += 1000;
+  f.save();
+  const source = f.restartSource();
+  f.restartTarget();
+  f.state.now += 60000;
+  await source.syncNotifications();
+  expect(
+    Object.keys(
+      JSON.parse(readFileSync(path.join(f.sourceHome, "host-links-outbox.json"), "utf8")),
+    ),
+  ).toHaveLength(0);
+  expect(f.prompts).toHaveLength(1);
+  expect(f.created).toHaveLength(1);
+  expect(f.finishNotices).toHaveLength(1);
+});
+
+test("archive cleanup checks the current archive state after its identity lookup", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "archive-race", "Retain control");
+  f.chats.get(receipt.agentId!)!.archived = true;
+  const target = new HostLinks({ ...f.deps, workerArchived: () => false });
+  const journal = JSON.parse(readFileSync(path.join(f.deps.home, "host-links-inbox.json"), "utf8"));
+  const owner = Object.values(journal)[0] as { notices: { id: string }[] };
+  expect(
+    await target.worker(receipt.token, {
+      kind: "acknowledge",
+      agentId: receipt.agentId,
+      noticeIds: owner.notices.map((notice) => notice.id),
+    }),
+  ).toEqual({ archived: false });
+  expect(
+    Object.keys(JSON.parse(readFileSync(path.join(f.deps.home, "host-links-inbox.json"), "utf8"))),
+  ).toHaveLength(1);
+});
+
+test("archive acknowledgement failures retain a bounded retry count", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "cleanup-offline", "Delivered once");
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  const worker = f.target.worker.bind(f.target);
+  const unavailable = vi.spyOn(f.target, "worker").mockImplementation((token, raw) => {
+    if ((raw as { kind: string }).kind === "acknowledge")
+      return Promise.reject(new Error("Cleanup unavailable"));
+    return worker(token, raw);
+  });
+  for (let attempt = 0; attempt < 8; attempt++) {
+    f.state.now += 60000;
+    await f.source.syncNotifications();
+  }
+  expect(retainedReturn(f.sourceHome).watch?.failures).toBe(8);
+  const reads = f.state.noticeReads;
+  f.state.now += 60000;
+  await f.source.syncNotifications();
+  expect(f.state.noticeReads).toBe(reads);
+  expect(f.finishNotices).toHaveLength(1);
+  unavailable.mockRestore();
 });

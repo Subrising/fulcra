@@ -52,7 +52,9 @@ It flushes the temporary file, renames it with `MoveFileExW`, then opens and flu
 `WRITE_THROUGH` alone does not guarantee a same-volume rename commit.
 The helper retries access and sharing locks for one second.
 Windows journals stop at 1 MiB before writing; POSIX journals retain the 8 MiB limit.
+New spawns stop at 512 KiB on Windows and 4 MiB on POSIX, to reserve space for worker notices.
 Cold compilation runs outside the daemon event loop. Helper waits use 50 ms plus 15 ms per MiB, capped at 250 ms.
+Safe helper restarts wait one second, then double to 60 seconds. An uncertain commit prevents restart.
 After a pending receipt times out, reconcile its original write, then use a new message id.
 Readers check Windows ownership and reject ACLs that expose content or mutation rights to other users.
 The temporary file stays in the destination directory. Cross-volume copies are disabled.
@@ -227,13 +229,26 @@ Changed authority, archived callers, and changed provider sessions refuse delive
 Credential rotation and expiry renewal preserve return notices while the grants remain active.
 
 Healthy subscriptions check for retained events every ten seconds. Network failures use eight persisted attempts with delays capped at sixty seconds.
-The home daemon reads at most four workers concurrently. It has no timer when no eligible work remains.
+The home daemon reads at most four workers concurrently. It checks completed workers until archive permits cleanup.
+It has no timer when no eligible work remains.
 After retry exhaustion, repeat the same native creation request with its original UUID to renew the retry budget.
 This reuses the worker and notice receipts. It never starts a replacement worker or replays a delivered notice.
 
 Each worker keeps up to 127 permission checkpoints and one terminal notice within the existing journal storage limits.
 Do not delete receipt files to clear capacity or retry a request.
-The private source outbox retains notice text and delivery state for owner inspection.
+The private source outbox retains notice text and delivery state for owner inspection until cleanup.
+Cleanup requires an archived worker, no pending prompts, and source acknowledgement of every terminal notice.
+Resolved permission notices can also be removed. Finished workers keep their control grants until archive.
+Both hosts must support the `acknowledge` operation for automatic cleanup.
+The receiver first commits compact replay records in `host-links-inbox.json.replay`, then removes active entries.
+The source uses `host-links-outbox.json.replay`. A duplicate UUID returns its old outcome; a changed request fails.
+Each replay file has a 1 MiB cap. New spawns reserve replay space for active work and stop before capacity is full.
+Records for configured credentials do not expire, including expiry renewal and revocation.
+Records for removed credentials can leave after 30 days, during admission or cleanup.
+Rotate a full link to fresh credentials. Old records remain for 30 days before automatic removal. Never restore an old credential after its replay records expire.
+A notice save refusal produces a fixed failure warning through the source watch and its normal lead delivery path.
+A separate private `host-links-notice-failures.json` file keeps the warning across restart when storage permits.
+If that write also fails, the running daemon retains the warning. Repair storage and reconcile the worker before more work.
 Run `fulcra host-link status --home <source-home>` to count uncertain notices, exhausted deliveries, and exhausted watches.
 An exhausted watch means the home daemon stopped checking that worker for notices.
 A failed or interrupted provider handoff has state `uncertain`. It requires reconciliation; the daemon never replays it automatically.

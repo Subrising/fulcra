@@ -74,6 +74,7 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
             finishText(event.agent.id, event.agent.lastError ?? "The remote worker failed."),
           );
         } catch (error) {
+          service.recordWorkerNoticeFailure(event.agent.id);
           logger.error(
             { err: error, agentId: event.agent.id },
             "Could not retain a host-link worker error",
@@ -121,6 +122,7 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
             `Permission request ${event.event.request.id}:\n${JSON.stringify(event.event.request)}`,
           );
       } catch (error) {
+        service.recordWorkerNoticeFailure(event.agentId);
         logger.error(
           { err: error, agentId: event.agentId },
           "Could not retain a host-link worker notice",
@@ -291,6 +293,7 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
         worker.pendingPermissions.has(requestId),
       );
     },
+    workerArchived: (id) => Boolean(directory.get(id)?.archivedAt),
     noticeError: (error) => logger.warn({ err: error }, "Host-link finish notice remains retained"),
     chat: async (id) => {
       const live = agentManager.getAgent(id);

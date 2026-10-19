@@ -163,6 +163,9 @@ export const HostLinkWorkerRequestSchema = z.discriminatedUnion("kind", [
     .strict(),
   z.object({ kind: z.literal("inspect"), agentId: name }).strict(),
   z.object({ kind: z.literal("notices"), agentId: name }).strict(),
+  z
+    .object({ kind: z.literal("acknowledge"), agentId: name, noticeIds: z.array(name).max(128) })
+    .strict(),
 ]);
 export type HostLinkWorkerRequest = z.infer<typeof HostLinkWorkerRequestSchema>;
 export const HostLinkReceiptSchema = z
@@ -197,10 +200,12 @@ export const HostLinkWorkerNoticesSchema = z
     serverId: name,
     agentId: name,
     complete: z.boolean(),
+
     settledPromptIds: z.array(z.string().uuid()).max(128).optional(),
     notices: z.array(HostLinkWorkerNoticeSchema).max(128),
   })
   .strict();
+export type HostLinkWorkerNotices = z.infer<typeof HostLinkWorkerNoticesSchema>;
 const receivedNotice = HostLinkWorkerNoticeSchema.extend({
   state: z.enum(["queued", "sending", "delivered", "uncertain", "exhausted", "suppressed"]),
   attempts: z.number().int().min(0).max(8),
@@ -252,3 +257,22 @@ export const HostLinkJournalSchema = z.record(
     .strict(),
 );
 export type HostLinkJournal = z.infer<typeof HostLinkJournalSchema>;
+
+// Separate bounded replay records outlive the active worker journal.
+export const HostLinkReplaySchema = z.record(
+  z.string(),
+  z
+    .object({
+      hash: z.string(),
+      grant: z.string(),
+      receipt: HostLinkReceiptSchema,
+      retiredAt: z.number().finite(),
+      credential: z.string(),
+      noticeGrant: z.string(),
+    })
+    .strict(),
+);
+
+export const HostLinkCleanupSchema = z.object({ archived: z.boolean() }).strict();
+
+export const HostLinkNoticeFailuresSchema = z.record(z.string(), z.literal(true));

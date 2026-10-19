@@ -37,6 +37,7 @@ vi.mock("node:worker_threads", () => ({
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
 afterEach(() => {
   Object.defineProperty(process, "platform", platformDescriptor);
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   transport.mode = "ok";
@@ -132,16 +133,22 @@ test.each([
   expect(wait).toHaveBeenLastCalledWith(expect.any(Int32Array), 0, 0, 50);
 });
 
-test("an idle helper exit logs once and restarts without replaying a write", async () => {
+test("idle helper restarts back off from one second to 60 seconds without replay", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const logger = { warn: vi.fn() };
   const api = await helper(logger);
   api.writeWindowsPrivateFileAtomicSync("journal.json", "committed");
-  transport.workers[0]!.emit("exit", 1);
-  await api.initializeWindowsPrivateFiles(logger);
-  expect(logger.warn).toHaveBeenCalledExactlyOnceWith("Windows durable file helper exited.");
-  expect(transport.workers).toHaveLength(2);
+  for (const [index, delay] of [1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000].entries()) {
+    transport.workers[index]!.emit("exit", 1);
+    await api.initializeWindowsPrivateFiles(logger);
+    await vi.advanceTimersByTimeAsync(delay - 1);
+    expect(transport.workers).toHaveLength(index + 1);
+    expect(api.windowsPrivateFilesReady()).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(transport.workers).toHaveLength(index + 2);
+    expect(api.windowsPrivateFilesReady()).toBe(true);
+  }
   expect(transport.posts).toBe(1);
-  expect(api.windowsPrivateFilesReady()).toBe(true);
   api.writeWindowsPrivateFileAtomicSync("journal.json", "next");
   expect(transport.posts).toBe(2);
 });
