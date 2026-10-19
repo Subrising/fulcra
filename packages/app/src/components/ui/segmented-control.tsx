@@ -7,6 +7,7 @@ import {
   segmentedIconSize,
   type SegmentedControlSize,
 } from "@/components/ui/control-geometry";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import type { Theme } from "@/styles/theme";
 
 type SegmentedControlIconRenderer = (props: { color: string; size: number }) => ReactNode;
@@ -110,6 +111,7 @@ function SegmentItem<T extends string>({
   currentValue: T;
   onValueChange: (value: T) => void;
 }) {
+  const touch = useTouchTargets();
   const labelStyle = useMemo(
     () => [styles.label, labelSizeStyle, isSelected && styles.labelSelected],
     [labelSizeStyle, isSelected],
@@ -127,8 +129,9 @@ function SegmentItem<T extends string>({
       Boolean(hovered) && !isSelected && styles.segmentHover,
       pressed && !isSelected && styles.segmentPressed,
       option.disabled && styles.segmentDisabled,
+      touch && touchTargetStyles.iconButton,
     ],
-    [isSelected, option.disabled, segmentSizeStyle],
+    [isSelected, option.disabled, segmentSizeStyle, touch],
   );
   const accessibilityState = useMemo(
     () => ({ selected: isSelected, disabled: option.disabled }),

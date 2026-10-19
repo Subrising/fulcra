@@ -94,7 +94,7 @@ export const withUnistyles = <T>(Component: T): T => Component;
 
 export const useUnistyles = () => ({
   theme: testTheme,
-  rt: {},
+  rt: { screen: { width: 0, height: 0 } },
   breakpoint: undefined,
 });
 

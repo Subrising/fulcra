@@ -16,7 +16,6 @@ const DEFAULT_ATTRIBUTES: PanelInstanceAttributes = { modified: false };
 const attributesByPanel = new Map<string, PanelInstanceAttributes>();
 const listenersByPanel = new Map<string, Set<() => void>>();
 const allListeners = new Set<() => void>();
-let attributesRevision = 0;
 
 export function buildPanelInstanceKey(identity: PanelInstanceIdentity): string {
   return `${identity.serverId}:${identity.workspaceId}:${identity.tabId}`;
@@ -42,7 +41,6 @@ export function setPanelInstanceAttributes(
   }
   if (attributes.modified) attributesByPanel.set(key, attributes);
   else attributesByPanel.delete(key);
-  attributesRevision += 1;
   for (const listener of listenersByPanel.get(key) ?? []) listener();
   for (const listener of allListeners) listener();
 }
@@ -52,27 +50,32 @@ export function useModifiedPanelTabIds(input: {
   workspaceId: string;
   tabIds: string[];
 }): Set<string> {
-  const revision = useSyncExternalStore(
-    useCallback((listener: () => void) => {
-      allListeners.add(listener);
-      return () => allListeners.delete(listener);
-    }, []),
-    () => attributesRevision,
-    () => attributesRevision,
+  // A primitive snapshot, not a revision-keyed memo: the React Compiler drops a `void revision`
+  // read as a memo input, so a tab modified after mount was missing
+  // (panel-instance-attributes.compiler.test.tsx).
+  const subscribe = useCallback((listener: () => void) => {
+    allListeners.add(listener);
+    return () => allListeners.delete(listener);
+  }, []);
+  const readModifiedTabIds = useCallback(
+    () =>
+      input.tabIds
+        .filter(
+          (tabId) =>
+            getPanelInstanceAttributes({
+              serverId: input.serverId,
+              workspaceId: input.workspaceId,
+              tabId,
+            }).modified,
+        )
+        .join("\u0000"),
+    [input.serverId, input.tabIds, input.workspaceId],
   );
-  return useMemo(() => {
-    void revision;
-    return new Set(
-      input.tabIds.filter(
-        (tabId) =>
-          getPanelInstanceAttributes({
-            serverId: input.serverId,
-            workspaceId: input.workspaceId,
-            tabId,
-          }).modified,
-      ),
-    );
-  }, [input.serverId, input.tabIds, input.workspaceId, revision]);
+  const modifiedTabIds = useSyncExternalStore(subscribe, readModifiedTabIds, readModifiedTabIds);
+  return useMemo(
+    () => new Set(modifiedTabIds.length > 0 ? modifiedTabIds.split("\u0000") : []),
+    [modifiedTabIds],
+  );
 }
 
 export function subscribePanelInstanceAttributes(

@@ -184,6 +184,35 @@ describe("session resource cleanup", () => {
     });
   });
 
+  test("prunes root bindings whose process is gone after a session wakes", async () => {
+    const f = await fixture();
+    await f.tracker.sample();
+    const wake = { ...root, pid: 200, birth: "30000" };
+    f.setRows([wake]);
+    await new SessionResources({
+      ...f.options,
+      roots: () => [{ agentId: "owner", instanceId: "wake", pid: 200 }],
+    }).sample();
+    const saved = JSON.parse(await readFile(f.options.file, "utf8"));
+    expect(saved.roots).toEqual([
+      { agentId: "owner", instanceId: "wake", pid: 200, birth: "30000" },
+    ]);
+  });
+  test("stops tracking, without signalling, a grandchild whose middle parent exited", async () => {
+    const f = await fixture();
+    const middle = { ...child, pid: 101, ppid: 100, birth: "20000" };
+    const grandchild = { ...child, pid: 102, ppid: 101, birth: "30000" };
+    f.setRows([root, middle, grandchild]);
+    await f.tracker.sample();
+    expect(JSON.parse(await readFile(f.options.file, "utf8")).processes).toHaveLength(2);
+    f.setRows([root, grandchild]);
+    await f.tracker.sample();
+    expect(JSON.parse(await readFile(f.options.file, "utf8")).processes).toHaveLength(1);
+    f.setNow(ORPHAN_INTERVAL_MS + 1);
+    await f.tracker.sample();
+    expect(JSON.parse(await readFile(f.options.file, "utf8")).processes).toEqual([]);
+    expect(f.stopped).toEqual([]);
+  });
   test("keeps live owners, recent work and reused PIDs", async () => {
     const f = await fixture();
     await f.tracker.sample();

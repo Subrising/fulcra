@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { Pressable, Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { Pencil } from "lucide-react-native";
@@ -42,6 +43,7 @@ function HostRenameButton({ host }: { host: HostProfile }) {
     [host.label, host.serverId, renameHost],
   );
 
+  const touch = useTouchTargets();
   const openEditor = useCallback(() => setIsEditing(true), []);
   const closeEditor = useCallback(() => setIsEditing(false), []);
 
@@ -50,7 +52,7 @@ function HostRenameButton({ host }: { host: HostProfile }) {
       <Pressable
         onPress={openEditor}
         hitSlop={8}
-        style={styles.renameButton}
+        style={[styles.renameButton, touch && touchTargetStyles.iconButton]}
         accessibilityRole="button"
         accessibilityLabel={t("settings.host.daemon.rename.editLabel")}
         testID="host-page-label-edit-button"

@@ -293,6 +293,7 @@ export const ptBR: TranslationResources = {
   sessions: {
     title: "Histórico de agentes",
     empty: "Nenhuma sessão ainda",
+    emptyHint: "Os chats que você iniciar ou importar aparecem aqui.",
     noMatches: "Nenhuma sessão corresponde",
     tooManyMatches: "Muitos resultados — refine a busca",
     hostLoadFailed: "{{host}}: Não foi possível carregar o histórico",

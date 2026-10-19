@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { Monitor, Moon, Sun } from "lucide-react-native";
@@ -255,6 +256,7 @@ function FontFamilyRow({
   onChangeDraft,
   onCommit,
 }: FontFamilyRowProps) {
+  const touch = useTouchTargets();
   const handleCommit = useCallback(() => {
     onCommit(draft);
   }, [draft, onCommit]);
@@ -282,7 +284,7 @@ function FontFamilyRow({
         autoCapitalize="none"
         autoCorrect={false}
         spellCheck={false}
-        style={styles.fontFamilyInput}
+        style={[styles.fontFamilyInput, touch && touchTargetStyles.text]}
         accessibilityLabel={accessibilityLabel}
       />
     </View>
@@ -308,6 +310,7 @@ function FontSizeRow({
   onChangeDraft,
   onCommit,
 }: FontSizeRowProps) {
+  const touch = useTouchTargets();
   return (
     <View style={withBorder ? styles.rowWithBorder : settingsStyles.row}>
       <View style={settingsStyles.rowContent}>
@@ -323,7 +326,7 @@ function FontSizeRow({
           keyboardType="number-pad"
           inputMode="numeric"
           selectTextOnFocus
-          style={styles.sizeInput}
+          style={[styles.sizeInput, touch && touchTargetStyles.text]}
           accessibilityLabel={accessibilityLabel}
         />
         <Text style={styles.unit}>px</Text>

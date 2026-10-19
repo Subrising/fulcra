@@ -289,6 +289,7 @@ export const ar: TranslationResources = {
   sessions: {
     title: "السجل",
     empty: "لا توجد جلسات بعد",
+    emptyHint: "تظهر هنا المحادثات التي تبدؤها أو تستوردها.",
     noMatches: "لا توجد جلسات مطابقة",
     tooManyMatches: "نتائج كثيرة جدًا — ضيّق نطاق البحث",
     hostLoadFailed: "{{host}}: تعذر تحميل السجل",

@@ -1,5 +1,6 @@
 import { useUnistyles } from "react-native-unistyles";
-import { isWeb } from "@/constants/platform";
+import { isNative, isWeb } from "@/constants/platform";
+import { useHasFinePointer } from "@/hooks/use-fine-pointer";
 
 export const FOOTER_HEIGHT = 75;
 
@@ -12,6 +13,10 @@ export const WORKSPACE_SECONDARY_HEADER_HEIGHT = 36;
 export const HEADER_TOP_PADDING_MOBILE = 8;
 
 export const COMPACT_FORM_FACTOR_WIDTH = 500;
+
+// A phone held sideways is wide enough for the "md" breakpoint but too short for the
+// desktop shell. Below this height an "md" width on a touch screen still gets the compact layout.
+export const COMPACT_FORM_FACTOR_MAX_HEIGHT = 500;
 
 // Settings uses the canonical desktop list + detail layout. Its sidebar and
 // detail target must fit together before it can share width with app navigation.
@@ -39,7 +44,20 @@ export {
  */
 export function useIsCompactFormFactor(): boolean {
   const { rt } = useUnistyles();
-  return rt.breakpoint === "xs" || rt.breakpoint === "sm";
+  const finePointer = useHasFinePointer();
+  return isCompactFormFactor(rt.breakpoint, rt.screen.height, isNative || !finePointer);
+}
+
+/** `touch`: a short window with a mouse is a desktop window, not a phone held sideways. */
+export function isCompactFormFactor(
+  breakpoint: string | undefined,
+  height: number,
+  touch: boolean,
+): boolean {
+  if (breakpoint === "xs" || breakpoint === "sm") {
+    return true;
+  }
+  return touch && breakpoint === "md" && height < COMPACT_FORM_FACTOR_MAX_HEIGHT;
 }
 
 // SplitContainer relies on dnd-kit and DOM-backed accessibility helpers.

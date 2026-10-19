@@ -29,7 +29,7 @@ vi.hoisted(() => {
 
 vi.mock("react-native-unistyles", () => ({
   StyleSheet: { create: () => ({}) },
-  useUnistyles: () => ({ rt: { breakpoint: "lg" } }),
+  useUnistyles: () => ({ rt: { breakpoint: "lg", screen: { width: 1440, height: 900 } } }),
   withUnistyles: (Component: React.ComponentType) => Component,
 }));
 
