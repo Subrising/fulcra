@@ -55,6 +55,26 @@ export const QUARANTINED_BROWSER_TESTS = new Map([
     "FU-257",
   ],
   [
+    // FU-249: 0/10 in repeats, but 6 CI failures 17-19 Oct. Same image cause as FU-251.
+    "agent-tab-image-stability.spec.ts › opens a timeline image in a zoomable lightbox",
+    "FU-249",
+  ],
+  [
+    // FU-237: 0/10 in repeats, but 6 CI failures 17-19 Oct. Same image cause as FU-251.
+    "agent-message-submission.spec.ts › Agent message submission › keeps layout stable when submitting to an agent with existing history",
+    "FU-237",
+  ],
+  [
+    // FU-245: 1/10 in a second 10 repeats. Same viewport offset check as FU-246.
+    "agent-stream-ui.spec.ts › Agent stream UI › keeps the viewport fixed after the user scrolls away during a stream",
+    "FU-245",
+  ],
+  [
+    // FU-277: 1/10 in a second 10 repeats. The restarted version check failed.
+    "host-version-after-daemon-restart.spec.ts › host page shows the restarted daemon's version without reloading",
+    "FU-277",
+  ],
+  [
     // FU-255: 2/10. The Retry button stays enabled while its response is held.
     "agent-timeline-sync-retry.spec.ts › Agent timeline sync retry › a refused catch-up offers a retry that reports pending, failure, and recovery",
     "FU-255",

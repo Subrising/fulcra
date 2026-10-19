@@ -9,15 +9,6 @@ on:
     branches: [main]
   merge_group:
   workflow_dispatch:
-    inputs:
-      repeat_specs:
-        description: "TEMPORARY (FU-232 part 2): browser spec files to repeat without retries"
-        required: false
-        default: ""
-      repeat_each:
-        description: "TEMPORARY: repeats per case"
-        required: false
-        default: "20"
 
 permissions:
   contents: read
@@ -1108,57 +1099,6 @@ jobs:
       E2E_REPORT_CI: "1"
       E2E_USE_BUILT_DAEMON: "1"
     steps: *playwright_test_steps
-
-  # TEMPORARY (FU-232 part 2): repeat chosen browser specs without retries and
-  # keep every trace. Runs only on a manual dispatch with repeat_specs set.
-  browser-repeat:
-    name: browser-repeat (${{ matrix.part }}/4)
-    needs: [changes, browser-prepare]
-    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && github.event_name == 'workflow_dispatch' && inputs.repeat_specs != '' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    continue-on-error: true
-    strategy:
-      fail-fast: false
-      matrix:
-        part: [1, 2, 3, 4]
-    env:
-      E2E_STATIC_WEB: "1"
-      E2E_USE_BUILT_DAEMON: "1"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/ci-deps
-      - name: Install Playwright browsers
-        run: npx playwright install chromium
-      - name: Restore shared browser inputs
-        uses: actions/cache/restore@v4
-        with:
-          path: browser-inputs.tgz
-          key: ${{ needs.browser-prepare.outputs.cache-key }}
-          fail-on-cache-miss: true
-      - name: Unpack tested browser inputs
-        run: tar -xzf browser-inputs.tgz
-      - name: Install agent CLIs for provider tests
-        run: node scripts/npm-retry.mjs install -g @anthropic-ai/claude-code @openai/codex@0.105.0 opencode-ai
-      - name: Repeat the chosen specs
-        env:
-          SPECS: ${{ inputs.repeat_specs }}
-          REPEAT: ${{ inputs.repeat_each }}
-          PART: ${{ matrix.part }}
-          PLAYWRIGHT_JSON_OUTPUT_NAME: repeat-results.json
-        # The result is in the JSON report. This step never fails the job.
-        run: |
-          npm exec --workspace=@getpaseo/app -- playwright test --project=browser $SPECS --repeat-each="$REPEAT" --retries=0 --workers=3 --shard="$PART/4" --trace=retain-on-failure --reporter=list,json || true
-      - name: Upload repeat results
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        continue-on-error: true
-        with:
-          name: browser-repeat-${{ matrix.part }}
-          path: |
-            packages/app/test-results/
-            packages/app/repeat-results.json
-          retention-days: 7
 
   relay-tests:
     name: relay-tests
