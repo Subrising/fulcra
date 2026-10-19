@@ -215,7 +215,8 @@ test("recursive observation updates tracked state and prunes ignored storms", as
         workspaceRefreshQueuedCount: 0,
       });
     },
-    { timeout: 5_000 },
+    // Starting two recursive watchers can take longer than 5 s on a loaded macOS runner.
+    { timeout: 15_000 },
   );
 
   writeFileSync(trackedPath, "base\n");

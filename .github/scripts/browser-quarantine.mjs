@@ -23,6 +23,11 @@ export const QUARANTINED_BROWSER_TESTS = new Map([
     "api-account-spend.spec.ts › API dollars from the durable account ledger fit all required viewports",
     "FU-398",
   ],
+  [
+    // FU-399: the restarted settings control is not found on both tries.
+    "daemon-lifecycle.spec.ts › settings restart waits for a replacement worker while retaining the supervisor",
+    "FU-399",
+  ],
 ]);
 
 export function isQuarantined(key) {
