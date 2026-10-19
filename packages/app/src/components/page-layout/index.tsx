@@ -43,7 +43,7 @@ export function PageLayout({
         <MenuHeader borderless />
       )}
       <ScrollView style={styles.scroll} contentContainerStyle={scrollContentStyle} testID={testID}>
-        <View style={styles.content}>
+        <View style={[styles.content, isCompact && styles.compactContent]}>
           {showTitle ? (
             <View style={styles.titleRow} testID={titleTestID}>
               <Text style={styles.title} testID="page-title">
@@ -73,6 +73,11 @@ const styles = StyleSheet.create((theme) => ({
     width: "100%",
     maxWidth: 720,
     alignSelf: "center",
+  },
+  // On a phone the column starts on the header's edge instead of centring. Held sideways it
+  // still stops at a readable width, so a value never sits 700px from its label.
+  compactContent: {
+    alignSelf: "flex-start",
   },
   titleRow: {
     flexDirection: "row",

@@ -3,11 +3,13 @@ import { View, Text } from "react-native";
 import { useIsFocused } from "@react-navigation/native";
 import { router } from "expo-router";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
-import { ChevronLeft, Import } from "lucide-react-native";
+import { ChevronLeft, History, Import } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { MenuHeader } from "@/components/headers/menu-header";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { useIsCompactFormFactor } from "@/constants/layout";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { AgentList } from "@/components/agent-list";
 import { SearchField } from "@/components/ui/search-field";
@@ -36,6 +38,22 @@ function SessionHostErrorsBanner({
   errors: AgentHistoryHostError[];
   t: TFunction;
 }): ReactElement {
+  const isCompact = useIsCompactFormFactor();
+  if (isCompact) {
+    // On a phone the failure reads as one designed alert, with its icon, not loose red text.
+    return (
+      <View style={styles.errorsBannerWrap} testID="sessions-host-errors">
+        {errors.map((error) => (
+          <Alert
+            key={error.serverId}
+            variant="error"
+            size="sm"
+            title={t("sessions.hostLoadFailed", { host: error.serverName })}
+          />
+        ))}
+      </View>
+    );
+  }
   return (
     <View style={styles.errorsBannerWrap}>
       <View style={styles.errorsBanner} testID="sessions-host-errors">
@@ -45,6 +63,58 @@ function SessionHostErrorsBanner({
           </Text>
         ))}
       </View>
+    </View>
+  );
+}
+
+function SessionsEmptyState({
+  text,
+  isSearching,
+  onClearSearch,
+  onBack,
+  onImport,
+  t,
+}: {
+  text: string;
+  isSearching: boolean;
+  onClearSearch: () => void;
+  onBack: () => void;
+  onImport: () => void;
+  t: TFunction;
+}): ReactElement {
+  const isCompact = useIsCompactFormFactor();
+  if (isCompact && !isSearching) {
+    // One centred group: icon, title, hint, then the one action. The header menu already navigates.
+    return (
+      <View style={styles.emptyContainer} testID="sessions-empty">
+        <View style={styles.compactEmptyState}>
+          <History size={styles.emptyIcon.width} color={styles.emptyIcon.color} />
+          <View style={styles.emptyTextStack}>
+            <Text style={styles.emptyTitle}>{text}</Text>
+            <Text style={styles.emptyText}>{t("sessions.emptyHint")}</Text>
+          </View>
+          <Button variant="outline" leftIcon={Import} onPress={onImport}>
+            {t("importSession.title")}
+          </Button>
+        </View>
+      </View>
+    );
+  }
+  return (
+    <View style={styles.emptyContainer} testID="sessions-empty">
+      <Text style={styles.emptyText}>{text}</Text>
+      {isSearching ? (
+        <Button variant="ghost" onPress={onClearSearch}>
+          {t("sessions.actions.clearSearch")}
+        </Button>
+      ) : (
+        <Button variant="ghost" leftIcon={ChevronLeft} onPress={onBack}>
+          Back
+        </Button>
+      )}
+      <Button variant="ghost" leftIcon={Import} onPress={onImport}>
+        {t("importSession.title")}
+      </Button>
     </View>
   );
 }
@@ -191,21 +261,14 @@ function SessionsScreenContent() {
         </View>
       ) : null}
       {!isInitialLoad && !showLoadError && agents.length === 0 ? (
-        <View style={styles.emptyContainer} testID="sessions-empty">
-          <Text style={styles.emptyText}>{emptyText}</Text>
-          {isSearching ? (
-            <Button variant="ghost" onPress={handleClearSearch}>
-              {t("sessions.actions.clearSearch")}
-            </Button>
-          ) : (
-            <Button variant="ghost" leftIcon={ChevronLeft} onPress={handleBack}>
-              Back
-            </Button>
-          )}
-          <Button variant="ghost" leftIcon={Import} onPress={importSession.open}>
-            {t("importSession.title")}
-          </Button>
-        </View>
+        <SessionsEmptyState
+          text={emptyText}
+          isSearching={isSearching}
+          onClearSearch={handleClearSearch}
+          onBack={handleBack}
+          onImport={importSession.open}
+          t={t}
+        />
       ) : null}
       {!isInitialLoad && !showLoadError && agents.length > 0 ? (
         <AgentList
@@ -249,6 +312,26 @@ const styles = StyleSheet.create((theme) => ({
   emptyText: {
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.base,
+    textAlign: "center",
+  },
+  compactEmptyState: {
+    alignItems: "center",
+    gap: theme.spacing[4],
+    maxWidth: 420,
+    width: "100%",
+  },
+  emptyTextStack: {
+    alignItems: "center",
+    gap: theme.spacing[2],
+  },
+  emptyTitle: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.base,
+    textAlign: "center",
+  },
+  emptyIcon: {
+    color: theme.colors.foregroundMuted,
+    width: theme.iconSize.lg,
   },
   loadingContainer: {
     flex: 1,
@@ -269,6 +352,7 @@ const styles = StyleSheet.create((theme) => ({
       md: theme.spacing[6],
     },
     paddingTop: theme.spacing[3],
+    gap: theme.spacing[2],
   },
   errorsBanner: {
     borderWidth: theme.borderWidth[1],

@@ -293,6 +293,7 @@ export const ru: TranslationResources = {
   sessions: {
     title: "История",
     empty: "Сессий пока нет",
+    emptyHint: "Здесь появятся чаты, которые вы начнёте или импортируете.",
     noMatches: "Подходящих сессий не найдено",
     tooManyMatches: "Слишком много совпадений — уточните запрос",
     hostLoadFailed: "{{host}}: не удалось загрузить историю",

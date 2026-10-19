@@ -43,6 +43,7 @@ import {
   Blocks,
   ChevronRight,
   ChevronDown,
+  SlidersHorizontal,
   SendHorizontal,
   Users,
 } from "lucide-react-native";
@@ -832,8 +833,9 @@ function MenuRow({
     (state: PressableStateCallbackType & { hovered?: boolean }) => [
       (isSelected ? selectedSidebarItemStyle : sidebarItemStyle)(state),
       touch && touchTargetStyles.text,
+      isCompact && sidebarStyles.compactRow,
     ],
-    [isSelected, touch],
+    [isCompact, isSelected, touch],
   );
   return (
     <Pressable
@@ -858,6 +860,9 @@ function MenuRow({
           </Text>
         ) : null}
       </View>
+      {isCompact ? (
+        <ChevronRight size={theme.iconSize.sm} color={theme.colors.foregroundMuted} />
+      ) : null}
     </Pressable>
   );
 }
@@ -1079,12 +1084,15 @@ function SettingsSidebar({
   layout,
 }: SettingsSidebarProps) {
   const touch = useTouchTargets();
+  const isCompact = layout === "mobile";
   const advancedStyle = useCallback(
     (state: PressableStateCallbackType & { hovered?: boolean }) => [
       sidebarItemStyle(state),
       touch && touchTargetStyles.text,
+      isCompact && sidebarStyles.compactRow,
+      isCompact && sidebarStyles.compactToggle,
     ],
-    [touch],
+    [isCompact, touch],
   );
   const { theme } = useUnistyles();
   const { t } = useTranslation();
@@ -1228,14 +1236,30 @@ function SettingsSidebar({
     );
   };
 
+  const everydayRows = (
+    <>
+      {accountsRow}
+      {itemsFor(EVERYDAY_SECTIONS).map((item) => renderSection(item, true))}
+    </>
+  );
+  const advancedChevron = advancedOpen ? (
+    <ChevronDown size={theme.iconSize.md} color={theme.colors.foregroundMuted} />
+  ) : (
+    <ChevronRight size={theme.iconSize.md} color={theme.colors.foregroundMuted} />
+  );
+  // On a phone the list is the page: the rows sit in cards like the detail pages, and the
+  // Advanced toggle reads as a row (full-contrast title, chevron on the trailing edge).
   const sidebarBody = (
     <>
-      <View style={sidebarStyles.list}>
-        {accountsRow}
-        {itemsFor(EVERYDAY_SECTIONS).map((item) => renderSection(item, true))}
-      </View>
-      <SidebarSeparator />
-      <View style={sidebarStyles.list}>
+      {isCompact ? (
+        <View style={sidebarStyles.compactCard}>
+          <View style={sidebarStyles.compactCardBody}>{everydayRows}</View>
+        </View>
+      ) : (
+        <View style={sidebarStyles.list}>{everydayRows}</View>
+      )}
+      {isCompact ? null : <SidebarSeparator />}
+      <View style={isCompact ? sidebarStyles.compactAdvanced : sidebarStyles.list}>
         <Pressable
           accessibilityRole="button"
           accessibilityState={advancedAccessibilityState}
@@ -1246,14 +1270,18 @@ function SettingsSidebar({
           testID="settings-advanced-toggle"
           style={advancedStyle}
         >
-          {advancedOpen ? (
-            <ChevronDown size={theme.iconSize.md} color={theme.colors.foregroundMuted} />
+          {isCompact ? (
+            <SlidersHorizontal size={theme.iconSize.md} color={theme.colors.foregroundMuted} />
           ) : (
-            <ChevronRight size={theme.iconSize.md} color={theme.colors.foregroundMuted} />
+            advancedChevron
           )}
-          <Text style={sidebarStyles.label} numberOfLines={1}>
+          <Text
+            style={[sidebarStyles.label, isCompact && sidebarStyles.compactLabel]}
+            numberOfLines={1}
+          >
             {t("settings.menu.advanced")}
           </Text>
+          {isCompact ? advancedChevron : null}
         </Pressable>
         {advancedOpen ? ADVANCED_GROUP_ORDER.map(renderGroup) : null}
       </View>
@@ -1852,8 +1880,45 @@ const sidebarStyles = StyleSheet.create((theme) => ({
     position: "relative",
   },
   mobileContainer: {
-    paddingVertical: theme.spacing[2],
-    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[4],
+    paddingHorizontal: theme.spacing[4],
+    gap: theme.spacing[6],
+    width: "100%",
+    maxWidth: 720,
+  },
+  // A phone list row: a card row with a divider above it, as on the settings detail pages.
+  compactRow: {
+    minHeight: 56,
+    paddingVertical: theme.spacing[3],
+    paddingHorizontal: theme.spacing[4],
+    gap: theme.spacing[3],
+    borderRadius: 0,
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.border,
+  },
+  compactCard: {
+    backgroundColor: theme.colors.surface1,
+    borderRadius: theme.borderRadius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    overflow: "hidden",
+  },
+  // Tucks the first row's divider under the card border.
+  compactCardBody: {
+    marginTop: -1,
+  },
+  // The Advanced toggle stands alone, so it is its own one-row card.
+  compactToggle: {
+    backgroundColor: theme.colors.surface1,
+    borderRadius: theme.borderRadius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  },
+  compactAdvanced: {
+    gap: theme.spacing[1],
+  },
+  compactLabel: {
+    color: theme.colors.foreground,
   },
   list: {
     paddingVertical: theme.spacing[2],
