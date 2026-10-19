@@ -246,7 +246,9 @@ The receiver first commits compact replay records in `host-links-inbox.json.repl
 The source uses `host-links-outbox.json.replay`. A duplicate UUID returns its old outcome; a changed request fails.
 Each replay file has a 1 MiB cap. New spawns reserve replay space for active work and stop before capacity is full.
 Replay records expire after 30 days, including records for configured credentials.
-Every spawn and prompt request must retain its original `issuedAt` in Unix milliseconds with its UUID.
+The source sets a missing spawn `issuedAt` at first dispatch and retains it with the request UUID.
+Retries reuse that time from the active outbox or replay record. A different caller timestamp fails.
+Prompt requests must retain their original `issuedAt` in Unix milliseconds with their UUID.
 Both hosts refuse requests aged 30 days minus five minutes, and timestamps more than five minutes in the future.
 Keep host clocks synchronized. Never refresh a retry's timestamp. Reconcile an expired request before using a new UUID.
 Update both host daemons and remote clients. Local messages keep their existing protocol shape.
@@ -255,10 +257,12 @@ A notice save capacity or write failure produces a fixed warning through the nor
 Start events and temporary Windows reconciliation fences do not set this warning.
 Events blocked by a Windows receipt wait for its completion, then retry only journal persistence.
 The daemon checks the original write result. It reports a confirmed write failure without replaying provider input.
-Real result text remains available. A successful notice save clears its warning.
+Real result text remains available. Only a successful terminal notice save or source acknowledgement clears its warning.
 The source stops its notice watch after delivering a storage warning. It does not poll that warning indefinitely.
 A separate private `host-links-notice-failures.json` file keeps warnings across restart when storage permits.
-Events from a cleaned-up worker also set a repair marker. Do not restore retired workers; create a new worker instead.
+Notices from a cleaned-up worker set a repair marker and a runtime log warning.
+The source can read this warning through the retired worker receipt.
+Do not restore retired workers; create a new worker instead.
 After storage repair and worker reconciliation, stop the worker host daemon when idle.
 Keep it stopped while you clear only that worker's marker:
 `fulcra host-link clear-notice-failure --home <worker-home> --worker <worker-uuid>`.

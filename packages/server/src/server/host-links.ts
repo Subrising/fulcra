@@ -348,6 +348,7 @@ export class HostLinks {
         retiredAt: Math.max(this.now(), entry.issuedAt ?? this.now()),
         credential: digest(link.token),
         noticeGrant: authorityDigest(link),
+        ...(entry.issuedAt !== undefined ? { issuedAt: entry.issuedAt } : {}),
       };
     }
     this.pruneReplay(replay);
@@ -663,13 +664,26 @@ export class HostLinks {
     await this.forward(link, chat, { kind: "notice", messageId: randomUUID(), text }, kind);
     return true;
   }
+  private sourceIssuedAt(key: string, issuedAt: number | undefined): number {
+    const prior = this.journal(this.outboxFile)[key] ?? this.replay(this.outboxFile)[key];
+    const retainedTime = prior?.issuedAt;
+    if (retainedTime !== undefined && issuedAt !== undefined && issuedAt !== retainedTime)
+      throw new HostLinkError("conflict", "The retained request issuedAt changed.");
+    if (prior && retainedTime === undefined && issuedAt === undefined)
+      throw new HostLinkError("refused", "The retained request issuedAt requires reconciliation.");
+    const time = retainedTime ?? issuedAt ?? this.now();
+    this.requestCurrent(time);
+    return time;
+  }
   private async forward(
     link: OutgoingHostLink,
     chat: HostLinkChat,
     input: HostLinkDispatch,
     noticeKind: HostLinkNoticeKind,
   ): Promise<HostLinkReceipt> {
-    if (input.kind === "spawn") this.requestCurrent(input.issuedAt);
+    const key = `${chat.id}:${input.messageId}`;
+    if (input.kind === "spawn")
+      input = { ...input, issuedAt: this.sourceIssuedAt(key, input.issuedAt) };
     const origin = {
       destination: link.serverId,
       sender: chat.id,
@@ -681,7 +695,6 @@ export class HostLinks {
       ...origin,
       ...(input.kind === "notice" ? { noticeKind, isLead: this.isLead(chat) } : {}),
     });
-    const key = `${chat.id}:${input.messageId}`;
     if (
       input.kind === "spawn" &&
       input.notifyOnFinish &&
@@ -1065,6 +1078,7 @@ export class HostLinks {
     );
     if (!link) throw new HostLinkError("refused", "The retired worker grant changed.");
     this.recheck(link);
+    if (input.kind === "acknowledge") this.acknowledgeNoticeFailure(input.agentId, input.noticeIds);
     return input.kind === "acknowledge"
       ? { archived: true }
       : {
@@ -1072,7 +1086,9 @@ export class HostLinks {
           agentId: input.agentId,
           complete: true,
           settledPromptIds: [],
-          notices: [],
+          notices: this.noticeFailed(input.agentId)
+            ? [this.noticeFailureWarning(input.agentId)]
+            : [],
         };
   }
 
@@ -1087,6 +1103,7 @@ export class HostLinks {
       (candidate) => candidate.receipt.token === entry.receipt.token,
     );
     if (!current || digest(current) !== digest(entry)) return { archived: false };
+    this.acknowledgeNoticeFailure(agentId, noticeIds);
     const acknowledged = new Set(noticeIds);
     const related = Object.entries(journal).filter(
       ([, candidate]) => candidate.receipt.agentId === agentId,
@@ -1122,12 +1139,21 @@ export class HostLinks {
       })
       .map(({ id, kind, text }) => ({ id, kind, text }));
     if (this.noticeFailed(agentId) && notices.length < 128)
-      notices.push({
-        id: digest([agentId, "notice-storage-failure"]),
-        kind: "failed",
-        text: "The remote host could not save a worker notice. Reconcile the worker and its receipt storage before more work.",
-      });
+      notices.push(this.noticeFailureWarning(agentId));
     return notices;
+  }
+
+  private noticeFailureWarning(agentId: string): HostLinkWorkerNotice {
+    return {
+      id: digest([agentId, "notice-storage-failure"]),
+      kind: "failed",
+      text: "The remote host could not save a worker notice. Reconcile the worker and its receipt storage before more work.",
+    };
+  }
+
+  private acknowledgeNoticeFailure(agentId: string, noticeIds: string[]): void {
+    if (noticeIds.includes(this.noticeFailureWarning(agentId).id))
+      this.clearWorkerNoticeFailure(agentId);
   }
 
   resolveWorkerPermission(agentId: string, requestId: string): void {
@@ -1168,7 +1194,7 @@ export class HostLinks {
     eventId: string,
     text: string,
     turnId?: string,
-  ): void {
+  ): void | "retired" {
     const journal = this.journal(this.inboxFile);
     if (
       !Object.values(journal).some((entry) => entry.profile && entry.receipt.agentId === agentId)
@@ -1177,8 +1203,10 @@ export class HostLinks {
         Object.values(this.replay(this.inboxFile)).some(
           (entry) => entry.receipt.agentId === agentId,
         )
-      )
+      ) {
         this.retainNoticeFailure(agentId);
+        return "retired";
+      }
       return;
     }
     for (const [key, entry] of Object.entries(journal)) {
@@ -1216,7 +1244,7 @@ export class HostLinks {
         complete: kind !== "permission" && !entry.pendingPromptIds?.length,
         finishArmed: kind === "permission",
       });
-      this.clearWorkerNoticeFailure(agentId);
+      if (kind !== "permission") this.clearWorkerNoticeFailure(agentId);
     }
   }
 

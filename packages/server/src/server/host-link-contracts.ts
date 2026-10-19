@@ -93,7 +93,7 @@ export const HostLinkSpawnSchema = z
   .object({
     kind: z.literal("spawn"),
     ...identity,
-    issuedAt,
+    issuedAt: issuedAt.optional(),
     workload: z.enum(["standard", "heavy", "gpu"]),
     workspace: name,
     profile: name,
@@ -142,7 +142,7 @@ export const HostAccountLimitWireSchema = HostAccountLimitSchema.extend({
   ...identity,
   destination: name,
 }).strict();
-const spawnWire = HostLinkSpawnSchema.extend(origin).strict();
+const spawnWire = HostLinkSpawnSchema.extend({ ...origin, issuedAt }).strict();
 const noticeWire = HostLinkNoticeSchema.extend({
   ...origin,
   noticeKind: z.enum(["explicit", "finished", "failed", "permission", "limit"]),
@@ -283,6 +283,7 @@ export const HostLinkReplaySchema = z.record(
       retiredAt: z.number().finite(),
       credential: z.string(),
       noticeGrant: z.string(),
+      issuedAt: issuedAt.optional(),
     })
     .strict(),
 );

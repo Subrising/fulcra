@@ -2687,3 +2687,134 @@ test("legacy active workers accept fresh prompts while timestamp-free pending re
   expect(retainedReturn(f.sourceHome).receipt.state).toBe("pending");
   expect(retainedReturn(f.sourceHome).watch?.failures).toBe(1);
 });
+
+test("source stamps a missing spawn time once and reuses it after uncertainty and restart", async () => {
+  const f = await fixture();
+  const { issuedAt: _omitted, ...request } = spawn;
+  const receive = f.target.receive.bind(f.target);
+  const times: number[] = [];
+  const lost = vi.spyOn(f.target, "receive").mockImplementation(async (token, wire) => {
+    times.push((wire as { issuedAt: number }).issuedAt);
+    const receipt = await receive(token, wire);
+    if (times.length === 1) throw new Error("Created receipt reply lost");
+    return receipt;
+  });
+  await expect(f.source.spawnForAgent("lead", "target", request)).rejects.toThrow();
+  const original = f.state.now;
+  f.state.now += 60000;
+  const source = f.restartSource();
+  const receipt = await source.spawnForAgent("lead", "target", request);
+  expect(receipt.state).toBe("created");
+  expect(times).toEqual([original, original]);
+  expect(f.created).toHaveLength(1);
+  lost.mockRestore();
+  f.chats.get(receipt.agentId!)!.archived = true;
+  await source.syncNotifications();
+  f.state.now += 60000;
+  const replay = await f.restartSource().spawnForAgent("lead", "target", request);
+  expect(replay).toEqual(receipt);
+  expect(f.created).toHaveLength(1);
+});
+
+test("source refuses a changed spawn time while its UUID is active or retired", async () => {
+  const f = await fixture();
+  const { issuedAt: _omitted, ...request } = spawn;
+  const first = await f.source.spawnForAgent("lead", "target", request);
+  const changed = { ...request, issuedAt: f.state.now + 1 };
+  await expect(f.source.spawnForAgent("lead", "target", changed)).rejects.toMatchObject({
+    code: "conflict",
+  });
+  f.chats.get(first.agentId!)!.archived = true;
+  await f.source.syncNotifications();
+  await expect(f.restartSource().spawnForAgent("lead", "target", changed)).rejects.toMatchObject({
+    code: "conflict",
+  });
+  expect(f.created).toHaveLength(1);
+});
+
+test("a retired worker warning reaches the source after a lost cleanup reply", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "old-result", "Original result");
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  f.chats.get(receipt.agentId!)!.archived = true;
+  const worker = f.target.worker.bind(f.target);
+  const lost = vi.spyOn(f.target, "worker").mockImplementation(async (token, raw) => {
+    const result = await worker(token, raw);
+    if ((raw as { kind: string }).kind === "acknowledge") throw new Error("Cleanup reply lost");
+    return result;
+  });
+  f.state.now += 10000;
+  await f.source.syncNotifications();
+  lost.mockRestore();
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "restored-event", "Retired result");
+  f.state.now += 60000;
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(2);
+  expect(f.finishNotices[1]!.text).toContain("could not save a worker notice");
+  expect(f.created).toHaveLength(1);
+});
+
+test("a permission notice save keeps a previous terminal storage failure warning", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNoticeFailure(receipt.agentId!, new HostLinkStorageError("write"));
+  f.target.recordWorkerNotice(
+    receipt.agentId!,
+    "permission",
+    "later-permission",
+    "Permission request",
+  );
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(
+    f.finishNotices.some((notice) => notice.text.includes("could not save a worker notice")),
+  ).toBe(true);
+});
+
+test("the HTTP source stamps a spawn before its first dispatch", async () => {
+  const f = await fixture();
+  const { issuedAt: _omitted, ...request } = spawn;
+  expect((await f.dispatch(request)).status).toBe(200);
+  const retained = retainedReturn(f.sourceHome);
+  expect(retained.issuedAt).toBe(f.state.now);
+  f.state.now += 60000;
+  expect((await f.dispatch(request)).status).toBe(200);
+  expect(retainedReturn(f.sourceHome).issuedAt).toBe(retained.issuedAt);
+  expect((await f.dispatch({ ...request, issuedAt: f.state.now })).status).toBe(409);
+  expect(f.created).toHaveLength(1);
+});
+
+test("only acknowledgement of the storage warning clears its marker without a terminal save", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNoticeFailure(receipt.agentId!, new HostLinkStorageError("write"));
+  const query = () =>
+    f.target.worker(receipt.token, { kind: "notices", agentId: receipt.agentId }) as Promise<{
+      notices: { id: string }[];
+    }>;
+  const warning = (await query()).notices[0]!;
+  await f.target.worker(receipt.token, {
+    kind: "acknowledge",
+    agentId: receipt.agentId,
+    noticeIds: [],
+  });
+  expect((await query()).notices).toHaveLength(1);
+  await f.target.worker(receipt.token, {
+    kind: "acknowledge",
+    agentId: receipt.agentId,
+    noticeIds: [warning.id],
+  });
+  expect((await query()).notices).toHaveLength(0);
+});

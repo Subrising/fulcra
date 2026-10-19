@@ -1094,7 +1094,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     })
       .optional()
       .describe(
-        "Remote grant identifiers, retained request UUID, and original issuedAt in Unix milliseconds. Remote finish notices default to enabled.",
+        "Remote grant identifiers and retained request UUID. The source sets and retains issuedAt. Remote finish notices default to enabled.",
       ),
   };
   const remoteCreateAgentArgsSchema = z

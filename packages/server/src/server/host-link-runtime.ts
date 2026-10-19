@@ -108,7 +108,7 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
             if (!error.receipt) return persist(agentId, eventType, key, operation);
             const outcome = Atomics.load(error.receipt, 0);
             if (outcome === 1) {
-              if (!["turn_started", "permission_resolved"].includes(eventType))
+              if (["finished", "failed"].includes(eventType))
                 service?.clearWorkerNoticeFailure(agentId);
               return;
             }
@@ -134,9 +134,13 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
     }
   };
   const recordNotice = (...args: Parameters<HostLinks["recordWorkerNotice"]>) =>
-    persist(args[0], "notice", `${args[0]}:${args[1]}:${args[2]}`, () =>
-      service?.recordWorkerNotice(...args),
-    );
+    persist(args[0], args[1], `${args[0]}:${args[1]}:${args[2]}`, () => {
+      if (service?.recordWorkerNotice(...args) === "retired")
+        logger.warn(
+          { agentId: args[0] },
+          "A retired host-link worker emitted a notice. Reconcile it before more work.",
+        );
+    });
   const unsubscribe = agentManager.subscribe(
     (event) => {
       try {
