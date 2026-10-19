@@ -65,6 +65,17 @@ export interface GitCommandOptions {
   beforeSpawn?: () => void;
 }
 
+export class GitCommandTimeoutError extends Error {
+  constructor(
+    message: string,
+    /** Settles when the timed-out process tree has been killed. */
+    readonly stopped: Promise<void>,
+  ) {
+    super(message);
+    this.name = "GitCommandTimeoutError";
+  }
+}
+
 export interface GitCommandResult<Output = string> {
   stdout: Output;
   stderr: string;
@@ -466,13 +477,14 @@ function executeGitCommand<Output>(
       }
 
       timer = setTimeout(() => {
-        timeoutError = new Error(`Git command timed out after ${timeout}ms: ${command}`);
-        // Reject after the tree is killed: a caller may repair what the command left (FU-372).
-        void terminateGitProcess(child)
-          .catch((cleanupError) => {
+        // `stopped` lets a caller repair what the command left only after its tree is killed (FU-372).
+        timeoutError = new GitCommandTimeoutError(
+          `Git command timed out after ${timeout}ms: ${command}`,
+          terminateGitProcess(child).catch((cleanupError) => {
             processError = cleanupError;
-          })
-          .finally(() => settle(() => reject(timeoutError)));
+          }),
+        );
+        settle(() => reject(timeoutError));
         if (processExit) {
           settleTimeoutTrace(processExit.exitCode, processExit.signal);
         }

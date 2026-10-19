@@ -24,7 +24,7 @@ import { join } from "path";
 import { createServer, type AddressInfo, type Socket } from "net";
 import { tmpdir } from "os";
 import { createRealpathAwarePathMatcher } from "./path";
-import { runGitCommand } from "./run-git-command";
+import { GitCommandTimeoutError, runGitCommand } from "./run-git-command";
 
 interface LegacyCreateWorktreeTestOptions {
   branchName: string;
@@ -138,12 +138,12 @@ describe("paseo worktree manager", () => {
     execFileSync("git", ["config", "filter.slow.smudge", "sleep 30; cat"], { cwd: repoDir });
     const worktreePath = join(tempDir, "interrupted");
 
-    await expect(
-      runGitCommand(["worktree", "add", "-b", "interrupted-branch", worktreePath, "main"], {
-        cwd: repoDir,
-        timeout: 1500,
-      }),
-    ).rejects.toThrow("timed out");
+    const timedOut = await runGitCommand(
+      ["worktree", "add", "-b", "interrupted-branch", worktreePath, "main"],
+      { cwd: repoDir, timeout: 1500 },
+    ).catch((error: unknown) => error);
+    expect(timedOut).toBeInstanceOf(GitCommandTimeoutError);
+    await (timedOut as GitCommandTimeoutError).stopped;
     const adminDir = join(repoDir, ".git", "worktrees", "interrupted");
     expect(existsSync(join(adminDir, "locked"))).toBe(true);
     expect(existsSync(join(worktreePath, "b.slow"))).toBe(false);
@@ -153,7 +153,7 @@ describe("paseo worktree manager", () => {
       cwd: repoDir,
       worktreePath,
       paseoHome,
-      cause: new Error("timed out"),
+      cause: timedOut,
     });
 
     expect(existsSync(join(adminDir, "locked"))).toBe(false);

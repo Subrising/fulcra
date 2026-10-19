@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { runGitCommand } from "./run-git-command.js";
+import { GitCommandTimeoutError, runGitCommand } from "./run-git-command.js";
 
 const tempDirs: string[] = [];
 
@@ -50,9 +50,9 @@ describe("runGitCommand fsmonitor isolation", () => {
   });
 });
 
-// FU-372: a caller repairs what a timed-out command left (index.lock). The killed tree must be gone first.
+// FU-372: a caller repairs what a timed-out command left (index.lock). It must know when the killed tree is gone.
 describe("runGitCommand timeout", () => {
-  it("rejects only after the timed-out process tree has stopped", async () => {
+  it("tells the caller when the timed-out process tree has stopped", async () => {
     const repo = makeTempRepo();
     await runGitCommand(["init"], { cwd: repo });
     const pidPath = path.join(repo, "child.pid");
@@ -60,9 +60,13 @@ describe("runGitCommand timeout", () => {
       ["config", "alias.hang", `!sh -c 'echo $$ > "${pidPath}"; exec sleep 30'`],
       { cwd: repo },
     );
-    const started = runGitCommand(["hang"], { cwd: repo, timeout: 1000 });
 
-    await expect(started).rejects.toThrow("timed out");
+    const error = await runGitCommand(["hang"], { cwd: repo, timeout: 1000 }).catch(
+      (failure: unknown) => failure,
+    );
+
+    expect(error).toBeInstanceOf(GitCommandTimeoutError);
+    await (error as GitCommandTimeoutError).stopped;
     const pid = Number(readFileSync(pidPath, "utf8"));
     expect(() => process.kill(pid, 0)).toThrow();
   });

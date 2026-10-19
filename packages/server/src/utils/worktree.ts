@@ -40,7 +40,7 @@ import {
   writePaseoWorktreeMetadata,
   writePaseoWorktreeRuntimeMetadata,
 } from "./worktree-metadata.js";
-import { runGitCommand } from "./run-git-command.js";
+import { GitCommandTimeoutError, runGitCommand } from "./run-git-command.js";
 import { spawnProcess } from "./spawn.js";
 import { resolvePaseoHome } from "../server/paseo-home.js";
 import { createExternalProcessEnv } from "../server/paseo-env.js";
@@ -1191,7 +1191,8 @@ export async function finishInterruptedWorktreeAdd(options: {
   };
   if (!gitDir || !existsSync(join(gitDir, "HEAD"))) return rollback(cause);
   try {
-    // The timed-out command's process tree is already killed, so these locks have no owner.
+    // Once the timed-out command's tree is killed, these locks have no owner.
+    if (cause instanceof GitCommandTimeoutError) await cause.stopped;
     rmSync(join(gitDir, "index.lock"), { force: true });
     rmSync(join(gitDir, "locked"), { force: true });
     await runGitCommand(["reset", "--hard", "--quiet", "--no-recurse-submodules"], {
