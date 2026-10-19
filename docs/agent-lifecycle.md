@@ -583,9 +583,10 @@ OMP test harnesses register teardown before start. Teardown closes native helper
 
 ### Cleanup controls and ownership safeguards
 
-`FULCRA_SESSION_RESOURCE_CLEANUP` controls resource cleanup. The default is `on`.
+`FULCRA_SESSION_RESOURCE_CLEANUP` controls this additional resource cleanup. The default is `on`.
 Set it to `off` to disable collection and cleanup. Set it to `dry-run` to record decisions without signals or simulator shutdown.
-Other values disable cleanup. Set the environment before starting the daemon.
+Other values disable this cleanup. Set the environment before starting the daemon.
+Existing provider transport shutdown still runs when a session closes.
 
 Each sampled root is bound to its native birth identity. Reused roots cannot acquire new children under the old binding.
 Child and parent births must agree across snapshots. A child cannot be older than its recorded parent.
