@@ -969,7 +969,11 @@ function WorkspaceHeaderProjectRow({
         </Text>
       ) : null}
       {showProject && hostBadge ? <Text style={styles.headerProjectSeparator}>·</Text> : null}
-      {hostBadge ? <HostBadge badge={hostBadge} /> : null}
+      {hostBadge ? (
+        <View style={styles.headerHostBadge}>
+          <HostBadge badge={hostBadge} />
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -4272,6 +4276,11 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundExtraMuted,
     fontSize: theme.fontSize.sm,
     flexShrink: 0,
+  },
+  // The project name truncates first, so the host name never shrinks to one letter.
+  headerHostBadge: {
+    flexShrink: 0,
+    maxWidth: "60%",
   },
   headerTitleSkeleton: {
     width: 220,

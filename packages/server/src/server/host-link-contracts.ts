@@ -87,6 +87,9 @@ export type IncomingHostLink = HostLinkConfig["incoming"][number];
 export type OutgoingHostLink = HostLinkConfig["outgoing"][number];
 export const HOST_LINK_RETENTION_MS = 30 * 86400000;
 export const HOST_LINK_CLOCK_SKEW_MS = 5 * 60000;
+// Cross-host notices retire from the receiver journal by age: settled ones early, undelivered ones at the cap.
+export const HOST_LINK_NOTICE_SETTLED_MS = 86400000;
+export const HOST_LINK_NOTICE_MAX_MS = 7 * 86400000;
 const issuedAt = z.number().int().nonnegative();
 const identity = { messageId: z.string().uuid() };
 export const HostLinkSpawnSchema = z
@@ -145,6 +148,8 @@ export const HostAccountLimitWireSchema = HostAccountLimitSchema.extend({
 const spawnWire = HostLinkSpawnSchema.extend({ ...origin, issuedAt }).strict();
 const noticeWire = HostLinkNoticeSchema.extend({
   ...origin,
+  // COMPAT(hostLinkNoticeIssuedAt): senders before this change omit it; such entries never retire by age.
+  issuedAt: issuedAt.optional(),
   noticeKind: z.enum(["explicit", "finished", "failed", "permission", "limit"]),
   isLead: z.boolean(),
 }).strict();

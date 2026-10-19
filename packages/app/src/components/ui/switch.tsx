@@ -14,6 +14,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { createControlGeometry, switchGeometry } from "@/components/ui/control-geometry";
+import { TOUCH_TARGET, useTouchTargets } from "@/hooks/use-touch-targets";
 import type { Theme } from "@/styles/theme";
 
 interface SwitchProps {
@@ -90,10 +91,16 @@ export function Switch({
     [disabled, onValueChange, value],
   );
 
+  const touch = useTouchTargets();
   const accessibilityState = useMemo(() => ({ checked: value, disabled }), [value, disabled]);
   const pressableStyle = useMemo(
-    () => [styles.switchControl, disabled ? styles.disabled : null, style],
-    [disabled, style],
+    () => [
+      styles.switchControl,
+      touch ? styles.switchControlTouch : null,
+      disabled ? styles.disabled : null,
+      style,
+    ],
+    [disabled, style, touch],
   );
 
   return (
@@ -119,6 +126,12 @@ const styles = StyleSheet.create((theme) => {
   return {
     switchControl: {
       ...geometry.switchControl,
+    },
+    // The track keeps its size and its trailing edge on the row rail; the target grows inward.
+    switchControlTouch: {
+      minWidth: TOUCH_TARGET,
+      minHeight: TOUCH_TARGET,
+      alignItems: "flex-end",
     },
     switchTrack: {
       width: switchGeometry.trackWidth,

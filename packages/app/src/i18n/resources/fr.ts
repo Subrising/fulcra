@@ -296,6 +296,7 @@ export const fr: TranslationResources = {
   sessions: {
     title: "Historique",
     empty: "Aucune session pour l’instant",
+    emptyHint: "Les discussions que vous lancez ou importez s’affichent ici.",
     noMatches: "Aucune session correspondante",
     tooManyMatches: "Trop de résultats — affinez la recherche",
     hostLoadFailed: "{{host}} : impossible de charger l’historique",

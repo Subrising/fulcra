@@ -83,13 +83,15 @@ export function testListPath(shard, attempt, { exists, read }) {
   const retry = attempt > 1;
   let list = `.e2e-plan/shard-${shard}.txt`;
   if (shard === "recovery") list = ".e2e-plan/recovery.txt";
+  if (shard === "quarantine") list = ".e2e-plan/quarantine.txt";
   if (retry) list = ".e2e-retry/failed.txt";
   if (retry && exists("packages/app/.e2e-retry/incomplete"))
     throw new Error("Previous run was incomplete; refusing a whole-shard retry.");
   if (!exists(`packages/app/${list}`))
     throw new Error("Missing exact test list. Refusing to rerun a whole shard.");
   if (!read(`packages/app/${list}`).trim()) {
-    if (retry) return null;
+    // An empty quarantine means every case is back in the required shards.
+    if (retry || shard === "quarantine") return null;
     throw new Error("Empty browser shard");
   }
   return list;

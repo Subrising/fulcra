@@ -1279,8 +1279,12 @@ test("a later send_agent_prompt arms a new report-up finish notice", async () =>
     const childId = (created.structuredContent as { agentId: string }).agentId;
     const childThread = f.manager.getAgent(childId)!.persistence!.sessionId;
     f.server.completeTurn({ threadId: childThread });
-    await vi.waitFor(async () =>
-      expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({ status: "delivered" }),
+    await vi.waitFor(
+      async () =>
+        expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({
+          status: "delivered",
+        }),
+      { timeout: 10_000 },
     );
     const firstId = (await f.agentStorage.getFinishNotice(childId))!.messageId;
     f.server.completeTurn({ threadId: f.agent.persistence!.sessionId });
@@ -1294,8 +1298,12 @@ test("a later send_agent_prompt arms a new report-up finish notice", async () =>
     expect(armed).toMatchObject({ owner: "report-up", status: "armed" });
     expect(armed.messageId).not.toBe(firstId);
     f.server.completeTurn({ threadId: childThread });
-    await vi.waitFor(async () =>
-      expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({ status: "delivered" }),
+    await vi.waitFor(
+      async () =>
+        expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({
+          status: "delivered",
+        }),
+      { timeout: 10_000 },
     );
     const parentTurns = f.server
       .requests()

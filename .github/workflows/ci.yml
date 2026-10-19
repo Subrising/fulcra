@@ -597,7 +597,23 @@ jobs:
         timeout-minutes: 10
         run: npx playwright install chromium
 
+      # A cache download can fail on a network error. The exact entry exists,
+      # so one later attempt replaces a failed shard.
       - name: Restore shared browser inputs
+        id: browser-inputs
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: browser-inputs.tgz
+          key: ${{ needs.browser-prepare.outputs.cache-key }}
+          fail-on-cache-miss: true
+
+      - name: Wait before the second browser input restore
+        if: ${{ steps.browser-inputs.outcome == 'failure' }}
+        run: sleep 15
+
+      - name: Restore shared browser inputs again
+        if: ${{ steps.browser-inputs.outcome == 'failure' }}
         uses: actions/cache/restore@v4
         with:
           path: browser-inputs.tgz
@@ -1064,6 +1080,22 @@ jobs:
     env:
       PLAYWRIGHT_ARTIFACT: recovery
       E2E_STATIC_WEB: "0"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  # Known flaky cases (.github/scripts/browser-quarantine.mjs). Not part of
+  # ci-passed: a failure here is recorded but does not block a merge.
+  browser-quarantine:
+    name: browser-quarantine
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    continue-on-error: true
+    env:
+      PLAYWRIGHT_ARTIFACT: quarantine
+      E2E_STATIC_WEB: "1"
       E2E_REPORT_CI: "1"
       E2E_USE_BUILT_DAEMON: "1"
     steps: *playwright_test_steps

@@ -295,6 +295,7 @@ export const en = {
   sessions: {
     title: "History",
     empty: "No sessions yet",
+    emptyHint: "Chats you start or import show here.",
     noMatches: "No sessions match",
     tooManyMatches: "Too many matches — narrow your search",
     hostLoadFailed: "{{host}}: Could not load history",

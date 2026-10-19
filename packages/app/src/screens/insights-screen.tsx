@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState, type ReactElement } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { useIsFocused } from "@react-navigation/native";
 import { useTranslation } from "react-i18next";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { StyleSheet } from "react-native-unistyles";
 import type { InsightsResult } from "@getpaseo/protocol/messages";
 import { MenuHeader } from "@/components/headers/menu-header";
@@ -131,13 +132,14 @@ function Chip(props: {
   onChoose: (value: string) => void;
 }) {
   const { value, onChoose } = props;
+  const touch = useTouchTargets();
   const onPress = useCallback(() => onChoose(value), [value, onChoose]);
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityState={props.selected ? SELECTED_STATE : UNSELECTED_STATE}
       onPress={onPress}
-      style={[styles.chip, props.selected && styles.chipOn]}
+      style={[styles.chip, props.selected && styles.chipOn, touch && touchTargetStyles.iconButton]}
       testID="insights-scope"
     >
       <Text style={styles.chipText}>{props.label}</Text>
@@ -148,13 +150,14 @@ function Chip(props: {
 function DaysChip(props: { days: number; selected: boolean; onChoose: (days: number) => void }) {
   const { t } = useTranslation();
   const { days, onChoose } = props;
+  const touch = useTouchTargets();
   const onPress = useCallback(() => onChoose(days), [days, onChoose]);
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityState={props.selected ? SELECTED_STATE : UNSELECTED_STATE}
       onPress={onPress}
-      style={[styles.chip, props.selected && styles.chipOn]}
+      style={[styles.chip, props.selected && styles.chipOn, touch && touchTargetStyles.iconButton]}
       testID={`insights-days-${days}`}
     >
       <Text style={styles.chipText}>{t(`${K}.lastDays`, { count: days })}</Text>

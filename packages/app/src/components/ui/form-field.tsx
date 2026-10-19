@@ -18,6 +18,7 @@ import {
 import { StyleSheet } from "react-native-unistyles";
 import { AdaptiveTextInput, type AdaptiveTextInputProps } from "@/components/adaptive-modal-sheet";
 import type { EditingTextInputHandle } from "@/components/ui/text-input";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import {
   createControlGeometry,
   resolveControlInteractionStyles,
@@ -160,6 +161,7 @@ function assignTextInputRef(
 
 export const FormTextInput = forwardRef<EditingTextInputHandle, FormTextInputProps>(
   function FormTextInput({ size = "md", style, onFocus, onBlur, editable, ...props }, ref) {
+    const touch = useTouchTargets();
     const [focused, setFocused] = useState(false);
     const isDisabled = editable === false;
     const chromeSizeStyle = size === "sm" ? formInputStyles.chromeSm : formInputStyles.chromeMd;
@@ -186,8 +188,13 @@ export const FormTextInput = forwardRef<EditingTextInputHandle, FormTextInputPro
       [onBlur],
     );
     const inputStyle = useMemo(
-      () => [formInputStyles.input, inputSizeStyle, splitStyle.inputStyle],
-      [inputSizeStyle, splitStyle.inputStyle],
+      () => [
+        formInputStyles.input,
+        inputSizeStyle,
+        touch && touchTargetStyles.text,
+        splitStyle.inputStyle,
+      ],
+      [inputSizeStyle, splitStyle.inputStyle, touch],
     ) as AdaptiveTextInputProps["style"];
     const chromeStyle = useCallback(
       ({ hovered = false }: PressableStateCallbackType & { hovered?: boolean }) => [
@@ -206,9 +213,10 @@ export const FormTextInput = forwardRef<EditingTextInputHandle, FormTextInputPro
             disabled: isDisabled,
           },
         ),
+        touch && touchTargetStyles.fieldChrome,
         splitStyle.chromeStyle,
       ],
-      [chromeSizeStyle, focused, isDisabled, splitStyle.chromeStyle],
+      [chromeSizeStyle, focused, isDisabled, splitStyle.chromeStyle, touch],
     );
 
     return (

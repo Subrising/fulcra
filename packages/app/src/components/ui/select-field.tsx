@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/control-geometry";
 import { Field } from "@/components/ui/form-field";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 
 export interface SelectFieldDisplay {
@@ -129,6 +130,7 @@ export function SelectFieldTrigger({
   size = "md",
   testID,
 }: SelectFieldTriggerProps): ReactElement {
+  const touch = useTouchTargets();
   const sizeStyle = size === "sm" ? styles.triggerSm : styles.triggerMd;
   const textSizeStyle = size === "sm" ? styles.triggerTextSm : styles.triggerTextMd;
   const triggerStyle = useMemo(
@@ -144,8 +146,9 @@ export function SelectFieldTrigger({
         },
         { hovered, focused, active, disabled },
       ),
+      touch && touchTargetStyles.text,
     ],
-    [active, disabled, focused, hovered, sizeStyle],
+    [active, disabled, focused, hovered, sizeStyle, touch],
   );
   const label = explicitLabel ?? display?.label ?? placeholder;
   const isPlaceholder = explicitIsPlaceholder ?? display == null;

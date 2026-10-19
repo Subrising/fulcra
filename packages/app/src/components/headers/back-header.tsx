@@ -21,7 +21,10 @@ function goBack(): void {
 
 export function BackHeader({ title, titleAccessory, rightContent, onBack }: BackHeaderProps) {
   const touch = useTouchTargets();
-  const backStyle = useMemo(() => [styles.backButton, touch && touchTargetStyles.icon], [touch]);
+  const backStyle = useMemo(
+    () => [styles.backButton, touch && touchTargetStyles.iconButton],
+    [touch],
+  );
   const { theme } = useUnistyles();
   const { t } = useTranslation();
   const handleBack = useCallback(() => {
