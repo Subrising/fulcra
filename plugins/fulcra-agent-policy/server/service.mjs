@@ -97,6 +97,15 @@ function refusalOf(agent, binding) {
   if (agent.labels[LIMIT_RESUME_OPT_OUT_LABEL] === "off") return "opted out";
   return null;
 }
+/** Delays before the next resume-time lookup after an unexplained lookup error (three retries at most). */
+export const LOOKUP_RETRY_MS = [30_000, 120_000, 600_000];
+/** Lookup errors that never clear: the session is archived or no longer exists. */
+function permanentLookupRefusal(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/^Agent is archived\b/.test(message)) return "archived";
+  if (/^Agent not found\b/.test(message)) return "session not found";
+  return null;
+}
 export class LimitResumeService {
   deps;
   file;
@@ -400,6 +409,33 @@ export class LimitResumeService {
       this.arm();
     }
   }
+  /**
+   * The resume-time lookup threw. A session that is archived or gone never comes back, so it leaves the queue at once.
+   * Any other error may be transient: retry with a bounded backoff, then give up. Never leave a due entry in place,
+   * or the timer re-fires it every STAGGER_MS.
+   */
+  async onLookupFailure(entry, error) {
+    const permanent = permanentLookupRefusal(error);
+    if (permanent) {
+      this.deps.onSkip?.(entry.agentId, permanent);
+      await this.cancel(entry.agentId);
+      return;
+    }
+    this.deps.onError(error);
+    const failures = (entry.lookupFailures ?? 0) + 1;
+    if (failures > LOOKUP_RETRY_MS.length) {
+      this.deps.onSkip?.(entry.agentId, "lookup failed repeatedly");
+      await this.cancel(entry.agentId);
+      return;
+    }
+    const mine = this.queue.entries.find(
+      (e) => e.agentId === entry.agentId && e.limitId === entry.limitId,
+    );
+    if (!mine) return;
+    mine.lookupFailures = failures;
+    mine.resumeAt = this.now() + LOOKUP_RETRY_MS[failures - 1];
+    this.save();
+  }
   async fire(entry) {
     const unchanged = () =>
       !this.stopped && this.epochOf(entry.agentId) === entry.epoch && this.deps.isEnabled();
@@ -415,7 +451,14 @@ export class LimitResumeService {
       await this.cancel(entry.agentId);
       return;
     }
-    const agent = await this.deps.getAgent(entry.agentId, true);
+    let agent;
+    try {
+      agent = await this.deps.getAgent(entry.agentId, true);
+    } catch (error) {
+      if (this.stopped) return;
+      await this.onLookupFailure(entry, error);
+      return;
+    }
     if (this.stopped) return;
     const refusal = refusalOf(agent, entry.binding);
     if (refusal) {

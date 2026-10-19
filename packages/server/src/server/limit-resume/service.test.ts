@@ -467,6 +467,89 @@ describe("LimitResumeService", () => {
     svc.stop();
   });
 
+  describe("lookup failures at the due time", () => {
+    /** A service whose resume-time lookup throws like ensureUnarchivedAgentLoaded does. */
+    const makeThrowing = (message: () => string | null) => {
+      const lookups: number[] = [];
+      const skips: Array<{ agentId: string; reason: string }> = [];
+      const errors: unknown[] = [];
+      const svc = new LimitResumeService({
+        paseoHome: home,
+        isEnabled: () => enabled,
+        captureBinding: (id) => agents.get(id)?.binding ?? null,
+        getAgent: async (id, forResume) => {
+          if (forResume) {
+            lookups.push(Date.now());
+            const failure = message();
+            if (failure) throw new Error(failure);
+          }
+          return agents.get(id) ?? null;
+        },
+        getLastAssistantMessage: async () => null,
+        setMarker: async (id, at) => {
+          markers.set(id, at);
+        },
+        sendResume: async (agentId, prompt, stillWanted, consume) => {
+          if (!stillWanted()) return;
+          consume();
+          sent.push({ agentId, prompt, at: Date.now() });
+        },
+        onError: (e) => errors.push(e),
+        onSkip: (agentId, reason) => skips.push({ agentId, reason }),
+        random: () => 0,
+      });
+      return { svc, lookups, skips, errors };
+    };
+
+    it("drops a session that was archived after it was queued: one attempt, then never again", async () => {
+      agents.set("a", idle());
+      const { svc, lookups, skips } = makeThrowing(() => "Agent is archived: a");
+      svc.start();
+      await svc.onAgentEvent(failed("a", resetIn(60 * 60_000)));
+      await vi.advanceTimersByTimeAsync(3_600_000 + HANDOFF_MS + 1_000);
+      expect(lookups).toHaveLength(1);
+      expect(skips).toEqual([{ agentId: "a", reason: "archived" }]);
+      expect(queued()).toEqual([]);
+      expect(markers.get("a")).toBeNull();
+      await vi.advanceTimersByTimeAsync(60 * STAGGER_MS);
+      expect(lookups).toHaveLength(1);
+      expect(sent).toEqual([]);
+      svc.stop();
+    });
+
+    it("drops a session that no longer exists: one attempt, then never again", async () => {
+      agents.set("a", idle());
+      const { svc, lookups, skips } = makeThrowing(() => "Agent not found: a");
+      svc.start();
+      await svc.onAgentEvent(failed("a", resetIn(60 * 60_000)));
+      await vi.advanceTimersByTimeAsync(3_600_000 + HANDOFF_MS + 1_000);
+      await vi.advanceTimersByTimeAsync(60 * STAGGER_MS);
+      expect(lookups).toHaveLength(1);
+      expect(skips).toEqual([{ agentId: "a", reason: "session not found" }]);
+      expect(queued()).toEqual([]);
+      svc.stop();
+    });
+
+    it("retries an unknown lookup error with growing delays, then gives up", async () => {
+      agents.set("a", idle());
+      const { svc, lookups, skips, errors } = makeThrowing(() => "provider timed out");
+      svc.start();
+      await svc.onAgentEvent(failed("a", resetIn(60 * 60_000)));
+      await vi.advanceTimersByTimeAsync(3_600_000 + HANDOFF_MS + 1_000);
+      expect(lookups).toHaveLength(1);
+      // Not a retry every STAGGER_MS: the next attempt waits for the first backoff step.
+      await vi.advanceTimersByTimeAsync(STAGGER_MS * 2);
+      expect(lookups).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(24 * 3_600_000);
+      expect(lookups.length).toBeGreaterThan(1);
+      expect(lookups.length).toBeLessThanOrEqual(4);
+      expect(errors.length).toBe(lookups.length);
+      expect(skips).toEqual([{ agentId: "a", reason: "lookup failed repeatedly" }]);
+      expect(queued()).toEqual([]);
+      svc.stop();
+    });
+  });
+
   describe("interrupted by a daemon restart", () => {
     const running = () =>
       (JSON.parse(readFileSync(limitResumeFilePath(home), "utf8")) as { running: object }).running;
