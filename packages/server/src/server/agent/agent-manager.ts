@@ -258,6 +258,7 @@ import { IdleSleep } from "./agent-idle-sleep.js";
 const RELOAD_SESSION_CLOSE_TIMEOUT_MS = 3_000;
 const INTERRUPT_SESSION_TIMEOUT_MS = 2_000;
 const IMPORTABLE_SESSION_LIST_TIMEOUT_MS = 90_000;
+const FAILED_MCP_CLOSE_ERROR = "MCP refresh failed; explicit close recovery required";
 const STORED_AGENT_CAPABILITIES: AgentCapabilityFlags = {
   supportsStreaming: false,
   supportsSessionPersistence: true,
@@ -3624,6 +3625,15 @@ export class AgentManager {
     };
   }
 
+  /** The resumed runtime keeps the old lastError; after a close recovery it no longer applies. */
+  private async clearRecoveredCloseError(agentId: string): Promise<void> {
+    const recovered = this.agents.get(agentId);
+    if (!recovered || recovered.lastError !== FAILED_MCP_CLOSE_ERROR) return;
+    recovered.lastError = undefined;
+    await this.persistSnapshot(recovered);
+    this.emitState(recovered);
+  }
+
   /** FU-230: a fenced reconnect on a retained failed-close runtime; `moved` is true once that exact runtime changed. */
   private captureCloseRecovery(
     reconnect: boolean,
@@ -3813,6 +3823,7 @@ export class AgentManager {
               closeStarted = true;
             };
           });
+          if (closeRecovery) await this.clearRecoveredCloseError(agentId);
           return {
             outcome: "refreshed",
             reason: null,
@@ -4006,7 +4017,7 @@ export class AgentManager {
       session,
       lifecycle: "error",
       activeForegroundTurnId: null,
-      lastError: "MCP refresh failed; explicit close recovery required",
+      lastError: FAILED_MCP_CLOSE_ERROR,
     };
     this.failedMcpRefreshCloses.add(session);
     this.agents.set(existing.id, retained);

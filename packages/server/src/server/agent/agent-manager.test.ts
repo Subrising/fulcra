@@ -3758,6 +3758,7 @@ test("a fenced reconnect finishes close recovery and resumes the same session wi
       state: { sessionId: f.created.persistence!.sessionId, supported: true },
     });
     expect(f.manager.getAgent(f.created.id)?.session).toBe(f.client.sessions[1]);
+    expect(f.manager.getAgent(f.created.id)?.lastError).toBeUndefined();
     expect(f.manager.getAgent(f.created.id)?.config.mcpServers).toEqual(
       f.created.config.mcpServers,
     );

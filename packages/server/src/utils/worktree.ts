@@ -1163,10 +1163,24 @@ function readLinkedWorktreeGitDir(worktreePath: string): string | null {
   }
 }
 
+/** This path's git admin dir, only while git's own "initializing" lock from `worktree add` is still there. */
+function readInterruptedWorktreeAdmin(worktreePath: string): string | null {
+  const gitDir = readLinkedWorktreeGitDir(worktreePath);
+  if (!gitDir || !existsSync(join(gitDir, "HEAD"))) return null;
+  try {
+    if (!readFileSync(join(gitDir, "locked"), "utf8").includes("initializing")) return null;
+    const backLink = readFileSync(join(gitDir, "gitdir"), "utf8").trim();
+    if (realpathSync(dirname(backLink)) !== realpathSync(worktreePath)) return null;
+  } catch {
+    return null;
+  }
+  return gitDir;
+}
+
 /**
- * A killed `git worktree add` leaves a registered worktree that is still locked ("initializing"), an index.lock from
- * its checkout child and a partial file set. Finish that checkout so the caller still gets its worktree. When it
- * cannot be finished, remove it and fail with the first error.
+ * A `git worktree add` killed by its timeout leaves a registered worktree that is still locked ("initializing"), an
+ * index.lock from its checkout child and a partial file set. Finish that checkout so the caller still gets its
+ * worktree. Every other failure is git's own answer and is rethrown untouched: the path can belong to another create.
  */
 export async function finishInterruptedWorktreeAdd(options: {
   cwd: string;
@@ -1176,7 +1190,13 @@ export async function finishInterruptedWorktreeAdd(options: {
   cause: unknown;
 }): Promise<void> {
   const { cwd, worktreePath, cause } = options;
-  const gitDir = readLinkedWorktreeGitDir(worktreePath);
+  if (!(cause instanceof GitCommandTimeoutError)) throw cause;
+  try {
+    await cause.stopped;
+  } catch {
+    // The old git may still be writing. Leave its files alone.
+    throw cause;
+  }
   const rollback = async (error: unknown): Promise<never> => {
     if (!existsSync(worktreePath)) throw error;
     return rollbackCreatedPaseoWorktree(
@@ -1189,10 +1209,10 @@ export async function finishInterruptedWorktreeAdd(options: {
       error,
     );
   };
-  if (!gitDir || !existsSync(join(gitDir, "HEAD"))) return rollback(cause);
+  const gitDir = readInterruptedWorktreeAdmin(worktreePath);
+  if (!gitDir) return rollback(cause);
   try {
-    // Once the timed-out command's tree is killed, these locks have no owner.
-    if (cause instanceof GitCommandTimeoutError) await cause.stopped;
+    // The timed-out tree is killed, so these locks have no owner.
     rmSync(join(gitDir, "index.lock"), { force: true });
     rmSync(join(gitDir, "locked"), { force: true });
     await runGitCommand(["reset", "--hard", "--quiet", "--no-recurse-submodules"], {
@@ -1200,10 +1220,9 @@ export async function finishInterruptedWorktreeAdd(options: {
       timeout: WORKTREE_CHECKOUT_TIMEOUT_MS,
     });
   } catch (resumeError) {
-    const message = cause instanceof Error ? cause.message : String(cause);
     const resumeMessage = resumeError instanceof Error ? resumeError.message : String(resumeError);
     await rollback(
-      new Error(`${message}; finishing the partial checkout also failed: ${resumeMessage}`, {
+      new Error(`${cause.message}; finishing the partial checkout also failed: ${resumeMessage}`, {
         cause,
       }),
     );

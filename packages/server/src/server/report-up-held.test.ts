@@ -734,7 +734,7 @@ describe("worker questions", () => {
         requestId: "permission-q1",
         response: expect.objectContaining({
           behavior: "deny",
-          agentNotice: expect.stringContaining("Do not use request_user_input to wait"),
+          agentNotice: expect.stringContaining("Fulcra sent a copy of the question to your lead."),
         }),
       },
     ]);
@@ -744,6 +744,77 @@ describe("worker questions", () => {
     expect(sent[0]!.agentId).toBe(LEAD);
     expect(sent[0]!.prompt).toContain("Is the PC install done?");
     expect(sent[0]!.prompt).toContain("Options: Yes");
+  });
+
+  // Review: live project leads carry fulcra.role=implementation and report to role:main-assistant.
+  test("a project lead that reports to the main assistant keeps its question", async () => {
+    const f = setup();
+    const projectLead = "44444444-4444-4444-8444-444444444444";
+    f.chats.set(projectLead, {
+      id: projectLead,
+      title: "Song Studio lead",
+      labels: { "fulcra.role": "implementation", [REPORTS_TO_LABEL]: "role:main-assistant" },
+      lifecycle: "idle",
+    });
+    f.stream(projectLead, { type: "permission_requested", request: question });
+    f.flushPermissionGrace();
+    await settle();
+
+    expect(responses).toEqual([]);
+  });
+
+  test("a chat that has its own workers keeps its question", async () => {
+    const f = setup();
+    const midLead = "55555555-5555-4555-8555-555555555555";
+    const worker = "66666666-6666-4666-8666-666666666666";
+    f.chats.set(midLead, {
+      id: midLead,
+      title: "Sub-lead",
+      labels: { [REPORTS_TO_LABEL]: LEAD },
+      lifecycle: "idle",
+    });
+    f.chats.set(worker, {
+      id: worker,
+      title: "Its worker",
+      labels: { [REPORTS_TO_LABEL]: midLead },
+      lifecycle: "idle",
+    });
+    f.stream(midLead, { type: "permission_requested", request: question });
+    f.flushPermissionGrace();
+    await settle();
+
+    expect(responses).toEqual([]);
+  });
+
+  test("a worker whose lead cannot get the copy is told so and to put the question in DECISION", async () => {
+    const f = setup();
+    const archivedLead = "77777777-7777-4777-8777-777777777777";
+    const worker = "88888888-8888-4888-8888-888888888888";
+    f.chats.set(archivedLead, {
+      id: archivedLead,
+      title: "Old lead",
+      labels: {},
+      archivedAt: "2026-10-18T00:00:00.000Z",
+      lifecycle: "idle",
+    });
+    f.chats.set(worker, {
+      id: worker,
+      title: "Orphan worker",
+      labels: { [REPORTS_TO_LABEL]: archivedLead },
+      lifecycle: "idle",
+    });
+    f.stream(worker, { type: "permission_requested", request: question });
+    f.flushPermissionGrace();
+    await settle();
+
+    expect(responses).toHaveLength(1);
+    const notice = (responses[0]!.response as { agentNotice: string }).agentNotice;
+    expect(notice).toContain("could not send the question to your lead");
+    expect(notice).not.toContain("sent a copy");
+    expect(notice).toContain("put the full question text in that line");
+    f.leadTurnEnds();
+    await settle();
+    expect(sent).toEqual([]);
   });
 
   test("a chat with no lead keeps its question for the person who watches it", async () => {

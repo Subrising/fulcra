@@ -80,13 +80,17 @@ export function formatWorkerQuestionNotice(input) {
     `Folder: ${input.cwd ?? "unknown"}`,
   ].join("\n");
 }
-/** FU-373: what the worker reads when Fulcra dismisses its question. */
-export const WORKER_QUESTION_REFUSAL = [
-  "Fulcra dismissed your request_user_input question. No person watches this chat, and an open question stops every new turn.",
-  "Fulcra sent a copy of the question to your lead.",
-  "Do not use request_user_input to wait for an answer or an event.",
-  "Continue the work. If you cannot continue, end your turn with DECISION <question> or BLOCKED <reason>.",
-].join("\n");
+/** FU-373: what the worker reads when Fulcra dismisses its question. `copied`: the lead really got a copy. */
+export function formatWorkerQuestionRefusal(input) {
+  return [
+    "Fulcra dismissed your request_user_input question. No person watches this chat, and an open question stops every new turn.",
+    input.copied
+      ? "Fulcra sent a copy of the question to your lead."
+      : "Fulcra could not send the question to your lead.",
+    "Do not use request_user_input to wait for an answer or an event.",
+    "Continue the work. If you cannot continue, end your turn with DECISION <question> or BLOCKED <reason>, and put the full question text in that line.",
+  ].join("\n");
+}
 export function formatCombinedNotice(items) {
   const only = items.length === 1 ? items[0] : undefined;
   if (only)

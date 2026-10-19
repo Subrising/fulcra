@@ -5368,16 +5368,12 @@ export class CodexAppServerAgentSession implements AgentSession {
     const prepared = this.asyncQuestions.prepareResponse(requestId, response);
     let followUpPrompt = prepared.prompt;
     const expectedTurnId = this.activeForegroundTurnId;
-    if (prepared.prompt && expectedTurnId) {
-      const result = await this.steerActiveTurn(prepared.prompt, {
-        expectedTurnId,
-        clientMessageId: randomUUID(),
-      });
-      if (result.status !== "accepted") {
-        throw new Error("The active Codex turn changed. Retry sending your answer.");
-      }
+    if (
+      prepared.prompt &&
+      expectedTurnId &&
+      (await this.steerAsyncAnswer(prepared.prompt, expectedTurnId, response.behavior === "deny"))
+    )
       followUpPrompt = undefined;
-    }
     this.emitEvent({ type: "timeline", provider: CODEX_PROVIDER, item: prepared.complete() });
     this.emitEvent({
       type: "permission_resolved",
@@ -5386,6 +5382,30 @@ export class CodexAppServerAgentSession implements AgentSession {
       resolution: response,
     });
     return followUpPrompt ? { followUpPrompt } : undefined;
+  }
+
+  /**
+   * Steer an answer into the running turn; once more into a newer turn if the turn changed. False means the caller
+   * sends it as a follow-up run, so the question never stays open. A failed delivery keeps a person's answer pending
+   * for a retry; a dismissal is final.
+   */
+  private async steerAsyncAnswer(
+    prompt: string,
+    expectedTurnId: string,
+    dismissal: boolean,
+  ): Promise<boolean> {
+    const steer = (turnId: string) =>
+      this.steerActiveTurn(prompt, { expectedTurnId: turnId, clientMessageId: randomUUID() });
+    try {
+      if ((await steer(expectedTurnId)).status === "accepted") return true;
+      const newer = this.activeForegroundTurnId;
+      return Boolean(
+        newer && newer !== expectedTurnId && (await steer(newer)).status === "accepted",
+      );
+    } catch (error) {
+      if (!dismissal) throw error;
+      return false;
+    }
   }
 
   private handlePlanPermissionResponse(params: {

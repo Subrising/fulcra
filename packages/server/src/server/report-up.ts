@@ -92,7 +92,7 @@ const {
   formatNudge,
   formatPermissionNotice,
   formatWorkerQuestionNotice,
-  WORKER_QUESTION_REFUSAL,
+  formatWorkerQuestionRefusal,
   formatCombinedNotice,
   titleOf,
   formatReportUpNotice,
@@ -197,17 +197,23 @@ interface PersistedState {
   nudgeDeliveredAt?: Record<string, number>;
 }
 
-/** A chat's lead chat on this computer (fulcra.reports-to, else its parent), or the reason there is none. */
 const ASYNC_QUESTION_TOOL = "request_user_input_async";
 
-/** A worker: it reports to a chat, and it holds no seat or lead role that a person talks to. */
-function hasNoHumanSeat(worker: LineAgent): boolean {
+/**
+ * A worker by its labels: it reports to a chat, holds no seat or lead role, and does not report to the main assistant
+ * (project leads do, with fulcra.role=implementation). The caller also excludes chats that have workers.
+ */
+function looksLikeWorker(worker: LineAgent): boolean {
   const line = reportsTo(worker);
   return (
-    Boolean(line) && line !== REPORTS_TO_OWNER && !isArchiveLead({ labels: worker.labels ?? {} })
+    Boolean(line) &&
+    line !== REPORTS_TO_OWNER &&
+    !line!.startsWith(`${ROLE_REF_PREFIX}${MAIN_ASSISTANT_ROLE}`) &&
+    !isArchiveLead({ labels: worker.labels ?? {} })
   );
 }
 
+/** A chat's lead chat on this computer (fulcra.reports-to, else its parent), or the reason there is none. */
 export async function leadChatOf(
   store: LineStore,
   worker: LineAgent,
@@ -1428,34 +1434,46 @@ export class ReportUpService {
     if (request.name !== ASYNC_QUESTION_TOOL) return false;
     const live = this.deps.agentManager.getAgent(workerId);
     const worker = await this.store.get(workerId);
-    if (!worker || worker.archivedAt || live?.internal || !hasNoHumanSeat(worker)) return false;
-    const prompt = formatSystemNotificationPrompt(
-      formatWorkerQuestionNotice({ worker, request, cwd: live?.cwd ?? null }),
-    );
+    if (!worker || worker.archivedAt || live?.internal || !looksLikeWorker(worker)) return false;
+    if (await this.hasWorkers(workerId)) return false;
     if (!current()) return true;
+    let copied = false;
     try {
-      if (!(await this.deps.remoteNotice?.(workerId, prompt, "permission"))) {
-        const lead = await this.leadOf(worker);
-        if ("id" in lead && (await this.reportingLineAllows(workerId, lead.id)))
-          void this.toLead(workerId, lead.id, prompt, "permission").catch((err: unknown) =>
-            this.deps.logger.warn({ err, agentId: workerId }, "Worker question notice failed"),
-          );
-      }
-    } finally {
-      if (current())
-        await respondToAgentPermission({
-          agentManager: this.deps.agentManager,
-          agentId: workerId,
-          requestId: request.id,
-          response: {
-            behavior: "deny",
-            message: "Dismissed: no person watches a worker chat",
-            agentNotice: WORKER_QUESTION_REFUSAL,
-          },
-          logger: this.deps.logger,
-        });
+      copied = await this.copyWorkerQuestion(worker, request, live?.cwd ?? null);
+    } catch (err) {
+      this.deps.logger.warn({ err, agentId: workerId }, "Worker question notice failed");
     }
+    if (current())
+      await respondToAgentPermission({
+        agentManager: this.deps.agentManager,
+        agentId: workerId,
+        requestId: request.id,
+        response: {
+          behavior: "deny",
+          message: "Dismissed: no person watches a worker chat",
+          agentNotice: formatWorkerQuestionRefusal({ copied }),
+        },
+        logger: this.deps.logger,
+      });
     return true;
+  }
+
+  /** True only when the question went to the lead's remote host or into the lead's notice queue. */
+  private async copyWorkerQuestion(
+    worker: LineAgent,
+    request: PermissionRequest,
+    cwd: string | null,
+  ): Promise<boolean> {
+    const prompt = formatSystemNotificationPrompt(
+      formatWorkerQuestionNotice({ worker, request, cwd }),
+    );
+    if (await this.deps.remoteNotice?.(worker.id, prompt, "permission")) return true;
+    const lead = await this.leadOf(worker);
+    if ("skip" in lead) return false;
+    const leadAgent = await this.store.get(lead.id);
+    if (!leadAgent || leadAgent.archivedAt) return false;
+    if (!(await this.reportingLineAllows(worker.id, lead.id))) return false;
+    return this.toLead(worker.id, lead.id, prompt, "permission");
   }
 
   private now(): number {
@@ -1528,8 +1546,8 @@ export class ReportUpService {
     kind: NoticeKind = "report-up",
     current: () => boolean = () => true,
     permission?: HeldReport["permission"],
-  ): Promise<void> {
-    if (!this.noticeEnabled(kind) || !current()) return;
+  ): Promise<boolean> {
+    if (!this.noticeEnabled(kind) || !current()) return false;
     const leadLimit = this.limitOf(leadId);
     if (leadLimit) {
       const held = this.held.get(leadId) ?? [];
@@ -1543,11 +1561,11 @@ export class ReportUpService {
       );
       const delay = Math.max(0, leadLimit.until - this.now()) + 1000;
       this.schedule(() => this.releaseHeld(leadId), delay);
-      return;
+      return true;
     }
     if (this.deps.deliver) {
       await this.deps.deliver(leadId, prompt);
-      return;
+      return true;
     }
     // Held until the lead's turn ends, one queue per lead, in order (held-sends.ts).
     heldSendsFor(this.deps.agentManager, this.deps.logger).hold(leadId, async () => {
@@ -1555,6 +1573,7 @@ export class ReportUpService {
       await this.send(leadId, prompt, kind, current);
       this.deps.logger.info({ agentId: workerId, lead: leadId, kind }, "Report-up delivered");
     });
+    return true;
   }
 
   /** The held reports for a lead go out as one notice, once the lead is no longer at a limit. */
