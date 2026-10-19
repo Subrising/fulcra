@@ -241,7 +241,7 @@ export class HostLinks {
       throw new HostLinkError("refused", "Host-link receipt capacity is full.");
     journal[key] = entry;
     const data = JSON.stringify(journal);
-    if (Buffer.byteLength(data) > 8 * 1024 * 1024)
+    if (Buffer.byteLength(data) > (process.platform === "win32" ? 1 : 8) * 1024 * 1024)
       throw new HostLinkError("refused", "Host-link receipt storage is full.");
     writePrivateFileAtomicSync(file, data, { durable: true });
   }

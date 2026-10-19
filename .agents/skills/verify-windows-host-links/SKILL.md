@@ -50,10 +50,11 @@ Use the queue's resource admission and retained receipt. Do not print account na
 A zero-GPU proof needs no provider account or daemon connection.
 Do not terminate another queue process to get admission.
 
-Require exit zero, `result: PASS`, all 17 named checks, no missing outputs, and verified receipt hashes.
+Require exit zero, `result: PASS`, all 18 named checks, no missing outputs, and verified receipt hashes.
 Check that `D:\pc-busy.flag` is absent before each PC test. A native file-event wait may wait for removal.
 The proof initializes one helper asynchronously, then measures full commit latency and event-loop blocking.
-Require event-loop blocking below 100 ms, including 2 MiB and 8 MiB payloads.
+Require near-cap 1 MiB saves without uncertainty and event-loop blocking below 100 ms.
+Other private-file writes use a scaled wait, with a 250 ms maximum. Keep the 2 MiB and 8 MiB transport checks.
 Check public-read ACL refusal, a short sharing lock, the original timed-out receipt, and unowned orphan preservation.
 The helper must flush the destination after rename. `WRITE_THROUGH` alone does not prove this step.
 Do not replay a timed-out write. Wait for its original receipt before reading the journal again.

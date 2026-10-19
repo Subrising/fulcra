@@ -7,12 +7,14 @@ const transport = vi.hoisted(() => ({
   buffer: undefined as SharedArrayBuffer | undefined,
   data: undefined as { script: string } | undefined,
   posts: 0,
+  workers: [] as EventEmitter[],
 }));
 vi.mock("node:worker_threads", () => ({
   Worker: class extends EventEmitter {
     constructor(_script: string, options: { workerData: { script: string } }) {
       super();
       transport.data = options.workerData;
+      transport.workers.push(this);
       queueMicrotask(() => this.emit("message", "READY"));
     }
     unref() {}
@@ -39,13 +41,14 @@ afterEach(() => {
   vi.unstubAllEnvs();
   transport.mode = "ok";
   transport.posts = 0;
+  transport.workers = [];
   vi.resetModules();
 });
-async function helper() {
+async function helper(logger = { warn: vi.fn() }) {
   Object.defineProperty(process, "platform", { value: "win32" });
   vi.stubEnv("SystemRoot", "C:\\Windows");
   const api = await import("./windows-private-file.js");
-  await api.initializeWindowsPrivateFiles();
+  await api.initializeWindowsPrivateFiles(logger);
   return api;
 }
 test.each([2, 8])("Windows line transport accepts %i MiB without a JSON parser", async (mib) => {
@@ -77,7 +80,7 @@ test("a bounded timeout blocks reads and later writes until the original commit 
   expect(() => api.writeWindowsPrivateFileAtomicSync("journal.json", "value")).toThrow(
     "requires reconciliation",
   );
-  expect(wait).toHaveBeenCalledWith(expect.any(Int32Array), 0, 0, 50);
+  expect(wait).toHaveBeenCalledWith(expect.any(Int32Array), 0, 0, 51);
   expect(() => api.assertWindowsPrivateFilesSettled()).toThrow("requires reconciliation");
   expect(() => api.writeWindowsPrivateFileAtomicSync("journal.json", "other")).toThrow(
     "requires reconciliation",
@@ -111,5 +114,56 @@ test("a terminated helper blocks reconciliation before its exit message is proce
     "Windows durable file commit failed",
   );
   expect(() => api.assertWindowsPrivateFilesSettled()).toThrow("requires reconciliation");
+  await expect(api.waitForWindowsPrivateFilesSettled()).rejects.toThrow("helper is unavailable");
+});
+
+test.each([
+  [0, 50],
+  [512 * 1024, 58],
+  [1024 * 1024, 65],
+  [8 * 1024 * 1024, 170],
+  [16 * 1024 * 1024, 250],
+])("a %i-byte write has a bounded %i ms wait budget", async (bytes, budget) => {
+  const api = await helper();
+  const wait = vi.spyOn(Atomics, "wait");
+  api.writeWindowsPrivateFileAtomicSync("journal.json", Buffer.alloc(bytes));
+  expect(wait).toHaveBeenLastCalledWith(expect.any(Int32Array), 0, 0, budget);
+  api.windowsPrivateFileAclIsSafe("journal.json", 1);
+  expect(wait).toHaveBeenLastCalledWith(expect.any(Int32Array), 0, 0, 50);
+});
+
+test("an idle helper exit logs once and restarts without replaying a write", async () => {
+  const logger = { warn: vi.fn() };
+  const api = await helper(logger);
+  api.writeWindowsPrivateFileAtomicSync("journal.json", "committed");
+  transport.workers[0]!.emit("exit", 1);
+  await api.initializeWindowsPrivateFiles(logger);
+  expect(logger.warn).toHaveBeenCalledExactlyOnceWith("Windows durable file helper exited.");
+  expect(transport.workers).toHaveLength(2);
+  expect(transport.posts).toBe(1);
+  expect(api.windowsPrivateFilesReady()).toBe(true);
+  api.writeWindowsPrivateFileAtomicSync("journal.json", "next");
+  expect(transport.posts).toBe(2);
+});
+
+test("an exit with an uncertain commit logs and keeps its fence without restart", async () => {
+  const logger = { warn: vi.fn() };
+  const api = await helper(logger);
+  transport.mode = "pending";
+  vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
+  expect(() => api.writeWindowsPrivateFileAtomicSync("journal.json", "pending")).toThrow(
+    "requires reconciliation",
+  );
+  transport.workers[0]!.emit("exit", 1);
+  await Promise.resolve();
+  expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
+    "Windows durable file helper exited; commit requires reconciliation.",
+  );
+  expect(transport.workers).toHaveLength(1);
+  expect(api.windowsPrivateFilesReady()).toBe(false);
+  expect(() => api.writeWindowsPrivateFileAtomicSync("journal.json", "new")).toThrow(
+    "requires reconciliation",
+  );
+  expect(transport.posts).toBe(1);
   await expect(api.waitForWindowsPrivateFilesSettled()).rejects.toThrow("helper is unavailable");
 });

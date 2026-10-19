@@ -101,7 +101,7 @@ public static class FulcraPrivateCommit {
 `;
 
 // The worker owns pipes and waits. The daemon's synchronous admission fences retain
-// their order. Each fence uses a 50 ms wait timeout; slow commits become uncertain.
+// their order. Waits scale with bytes, with a 250 ms maximum; slow commits become uncertain.
 const workerScript = String.raw`
 const { parentPort, workerData } = require('node:worker_threads');
 const { spawn } = require('node:child_process');
@@ -161,17 +161,20 @@ parentPort.on('message', (request) => {
 let helper: Worker | undefined;
 let preparation: Promise<void> | undefined;
 let pending: Int32Array | undefined;
+let pendingOperation: "W" | "A" | undefined;
 let unavailable = false;
 let ready = false;
 
 /** Start once, outside synchronous provider admission. Cold compilation never blocks the daemon. */
-export function initializeWindowsPrivateFiles(): Promise<void> {
+export function initializeWindowsPrivateFiles(
+  logger: { warn(message: string): void } = console,
+): Promise<void> {
   if (process.platform !== "win32") return Promise.resolve();
   if (preparation) return preparation;
   preparation = new Promise<void>((resolve, reject) => {
     const systemRoot = process.env.SystemRoot;
     if (!systemRoot) return reject(new Error("Windows SystemRoot is unavailable."));
-    helper = new Worker(workerScript, {
+    const worker = new Worker(workerScript, {
       eval: true,
       workerData: {
         executable: path.win32.join(
@@ -184,26 +187,49 @@ export function initializeWindowsPrivateFiles(): Promise<void> {
         script: commitScript,
       },
     });
-    const timer = setTimeout(() => {
-      unavailable = true;
-      void helper?.terminate();
-      reject(new Error("Windows durable file helper is unavailable."));
-    }, 30000);
+    helper = worker;
+    let started = false;
+    let failedOnce = false;
+    const timer = setTimeout(() => failed(), 30000);
     const failed = () => {
+      if (failedOnce || helper !== worker) return;
+      failedOnce = true;
       unavailable = true;
       ready = false;
-      void helper?.terminate();
+      void worker.terminate();
       clearTimeout(timer);
       reject(new Error("Windows durable file helper is unavailable."));
+      const commitPending =
+        pendingOperation === "W" && pending && [0, -2].includes(Atomics.load(pending, 0));
+      logger.warn(
+        commitPending
+          ? "Windows durable file helper exited; commit requires reconciliation."
+          : "Windows durable file helper exited.",
+      );
+      // A settled write is safe to read again. Never clear an uncertain write fence.
+      // A failed cold start stays unavailable; only a previously ready helper restarts.
+      if (started && !commitPending) {
+        pending = undefined;
+        pendingOperation = undefined;
+        preparation = undefined;
+        queueMicrotask(() => {
+          if (helper !== worker) return;
+          helper = undefined;
+          void initializeWindowsPrivateFiles(logger).catch(() => {});
+        });
+      }
     };
-    helper.on("error", failed);
-    helper.on("exit", failed);
-    helper.on("message", (message: unknown) => {
+    worker.on("error", failed);
+    worker.on("exit", failed);
+    worker.on("message", (message: unknown) => {
+      if (failedOnce) return;
       if (message === "SETTLED") return;
       if (message !== "READY") return failed();
       clearTimeout(timer);
+      started = true;
       ready = true;
-      helper?.unref();
+      unavailable = false;
+      worker.unref();
       resolve();
     });
   });
@@ -220,14 +246,16 @@ export function assertWindowsPrivateFilesSettled(): void {
     throw new Error("Windows durable file commit requires reconciliation.");
 }
 
-function request(operation: "W" | "A", filePath: string, value: string): boolean {
+function request(operation: "W" | "A", filePath: string, value: string, byteLength = 0): boolean {
   assertWindowsPrivateFilesSettled();
   const target = path.resolve(filePath);
   if (/[\r\n]/.test(target)) throw new Error("Windows private file path is invalid.");
   const state = new Int32Array(new SharedArrayBuffer(4));
   pending = state;
+  pendingOperation = operation;
   helper!.postMessage({ buffer: state.buffer, input: `${operation}\n${target}\n${value}\n` }, []);
-  Atomics.wait(state, 0, 0, 50);
+  const waitMs = Math.min(250, 50 + Math.ceil((15 * byteLength) / (1024 * 1024)));
+  Atomics.wait(state, 0, 0, waitMs);
   const result = Atomics.load(state, 0);
   if (result === 0) throw new Error("Windows durable file commit requires reconciliation.");
   return result === 1;
@@ -249,13 +277,13 @@ export function writeWindowsPrivateFileAtomicSync(
     typeof data === "string"
       ? Buffer.from(data)
       : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
-  if (!request("W", filePath, bytes.toString("base64")))
+  if (!request("W", filePath, bytes.toString("base64"), bytes.byteLength))
     throw new Error("Windows durable file commit failed.");
 }
 
 /** Wait on the original helper receipt; do not repeat the write. */
 export async function waitForWindowsPrivateFilesSettled(): Promise<void> {
-  if (pending && Atomics.load(pending, 0) === -2)
+  if (unavailable || (pending && Atomics.load(pending, 0) === -2))
     throw new Error("Windows durable file helper is unavailable.");
   if (!pending || Atomics.load(pending, 0) !== 0) return;
   await new Promise<void>((resolve, reject) => {

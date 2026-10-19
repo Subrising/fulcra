@@ -573,6 +573,59 @@ test("Windows write-through failure stops provider input and acknowledgement", a
   }
 });
 
+test.each([
+  ["win32", 1024 * 1024, true],
+  ["win32", 1024 * 1024 - 4096, false],
+  ["darwin", 1024 * 1024, false],
+] as const)(
+  "%s receipt capacity with %i bytes of retained data",
+  async (platform, padding, full) => {
+    const f = await fixture();
+    const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const file = path.join(f.deps.home, "host-links-inbox.json");
+    const original = JSON.stringify({
+      retained: {
+        hash: "x".repeat(padding),
+        grant: "fixture",
+        sender: "lead",
+        linkId: "link",
+        sourceServerId: "source",
+        profile: null,
+        cwd: null,
+        receipt: {
+          serverId: "target",
+          messageId,
+          state: "pending",
+          agentId: null,
+          token: null,
+          endpoint: null,
+        },
+      },
+    });
+    writeFileSync(file, original, { mode: 0o600 });
+    vi.mocked(writeWindowsPrivateFileAtomicSync).mockImplementation((target, data) =>
+      writeFileSync(target, data, { mode: 0o600 }),
+    );
+    try {
+      Object.defineProperty(process, "platform", { value: platform });
+      if (full) {
+        await expect(f.target.receive(linkToken, f.wire).then(() => "admitted")).rejects.toThrow(
+          "receipt storage is full",
+        );
+        expect(writeWindowsPrivateFileAtomicSync).not.toHaveBeenCalled();
+        expect(readFileSync(file, "utf8")).toBe(original);
+        expect(f.created).toHaveLength(0);
+      } else {
+        expect((await f.target.receive(linkToken, f.wire)).state).toBe("created");
+        expect(f.created).toHaveLength(1);
+      }
+    } finally {
+      Object.defineProperty(process, "platform", descriptor);
+      vi.mocked(writeWindowsPrivateFileAtomicSync).mockRestore();
+    }
+  },
+);
+
 test("Windows starts the retained return-notice scheduler", async () => {
   const f = await fixture();
   const platform = process.platform;

@@ -755,7 +755,7 @@ export async function createPaseoDaemon(
 ): Promise<PaseoDaemon> {
   configureGitProcessPolicy(config.git ?? resolveGitProcessPolicy({ env: process.env }));
   const logger = rootLogger.child({ module: "bootstrap" });
-  await initializeWindowsPrivateFiles().catch(() => {
+  await initializeWindowsPrivateFiles(logger).catch(() => {
     logger.warn("Windows durable file commits are unavailable.");
   });
   const stopSyncIoMeter = startSyncIoMeter((sites) =>
