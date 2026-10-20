@@ -236,6 +236,11 @@ import {
 import { invokeRewindCapability, type RewindMode } from "./rewind/rewind.js";
 import { FINISH_NOTIFICATION_MESSAGE_PREFIX, isSystemInjectedEnvelope } from "./agent-prompt.js";
 import { isStaleProviderSessionError } from "./stale-provider-session-error.js";
+
+/** A start that ends with no turn to fail: a stale provider session, or an input a final check withdrew (FU-422). */
+function endsWithoutFailedTurn(error: unknown): error is Error {
+  return error instanceof FinalInputWithdrawnError || isStaleProviderSessionError(error);
+}
 import {
   stripInternalPaseoMcpServer,
   withRuntimePaseoMcpServer,
@@ -6475,16 +6480,8 @@ export class AgentManager {
       if (pendingRun.settled) {
         throw error;
       }
-      // A withdrawn input (FU-422) never started a turn: the session stays idle, with no failed turn.
-      if (error instanceof FinalInputWithdrawnError) {
-        pendingRun.start = { status: "failed", error: error.message };
-        agent.pendingReplacement = false;
-        if (!agent.activeForegroundTurnId) agent.lifecycle = "idle";
-        this.runs.settleForegroundRun(agentId, pendingRun.token);
-        this.emitState(agent);
-        throw error;
-      }
-      if (isStaleProviderSessionError(error)) {
+      // A withdrawn input (FU-422) never started a turn, like a stale session: idle, no failed turn.
+      if (endsWithoutFailedTurn(error)) {
         pendingRun.start = { status: "failed", error: error.message };
         agent.pendingReplacement = false;
         if (!agent.activeForegroundTurnId) agent.lifecycle = "idle";
