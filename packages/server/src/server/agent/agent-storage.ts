@@ -425,6 +425,29 @@ export class AgentStorage {
     });
   }
 
+  /**
+   * FU-424: an unknown notice is resolved from the lead's copy. "delivered" records that the lead has it; "pending"
+   * sends it again under the same message id.
+   */
+  async resolveUnknownFinishNotice(
+    agentId: string,
+    messageId: string,
+    outcome: { status: "delivered"; deliveredBy: "native" | "report-up" } | { status: "pending" },
+  ): Promise<FinishNotice | null> {
+    await this.load();
+    let next: FinishNotice | null = null;
+    await this.queueRecordMutation(agentId, (record) => {
+      const notice = findFinishNotice(record, messageId);
+      if (!record || !notice || notice.status !== "unknown") return null;
+      next =
+        outcome.status === "delivered"
+          ? { ...notice, status: "delivered", deliveredBy: outcome.deliveredBy }
+          : { ...notice, status: "pending", retryAfterRefusal: true };
+      return withFinishNotice(record, next);
+    });
+    return next;
+  }
+
   async retargetFinishNotice(
     agentId: string,
     messageId: string,

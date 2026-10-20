@@ -11,6 +11,9 @@ When cost is available, each finish notice includes cumulative session spend, in
 After a restart, queued delivery starts when saved open sessions are available.
 An idle, unpaused receiver can start its queued turn while other sessions recover their providers.
 The parent notice is armed before the receiver starts.
+A refused notice to an idle parent retries after 2 s, doubling to 60 s, for 8 attempts.
+A busy parent gets it when it becomes idle. The saved notice is the retry record, so a restart keeps it.
+An `unknown` outcome is checked against the parent's session. If the parent has no copy, the notice goes again with the same message ID.
 Paused input stays held. Its finish notice stays unarmed until resume. See [provider pauses](notice-pause.md).
 
 Use `fulcra send <child> --prompt-file task.txt --no-wait` on the parent host.

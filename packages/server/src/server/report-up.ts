@@ -147,7 +147,7 @@ export interface ReportUpDeps {
   localServerId: string | null;
   logger: Logger;
   /** The delivery step; tests replace it. */
-  deliver?: (leadId: string, prompt: string) => Promise<void>;
+  deliver?: (leadId: string, prompt: string, messageId?: string) => Promise<void>;
   /** The clock and the timer; tests replace them. */
   now?: () => number;
   setTimer?: (run: () => void, ms: number) => void;
@@ -235,6 +235,18 @@ export async function leadChatOf(
 
 export { PERMISSION_NOTICE_GRACE_MS } from "./permission-notice.js";
 const NUDGE_DELIVERY_TIMEOUT_MS = 60_000;
+/**
+ * FU-424: a refused or unknown finish notice to an idle lead is tried again after 2 s, then 4 s, up to 60 s apart.
+ * After the timed attempts, the lead's next idle event or the next boot tries it again from the stored notice.
+ */
+export const FINISH_RETRY_BASE_MS = 2_000;
+export const FINISH_RETRY_MAX_MS = 60_000;
+export const FINISH_RETRY_TIMED_ATTEMPTS = 8;
+
+/** The notices that report-up stores as "sending" before the provider call, so storage holds their outcome. */
+function durableFinish(notice: FinishNotice): boolean {
+  return notice.owner === "report-up" || notice.reason === "stopped";
+}
 interface PendingNudge {
   handoff?: object;
   deliveryRecorded?: boolean;
@@ -260,7 +272,8 @@ export class ReportUpService {
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
   private readonly finishOwners = new Map<string, boolean>();
   private readonly processingOwned = new Set<string>();
-  private readonly finishRetriesOnIdle = new Set<string>();
+  private readonly finishRetryAttempts = new Map<string, number>();
+  private readonly finishRetryTimers = new Set<string>();
   private readonly store: LineStore;
   private readonly limited = new Map<string, LimitedChat>();
   private archiveStateKnown = true;
@@ -434,7 +447,7 @@ export class ReportUpService {
     if (event.type === "agent_state" && event.agent.lifecycle === "closed")
       this.observer.close(event.agent.id);
     if (event.type === "agent_state" && event.agent.lifecycle === "idle") {
-      this.retryRefusedFinishesOnIdle(event.agent.id);
+      this.sweepFinishNotices(event.agent.id);
       void this.deps.routing
         ?.wake()
         .catch((err: unknown) =>
@@ -451,35 +464,93 @@ export class ReportUpService {
     }
   }
 
-  private retryRefusedFinishesOnIdle(parentId: string): void {
+  /**
+   * FU-424: the stored notices are the record of a retry, not a memory set. When a lead becomes idle, every pending or
+   * unknown notice from its current children is delivered or resolved.
+   */
+  private sweepFinishNotices(parentId: string): void {
     if (this.stopped) return;
-    for (const childId of this.finishRetriesOnIdle) {
-      // Adoption can change the parent while a refused notice waits for an idle event.
-      const child =
-        this.deps.agentManager.getAgent(childId) ?? this.deps.agentStorage.getCached(childId);
-      const currentParentId = finishNoticeParentId(child?.labels);
-      if (!currentParentId || child?.archivedAt) {
-        this.finishRetriesOnIdle.delete(childId);
-        continue;
-      }
-      if (currentParentId !== parentId) continue;
-      this.finishRetriesOnIdle.delete(childId);
-      void this.deps.agentStorage
-        .get(childId)
-        .then((record) => {
-          if (!record) return undefined;
-          return Promise.all(
-            storedFinishNotices(record).map((notice) => {
-              if (notice.status === "pending" && notice.retryAfterRefusal)
-                return this.deliverOwnedFinish(childId, notice, false);
-              return undefined;
-            }),
+    void this.deps.agentStorage
+      .list()
+      .then((records) =>
+        Promise.all(
+          records.flatMap((record) => {
+            // Adoption can change the parent while a notice waits; the current parent receives it.
+            if (record.archivedAt || finishNoticeParentId(record.labels) !== parentId) return [];
+            return storedFinishNotices(record).map((notice) =>
+              this.retryStoredFinish(record.id, notice),
+            );
+          }),
+        ),
+      )
+      .catch((err: unknown) =>
+        this.deps.logger.warn({ err, parentId }, "Finish notice sweep failed"),
+      );
+  }
+
+  private async retryStoredFinish(childId: string, notice: FinishNotice): Promise<void> {
+    if (!durableFinish(notice)) return;
+    if (notice.status === "unknown") await this.resolveUnknownFinish(childId, notice);
+    else if (notice.status === "pending") await this.deliverOwnedFinish(childId, notice, false);
+  }
+
+  /** A busy lead gets the retry from its next idle sweep. */
+  private leadBusy(parentId: string): boolean {
+    const lifecycle = this.deps.agentManager.getAgent(parentId)?.lifecycle;
+    return lifecycle === "running" || lifecycle === "initializing";
+  }
+
+  /**
+   * FU-424: a refused notice used to wait for the lead's next idle event, but a lead whose turn ended during the send
+   * is already idle and sends no new event. An idle lead now gets a timed retry with a bounded backoff.
+   */
+  private scheduleFinishRetry(childId: string, notice: FinishNotice): void {
+    const { messageId, parentId } = notice;
+    if (this.stopped || this.finishRetryTimers.has(messageId) || this.leadBusy(parentId)) return;
+    const attempt = this.finishRetryAttempts.get(messageId) ?? 0;
+    if (attempt >= FINISH_RETRY_TIMED_ATTEMPTS) return;
+    this.finishRetryAttempts.set(messageId, attempt + 1);
+    this.finishRetryTimers.add(messageId);
+    this.schedule(
+      () => {
+        this.finishRetryTimers.delete(messageId);
+        if (this.leadBusy(parentId)) return;
+        void this.deps.agentStorage
+          .getFinishNotice(childId, messageId)
+          .then((stored) => (stored ? this.retryStoredFinish(childId, stored) : undefined))
+          .catch((err: unknown) =>
+            this.deps.logger.warn({ err, childId }, "Finish notice retry failed"),
           );
-        })
-        .catch((err: unknown) =>
-          this.deps.logger.warn({ err, childId }, "Refused finish retry failed"),
-        );
+      },
+      Math.min(FINISH_RETRY_BASE_MS * 2 ** attempt, FINISH_RETRY_MAX_MS),
+    );
+  }
+
+  /**
+   * FU-424: an unknown outcome is checked on the lead first. When the lead has no copy, the notice goes again with the
+   * same message id, and the send's final check still refuses a copy that arrived in the meantime.
+   */
+  private async resolveUnknownFinish(childId: string, notice: FinishNotice): Promise<void> {
+    if (this.stopped || this.processingOwned.has(notice.messageId)) return;
+    const { agentManager, agentStorage } = this.deps;
+    const receipt = await agentManager
+      .nativeFinishReceiptStatus(notice.messageId)
+      .catch(() => "missing" as const);
+    if (
+      receipt === "delivered" ||
+      agentManager.hasSubmittedFinishMessageNow(notice.parentId, notice.messageId)
+    ) {
+      await agentStorage.resolveUnknownFinishNotice(childId, notice.messageId, {
+        status: "delivered",
+        deliveredBy: receipt === "delivered" ? "native" : "report-up",
+      });
+      this.finishRetryAttempts.delete(notice.messageId);
+      return;
     }
+    const pending = await agentStorage.resolveUnknownFinishNotice(childId, notice.messageId, {
+      status: "pending",
+    });
+    if (pending) await this.deliverOwnedFinish(childId, pending, false);
   }
 
   observeNative(hooks: PolicyHooks): () => void {
@@ -508,7 +579,8 @@ export class ReportUpService {
     for (const pending of this.nudging.values())
       pending.abort.abort(new Error("Idle nudge service stopped"));
     this.nudging.clear();
-    this.finishRetriesOnIdle.clear();
+    this.finishRetryAttempts.clear();
+    this.finishRetryTimers.clear();
     for (const timer of this.timers) clearTimeout(timer);
     this.timers.clear();
     this.finishOwners.clear();
@@ -698,6 +770,8 @@ export class ReportUpService {
               "Finish notice outcome unknown after restart",
             );
           }
+          if (notice.status === "sending" || notice.status === "unknown")
+            await this.retryStoredFinish(record.id, { ...notice, status: "unknown" });
           if (notice.status === "pending") await this.deliverOwnedFinish(record.id, notice, true);
         }),
       ),
@@ -821,16 +895,23 @@ export class ReportUpService {
       if (sending) await this.deps.agentStorage.markFinishNoticeRefused(childId, notice.messageId);
       return this.recoverOwnedLineChange(childId, notice, error, reroutes);
     }
-    if (!sending) throw error;
+    if (!sending) {
+      // A steer refusal is stored as a pending retry before it is thrown.
+      if (error instanceof SteerUnavailableError) this.scheduleFinishRetry(childId, notice);
+      throw error;
+    }
     const refusal = finalInputFailure(handoff) ?? error;
     if (!hasFinalInputHandoff(handoff) || refusal instanceof CodexAppServerRpcError) {
       await this.deps.agentStorage.markFinishNoticeRefused(childId, notice.messageId);
-      this.finishRetriesOnIdle.add(childId);
-      this.deps.logger.warn({ err: error, childId }, "Finish notice refused; next idle will retry");
+      this.deps.logger.warn({ err: error, childId }, "Finish notice refused; it will retry");
     } else {
       await this.deps.agentStorage.markFinishNoticeUnknown(childId, notice.messageId);
-      this.deps.logger.warn({ err: error, childId }, "Finish notice outcome unknown");
+      this.deps.logger.warn(
+        { err: error, childId },
+        "Finish notice outcome unknown; it will be checked",
+      );
     }
+    this.scheduleFinishRetry(childId, notice);
     return null;
   }
 
@@ -922,7 +1003,7 @@ export class ReportUpService {
           sending = true;
         }
         if (this.deps.deliver) {
-          await this.deps.deliver(notice.parentId, prompt);
+          await this.deps.deliver(notice.parentId, prompt, notice.messageId);
         } else {
           try {
             await this.send(
@@ -962,6 +1043,7 @@ export class ReportUpService {
         "delivered",
         "report-up",
       );
+      this.finishRetryAttempts.delete(notice.messageId);
     } catch (error) {
       retry = await this.resolveOwnedFinishFailure({
         childId,

@@ -303,6 +303,35 @@ describe("AgentStorage", () => {
     ).rejects.toThrow("Finish notice already settled");
   });
 
+  test("FU-424 an unknown notice resolves to pending with the same id, or to delivered", async () => {
+    const parentId = "11111111-1111-4111-8111-111111111111";
+    const child = createManagedAgent({ id: "22222222-2222-4222-8222-222222222222" });
+    child.labels = { "paseo.parent-agent-id": parentId };
+    await storage.applySnapshot(child);
+    const armed = await storage.armFinishNotice(child, parentId, "report-up");
+    await storage.recordFinishNotice(child.id, "turn-1", "finished");
+    expect(
+      await storage.resolveUnknownFinishNotice(child.id, armed.messageId, { status: "pending" }),
+    ).toBeNull();
+    await storage.markFinishNoticeSending(child.id, armed.messageId);
+    await storage.markFinishNoticeUnknown(child.id, armed.messageId);
+    const recovered = new AgentStorage(storagePath, logger);
+    expect(
+      await recovered.resolveUnknownFinishNotice(child.id, armed.messageId, { status: "pending" }),
+    ).toMatchObject({ status: "pending", retryAfterRefusal: true, messageId: armed.messageId });
+    await recovered.markFinishNoticeSending(child.id, armed.messageId);
+    await recovered.markFinishNoticeUnknown(child.id, armed.messageId);
+    await recovered.resolveUnknownFinishNotice(child.id, armed.messageId, {
+      status: "delivered",
+      deliveredBy: "report-up",
+    });
+    expect(await new AgentStorage(storagePath, logger).getFinishNotice(child.id)).toMatchObject({
+      status: "delivered",
+      deliveredBy: "report-up",
+      messageId: armed.messageId,
+    });
+  });
+
   test("FU-334 a full result queue refuses new work without losing pending results", async () => {
     const parentId = "11111111-1111-4111-8111-111111111111";
     const child = createManagedAgent({ id: "22222222-2222-4222-8222-222222222222" });
