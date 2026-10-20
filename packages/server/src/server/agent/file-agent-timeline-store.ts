@@ -11,6 +11,8 @@ import {
   JournalHistoryCache,
   logHistoryLoad,
   readHistoryLines,
+  timelineRowCache,
+  TimelineRowCache,
   type HistoryLine,
 } from "./history-load.js";
 import { TimelineProjection } from "./timeline-projection.js";
@@ -151,6 +153,7 @@ export interface FileAgentTimelineStoreOptions {
   segmentMaxBytes?: number;
   logger?: Logger;
   historyCache?: JournalHistoryCache;
+  rowCache?: TimelineRowCache;
   /** Retained history is read, never created. */
   createIfMissing?: boolean;
   /** Test seam: called after each step; throwing models a crash at that point. */
@@ -216,6 +219,7 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
   private readonly segmentMaxBytes: number;
   private readonly logger: Logger;
   private readonly historyCache: JournalHistoryCache;
+  private readonly rowCache: TimelineRowCache;
   private readonly createIfMissing: boolean;
   private readonly onStep?: FileAgentTimelineStoreOptions["onStep"];
   constructor(
@@ -223,6 +227,7 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
     options?: FileAgentTimelineStoreOptions,
   ) {
     this.historyCache = options?.historyCache ?? journalHistoryCache;
+    this.rowCache = options?.rowCache ?? timelineRowCache;
     this.logger = options?.logger ?? pino({ level: "silent" });
     this.segmentMaxBytes = options?.segmentMaxBytes ?? DEFAULT_SEGMENT_MAX_BYTES;
     this.createIfMissing = options?.createIfMissing ?? true;
@@ -380,13 +385,20 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
       busy: () => this.pending.has(id) || this.indexTimers.has(id) || this.pins.has(id),
       evict: () => {
         if (this.journals.get(id) === journal) this.journals.delete(id);
+        this.dropRows(journal);
       },
     });
   }
   private forget(id: string): void {
     const journal = this.journals.get(id);
-    if (journal) this.historyCache.delete(journal);
+    if (journal) {
+      this.historyCache.delete(journal);
+      this.dropRows(journal);
+    }
     this.journals.delete(id);
+  }
+  private dropRows(journal: Journal): void {
+    for (const entry of journal.rows.values()) this.rowCache.delete(entry);
   }
   private async load(id: string, interactive = false): Promise<Journal> {
     if (this.faults.has(id)) throw this.faults.get(id);
@@ -534,6 +546,7 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
       // Calibrated against retained heap for 50,000 small rows, including projection and turn indexes.
       const cacheBytes = 6 * Buffer.byteLength(JSON.stringify({ row, location, order })) + 256;
       journal.cacheBytes += cacheBytes - (previous?.cacheBytes ?? 0);
+      if (previous) this.rowCache.delete(previous);
       journal.rows.set(row.seq, { row, location, order, cacheBytes });
       if (record.op === "append") {
         if (!rebuildProjection && !("seqStart" in row) && row.seq === journal.memory.getNextSeq(id))
@@ -571,6 +584,27 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
     purpose: "page" | "full" = "page",
   ): Promise<AgentTimelineRow[]> {
     if (selected.length === 0) return [];
+    const output = new Map<number, AgentTimelineRow>();
+    const missing = selected.filter((entry) => {
+      const row = this.rowCache.get(entry) as AgentTimelineRow | undefined;
+      if (row) output.set(entry.row.seq, row);
+      return !row;
+    });
+    if (missing.length) await this.readRows(id, journal, missing, output, purpose);
+    return selected.map((entry) => {
+      const row = output.get(entry.row.seq);
+      if (!row) throw new TimelineJournalIntegrityError("Timeline journal changed");
+      // Callers own what they get; the cached copy stays as read.
+      return structuredClone(row);
+    });
+  }
+  private async readRows(
+    id: string,
+    journal: Journal,
+    selected: JournalRow[],
+    output: Map<number, AgentTimelineRow>,
+    purpose: "page" | "full",
+  ): Promise<void> {
     const groups = new Map<string, JournalRow[]>();
     for (const entry of selected) {
       const key = `${entry.location.segment}:${entry.location.offset}`;
@@ -591,18 +625,16 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
     const handles = new Map<number, fsp.FileHandle>();
     try {
       logHistoryLoad(this.logger, "start", "journal", replayBytes, level);
-      const output = new Map<number, AgentTimelineRow>();
       if (selected.length === journal.rows.size) {
         await this.streamRows(id, journal, groups, output);
       } else {
         await this.readPageRecords(id, journal, records, handles, output);
       }
       logHistoryLoad(this.logger, "end", "journal", replayBytes, level);
-      return selected.map((entry) => {
+      for (const entry of selected) {
         const row = output.get(entry.row.seq);
-        if (!row) throw new TimelineJournalIntegrityError("Timeline journal changed");
-        return row;
-      });
+        if (row) this.rowCache.set(entry, row, 2 * Buffer.byteLength(JSON.stringify(row)) + 256);
+      }
     } catch (error) {
       if (isJournalIntegrityError(error)) journal.owner.faults.set(id, error);
       logHistoryLoad(this.logger, "error", "journal", replayBytes, level);
