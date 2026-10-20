@@ -29,17 +29,10 @@ export function getPaseoClient(host) {
           })),
         ),
         pageInfo: { hasMore: false },
+        subscription: { release: async () => {} },
       }),
-      ref: (id) => ({
-        timeline: {
-          refetch: async () => ({
-            entries: (await snapshot()).projects
-              .flatMap((p) => p.jobs)
-              .filter((job) => job.id === id && job.result)
-              .map((job) => ({ item: { type: "assistant_message", text: job.result } })),
-          }),
-        },
-      }),
+      // The board refreshes on agent updates; this fixture host sends none.
+      subscribe: () => () => {},
     },
     workspaces: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
   };

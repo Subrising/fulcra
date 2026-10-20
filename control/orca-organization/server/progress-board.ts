@@ -8,6 +8,7 @@ import type { PaseoApi, PaseoAgent, PaseoWorkspace } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { matchesHumanOwner, type BoardItem, type ProgressBoard } from "../shared/progress-board";
 import { scrubFreeText } from "../shared/privacy-scrub";
+import { createRefreshGate, type RefreshGateTimers } from "../shared/refresh-gate";
 
 const COLUMNS = ["id", "item", "kind", "owner", "status", "evidence", "source"] as const;
 // Request dates do not date completion. Explicit close records take priority.
@@ -298,6 +299,9 @@ export async function readBranch(
   return row;
 }
 
+/** One board rebuild a window, for all changes in it (FU-412: at most one each 30 to 60 s). */
+const BOARD_WINDOW_MS = 30_000;
+
 /**
  * What a running session is doing, from its record alone. The board never reads a session timeline:
  * each read replays that session's journal from disk (FU-412).
@@ -317,6 +321,8 @@ export function createProgressBoard(
     run?: RunRead;
     humanOwners?: () => readonly string[];
     historyFile?: string;
+    /** Test seam: the batch timer. */
+    timers?: RefreshGateTimers;
   } = {},
 ) {
   const root =
@@ -402,11 +408,25 @@ export function createProgressBoard(
   // The last reply of each session, from turn events. A new turn replaces it with live activity.
   const results = new Map<string, string>();
   const ledgers = new Map<string, { items: BoardItem[]; state: string; signature?: string }>();
+  // Status changes of any session. Each one marks the board changed; nothing else does.
   const hooks = [
-    server.on("agent.turn_started", (event) => {
+    server.on("agent.turn_started", (event, context) => {
       results.delete(event.agent.id);
+      changed(context?.paseo);
     }),
-    server.on("agent.turn_ended", (event) => {
+    ...(
+      [
+        "agent.permission_requested",
+        "agent.permission_resolved",
+        "agent.archived",
+        "agent.created",
+        "agent.closed",
+        "workspace.created",
+        "workspace.archived",
+      ] as const
+    ).map((name) => server.on(name, (_event, context) => changed(context?.paseo))),
+    server.on("agent.turn_ended", (event, context) => {
+      changed(context?.paseo);
       const last = event.timeline.toReversed().find((entry) => entry.type === "assistant_message");
       const text =
         last?.type === "assistant_message"
@@ -429,6 +449,7 @@ export function createProgressBoard(
           discoverLedgers();
           ledgers.clear();
         }
+        changed();
       });
       watcher.on("error", () => {
         watcher.close();
@@ -457,7 +478,48 @@ export function createProgressBoard(
   const dated = new Map<string, { signature: string | undefined; items: BoardItem[] }>();
   let flight: Promise<ProgressBoard> | undefined;
   let ownerSignature: string | undefined;
-  async function read(paseo: PaseoApi): Promise<ProgressBoard> {
+  // The last board, rebuilt at most once a window and only after a change (FU-412).
+  let board: ProgressBoard | undefined;
+  let dirty = false;
+  let latest: PaseoApi | undefined;
+  const gate = createRefreshGate(
+    () => {
+      if (latest) void rebuild(latest).catch(() => undefined);
+    },
+    BOARD_WINDOW_MS,
+    options.timers,
+  );
+  function changed(paseo?: PaseoApi) {
+    if (paseo) latest = paseo;
+    dirty = true;
+    gate.changed();
+  }
+  function snapshot(paseo: PaseoApi): Promise<ProgressBoard> {
+    return (
+      flight ??
+      (flight = compute(paseo).finally(() => {
+        flight = undefined;
+      }))
+    );
+  }
+  async function rebuild(paseo: PaseoApi): Promise<ProgressBoard> {
+    dirty = false;
+    try {
+      board = await snapshot(paseo);
+      return board;
+    } catch (error) {
+      dirty = true;
+      throw error;
+    }
+  }
+  function ownersChanged(): boolean {
+    const humanOwners = options.humanOwners?.() ?? [];
+    return (
+      JSON.stringify(humanOwners.map((owner) => owner.trim().toLowerCase()).sort()) !==
+      ownerSignature
+    );
+  }
+  async function compute(paseo: PaseoApi): Promise<ProgressBoard> {
     const humanOwners = options.humanOwners?.() ?? [];
     const signature = JSON.stringify(humanOwners.map((owner) => owner.trim().toLowerCase()).sort());
     if (signature !== ownerSignature) {
@@ -639,15 +701,20 @@ export function createProgressBoard(
     };
   }
   return {
-    read(paseo: PaseoApi) {
-      return (
-        flight ??
-        (flight = read(paseo).finally(() => {
-          flight = undefined;
-        }))
-      );
+    /**
+     * The board as of the last change. It is built on the first read, then only by the batch timer
+     * after a change, or by a read that finds a change the timer could not build.
+     */
+    read(paseo: PaseoApi): Promise<ProgressBoard> {
+      latest = paseo;
+      if (flight) return flight;
+      if (!board || (dirty && !gate.pending) || ownersChanged()) return rebuild(paseo);
+      return Promise.resolve(board);
     },
+    /** Builds the board now, without the cache. */
+    snapshot,
     close() {
+      gate.close();
       hooks.forEach((stop) => stop());
       watchers.forEach((w) => w.close());
       results.clear();
