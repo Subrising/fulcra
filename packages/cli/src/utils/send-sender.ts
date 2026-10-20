@@ -16,6 +16,7 @@ export interface Sender {
   inboundOnly?: true;
   outboundMainOnly?: true;
   outboundServerOnly?: string;
+  outboundParent?: true;
   refusal?: string;
 }
 

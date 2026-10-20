@@ -212,6 +212,8 @@ function restrictedRemoteDecision(input: LineInput): LineDecision {
     (sender.outboundServerOnly && sender.outboundServerOnly !== localServerId)
   )
     return { allowed: false, reason: sender.refusal ?? "Send this to your lead." };
+  // FU-402: a worker on another computer reports up to its own lead here. Its source host checked that line.
+  if (sender.outboundParent) return { allowed: true, why: "parent" };
   return remoteDecision(input);
 }
 
@@ -241,6 +243,7 @@ export interface OutboundSendDecision {
   inboundOnly: boolean;
   outboundMainOnly?: true;
   outboundServerOnly?: string;
+  outboundParent?: true;
   refusal?: string;
 }
 
@@ -282,14 +285,24 @@ export async function decideOutboundSend(
       refusal: "Send this to the main assistant.",
     };
   const relation = matchingOutboundReference(line, input.targetId);
-  if (relation) {
-    const server =
-      relation.server ?? (rawLine === MAIN_ASSISTANT_REF ? input.localServerId : undefined);
-    return server
-      ? { inboundOnly: false, outboundServerOnly: server, refusal: reason }
-      : { inboundOnly: false };
-  }
+  if (relation) return lineDecision(relation, rawLine, input.localServerId, reason);
   return { inboundOnly: true, refusal: reason };
+}
+
+/** The target is the sender's own line. */
+function lineDecision(
+  relation: { server?: string },
+  rawLine: string,
+  localServerId: string | undefined,
+  reason: string,
+): OutboundSendDecision {
+  const role = rawLine === MAIN_ASSISTANT_REF;
+  const server = relation.server ?? (role ? localServerId : undefined);
+  // FU-402: the destination cannot see this chat's line, so the source says the target is its own lead.
+  const parent = role ? {} : { outboundParent: true as const };
+  return server
+    ? { inboundOnly: false, outboundServerOnly: server, ...parent, refusal: reason }
+    : { inboundOnly: false, ...parent };
 }
 
 async function outboundRefusal(data: {

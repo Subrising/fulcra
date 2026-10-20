@@ -62,6 +62,7 @@ export interface AgentSendOptions extends CommandOptions {
   inboundOnly?: boolean;
   outboundMainOnly?: boolean;
   outboundServerOnly?: string;
+  outboundParent?: boolean;
   outboundRefusal?: string;
   checkOnly?: boolean;
 }
@@ -94,6 +95,10 @@ export function addSendOptions(cmd: Command): Command {
     .option(
       "--outbound-server-only <id>",
       "Restrict a relayed send to its source-selected destination host",
+    )
+    .option(
+      "--outbound-parent",
+      "Mark a relayed send as checked by the source host: the receiver is the sender's own lead",
     )
     .option(
       "--outbound-refusal <text>",
@@ -361,16 +366,7 @@ async function routeMissingSend(
       })
     : null;
   await readRemoteSendHost(selected.route);
-  const relayedSender =
-    sender && check
-      ? {
-          ...sender,
-          ...(check.inboundOnly ? { inboundOnly: true as const } : {}),
-          ...(check.outboundMainOnly ? { outboundMainOnly: true as const } : {}),
-          ...(check.outboundServerOnly ? { outboundServerOnly: check.outboundServerOnly } : {}),
-          ...(check.refusal ? { refusal: check.refusal } : {}),
-        }
-      : sender;
+  const relayedSender = sender && check ? withSourceCheck(sender, check) : sender;
   return sshSend({
     ...selected,
     prompt,
@@ -379,6 +375,27 @@ async function routeMissingSend(
     localHost,
     options,
   });
+}
+
+/** The source daemon's reporting-line answer travels with the relayed sender. */
+function withSourceCheck(
+  sender: NonNullable<ReturnType<typeof resolveSender>>,
+  check: {
+    inboundOnly: boolean;
+    outboundMainOnly?: true;
+    outboundServerOnly?: string;
+    outboundParent?: true;
+    refusal?: string;
+  },
+): NonNullable<ReturnType<typeof resolveSender>> {
+  return {
+    ...sender,
+    ...(check.inboundOnly ? { inboundOnly: true as const } : {}),
+    ...(check.outboundMainOnly ? { outboundMainOnly: true as const } : {}),
+    ...(check.outboundServerOnly ? { outboundServerOnly: check.outboundServerOnly } : {}),
+    ...(check.outboundParent ? { outboundParent: true as const } : {}),
+    ...(check.refusal ? { refusal: check.refusal } : {}),
+  };
 }
 
 function throwSendFailure(error: unknown): never {
@@ -396,6 +413,7 @@ function restrictedSender(options: AgentSendOptions): ReturnType<typeof resolveS
     options.inboundOnly ||
     options.outboundMainOnly ||
     options.outboundServerOnly ||
+    options.outboundParent ||
     options.outboundRefusal
   ) {
     if (!options.from || !sender?.serverId)
@@ -408,6 +426,7 @@ function restrictedSender(options: AgentSendOptions): ReturnType<typeof resolveS
       ...(options.inboundOnly ? { inboundOnly: true } : {}),
       ...(options.outboundMainOnly ? { outboundMainOnly: true } : {}),
       ...(options.outboundServerOnly ? { outboundServerOnly: options.outboundServerOnly } : {}),
+      ...(options.outboundParent ? { outboundParent: true as const } : {}),
       ...(options.outboundRefusal ? { refusal: options.outboundRefusal } : {}),
     };
   }
@@ -443,7 +462,10 @@ async function checkSendAdmission(input: {
     };
   }
   if (
-    (sender?.inboundOnly || sender?.outboundMainOnly || sender?.outboundServerOnly) &&
+    (sender?.inboundOnly ||
+      sender?.outboundMainOnly ||
+      sender?.outboundServerOnly ||
+      sender?.outboundParent) &&
     client.getLastServerInfoMessage()?.features?.agentSendReportingLines !== true
   )
     throw new Error("Update the host to enforce the source reporting-line restriction.");

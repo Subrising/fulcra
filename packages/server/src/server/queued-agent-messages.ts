@@ -764,6 +764,17 @@ export class QueuedAgentMessages {
   }
 }
 
+/** A batch keeps one sender identity and one set of relay restrictions. */
+const SENDER_KEYS = [
+  "agentId",
+  "serverId",
+  "inboundOnly",
+  "outboundMainOnly",
+  "outboundServerOnly",
+  "outboundParent",
+  "refusal",
+] as const;
+
 function selectQueuedBatch(waiting: Record[]): Record[] {
   // A mode change applies to a whole turn. Preserve order across incompatible mode requests.
   const firstDifferentMode = waiting.findIndex(
@@ -772,12 +783,7 @@ function selectQueuedBatch(waiting: Record[]): Record[] {
       Boolean(r.request.sender) !== Boolean(waiting[0]!.request.sender),
   );
   const sameSender = (record: Record) =>
-    record.request.sender?.agentId === waiting[0]!.request.sender?.agentId &&
-    record.request.sender?.serverId === waiting[0]!.request.sender?.serverId &&
-    record.request.sender?.inboundOnly === waiting[0]!.request.sender?.inboundOnly &&
-    record.request.sender?.outboundMainOnly === waiting[0]!.request.sender?.outboundMainOnly &&
-    record.request.sender?.refusal === waiting[0]!.request.sender?.refusal &&
-    record.request.sender?.outboundServerOnly === waiting[0]!.request.sender?.outboundServerOnly;
+    SENDER_KEYS.every((key) => record.request.sender?.[key] === waiting[0]!.request.sender?.[key]);
   const ordinary = firstDifferentMode < 0 ? waiting : waiting.slice(0, firstDifferentMode);
   return waiting[0]!.request.pauseNotice
     ? waiting.filter(
