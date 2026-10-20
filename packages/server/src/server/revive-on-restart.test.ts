@@ -1020,8 +1020,8 @@ describe("background wake on the real send path (FU-362)", () => {
   test("a message that arrived after the cut-off refuses the wake at the final check", async () => {
     const f = wakeSessions();
     f.live.lastUserMessageAt = new Date("2026-10-11T09:50:00Z");
-    await expect(f.sessions.sendBackgroundWake(BACKGROUND, "wake text", null)).rejects.toThrow(
-      "Continue after restart refused",
+    await expect(f.sessions.sendBackgroundWake(BACKGROUND, "wake text", null)).resolves.toBe(
+      "withdrawn",
     );
     expect(f.runs).toEqual([]);
   });
