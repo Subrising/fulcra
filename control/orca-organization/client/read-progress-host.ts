@@ -69,25 +69,10 @@ export async function readProgressHost(
         projects.set(projectName, project);
       }
       const previous = saved?.projects.flatMap((p) => p.jobs).find((job) => job.id === agent.id);
-      let result = previous?.result ?? null;
-      try {
-        const page = await api.agents.ref(agent.id).timeline.refetch({ limit: 20 });
-        const entries = page.entries.toReversed();
-        const line = (text: string) =>
-          text
-            .trim()
-            .split(/\r?\n/)
-            .find((part) => part.trim() && !/^[-_*=#]{2,}$/.test(part.trim()));
-        const message = entries.find(
-          (entry) => entry.item.type === "assistant_message" && line(entry.item.text),
-        );
-        if (message?.item.type === "assistant_message")
-          result = safe(line(message.item.text) ?? "").slice(0, 320);
-        else if (entries.some((entry) => entry.item.type === "tool_call"))
-          result = "Working on the task";
-      } catch {
-        /* The session remains visible when its activity is unavailable. */
-      }
+      // Never a timeline read here: each one replays the session's journal on the host (FU-412).
+      const result =
+        previous?.result ||
+        (agent.pendingPermissions.length ? "Waiting for permission" : "Working on the task");
       project.jobs.push({
         id: agent.id,
         title: safe(agent.title ?? "Untitled session"),

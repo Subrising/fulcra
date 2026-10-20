@@ -214,7 +214,8 @@ test("snapshot reads the ledger, updates on a file event, and cleans up", async 
     board.close();
     fs.rmSync(root, { recursive: true, force: true });
   }
-  assert.equal(removed, 1);
+  // Both turn hooks are removed.
+  assert.equal(removed, 2);
 });
 test("board includes ledger projects without a lead and groups workers across folders", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "board-groups-"));
@@ -460,15 +461,6 @@ test("configured mirror includes ledger-only projects and every running session"
   const api = {
     agents: {
       list: async () => ({ entries: [{ agent }], pageInfo: { hasMore: false } }),
-      ref: () => ({
-        timeline: {
-          refetch: async () => ({
-            entries: [
-              { item: { type: "assistant_message", text: "Checking the layout.\nDetails" } },
-            ],
-          }),
-        },
-      }),
     },
     workspaces: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
   } as unknown as PaseoApi;
@@ -477,7 +469,7 @@ test("configured mirror includes ledger-only projects and every running session"
     result.projects.map((p) => p.name),
     ["Other sessions", "ledger-only"],
   );
-  assert.equal(result.projects[0]!.jobs[0]!.result, "Checking the layout.");
+  assert.equal(result.projects[0]!.jobs[0]!.result, "Working on the task");
   assert.equal(result.projects[0]!.jobs[0]!.model, "gpt-test");
   assert.equal(result.projects[0]!.jobs[0]!.startedAt, "2026-10-16T00:00:00Z");
   assert.equal(result.projects[1]!.items.length, 1);
@@ -565,90 +557,85 @@ test("explicit close records are retained while no screen is mounted", async (t)
   assert.ok(Number.isFinite(Date.parse(saved.rows["fixture:FU-1"].completedAt)));
 });
 
-function activityFixture(t: { after: (fn: () => void) => void }) {
+// FU-412: the board read each running session's timeline every minute, and each read replayed
+// that session's whole journal on the host. Activity now comes from the session record and turn events.
+function activityFixture(t: { after: (fn: () => void) => void }, count = 1) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "board-activity-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const clock = { at: 1_000_000 };
-  const board = createProgressBoard({ on: () => () => {} }, { root, now: () => clock.at });
-  t.after(() => board.close());
-  const tool = {
-    item: {
-      type: "tool_call",
-      name: "shell",
-      detail: { type: "shell", command: "npm run test -- --long-private-option" },
+  const handlers = new Map<string, (event: unknown) => void>();
+  const server = {
+    on: (name: string, handler: (event: unknown) => void) => {
+      handlers.set(name, handler);
+      return () => handlers.delete(name);
     },
-  };
+  } as unknown as Parameters<typeof createProgressBoard>[0];
+  const board = createProgressBoard(server, { root });
+  t.after(() => board.close());
   const state = {
-    timeline: [tool] as unknown[],
-    agent: boardLead as PaseoAgent,
-    refetches: 0,
+    agents: Array.from(
+      { length: count },
+      (_, n) => ({ ...boardLead, id: `lead-${n}` }) as PaseoAgent,
+    ),
+    timelineReads: 0,
   };
   const api = {
     agents: {
-      list: async () => ({ entries: [{ agent: state.agent }], pageInfo: { hasMore: false } }),
-      ref: () => ({
-        timeline: {
-          refetch: async () => {
-            state.refetches += 1;
-            return { entries: state.timeline };
-          },
-        },
+      list: async () => ({
+        entries: state.agents.map((agent) => ({ agent })),
+        pageInfo: { hasMore: false },
       }),
+      ref: () => {
+        state.timelineReads += 1;
+        return { timeline: { refetch: async () => ({ entries: [] }) } };
+      },
     },
     workspaces: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
   } as unknown as PaseoApi;
-  const touch = () => {
-    state.agent = { ...state.agent, updatedAt: `${state.agent.updatedAt}+` } as PaseoAgent;
-  };
+  const emit = (name: string, event: unknown) => handlers.get(name)!(event);
   const result = async () => (await board.read(api)).projects[0]!.jobs[0]!.result;
-  return { clock, tool, state, touch, result, board, api };
+  return { state, emit, result, board, api };
 }
 
-test("running activity uses readable updates instead of raw commands", async (t) => {
+test("board refresh makes no timeline fetch for running sessions over 5 minutes", async (t) => {
+  const f = activityFixture(t, 8);
+  // One refresh every 10 s for 5 minutes; every session changes between refreshes.
+  for (let tick = 0; tick < 30; tick++) {
+    f.state.agents = f.state.agents.map(
+      (agent) =>
+        ({
+          ...agent,
+          updatedAt: new Date(Date.parse("2026-10-20T00:00:00Z") + tick * 10_000).toISOString(),
+          activeTurn: { turnId: `turn-${tick}`, startedAt: "2026-10-20T00:00:00Z" },
+        }) as PaseoAgent,
+    );
+    const board = await f.board.read(f.api);
+    assert.equal(board.projects[0]!.jobs.length, 8);
+  }
+  assert.equal(f.state.timelineReads, 0);
+});
+
+test("a running session shows live activity from its record", async (t) => {
   const f = activityFixture(t);
-  assert.equal(await f.result(), "Running checks");
-  f.state.timeline = [
-    { item: { type: "assistant_message", text: "Checking the phone layout." } },
-    f.tool,
-  ];
-  f.touch();
-  f.clock.at += 61_000;
+  assert.equal(await f.result(), "Working on the task");
+  f.state.agents = [{ ...boardLead, pendingPermissions: [{ id: "p" }] } as unknown as PaseoAgent];
+  assert.equal(await f.result(), "Waiting for permission");
+  f.state.agents = [{ ...boardLead, status: "initializing" } as PaseoAgent];
+  assert.equal(await f.result(), "Starting the session");
+  assert.equal(f.state.timelineReads, 0);
+});
+
+test("a session shows its last reply until its next turn starts", async (t) => {
+  const f = activityFixture(t);
+  f.state.agents = [{ ...boardLead, id: "lead" } as PaseoAgent];
+  f.emit("agent.turn_ended", {
+    agent: { id: "lead" },
+    outcome: { kind: "completed" },
+    timeline: [{ type: "assistant_message", text: "Checking the phone layout.\nDetails" }],
+  });
   assert.equal(await f.result(), "Checking the phone layout.");
-});
-
-test("activity is not read again while the session is unchanged", async (t) => {
-  const f = activityFixture(t);
-  assert.equal(await f.result(), "Running checks");
-  f.clock.at += 10 * 60_000;
-  f.state.timeline = [{ item: { type: "assistant_message", text: "Hidden change." } }];
-  assert.equal(await f.result(), "Running checks");
-  assert.equal(f.state.refetches, 1);
-});
-
-test("activity is read at most once a minute for a changed session", async (t) => {
-  const f = activityFixture(t);
-  await f.result();
-  f.touch();
-  f.clock.at += 30_000;
-  f.state.timeline = [{ item: { type: "assistant_message", text: "New update." } }];
-  assert.equal(await f.result(), "Running checks");
-  assert.equal(f.state.refetches, 1);
-  f.clock.at += 31_000;
-  assert.equal(await f.result(), "New update.");
-  assert.equal(f.state.refetches, 2);
-});
-
-test("activity cache entries are dropped when a session stops running", async (t) => {
-  const f = activityFixture(t);
-  await f.result();
-  const running = f.state.agent;
-  f.state.agent = { ...boardLead, status: "idle" } as PaseoAgent;
-  await f.board.read(f.api);
-  // Same snapshot marker as the first read. Only a dropped entry makes this read the timeline again.
-  f.state.agent = running;
-  f.clock.at += 1000;
-  await f.result();
-  assert.equal(f.state.refetches, 2);
+  f.emit("agent.turn_started", { agent: { id: "lead" }, turnId: "next" });
+  assert.equal(await f.result(), "Working on the task");
+  assert.equal(f.state.timelineReads, 0);
 });
 
 test("ledger close proxy loads only the selected canonical source", async (t) => {
@@ -771,13 +758,9 @@ test("each host reads native running sessions even without a board plugin", asyn
             ? { entries: agents.slice(1).map((agent) => ({ agent })), pageInfo: { hasMore: false } }
             : { entries: [{ agent: agents[0] }], pageInfo: { hasMore: true, nextCursor: "next" } };
         },
-        ref: () => ({
-          timeline: {
-            refetch: async () => ({
-              entries: [{ item: { type: "assistant_message", text: "---\nChecking the task." } }],
-            }),
-          },
-        }),
+        ref: () => {
+          throw Error("The board must not read a session timeline");
+        },
       },
       workspaces: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
     } as unknown as PaseoApi;
@@ -786,7 +769,7 @@ test("each host reads native running sessions even without a board plugin", asyn
     });
     assert.equal(board.projects.flatMap((p) => p.jobs).length, agents.length);
     assert.equal(board.projects[0]!.jobs[0]!.model, "claude-opus-5-5");
-    assert.equal(board.projects[0]!.jobs[0]!.result, "Checking the task.");
+    assert.equal(board.projects[0]!.jobs[0]!.result, "Working on the task");
     assert.deepEqual(calls, [undefined, "next"]);
     assert.match(board.warnings[0]!, /Project lists are unavailable/);
   }

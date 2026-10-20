@@ -298,7 +298,16 @@ export async function readBranch(
   return row;
 }
 
-const ACTIVITY_REFRESH_MS = 60_000;
+/**
+ * What a running session is doing, from its record alone. The board never reads a session timeline:
+ * each read replays that session's journal from disk (FU-412).
+ */
+function activityOf(agent: PaseoAgent): string | null {
+  if (agent.pendingPermissions.length) return "Waiting for permission";
+  if (agent.status === "initializing") return "Starting the session";
+  if (agent.status === "running") return "Working on the task";
+  return null;
+}
 
 export function createProgressBoard(
   server: Pick<PluginServerContext, "on">,
@@ -308,10 +317,8 @@ export function createProgressBoard(
     run?: RunRead;
     humanOwners?: () => readonly string[];
     historyFile?: string;
-    now?: () => number;
   } = {},
 ) {
-  const now = options.now ?? Date.now;
   const root =
     options.root ??
     (process.env.FULCRA_LEDGER_DIR?.trim() || path.join(os.homedir(), "shared-vault", "projects"));
@@ -392,12 +399,13 @@ export function createProgressBoard(
       /* A missing or unreadable list cannot supply a date. */
     }
   }
+  // The last reply of each session, from turn events. A new turn replaces it with live activity.
   const results = new Map<string, string>();
-  // Each timeline read loads large journal records from disk. Read a running session again only
-  // when its snapshot changed and the last read is at least one minute old.
-  const activityReads = new Map<string, { marker: string; at: number }>();
   const ledgers = new Map<string, { items: BoardItem[]; state: string; signature?: string }>();
   const hooks = [
+    server.on("agent.turn_started", (event) => {
+      results.delete(event.agent.id);
+    }),
     server.on("agent.turn_ended", (event) => {
       const last = event.timeline.toReversed().find((entry) => entry.type === "assistant_message");
       const text =
@@ -563,53 +571,6 @@ export function createProgressBoard(
           state: "No readable ledger for this project on this computer.",
         });
       }
-      // Read the most recent activity for running sessions, including after daemon restarts.
-      await Promise.all(
-        projectAgents
-          .filter((a) => a.status === "running" || a.status === "initializing")
-          .map(async (a) => {
-            const marker = `${a.updatedAt}|${a.lastUserMessageAt ?? ""}|${a.activeTurn?.startedAt ?? ""}`;
-            const previous = activityReads.get(a.id);
-            const at = now();
-            if (previous && (previous.marker === marker || at - previous.at < ACTIVITY_REFRESH_MS))
-              return;
-            try {
-              activityReads.set(a.id, { marker, at });
-              const page = await paseo.agents.ref(a.id).timeline.refetch({ limit: 20 });
-              const entries = page.entries.toReversed();
-              const last =
-                entries.find((e) => e.item.type === "assistant_message" && oneLine(e.item.text)) ??
-                entries.find((e) => e.item.type === "tool_call");
-              if (last?.item.type === "assistant_message") {
-                const line = oneLine(last.item.text);
-                if (line) results.set(a.id, line);
-              } else if (last?.item.type === "tool_call") {
-                const detail = last.item.detail;
-                const activity =
-                  detail.type === "shell"
-                    ? /(?:test|vitest|playwright|lint|typecheck)\b/i.test(detail.command)
-                      ? "Running checks"
-                      : /(?:build|compile)\b/i.test(detail.command)
-                        ? "Building the project"
-                        : "Running a command"
-                    : detail.type === "read"
-                      ? "Reading project files"
-                      : detail.type === "edit" || detail.type === "write"
-                        ? "Updating project files"
-                        : detail.type === "search"
-                          ? "Searching for information"
-                          : detail.type === "fetch"
-                            ? "Reading a web page"
-                            : detail.type === "plain_text"
-                              ? (detail.label ?? "Working on the task")
-                              : "Working on the task";
-                results.set(a.id, oneLine(activity) ?? "Using a tool");
-              }
-            } catch {
-              /* The UI names missing activity. Session status remains authoritative. */
-            }
-          }),
-      );
       const ledger = ledgers.get(name)!;
       const tracked = ledger.items.map((item) => track(name, item, observedAt));
       if (dated.get(name)?.signature !== signature || !dated.has(name)) {
@@ -636,7 +597,7 @@ export function createProgressBoard(
         startedAt: a.activeTurn?.startedAt ?? null,
         model: a.model ?? null,
         permissions: a.pendingPermissions.length,
-        result: oneLine(results.get(a.id) ?? a.lastError ?? ""),
+        result: oneLine(results.get(a.id) ?? a.lastError ?? activityOf(a) ?? ""),
       }));
       projects.push({
         id: name,
@@ -650,12 +611,6 @@ export function createProgressBoard(
         branches: [],
       });
     }
-    const running = new Set(
-      agentRows
-        .filter((a) => a.status === "running" || a.status === "initializing")
-        .map((a) => a.id),
-    );
-    for (const id of activityReads.keys()) if (!running.has(id)) activityReads.delete(id);
     if (previousTransitions !== JSON.stringify(transitions)) saveHistory();
     if (historyUnavailable)
       warnings.push("Completion history could not be saved. Dates may be missing after a restart.");
@@ -696,7 +651,6 @@ export function createProgressBoard(
       hooks.forEach((stop) => stop());
       watchers.forEach((w) => w.close());
       results.clear();
-      activityReads.clear();
       ledgers.clear();
     },
   };
