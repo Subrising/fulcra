@@ -66,6 +66,7 @@ import {
   isNudgeOwnerSkipped,
   type LedgerRow,
 } from "./ledger-items.js";
+import { finishNoticeWanted } from "./finish-notice-filter.js";
 import { lastAgentMessageDeliveredAt } from "./agent-message-log.js";
 import type { HostLinkNoticeKind } from "./host-link-contracts.js";
 import { classifyEndingAssistantMessage, classifyFailedTurn } from "./limit-resume/detect.js";
@@ -749,6 +750,15 @@ export class ReportUpService {
     if (!notice) return false;
     this.finishOwners.delete(input.agentId);
     let recorded = false;
+    if (
+      notice.status === "armed" &&
+      input.startedAt !== undefined &&
+      !input.fromNotice &&
+      !input.failed &&
+      (await this.finishHeld(input.agentId, input.lastAssistant, notice.parentId))
+    )
+      // The notice stays armed, so the turn that ends with the result still reaches the lead.
+      return true;
     if (notice.status === "armed" && input.startedAt !== undefined && !input.fromNotice) {
       notice = await storage.recordFinishNotice(
         input.agentId,
@@ -760,6 +770,24 @@ export class ReportUpService {
     if (recorded && notice && (await this.alreadyReportedThisTurn(input, notice))) return true;
     if (notice?.status === "pending")
       await this.deliverOwnedFinish(input.agentId, notice, false, input.lastAssistant);
+    return true;
+  }
+
+  /** FU-439: true (and logged) when a finished turn has no DONE, BLOCKED or question for the lead. */
+  private async finishHeld(
+    workerId: string,
+    observed: string | null | undefined,
+    leadId: string | null,
+  ): Promise<boolean> {
+    const text =
+      observed === undefined
+        ? await this.deps.agentManager.getLastAssistantMessage(workerId).catch(() => null)
+        : observed;
+    if (finishNoticeWanted(text)) return false;
+    this.deps.logger.info(
+      { childId: workerId, parentId: leadId },
+      "Finish notice held: no DONE/BLOCKED/question",
+    );
     return true;
   }
 
@@ -1823,6 +1851,7 @@ export class ReportUpService {
       await this.toLead(workerId, lead.id, prompt, "finished-turn");
       return;
     }
+    if (await this.finishHeld(workerId, lastMessage, lead.id)) return;
     await this.queueFinished(lead.id, {
       workerId,
       worker: this.workerWithSpend(worker),
