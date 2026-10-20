@@ -3,6 +3,10 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { createPaseoDaemon, formatListenTarget } from "./bootstrap.js";
 import { loadConfig } from "./config.js";
+import {
+  COMMAND_CENTRE_PASSWORD_FILE_ENV,
+  resolveCommandCentreAuth,
+} from "./command-centre-password.js";
 import { resolvePaseoHome } from "./paseo-home.js";
 import { findOtherHomeOwner, formatOtherHomeOwner } from "./home-owner-guard.js";
 import { createRootLogger } from "./logger.js";
@@ -80,15 +84,13 @@ function bootstrapFromEnvironment(): BootstrapResult {
     const config = loadConfig(paseoHome);
     const commandCentreEnabled = process.env.FULCRA_COMMAND_CENTRE === "1";
     const generatedAuthHash = process.env.FULCRA_COMMAND_CENTRE_AUTH_HASH;
+    const passwordFile = process.env[COMMAND_CENTRE_PASSWORD_FILE_ENV];
     delete process.env.FULCRA_COMMAND_CENTRE_AUTH_HASH;
+    delete process.env[COMMAND_CENTRE_PASSWORD_FILE_ENV];
+    if (passwordFile && !commandCentreEnabled)
+      throw Error(`${COMMAND_CENTRE_PASSWORD_FILE_ENV} requires FULCRA_COMMAND_CENTRE=1`);
     if (commandCentreEnabled) {
-      if (
-        !config.auth?.password &&
-        generatedAuthHash &&
-        /^\$2[aby]\$12\$[./A-Za-z0-9]{53}$/.test(generatedAuthHash)
-      )
-        config.auth = { password: generatedAuthHash };
-      if (!config.auth?.password) throw Error("Command Centre requires daemon authentication");
+      config.auth = resolveCommandCentreAuth(config, { passwordFile, generatedAuthHash });
       Object.defineProperty(config, "bundledPluginsDirectory", {
         value: packagedPluginsDirectory(import.meta.url, true),
         enumerable: true,
