@@ -1,6 +1,7 @@
 import { bindBootstrapAfterRestart } from "./native-bootstrap.mjs";
 import { childId, resumeGate } from "./recovery.mjs";
 import { assertColumns } from "./schema.mjs";
+import { tickDue } from "./agent-watch.mjs";
 import { bootChainVerdict } from "./boot-chain.mjs";
 
 export const RESTART_SETTLE_MS = 30000,
@@ -137,7 +138,14 @@ export class AutomaticRestarts {
     const stale = this.store
       .list()
       .map(({ id }) => this.store.get(id))
-      .filter((s) => s.mode === "delegated" && s.boot && s.boot !== boot);
+      .filter((s) => s.mode === "delegated" && s.boot && s.boot !== boot)
+      // FU-423: an archived session has no turn to restart; it is not fetched. A live one is re-read only when it
+      // changed, is running, or the safety pass is due (this runs on every agent update and every 30 s).
+      .filter(
+        (s) =>
+          this.control.native?.isLive?.(s.id) !== false &&
+          tickDue(this.control.native, s.id, (this.tickMemo ??= new Map()), this.now()),
+      );
     if (stale.length > 1000) {
       this.lastError = {
         message: "More than 1000 stale delegations; automatic restart discovery requires a human",
@@ -148,7 +156,9 @@ export class AutomaticRestarts {
     for (const s of stale) {
       this.alive();
       try {
-        const snapshot = await this.control.native.snapshot(s.id);
+        // FU-423: the live directory already holds this record (interruptedTurn included); fetch only without it.
+        const snapshot =
+          this.control.native.liveSnapshot?.(s.id) ?? (await this.control.native.snapshot(s.id));
         if (
           snapshot.interruptedTurn?.lastUserMessageAt === s.expectedAt &&
           ["running", "initializing"].includes(snapshot.interruptedTurn?.previousStatus)

@@ -20,6 +20,7 @@ import { isArchiveLead, isArchiveChild, reportsToArchiveParent } from "./archive
 import {
   defaultLedgerDir,
   readOpenLedgerRows,
+  readOpenLedgerRowsShared,
   rowsOwnedBy,
   isSoleLedgerOwner,
   type LedgerRow,
@@ -4781,8 +4782,11 @@ export class AgentManager {
     throw new WorkAcceptanceError("unauthorised", "Review needs a lead session or the owner.");
   }
 
-  private async archiveLedgerRows(record: StoredAgentRecord) {
-    const rows = await readOpenLedgerRows(this.archiveLedgerDirectory ?? defaultLedgerDir(), true);
+  private async archiveLedgerRows(record: StoredAgentRecord, shared = false) {
+    const dir = this.archiveLedgerDirectory ?? defaultLedgerDir();
+    const rows = shared
+      ? await readOpenLedgerRowsShared(dir, true)
+      : await readOpenLedgerRows(dir, true);
     return rowsOwnedBy(rows, {
       id: record.id,
       title: record.title ?? "",
@@ -4800,14 +4804,17 @@ export class AgentManager {
     );
   }
 
+  // FU-423: `forSnapshot` is the display copy in a session snapshot; it shares one recent ledger read. The archive and
+  // restore gates call this without it and always read the ledgers fresh.
   async getArchiveProtection(
     agentId: string,
+    { forSnapshot = false }: { forSnapshot?: boolean } = {},
   ): Promise<{ confirmationRequired: boolean; reasons: string[] }> {
     const record = await this.requireRegistry().get(agentId);
     if (!record) throw new Error(`Agent not found: ${agentId}`);
     const reasons: string[] = [];
     if (isArchiveLead(record)) reasons.push("This session is a lead or owner.");
-    const ownedRows = await this.archiveLedgerRows(record);
+    const ownedRows = await this.archiveLedgerRows(record, forSnapshot);
     for (const row of ownedRows)
       reasons.push(
         `This session owns open ledger item ${row.id} in ${row.project}. Close it: ledger close ${row.project} ${row.id} --evidence <result>. Or transfer it: ledger set ${row.project} ${row.id} --owner <lead>. Open ledger ownership must be transferred before archive.`,

@@ -1728,6 +1728,7 @@ describe("WorkspaceGitService checkout observation", () => {
       getCheckoutStatus,
       getWorkspaceGitSelfHealPhaseMs: () => 60_000,
       runGitCommand,
+      checkoutProbe: async () => (isGit ? "checkout" : "none"),
     });
     const summarySubscription = service.registerWorkspace({ cwd: REPO_CWD }, vi.fn());
 
@@ -2064,11 +2065,13 @@ describe("WorkspaceGitService checkout observation", () => {
     const runGitCommand = vi.fn(async () => {
       throw new Error("not a git repository");
     });
+    const checkoutProbe = vi.fn(async () => "none" as const);
     const service = createService(watcher, {
       getCheckoutSnapshotFacts,
       getCheckoutStatus,
       getWorkspaceGitSelfHealPhaseMs: () => 1_000_000,
       runGitCommand,
+      checkoutProbe,
     });
     const subscription = service.registerWorkspace({ cwd: REPO_CWD }, vi.fn());
 
@@ -2086,11 +2089,53 @@ describe("WorkspaceGitService checkout observation", () => {
     await vi.waitFor(() => {
       expect(service.getMetrics().workspaceRefreshInFlightCount).toBe(0);
     });
-    const statusCallsAfterRecovery = getCheckoutStatus.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(5_000);
+    // FU-423: discovery polling of a non-Git folder checks for a `.git` entry, not with a Git refresh.
+    const probesAfterRecovery = checkoutProbe.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(600_000);
     await vi.waitFor(() => {
-      expect(getCheckoutStatus.mock.calls.length).toBeGreaterThan(statusCallsAfterRecovery);
+      expect(checkoutProbe.mock.calls.length).toBeGreaterThan(probesAfterRecovery);
     });
+
+    subscription.unsubscribe();
+    service.dispose();
+  });
+
+  test("a deleted or non-Git folder is polled without Git and backs off to ten minutes", async () => {
+    const watcher = createWatcherHarness();
+    const getCheckoutSnapshotFacts = vi.fn(
+      async (): Promise<CheckoutSnapshotFacts> => ({ isGit: false }),
+    );
+    const getCheckoutStatus = vi.fn(async () => ({ isGit: false }) as const);
+    const runGitCommand = vi.fn(async () => {
+      throw new Error("not a git repository");
+    });
+    const checkoutProbe = vi.fn(async () => "missing" as const);
+    const service = createService(watcher, {
+      getCheckoutSnapshotFacts,
+      getCheckoutStatus,
+      getWorkspaceGitSelfHealPhaseMs: () => 1_000_000,
+      runGitCommand,
+      checkoutProbe,
+    });
+    const subscription = service.registerWorkspace({ cwd: REPO_CWD }, vi.fn());
+    await vi.waitFor(() => {
+      expect(service.getMetrics()).toMatchObject({
+        workspaceObservationSetupInFlightCount: 0,
+        workspaceRefreshInFlightCount: 0,
+      });
+    });
+    const statusCalls = getCheckoutStatus.mock.calls.length,
+      factsCalls = getCheckoutSnapshotFacts.mock.calls.length,
+      gitCalls = runGitCommand.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+
+    expect(getCheckoutStatus).toHaveBeenCalledTimes(statusCalls);
+    expect(getCheckoutSnapshotFacts).toHaveBeenCalledTimes(factsCalls);
+    expect(runGitCommand).toHaveBeenCalledTimes(gitCalls);
+    // 5 s doubling to a 600 s cap: 8 checks in 30 minutes, where a 60 s cap would make about 34.
+    expect(checkoutProbe.mock.calls.length).toBeGreaterThan(0);
+    expect(checkoutProbe.mock.calls.length).toBeLessThanOrEqual(9);
 
     subscription.unsubscribe();
     service.dispose();
