@@ -745,6 +745,7 @@ test("owned permission observation requires a fresh acknowledged snapshot after 
   assert.equal(releases, 1);
   await assert.rejects(channel.ready(), /closed/);
 });
+// FU-423: while the owned subscription is live, a watchdog read makes no new list request.
 test("watchdog reads reuse one owned agent subscription and release it on close", async () => {
   let subscribed = 0,
     reads = 0,
@@ -753,7 +754,7 @@ test("watchdog reads reuse one owned agent subscription and release it on close"
   const client = {
     agents: {
       list: async (options) => {
-        assert.equal(options.page.limit, 100);
+        assert.equal(options.page.limit, 200);
         if (!options.subscribe) {
           reads++;
           return {};
@@ -778,7 +779,7 @@ test("watchdog reads reuse one owned agent subscription and release it on close"
   await Promise.all([watch.watch(), watch.watch()]);
   await watch.watch();
   assert.equal(subscribed, 1);
-  assert.equal(reads, 1);
+  assert.equal(reads, 0);
   observer.error();
   await watch.watch();
   assert.equal(subscribed, 2);

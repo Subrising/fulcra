@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { resolveForgeRemoteUrl } from "../utils/forge-remote.js";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { LRUCache } from "lru-cache";
 import { CheckoutDiffCache } from "./checkout-diff-cache.js";
@@ -94,6 +94,10 @@ const DEGRADED_GIT_POLL_INTERVAL_MS = 5_000;
 // does not. Explicit reads still force a refresh, so this only bounds background discovery of
 // changes made outside Paseo.
 const DEGRADED_GIT_POLL_MAX_INTERVAL_MS = 60_000;
+// FU-423: a folder that is not a Git checkout, or no longer exists, has nothing for Git to report. Its poll only
+// checks (with stat, never a git process) whether the folder or a `.git` entry appeared, and backs off to this
+// gap. An explicit read still forces a full refresh.
+const NON_CHECKOUT_POLL_MAX_INTERVAL_MS = 600_000;
 // A dependency install creates directories for minutes. Collapse the burst into
 // a couple of `git ls-files` runs rather than one per event.
 const WORKING_TREE_IGNORE_REFRESH_QUIET_MS = 300;
@@ -393,6 +397,7 @@ interface WorkspaceGitServiceDependencies {
   runGitCommand: typeof runGitCommand;
   getWorkspaceGitSelfHealPhaseMs: typeof getWorkspaceGitObservationReensurePhaseMs;
   createWatcherLivenessCanary: typeof createWatcherLivenessCanary;
+  checkoutProbe: typeof checkoutProbe;
   now: () => Date;
 }
 
@@ -578,6 +583,7 @@ function buildDefaultWorkspaceGitServiceDeps(
     runGitCommand,
     getWorkspaceGitSelfHealPhaseMs: getWorkspaceGitObservationReensurePhaseMs,
     createWatcherLivenessCanary,
+    checkoutProbe,
     now: () => new Date(),
   };
 }
@@ -1581,11 +1587,11 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     }
   }
 
-  private degradedPollDelayMs(quietTickCount: number): number {
-    return Math.min(
-      DEGRADED_GIT_POLL_MAX_INTERVAL_MS,
-      DEGRADED_GIT_POLL_INTERVAL_MS * 2 ** quietTickCount,
-    );
+  private degradedPollDelayMs(
+    quietTickCount: number,
+    maxMs = DEGRADED_GIT_POLL_MAX_INTERVAL_MS,
+  ): number {
+    return Math.min(maxMs, DEGRADED_GIT_POLL_INTERVAL_MS * 2 ** quietTickCount);
   }
 
   // A refresh that throws is swallowed by refreshWorkspaceTarget and leaves the fingerprint
@@ -1613,6 +1619,21 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     const poll = async () => {
       target.fallbackPollTimer = null;
       if (target.closed || this.workingTreeWatchTargets.get(target.cwd) !== target) {
+        return;
+      }
+      // FU-423: no git process for a deleted folder or a folder with no `.git` here or above it.
+      if (target.repoRoot === null && (await this.deps.checkoutProbe(cwd)) !== "checkout") {
+        if (target.closed || this.workingTreeWatchTargets.get(target.cwd) !== target) {
+          return;
+        }
+        target.fallbackPollQuietTickCount += 1;
+        target.fallbackPollTimer = setTimeout(
+          poll,
+          this.degradedPollDelayMs(
+            target.fallbackPollQuietTickCount,
+            NON_CHECKOUT_POLL_MAX_INTERVAL_MS,
+          ),
+        );
         return;
       }
       const changes = await Promise.all(
@@ -4003,4 +4024,29 @@ function computeGenericForgeNextInterval(
     baseInterval * 2 ** (consecutiveErrors - 1),
     FORGE_PR_STATUS_POLL_ERROR_BACKOFF_CAP_MS,
   );
+}
+
+// FU-423: cheap check for the fallback poll of a folder that was not a Git checkout. "missing": the folder is gone;
+// "none": no `.git` entry in it or any parent; "checkout": a `.git` entry exists, so a Git refresh can find a repo.
+// Any other stat error counts as "checkout", so an unexpected state still gets the full refresh.
+export async function checkoutProbe(cwd: string): Promise<"missing" | "none" | "checkout"> {
+  try {
+    await stat(cwd);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR" ? "missing" : "checkout";
+  }
+  let dir = resolve(cwd);
+  for (;;) {
+    try {
+      await stat(join(dir, ".git"));
+      return "checkout";
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") return "checkout";
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return "none";
+    dir = parent;
+  }
 }

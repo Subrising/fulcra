@@ -45,6 +45,8 @@ import { macHeldNotifier, macLimitNotifier } from "./held-notifier.mjs";
 import { bootChainDir } from "./boot-chain.mjs";
 import { MetricsLog, instrumentDb, timedDispatch, startLoopSampler } from "./metrics.mjs";
 import { closeWithin } from "./native-close.mjs";
+import { pace } from "./startup-pace.mjs";
+import { tickDue } from "./agent-watch.mjs";
 // The SSH Book transport is retired (0.2.7): the controller never starts a remote receiver. A leftover
 // <ORCA_HOME>/book-transport.json is ignored, and Book creations are refused as "not configured".
 export const BOOK_RETIRED = Object.freeze({ configured: false, status: "Book transport retired" });
@@ -86,6 +88,9 @@ export async function startController({
     store = instrumentDb(new ControlStore(`${HOME}/journal.sqlite`)),
     native = new HostNative({ store, local, ...bookTransport(HOME) }),
     control = new Controller({ store, native, bootChainDir: bootChainDir(HOME) });
+  // FU-423: one fetch_agents list (live sessions only) before any startup pass, so every pass below can skip
+  // archived sessions without fetching them. Later watch() calls reuse this observation.
+  await native.watch();
   let closing = false;
   if (typeof requestReport === "function") control.reportInbox = { request: requestReport };
   control.events = new Events(control);
@@ -167,6 +172,8 @@ export async function startController({
     control.events.lastError = { message: error.message, at: new Date().toISOString() };
     console.error("Orca event observer:", error.message);
   };
+  const grantTicks = new Map(),
+    linkTicks = new Map();
   let refreshingEvents = null,
     eventDirty = false,
     eventsReady = false;
@@ -181,9 +188,13 @@ export async function startController({
         void native.reconcile();
         await control.leadership.pump();
         await control.permissions.verifyPending();
+        // FU-423: only live sessions that changed, are running, or are due a safety re-read are inspected again.
         for (const grant of control.permissions.rows())
-          await control.permissions.reconcile(grant.session);
-        for (const link of control.events.links()) await control.events.reconcile(link.worker);
+          if (native.isLive(grant.session) && tickDue(native, grant.session, grantTicks))
+            await control.permissions.reconcile(grant.session);
+        for (const link of control.events.links())
+          if (native.isLive(link.worker) && tickDue(native, link.worker, linkTicks))
+            await control.events.reconcile(link.worker);
         await control.events.pump();
         await control.channels.pump();
         await control.roleSessions.pump();
@@ -311,10 +322,18 @@ export async function startController({
   process.on("SIGINT", stop);
   await native.watch();
   // C2 #5: title the workspaces of existing sessions once, in the background. Cosmetic; a failure is only logged.
-  native.nameWorkspaces?.(store.list().map((r) => r.id)).then(
-    (r) => log.line({ workspaceTitles: r }),
-    (e) => log.line({ workspaceTitlesError: String(e?.message ?? e) }),
-  );
+  // FU-423: live sessions only; archived ones keep their workspace titles and cost nothing.
+  native
+    .nameWorkspaces?.(
+      store
+        .list()
+        .map((r) => r.id)
+        .filter((id) => native.isLive(id)),
+    )
+    .then(
+      (r) => log.line({ workspaceTitles: r }),
+      (e) => log.line({ workspaceTitlesError: String(e?.message ?? e) }),
+    );
   await refreshEvents();
   // H6 item 6: a Claude session of ours that goes idle is checked for a usage-limit stop; stops already present at
   // startup (a controller restarted during the wait) are found by one bounded pass over delegated sessions.
@@ -329,10 +348,20 @@ export async function startController({
     void control.compactionLoops.onAgent(a);
     void control.automaticRestarts.tick();
   });
-  for (const { id } of store.db
+  // FU-423: archived sessions are skipped; the rest are read in the background, at most two per second.
+  const limitIds = store.db
     .prepare("SELECT id FROM sessions WHERE mode='delegated' ORDER BY rowid DESC LIMIT 64")
-    .all())
-    await control.usageLimits.observe(id);
+    .all()
+    .map((r) => r.id)
+    .filter((id) => native.isLive(id));
+  void (async () => {
+    for (const id of limitIds) {
+      if (closing) break;
+      await pace();
+      if (closing) break;
+      await control.usageLimits.observe(id);
+    }
+  })().catch((error) => log.line({ usageLimitStartError: String(error?.message ?? error) }));
   // Merge: the live lineage's H7 wake and provider-recovery ticks. Its daemon-listener witness (Stage 2 F1) is NOT carried
   // over: it inspects an unverified separate listener and disarms the LEGACY file-guard human-input chain; the owned child
   // is spawned by its verified daemon over the boot handshake, and V4's human-input fencing is native to that daemon
