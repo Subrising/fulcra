@@ -66,6 +66,7 @@ import {
   isNudgeOwnerSkipped,
   type LedgerRow,
 } from "./ledger-items.js";
+import { lastAgentMessageDeliveredAt } from "./agent-message-log.js";
 import type { HostLinkNoticeKind } from "./host-link-contracts.js";
 import { classifyEndingAssistantMessage, classifyFailedTurn } from "./limit-resume/detect.js";
 import {
@@ -747,14 +748,47 @@ export class ReportUpService {
     let notice = await storage.getFinishNotice(input.agentId);
     if (!notice) return false;
     this.finishOwners.delete(input.agentId);
-    if (notice.status === "armed" && input.startedAt !== undefined && !input.fromNotice)
+    let recorded = false;
+    if (notice.status === "armed" && input.startedAt !== undefined && !input.fromNotice) {
       notice = await storage.recordFinishNotice(
         input.agentId,
         `${input.agentId}:${input.startedAt}`,
         input.failed ? "errored" : "finished",
       );
+      recorded = true;
+    }
+    if (recorded && notice && (await this.alreadyReportedThisTurn(input, notice))) return true;
     if (notice?.status === "pending")
       await this.deliverOwnedFinish(input.agentId, notice, false, input.lastAssistant);
+    return true;
+  }
+
+  /**
+   * FU-427: a finished turn whose worker already delivered a message to this lead needs no second wake for the same
+   * result. The notice is settled as delivered so no retry sends it. Errors and turns without a send are not skipped.
+   */
+  private async alreadyReportedThisTurn(
+    input: ReportTurnEnd,
+    notice: FinishNotice,
+  ): Promise<boolean> {
+    if (
+      notice.status !== "pending" ||
+      notice.reason !== "finished" ||
+      input.startedAt === undefined
+    )
+      return false;
+    const sentAt = lastAgentMessageDeliveredAt(input.agentId, notice.parentId);
+    if (sentAt === null || sentAt < input.startedAt) return false;
+    await this.deps.agentStorage.settleFinishNotice(
+      input.agentId,
+      notice.messageId,
+      "delivered",
+      "report-up",
+    );
+    this.deps.logger.info(
+      { childId: input.agentId, parentId: notice.parentId },
+      "Finish notice skipped: already reported in this turn",
+    );
     return true;
   }
 
