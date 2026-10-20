@@ -282,6 +282,12 @@ export interface ReviveResult {
   closed: ClosedSession[];
 }
 
+/** The refusal for a session a trusted plugin owns: the daemon does not continue it (the owner's fence). */
+export const OWNED_BY_PLUGIN = "owned by a trusted plugin";
+/** FU-103: the notice reason, so a plugin-owned lead cut off by the restart does not sit idle unseen. */
+export const PLUGIN_OWNED_NOT_CONTINUED =
+  "owned by Fulcra, not continued: if it is idle, send it a message";
+
 export function formatBackgroundWakePrompt(restartedAt: Date): string {
   const time = restartedAt.toLocaleString("en-GB", {
     day: "numeric",
@@ -515,6 +521,7 @@ async function continueOne(
   const before = await skip();
   if (before) {
     logger.info({ agentId: id, reason: before }, "Revive on restart: no continue prompt");
+    if (before === OWNED_BY_PLUGIN) fail(PLUGIN_OWNED_NOT_CONTINUED);
     return;
   }
   // FU-25: a session with no pool account has no account record to ask, so its limit is read from its own last
@@ -564,8 +571,8 @@ export function defaultSessions(deps: ReviveDeps): ReviveSessions {
     // A pool-account session has a binding: limit-resume continues it.
     if (mode === "continue" && agentManager.getLimitResumeBinding(id) !== null)
       return "pool account: limit-resume continues it";
-    // The owner continues its sessions through the controller restart queue and its journal checks.
-    if (!agentManager.canRunUnscopedLimitResume(id)) return "owned by a trusted plugin";
+    // The owner's fence: the daemon does not continue it. A cut-off turn is named to its lead instead (FU-103).
+    if (!agentManager.canRunUnscopedLimitResume(id)) return OWNED_BY_PLUGIN;
     if (live.labels[LIMIT_RESUME_OPT_OUT_LABEL] === "off") return "opted out";
     return null;
   };
