@@ -273,6 +273,7 @@ export const PersistedConfigSchema = z
             enabled: z.boolean().optional(),
             swapUsedPercent: z.number().min(1).max(100).optional(),
             freeMemoryPercent: z.number().min(1).max(100).optional(),
+            swapDiskFreeGB: z.number().min(0).max(1000).optional(),
           })
           .strict()
           .optional(),

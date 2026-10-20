@@ -862,6 +862,10 @@ test("daemon.memoryGuard is optional, never defaulted into the file, and rejects
       ?.memoryGuard,
   ).toEqual({ swapUsedPercent: 70 });
   expect(
+    PersistedConfigSchema.parse({ daemon: { memoryGuard: { swapDiskFreeGB: 20 } } }).daemon
+      ?.memoryGuard,
+  ).toEqual({ swapDiskFreeGB: 20 });
+  expect(
     PersistedConfigSchema.safeParse({ daemon: { memoryGuard: { swapUsed: 70 } } }).success,
   ).toBe(false);
 });
