@@ -16838,3 +16838,148 @@ test("FU-425: an archive after that refresh archives the record and closes the p
     await fixture.cleanup();
   }
 });
+
+// FU-441: follow-ups of the FU-425 review.
+interface TimelineReplayInternals {
+  recordTimeline(agentId: string, item: AgentTimelineItem): Promise<unknown>;
+  resetTimelineForReplay(
+    agentId: string,
+    history: { item: AgentTimelineItem; timestamp?: string }[],
+  ): Promise<unknown[]>;
+}
+
+function assistantText(text: string): AgentTimelineItem {
+  return { type: "assistant_message", text };
+}
+
+test("FU-441: a timeline failure from a write that raced a close does not break the next resume", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-fu441-stale-"));
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    durableTimelineStore: new FileAgentTimelineStore(join(workdir, ".journal")),
+    logger,
+  });
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+    await manager.closeAgent(agent.id);
+    // The write of an event that started before the close runs after the runtime left the store.
+    await (manager as unknown as TimelineReplayInternals)
+      .recordTimeline(agent.id, assistantText("late"))
+      .catch(() => undefined);
+    await manager.resumeAgentFromPersistence(
+      { provider: "codex", sessionId: "fu441-stale" },
+      { cwd: workdir },
+      agent.id,
+    );
+    await expect(
+      manager.appendTimelineItem(agent.id, assistantText("after resume")),
+    ).resolves.toEqual({ seq: expect.any(Number), epoch: expect.any(String) });
+  } finally {
+    await manager.closeAgent(manager.listAgents()[0]?.id ?? "").catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("FU-441: the dropped-event info line keeps the error", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-fu441-log-"));
+  const eventLogger = createTestLogger();
+  const infos = vi.spyOn(eventLogger, "info");
+  const client = new SessionRecordingAgentClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger: eventLogger });
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+    const internal = manager as unknown as {
+      agents: Map<string, unknown>;
+      dispatchSessionEvent(): Promise<void>;
+    };
+    const live = internal.agents.get(agent.id);
+    const fault = new Error("provider fault");
+    vi.spyOn(internal, "dispatchSessionEvent").mockImplementationOnce(async () => {
+      internal.agents.delete(agent.id);
+      throw fault;
+    });
+    client.sessions[0]!.pushEvent({
+      type: "timeline",
+      provider: "codex",
+      item: assistantText("late"),
+    });
+    await manager.flush();
+    const dropped = infos.mock.calls.find((call) =>
+      call.includes("Dropped a session event for an agent that is no longer loaded"),
+    );
+    expect(dropped?.[0]).toMatchObject({ err: fault, agentId: agent.id });
+    internal.agents.set(agent.id, live);
+    await manager.closeAgent(agent.id);
+  } finally {
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("FU-441: a live row written during a replay comes after the replayed rows", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-fu441-order-"));
+  const store = new FileAgentTimelineStore(join(workdir, ".journal"));
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    durableTimelineStore: store,
+    logger,
+  });
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+    const internal = manager as unknown as TimelineReplayInternals;
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const deleteAgent = store.deleteAgent.bind(store);
+    vi.spyOn(store, "deleteAgent").mockImplementationOnce(async (id) => {
+      entered.resolve();
+      await release.promise;
+      await deleteAgent(id);
+    });
+    const replay = internal.resetTimelineForReplay(agent.id, [
+      { item: assistantText("history 1") },
+      { item: assistantText("history 2") },
+    ]);
+    await entered.promise;
+    // The replay is in its queued write. A live row arrives now and waits behind it.
+    const live = internal.recordTimeline(agent.id, assistantText("live"));
+    release.resolve();
+    await Promise.all([replay, live]);
+    const rows = await store.getCommittedRows(agent.id);
+    expect(rows.map((row) => (row.item as { text: string }).text)).toEqual([
+      "history 1",
+      "history 2",
+      "live",
+    ]);
+    expect(rows.map((row) => row.seq)).toEqual([1, 2, 3]);
+  } finally {
+    await manager.closeAgent(manager.listAgents()[0]?.id ?? "").catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("FU-441: a failed rebuild keeps the old rows and leaves the timeline writable", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-fu441-rebuild-"));
+  const store = new FileAgentTimelineStore(join(workdir, ".journal"));
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    durableTimelineStore: store,
+    logger,
+  });
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+    await manager.appendTimelineItem(agent.id, assistantText("kept"));
+    vi.spyOn(store, "getCommittedRows").mockRejectedValueOnce(new Error("disk read failed"));
+    const internal = manager as unknown as TimelineReplayInternals;
+    await expect(internal.resetTimelineForReplay(agent.id, [])).rejects.toThrow("disk read failed");
+    await expect(
+      manager.appendTimelineItem(agent.id, assistantText("after failure")),
+    ).resolves.toEqual({ seq: expect.any(Number), epoch: expect.any(String) });
+    const rows = await store.getCommittedRows(agent.id);
+    expect(rows.map((row) => (row.item as { text: string }).text)).toEqual([
+      "kept",
+      "after failure",
+    ]);
+  } finally {
+    await manager.closeAgent(manager.listAgents()[0]?.id ?? "").catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
