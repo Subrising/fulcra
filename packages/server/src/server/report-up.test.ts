@@ -2,14 +2,15 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { REPORTS_TO_LABEL, REPORTS_TO_OWNER, SEAT_LABEL } from "@getpaseo/protocol/agent-labels";
 import type { AgentManager, AgentManagerEvent } from "./agent/agent-manager.js";
-import type { AgentStorage } from "./agent/agent-storage.js";
+import { AgentStorage, type FinishNotice } from "./agent/agent-storage.js";
 import { createTestLogger } from "../test-utils/test-logger.js";
 import {
   COALESCE_WINDOW_MS,
   COMBINED_LIST_LIMIT,
+  FINISH_RETRY_BASE_MS,
   NUDGE_MESSAGE_PREFIX,
   PERMISSION_COMMAND_CHARS,
   PERMISSION_NOTICE_GRACE_MS,
@@ -2735,3 +2736,223 @@ test.each(["DONE", "BLOCKED"])(
     }
   },
 );
+
+describe("FU-424 a lost finish notice reaches the lead once", () => {
+  const MESSAGE_ID = "paseo-notify:fu424-notice";
+  const roots: string[] = [];
+
+  afterEach(() => {
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  async function ownedFixture(input: {
+    notice: Pick<FinishNotice, "status">;
+    leadLifecycle?: string;
+    leadHasMessage?: boolean;
+    deliver?: (attempt: number) => void;
+  }) {
+    const root = mkdtempSync(join(tmpdir(), "fu424-"));
+    roots.push(root);
+    const storage = new AgentStorage(join(root, "agents"), createTestLogger());
+    const chats = new Map<string, FakeChat>([
+      [LEAD, { id: LEAD, title: "Lead", labels: {}, lifecycle: input.leadLifecycle ?? "idle" }],
+      [
+        WORKER,
+        {
+          id: WORKER,
+          title: "Worker",
+          labels: { [REPORTS_TO_LABEL]: LEAD },
+          lifecycle: "idle",
+          lastMessage: "DONE checked",
+        },
+      ],
+    ]);
+    const at = new Date().toISOString();
+    for (const chat of chats.values())
+      await storage.upsert({
+        id: chat.id,
+        provider: "claude",
+        cwd: root,
+        createdAt: at,
+        updatedAt: at,
+        title: chat.title,
+        labels: chat.labels,
+        lastStatus: "idle",
+        ...(chat.id === WORKER
+          ? {
+              finishNotice: {
+                parentId: LEAD,
+                owner: "report-up" as const,
+                messageId: MESSAGE_ID,
+                ...(input.notice.status === "armed"
+                  ? {}
+                  : { turnId: "turn-1", reason: "finished" as const }),
+                ...input.notice,
+              },
+            }
+          : {}),
+      });
+    const delivered: Array<{ leadId: string; messageId?: string }> = [];
+    let attempts = 0;
+    const manager = {
+      getAgent: (id: string) => chats.get(id) ?? null,
+      listAgents: () => [...chats.values()],
+      hasInFlightRun: (id: string) => chats.get(id)?.lifecycle === "running",
+      getPendingPermissions: () => [],
+      getLastAssistantMessage: async (id: string) => chats.get(id)?.lastMessage ?? null,
+      nativeReportOwnsFinish: () => false,
+      archiveLedgerTransferOffer: async () => "",
+      nativeFinishReceiptStatus: async () => "missing",
+      // The lead's timeline holds every notice that reached it.
+      hasSubmittedFinishMessageNow: (leadId: string, messageId: string) =>
+        input.leadHasMessage === true ||
+        delivered.some((item) => item.leadId === leadId && item.messageId === messageId),
+    } as unknown as AgentManager;
+    const timers: Array<{ run: () => void; ms: number }> = [];
+    const service = new ReportUpService({
+      agentManager: manager,
+      agentStorage: storage,
+      isEnabled: () => false,
+      isOtherEnabled: () => true,
+      isNudgeEnabled: () => false,
+      localServerId: "srv_local",
+      logger: createTestLogger(),
+      readLedger: () => [],
+      setTimer: (run, ms) => timers.push({ run, ms }),
+      deliver: async (leadId, _prompt, messageId) => {
+        attempts += 1;
+        input.deliver?.(attempts);
+        delivered.push({ leadId, messageId });
+      },
+    });
+    const stream = (agentId: string, event: object) =>
+      service.onEvent({ type: "agent_stream", agentId, event } as AgentManagerEvent);
+    return {
+      service,
+      delivered,
+      attempts: () => attempts,
+      setLeadLifecycle: (lifecycle: string) => (chats.get(LEAD)!.lifecycle = lifecycle),
+      finishTurn: (agentId: string) => {
+        stream(agentId, { type: "turn_started", provider: "claude" });
+        stream(agentId, {
+          type: "timeline",
+          provider: "claude",
+          item: { type: "user_message", text: "do the task" },
+        });
+        stream(agentId, { type: "turn_completed", provider: "claude" });
+      },
+      idle: (agentId: string) =>
+        service.onEvent({
+          type: "agent_state",
+          agent: { ...chats.get(agentId)!, lifecycle: "idle" },
+        } as unknown as AgentManagerEvent),
+      retryDelays: () =>
+        timers.filter((timer) => timer.ms >= FINISH_RETRY_BASE_MS).map((timer) => timer.ms),
+      runRetries: () => {
+        for (const timer of timers.splice(0)) timer.run();
+      },
+      notice: () => storage.getFinishNotice(WORKER, MESSAGE_ID),
+    };
+  }
+
+  const refuseFirst = (attempt: number) => {
+    if (attempt === 1) throw new Error("Active turn changed before steering could be delivered");
+  };
+  // File syncs can be slow on a loaded Windows host.
+  const until = async (check: () => unknown) => {
+    const { vi } = await import("vitest");
+    return vi.waitFor(check, { timeout: 5000 });
+  };
+  const quiet = () => new Promise((resolve) => setTimeout(resolve, 50));
+
+  test("a refusal while the lead is already idle is retried, and the lead gets the notice once", async () => {
+    const f = await ownedFixture({ notice: { status: "armed" }, deliver: refuseFirst });
+    try {
+      f.finishTurn(WORKER);
+      await until(async () =>
+        expect(await f.notice()).toMatchObject({ status: "pending", retryAfterRefusal: true }),
+      );
+      expect(f.delivered).toEqual([]);
+      // The lead was idle before the refusal, so no new idle event comes. The retry must not wait for one.
+      await until(() => expect(f.retryDelays()).toEqual([FINISH_RETRY_BASE_MS]));
+      f.runRetries();
+      await until(async () => expect(await f.notice()).toMatchObject({ status: "delivered" }));
+      f.idle(LEAD);
+      f.runRetries();
+      await f.service.recoverOwnedFinishes();
+      await quiet();
+      expect(f.delivered).toEqual([{ leadId: LEAD, messageId: MESSAGE_ID }]);
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  test("a retry that is refused again is retried again after a longer wait", async () => {
+    const f = await ownedFixture({
+      notice: { status: "armed" },
+      deliver: (attempt) => {
+        if (attempt <= 2) throw new Error("Active turn changed before steering could be delivered");
+      },
+    });
+    try {
+      f.finishTurn(WORKER);
+      await until(() => expect(f.retryDelays()).toEqual([FINISH_RETRY_BASE_MS]));
+      f.runRetries();
+      await until(() => expect(f.retryDelays()).toEqual([FINISH_RETRY_BASE_MS * 2]));
+      f.runRetries();
+      await until(async () => expect(await f.notice()).toMatchObject({ status: "delivered" }));
+      expect(f.attempts()).toBe(3);
+      expect(f.delivered).toEqual([{ leadId: LEAD, messageId: MESSAGE_ID }]);
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  test("a refusal while the lead is busy is sent from storage on the next lead idle event", async () => {
+    const f = await ownedFixture({
+      notice: { status: "armed" },
+      leadLifecycle: "running",
+      deliver: refuseFirst,
+    });
+    try {
+      f.finishTurn(WORKER);
+      await until(async () =>
+        expect(await f.notice()).toMatchObject({ status: "pending", retryAfterRefusal: true }),
+      );
+      expect(f.retryDelays()).toEqual([]);
+      f.setLeadLifecycle("idle");
+      f.idle(LEAD);
+      await until(async () => expect(await f.notice()).toMatchObject({ status: "delivered" }));
+      f.idle(LEAD);
+      await quiet();
+      expect(f.delivered).toEqual([{ leadId: LEAD, messageId: MESSAGE_ID }]);
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  test("a notice left sending at restart is sent once with the same id when the lead has no copy", async () => {
+    const f = await ownedFixture({ notice: { status: "sending" } });
+    try {
+      await f.service.recoverOwnedFinishes();
+      await f.service.recoverOwnedFinishes();
+      expect(await f.notice()).toMatchObject({ status: "delivered", deliveredBy: "report-up" });
+      expect(f.delivered).toEqual([{ leadId: LEAD, messageId: MESSAGE_ID }]);
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  test("an unknown notice that the lead already has is closed without a second send", async () => {
+    const f = await ownedFixture({ notice: { status: "unknown" }, leadHasMessage: true });
+    try {
+      f.idle(LEAD);
+      await until(async () =>
+        expect(await f.notice()).toMatchObject({ status: "delivered", deliveredBy: "report-up" }),
+      );
+      expect(f.delivered).toEqual([]);
+    } finally {
+      f.service.stop();
+    }
+  });
+});
