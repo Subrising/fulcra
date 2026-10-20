@@ -148,8 +148,17 @@ export async function runPluginLinksRegression({
   expect(popups).toHaveLength(0);
   await page.screenshot({ path: path.join(artifactDir, "plugin-workspace-browser.png") });
   await pluginEntry.click();
-  await page.getByRole("button", { name: "Open remote workspace browser", exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`/h/plugin-links-remote/workspace/${remoteWorkspaceId}`));
+  // The remote host is registered just before a reload. The button can appear before the host
+  // connects, so wait as long as the other waits in this file.
+  await page
+    .getByRole("button", { name: "Open remote workspace browser", exact: true })
+    .click({ timeout: 60_000 });
+  await expect(page).toHaveURL(
+    new RegExp(`/h/plugin-links-remote/workspace/${remoteWorkspaceId}`),
+    {
+      timeout: 60_000,
+    },
+  );
   await expectPresentedBrowser(page, url);
   await page.screenshot({ path: path.join(artifactDir, "plugin-remote-workspace-browser.png") });
   return {
