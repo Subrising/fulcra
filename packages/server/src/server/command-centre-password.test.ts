@@ -40,7 +40,6 @@ describe("readCommandCentrePasswordFile", () => {
     ["whitespace", "  \n\t\n", /empty/],
     ["too short", "short-secret", /shorter than 16/],
     ["inner whitespace", "fake-only secret-0123456789", /whitespace/],
-    ["too long", "x".repeat(1025), /too long/],
   ])("refuses a %s file and never shows its content", (_name, content, reason) => {
     writeSecret(content);
     let message = "";
@@ -52,6 +51,39 @@ describe("readCommandCentrePasswordFile", () => {
     expect(message).toMatch(reason);
     expect(message).toContain(file);
     if (content.trim()) expect(message).not.toContain(content.trim());
+  });
+
+  test("accepts 72 UTF-8 bytes and refuses 73 (bcrypt limit)", () => {
+    writeSecret("a".repeat(72));
+    expect(readCommandCentrePasswordFile(file)).toBe("a".repeat(72));
+    writeSecret("a".repeat(73));
+    let message = "";
+    try {
+      readCommandCentrePasswordFile(file);
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toMatch(/longer than 72 bytes/);
+    expect(message).toContain(file);
+    expect(message).not.toContain("a".repeat(73));
+    // 37 two-byte characters are 74 bytes but only 37 characters.
+    writeSecret("\u00e9".repeat(37));
+    expect(() => readCommandCentrePasswordFile(file)).toThrow(/longer than 72 bytes/);
+  });
+
+  test("on Windows a file outside the user profile is refused", () => {
+    writeSecret(SECRET);
+    const win = { platform: "win32", homeDir: "C:\\Users\\fixture" } as const;
+    expect(() => readCommandCentrePasswordFile("E:\\daemon\\command-centre-password", win)).toThrow(
+      /not under the user profile/,
+    );
+    // Inside the profile the check passes and the read goes on (this fixture path does not exist).
+    expect(() =>
+      readCommandCentrePasswordFile("C:\\Users\\fixture\\app\\command-centre-password", win),
+    ).toThrow(/unreadable/);
+    expect(
+      readCommandCentrePasswordFile(file, { platform: "win32", homeDir: path.dirname(dir) }),
+    ).toBe(SECRET);
   });
 
   test("refuses a directory", () => {

@@ -321,13 +321,18 @@ async function desktopCommandCentreCredential(create = false): Promise<string | 
   const settings = await getDesktopSettingsStore().get();
   if (settings.daemon.commandCentreEnabled !== true) return null;
   const home = getPaseoHome();
-  // A previously configured daemon password remains its owner's responsibility.
-  if (loadPersistedConfig(home).daemon?.auth?.password) return null;
+  const configuredPassword = Boolean(loadPersistedConfig(home).daemon?.auth?.password);
   // FU-437: a shared password file in the home gives the app, a script start and remote controllers one password.
   // A bad file throws; it never falls back to a generated credential or to no auth.
   const shared = readCommandCentrePasswordFile(path.join(home, COMMAND_CENTRE_PASSWORD_FILE_NAME), {
     allowMissing: true,
   });
+  if (shared !== null && configuredPassword)
+    throw new Error(
+      `${COMMAND_CENTRE_PASSWORD_FILE_NAME} conflicts with a configured daemon password. Set only one.`,
+    );
+  // A previously configured daemon password remains its owner's responsibility.
+  if (configuredPassword) return null;
   return commandCentreCredential({
     enabled: settings.daemon.commandCentreEnabled === true,
     home,

@@ -1,4 +1,6 @@
 import { readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
 import { hashDaemonPassword, type DaemonAuthConfig } from "./auth.js";
 
 /** Names the shared password file for a script-started daemon. The password itself never goes in env or argv. */
@@ -6,7 +8,9 @@ export const COMMAND_CENTRE_PASSWORD_FILE_ENV = "FULCRA_COMMAND_CENTRE_PASSWORD_
 /** The desktop app uses this file in the daemon home, when it exists, instead of a generated credential. */
 export const COMMAND_CENTRE_PASSWORD_FILE_NAME = "command-centre-password";
 export const COMMAND_CENTRE_PASSWORD_MIN_LENGTH = 16;
-const MAX_LENGTH = 1024;
+/** bcrypt reads only the first 72 bytes, so a longer password would match a token that differs after byte 72. */
+export const COMMAND_CENTRE_PASSWORD_MAX_BYTES = 72;
+const MAX_FILE_BYTES = 4096;
 
 /**
  * Reads the shared Command Centre password. Every fault throws: a bad file must never start a daemon without auth.
@@ -14,9 +18,19 @@ const MAX_LENGTH = 1024;
  */
 export function readCommandCentrePasswordFile(
   filePath: string,
-  options: { allowMissing?: boolean; platform?: string } = {},
+  options: { allowMissing?: boolean; platform?: string; homeDir?: string } = {},
 ): string | null {
   const fail = (reason: string) => Error(`Command Centre password file ${filePath}: ${reason}`);
+  const platform = options.platform ?? process.platform;
+  // Windows has no mode bits. A file outside the user profile inherits drive rights that other local users can read.
+  if (platform === "win32") {
+    const relative = path.win32.relative(
+      path.win32.resolve(options.homeDir ?? homedir()),
+      path.win32.resolve(filePath),
+    );
+    if (relative.startsWith("..") || path.win32.isAbsolute(relative))
+      throw fail("not under the user profile (on Windows the daemon home must be under it)");
+  }
   let stats: ReturnType<typeof statSync>;
   try {
     stats = statSync(filePath);
@@ -27,9 +41,9 @@ export function readCommandCentrePasswordFile(
   }
   if (!stats.isFile()) throw fail("not a file");
   // POSIX modes are meaningful; Windows protects the file with the user profile ACL instead.
-  if ((options.platform ?? process.platform) !== "win32" && (stats.mode & 0o077) !== 0)
+  if (platform !== "win32" && (stats.mode & 0o077) !== 0)
     throw fail("readable by other users (run chmod 600)");
-  if (stats.size > MAX_LENGTH * 4) throw fail("too long");
+  if (stats.size > MAX_FILE_BYTES) throw fail("too long");
   let text: string;
   try {
     text = readFileSync(filePath, "utf8");
@@ -40,8 +54,9 @@ export function readCommandCentrePasswordFile(
   if (!password) throw fail("empty");
   if (password.length < COMMAND_CENTRE_PASSWORD_MIN_LENGTH)
     throw fail(`shorter than ${COMMAND_CENTRE_PASSWORD_MIN_LENGTH} characters`);
-  if (password.length > MAX_LENGTH) throw fail("too long");
   if (/\s/.test(password)) throw fail("contains whitespace");
+  if (Buffer.byteLength(password, "utf8") > COMMAND_CENTRE_PASSWORD_MAX_BYTES)
+    throw fail(`longer than ${COMMAND_CENTRE_PASSWORD_MAX_BYTES} bytes (the bcrypt limit)`);
   return password;
 }
 

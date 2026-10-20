@@ -804,6 +804,20 @@ describe("owned startup and Settings recovery", () => {
       expect(mocks.keychainGet).not.toHaveBeenCalled();
     },
   );
+  it("FU-437 a password file and a configured daemon password refuse the start", async () => {
+    writeFileSync(
+      path.join(root, "command-centre-password"),
+      "fake-only-shared-secret-0123456789",
+      {
+        mode: 0o600,
+      },
+    );
+    mocks.config = { daemon: { auth: { password: "fake-only-configured" } } };
+    await expect(manager.createDaemonCommandHandlers().start_desktop_daemon()).rejects.toThrow(
+      /Set only one/,
+    );
+    expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
+  });
   it("FU-437 an unreadable password file refuses the start", async () => {
     mkdirSync(path.join(root, "command-centre-password"));
     await expect(manager.createDaemonCommandHandlers().start_desktop_daemon()).rejects.toThrow(
