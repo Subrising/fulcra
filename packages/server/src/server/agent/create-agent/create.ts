@@ -244,14 +244,14 @@ async function armCreatedFinishNotice(
   resolved: ResolvedCreateAgent,
   snapshot: ManagedAgent,
 ): Promise<FinishNotice | null> {
-  if (
-    input.kind !== "mcp" ||
-    !input.notifyOnFinish ||
-    !input.callerAgentId ||
-    input.detached ||
-    !resolved.prompt
-  )
-    return null;
+  if (!resolved.prompt) return null;
+  // FU-173: a CLI create from inside a session (`fulcra run` from a lead) gets the same finish notice as the native
+  // tool, so the lead wakes on any route. A create with no caller session (the app, a detached run) arms none.
+  if (input.kind === "session")
+    return input.parentAgentId
+      ? dependencies.agentStorage.armFinishNotice(snapshot, input.parentAgentId, "report-up")
+      : null;
+  if (!input.notifyOnFinish || !input.callerAgentId || input.detached) return null;
   return dependencies.agentStorage.armFinishNotice(
     snapshot,
     input.callerAgentId,
