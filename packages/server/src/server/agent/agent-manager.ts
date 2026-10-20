@@ -4631,7 +4631,7 @@ export class AgentManager {
       },
       "agent.manager.close.start",
     );
-    await this.drainSessionEvents(agentId);
+    await this.drainQueuedSessionEvents(agentId);
     // Retain ownership until shutdown succeeds. A failed close may still own a
     // native writer, so publishing a resumable closed snapshot would orphan it.
     this.invokeReportRelaunchGuard(requireRetiringIdentity);
@@ -5055,7 +5055,10 @@ export class AgentManager {
             agentId,
             "archive",
             undefined,
-            () => this.archiveAgentUnlocked(agentId),
+            (lockedHandle) =>
+              this.agents.has(agentId)
+                ? this.archiveAgentUnlocked(agentId)
+                : this.archiveRetiredAgentUnlocked(agentId, lockedHandle),
             commandPayload("archive"),
             operationHandle,
           ),
@@ -5064,6 +5067,20 @@ export class AgentManager {
       commandPayload("archive"),
       handle,
     );
+  }
+
+  // FU-425: callers cancel the run before this lane. A concurrent archive or reload can retire the runtime
+  // meanwhile; archive the stored record then, instead of failing with "Unknown agent".
+  private async archiveRetiredAgentUnlocked(
+    agentId: string,
+    handle?: TrustedOperationHandle,
+  ): Promise<{ archivedAt: string }> {
+    const record = await this.requireRegistry().get(agentId);
+    if (!record) throw new Error(`Unknown agent '${agentId}'`);
+    if (record.archivedAt) return { archivedAt: record.archivedAt };
+    const archived = await this.archiveSnapshotUnlocked(agentId, new Date().toISOString(), handle);
+    if (!archived.archivedAt) throw new Error(`Agent missing archivedAt after archive: ${agentId}`);
+    return { archivedAt: archived.archivedAt };
   }
 
   private async archiveAgentUnlocked(
@@ -7636,6 +7653,19 @@ export class AgentManager {
     this.timelineFailures.delete(agentId);
   }
 
+  // FU-425: a turn that does not stop writes rows while the replay rebuilds the timeline. Rebuild it as one
+  // queued write, so no live write sees the agent without a timeline and records "Unknown agent" for good.
+  private async resetTimelineForReplay(agentId: string): Promise<void> {
+    await this.drainTimelineWrites(agentId);
+    this.timelineFailures.delete(agentId);
+    await this.queueTimelineWrite(agentId, async () => {
+      await this.durableTimelineStore?.deleteAgent(agentId);
+      const seed = await this.loadCommittedTimelineSeed(agentId, new Date());
+      this.timelineStore.delete(agentId);
+      this.timelineStore.initialize(agentId, seed);
+    });
+  }
+
   async getLastAssistantMessage(agentId: string): Promise<string | null> {
     const agent = this.agents.get(agentId);
     if (!agent) {
@@ -8483,6 +8513,14 @@ export class AgentManager {
         return;
       })
       .catch((err) => {
+        // FU-425: a close or archive can retire the agent while its event waits; that is not a failure.
+        if (!this.agents.has(agentId)) {
+          this.logger.info(
+            { agentId, eventType: event.type },
+            "Dropped a session event for an agent that is no longer loaded",
+          );
+          return;
+        }
         this.logger.error(
           { err, agentId, eventType: event.type },
           "Failed to process session event",
@@ -8503,6 +8541,12 @@ export class AgentManager {
    * asynchronous session queue. Apply those events before committing the mutation's explicit
    * manager state so call order remains authoritative.
    */
+  // FU-425: a turn that does not stop keeps adding events, so close would wait for an empty queue for ever.
+  // Close applies only the events queued before it; later ones stop when the runtime unsubscribes.
+  private async drainQueuedSessionEvents(agentId: string): Promise<void> {
+    await this.sessionEventTails.get(agentId);
+  }
+
   private async drainSessionEvents(agentId: string): Promise<void> {
     while (true) {
       const tail = this.sessionEventTails.get(agentId);
@@ -8727,12 +8771,7 @@ export class AgentManager {
     }
 
     this.agentStreamCoalescer.flushAndDiscard(agent.id);
-    await this.deleteCommittedTimeline(agent.id);
-    this.timelineStore.delete(agent.id);
-    this.timelineStore.initialize(
-      agent.id,
-      await this.loadCommittedTimelineSeed(agent.id, new Date()),
-    );
+    await this.resetTimelineForReplay(agent.id);
     agent.historyPrimed = true;
 
     for (const event of this.providerSubagents.deleteParent(agent.id)) {
@@ -8809,12 +8848,7 @@ export class AgentManager {
 
     // The replay is the timeline, so drop the rows a previous hydration committed.
     // Keeping them would leave getTimelineRows reading one copy per hydration.
-    await this.deleteCommittedTimeline(agent.id);
-    this.timelineStore.delete(agent.id);
-    this.timelineStore.initialize(
-      agent.id,
-      await this.loadCommittedTimelineSeed(agent.id, new Date()),
-    );
+    await this.resetTimelineForReplay(agent.id);
 
     const timelineEvents: Array<{
       event: Extract<AgentStreamEvent, { type: "timeline" }>;

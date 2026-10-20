@@ -16611,3 +16611,230 @@ test.each(["close", "archive"] as const)("H2 resource errors never block %s", as
     rmSync(workdir, { recursive: true, force: true });
   }
 });
+
+test("FU-425: two archives of a session whose turn ignores interrupt both finish and close it once", async () => {
+  const fixture = await createControlledInterruptFixture({
+    name: "fu425-stuck-turn",
+    agentId: "00000000-0000-4000-8000-000000000425",
+    turnId: "stuck-turn",
+    // The provider acknowledges the interrupt, but the turn goes on.
+    interrupt: async () => undefined,
+  });
+  let closeCalls = 0;
+  const close = fixture.session.close.bind(fixture.session);
+  fixture.session.close = async () => {
+    closeCalls += 1;
+    await close();
+  };
+  const stillWorking = setInterval(() => {
+    fixture.session.pushEvent({
+      type: "timeline",
+      provider: "codex",
+      turnId: "stuck-turn",
+      item: { type: "assistant_message", text: "still working" },
+    });
+  }, 20);
+  const dependencies = { agentManager: fixture.manager, agentStorage: fixture.storage, logger };
+  try {
+    await fixture.startForegroundRun();
+    const [first, second] = await Promise.all([
+      archiveSafetyCommand(dependencies, fixture.agentId),
+      archiveSafetyCommand(dependencies, fixture.agentId),
+    ]);
+    const stored = await fixture.storage.get(fixture.agentId);
+    expect(stored?.archivedAt).toEqual(expect.any(String));
+    expect(first.archivedAt).toBe(stored?.archivedAt);
+    expect(second.archivedAt).toBe(stored?.archivedAt);
+    expect(fixture.manager.getAgent(fixture.agentId)).toBeNull();
+    expect(closeCalls).toBe(1);
+  } finally {
+    clearInterval(stillWorking);
+    await fixture.manager.flush();
+    await fixture.storage.flush();
+  }
+});
+
+test("FU-425: an event for an agent that left the manager is dropped with one info line", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-fu425-late-event-"));
+  const eventLogger = createTestLogger();
+  const errors = vi.spyOn(eventLogger, "error");
+  const infos = vi.spyOn(eventLogger, "info");
+  const client = new SessionRecordingAgentClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger: eventLogger });
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+    const internal = manager as unknown as {
+      agents: Map<string, unknown>;
+      dispatchSessionEvent(): Promise<void>;
+    };
+    const live = internal.agents.get(agent.id);
+    // The stuck turn's event is in flight when a close retires the agent.
+    vi.spyOn(internal, "dispatchSessionEvent").mockImplementationOnce(async () => {
+      internal.agents.delete(agent.id);
+      throw new Error(`Unknown agent '${agent.id}'`);
+    });
+    client.sessions[0]!.pushEvent({
+      type: "timeline",
+      provider: "codex",
+      item: { type: "assistant_message", text: "late" },
+    });
+    await manager.flush();
+    expect(errors.mock.calls.some((call) => call.includes("Failed to process session event"))).toBe(
+      false,
+    );
+    expect(
+      infos.mock.calls.filter((call) =>
+        call.includes("Dropped a session event for an agent that is no longer loaded"),
+      ),
+    ).toHaveLength(1);
+    internal.agents.set(agent.id, live);
+    await manager.closeAgent(agent.id);
+  } finally {
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+// FU-425: a Claude turn that does not stop. The provider acknowledges the interrupt, the turn goes on and
+// keeps sending events, and the resumed session goes on with it. Close ends the events, as Claude does.
+class StuckTurnSession extends TestAgentSession {
+  closeCalls = 0;
+  private pump: NodeJS.Timeout | null = null;
+
+  override async startTurn(): Promise<{ turnId: string }> {
+    setTimeout(() => {
+      this.pushEvent({ type: "turn_started", provider: "codex", turnId: "stuck-turn" });
+    }, 0);
+    return { turnId: "stuck-turn" };
+  }
+
+  override async interrupt(): Promise<void> {}
+
+  override async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
+    yield {
+      type: "timeline",
+      provider: "codex",
+      item: { type: "assistant_message", text: "before" },
+    };
+  }
+
+  override async close(): Promise<void> {
+    this.closeCalls += 1;
+    this.stopEvents();
+  }
+
+  keepWorking(): void {
+    this.pump = setInterval(() => {
+      this.pushEvent({
+        type: "timeline",
+        provider: "codex",
+        turnId: "stuck-turn",
+        item: { type: "user_message", text: "still working", messageId: randomUUID() },
+      });
+    }, 1);
+  }
+
+  stopEvents(): void {
+    if (this.pump) clearInterval(this.pump);
+    this.pump = null;
+  }
+}
+
+async function createStuckTurnRefreshFixture(name: string) {
+  const workdir = mkdtempSync(join(tmpdir(), `agent-manager-${name}-`));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const managerLogger = createTestLogger();
+  const errors = vi.spyOn(managerLogger, "error");
+  const sessions: StuckTurnSession[] = [];
+  const open = (cwd: string) => {
+    const session = new StuckTurnSession({ provider: "codex", cwd });
+    session.keepWorking();
+    sessions.push(session);
+    return session;
+  };
+  const client = new (class extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      return open(config.cwd);
+    }
+    override async resumeSession(
+      _handle: AgentPersistenceHandle,
+      config?: Partial<AgentSessionConfig>,
+    ): Promise<AgentSession> {
+      return open(config?.cwd ?? workdir);
+    }
+  })();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: storage,
+    logger: managerLogger,
+    durableTimelineStore: new FileAgentTimelineStore(join(workdir, ".journal")),
+    rescueTimeouts: { interruptSessionMs: 10 },
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+  const run = manager.streamAgent(agent.id, "work until stopped");
+  void (async () => {
+    for await (const _event of run) {
+      // Keep the foreground stream subscribed.
+    }
+  })();
+  await manager.waitForAgentRunStart(agent.id);
+  return {
+    agentId: agent.id,
+    manager,
+    storage,
+    sessions,
+    // The refresh request: stop the run, reload from persistence, then replay the provider history.
+    async refresh(): Promise<void> {
+      await manager.cancelAgentRun(agent.id);
+      await manager.reloadAgentSession(agent.id, undefined, { rehydrateFromDisk: true });
+      await manager.hydrateTimelineFromProvider(agent.id, { broadcast: true });
+    },
+    timelineErrors(): unknown[][] {
+      return errors.mock.calls.filter(
+        (call) =>
+          call.includes("Failed to commit timeline") ||
+          call.includes("Failed to process session event"),
+      );
+    },
+    async cleanup(): Promise<void> {
+      for (const session of sessions) session.stopEvents();
+      for (const live of manager.listAgents()) await manager.closeAgent(live.id);
+      await manager.flush();
+      await storage.flush();
+      rmSync(workdir, { recursive: true, force: true });
+    },
+  };
+}
+
+test("FU-425: a refresh while the turn keeps writing rows resumes the session with its timeline", async () => {
+  const fixture = await createStuckTurnRefreshFixture("fu425-refresh");
+  try {
+    await fixture.refresh();
+    const [original, resumed] = fixture.sessions;
+    expect(original!.closeCalls).toBe(1);
+    expect((fixture.manager.getAgent(fixture.agentId) as { session?: unknown }).session).toBe(
+      resumed,
+    );
+    expect(() => fixture.manager.getTimeline(fixture.agentId)).not.toThrow();
+    resumed!.stopEvents();
+    await fixture.manager.flush();
+    expect(fixture.timelineErrors()).toEqual([]);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("FU-425: an archive after that refresh archives the record and closes the provider", async () => {
+  const fixture = await createStuckTurnRefreshFixture("fu425-refresh-archive");
+  try {
+    await fixture.refresh();
+    await archiveSafetyCommand(
+      { agentManager: fixture.manager, agentStorage: fixture.storage, logger },
+      fixture.agentId,
+    );
+    expect((await fixture.storage.get(fixture.agentId))?.archivedAt).toEqual(expect.any(String));
+    expect(fixture.manager.getAgent(fixture.agentId)).toBeNull();
+    expect(fixture.sessions.map((session) => session.closeCalls)).toEqual([1, 1]);
+  } finally {
+    await fixture.cleanup();
+  }
+});
