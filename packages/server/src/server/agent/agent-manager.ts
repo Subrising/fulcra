@@ -459,6 +459,11 @@ export interface SubscribeOptions {
   replayState?: boolean;
 }
 
+interface TimelineReplayItem {
+  item: AgentTimelineItem;
+  timestamp?: string;
+}
+
 interface HydrateTimelineOptions {
   force?: boolean;
   broadcast?: boolean | (() => boolean);
@@ -4653,6 +4658,8 @@ export class AgentManager {
     this.emitClosedAgent(closedAgent, { persist: false });
     // Closed history reads use the journal. Keep child facts, but release duplicate parent payloads.
     if (this.durableTimelineStore) this.timelineStore.delete(agentId);
+    // A write that raced the close fails with "Unknown agent". That failure must not outlive the runtime.
+    this.timelineFailures.delete(agentId);
     this.logger.trace(
       {
         agentId,
@@ -7648,15 +7655,49 @@ export class AgentManager {
 
   // FU-425: a turn that does not stop writes rows while the replay rebuilds the timeline. Rebuild it as one
   // queued write, so no live write sees the agent without a timeline and records "Unknown agent" for good.
-  private async resetTimelineForReplay(agentId: string): Promise<void> {
+  // FU-441: the history rows go in the same queued write (one bulk insert), so live rows come after the
+  // replay. A failed rebuild is returned to the caller; it does not mark the timeline as failed.
+  private async resetTimelineForReplay(
+    agentId: string,
+    history: readonly TimelineReplayItem[],
+  ): Promise<AgentTimelineRow[]> {
     await this.drainTimelineWrites(agentId);
     this.timelineFailures.delete(agentId);
-    await this.queueTimelineWrite(agentId, async () => {
-      await this.durableTimelineStore?.deleteAgent(agentId);
-      const seed = await this.loadCommittedTimelineSeed(agentId, new Date());
-      this.timelineStore.delete(agentId);
-      this.timelineStore.initialize(agentId, seed);
-    });
+    const outcome = await this.queueTimelineWrite(
+      agentId,
+      async (): Promise<{ rows: AgentTimelineRow[] } | { error: unknown }> => {
+        const previousRows = this.timelineStore.has(agentId)
+          ? this.timelineStore.getRows(agentId)
+          : [];
+        let deleted = false;
+        try {
+          await this.durableTimelineStore?.deleteAgent(agentId);
+          deleted = true;
+          const seed = await this.loadCommittedTimelineSeed(agentId, new Date());
+          this.timelineStore.delete(agentId);
+          this.timelineStore.initialize(agentId, seed);
+          const rows = history.map(({ item, timestamp }) =>
+            this.timelineStore.append(
+              agentId,
+              structuredClone(limitAgentTimelineItemContent(item)),
+              timestamp ? { timestamp } : undefined,
+            ),
+          );
+          await this.durableTimelineStore?.bulkInsert(agentId, rows);
+          return { rows };
+        } catch (error) {
+          // Put the old rows back, so the next write does not meet an empty durable timeline.
+          if (deleted && previousRows.length > 0) {
+            await this.durableTimelineStore
+              ?.bulkInsert(agentId, previousRows)
+              .catch(() => undefined);
+          }
+          return { error };
+        }
+      },
+    );
+    if ("error" in outcome) throw outcome.error;
+    return outcome.rows;
   }
 
   async getLastAssistantMessage(agentId: string): Promise<string | null> {
@@ -8149,6 +8190,7 @@ export class AgentManager {
       | undefined;
   }): Promise<{ durableTimelineHasRows: boolean }> {
     const { agentId, now, options } = params;
+    this.timelineFailures.delete(agentId);
     const timelineAlreadyPrimed = this.timelineStore.has(agentId);
     const explicitTimelineSeed = buildExplicitTimelineSeedForRegister(now, options);
     const shouldSeedFromDurable =
@@ -8509,7 +8551,7 @@ export class AgentManager {
         // FU-425: a close or archive can retire the agent while its event waits; that is not a failure.
         if (!this.agents.has(agentId)) {
           this.logger.info(
-            { agentId, eventType: event.type },
+            { err, agentId, eventType: event.type },
             "Dropped a session event for an agent that is no longer loaded",
           );
           return;
@@ -8764,7 +8806,10 @@ export class AgentManager {
     }
 
     this.agentStreamCoalescer.flushAndDiscard(agent.id);
-    await this.resetTimelineForReplay(agent.id);
+    const historyRows = await this.resetTimelineForReplay(
+      agent.id,
+      historyEvents.map((event) => ({ item: event.item, timestamp: event.timestamp })),
+    );
     agent.historyPrimed = true;
 
     for (const event of this.providerSubagents.deleteParent(agent.id)) {
@@ -8778,12 +8823,8 @@ export class AgentManager {
         this.dispatch({ type: "provider_subagent", event: update });
       }
     }
-    for (const event of historyEvents) {
-      const row = await this.recordTimeline(
-        agent.id,
-        event.item,
-        event.timestamp ? { timestamp: event.timestamp } : undefined,
-      );
+    for (const [index, event] of historyEvents.entries()) {
+      const row = historyRows[index]!;
       if (broadcastTimeline) {
         this.dispatchStream(agent.id, event, {
           seq: row.seq,
@@ -8841,7 +8882,10 @@ export class AgentManager {
 
     // The replay is the timeline, so drop the rows a previous hydration committed.
     // Keeping them would leave getTimelineRows reading one copy per hydration.
-    await this.resetTimelineForReplay(agent.id);
+    const historyRows = await this.resetTimelineForReplay(
+      agent.id,
+      historyEvents.map((event) => ({ item: event.item, timestamp: event.timestamp })),
+    );
 
     const timelineEvents: Array<{
       event: Extract<AgentStreamEvent, { type: "timeline" }>;
@@ -8857,12 +8901,8 @@ export class AgentManager {
       const managerEvent: AgentManagerEvent = { type: "provider_subagent", event: update };
       this.publishHistorySubagentEvent(managerEvent, broadcast, providerSubagentEvents);
     }
-    for (const event of historyEvents) {
-      const row = await this.recordTimeline(
-        agent.id,
-        event.item,
-        event.timestamp ? { timestamp: event.timestamp } : undefined,
-      );
+    for (const [index, event] of historyEvents.entries()) {
+      const row = historyRows[index]!;
       if (deferredBroadcast) {
         timelineEvents.push({ event, row });
       } else if (broadcast) {
