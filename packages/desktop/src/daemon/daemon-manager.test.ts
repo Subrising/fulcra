@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => ({
   startDaemonInstance: vi.fn(),
   stopDaemonInstance: vi.fn(),
   saveOwner: vi.fn(),
+  hashDaemonPassword: vi.fn((_password: string) => "fake-only-hash"),
   logInfo: vi.fn(),
   logError: vi.fn(),
   appLogPath: "",
@@ -92,7 +93,7 @@ vi.mock("@getpaseo/server/configuration", () => ({
   loadPersistedConfig: () => mocks.config,
 }));
 vi.mock("@getpaseo/server/auth", () => ({
-  hashDaemonPassword: () => "fake-only-hash",
+  hashDaemonPassword: mocks.hashDaemonPassword,
   // Stand-in for bcrypt: "hash-of:<secret>" matches <secret>.
   isBearerTokenValidAsync: async (input: { password?: string; token: string | null }) =>
     input.password === `hash-of:${input.token}`,
@@ -752,6 +753,7 @@ describe("owned startup and Settings recovery", () => {
       options.onAcquired(instance);
     });
     mocks.stopDaemonInstance.mockReset();
+    mocks.hashDaemonPassword.mockClear();
     mocks.createNodeEntrypointInvocation
       .mockReset()
       .mockReturnValue({ command: "node", args: [], env: {} });
@@ -759,6 +761,55 @@ describe("owned startup and Settings recovery", () => {
   });
   afterEach(() => {
     rmSync(root, { recursive: true, force: true });
+  });
+  it("FU-437 no password file keeps the generated Keychain credential", async () => {
+    await manager.createDaemonCommandHandlers().start_desktop_daemon();
+    expect(mocks.keychainGet).toHaveBeenCalled();
+    expect(mocks.hashDaemonPassword).toHaveBeenLastCalledWith("fake-only-secret");
+  });
+  it("FU-437 a shared password file in the home is the daemon password", async () => {
+    const shared = "fake-only-shared-secret-0123456789";
+    writeFileSync(path.join(root, "command-centre-password"), `${shared}\n`, { mode: 0o600 });
+    mocks.createNodeEntrypointInvocation.mockReturnValue({
+      command: "node",
+      args: [],
+      env: { FULCRA_COMMAND_CENTRE_PASSWORD_FILE: "/fixture/ambient" },
+    });
+    await manager.createDaemonCommandHandlers().start_desktop_daemon();
+    expect(mocks.keychainGet).not.toHaveBeenCalled();
+    expect(mocks.keychainSet).not.toHaveBeenCalled();
+    expect(mocks.hashDaemonPassword).toHaveBeenCalledWith(shared);
+    const env = mocks.startDaemonInstance.mock.lastCall?.[0].env;
+    expect(env).toMatchObject({
+      FULCRA_COMMAND_CENTRE: "1",
+      FULCRA_COMMAND_CENTRE_AUTH_HASH: "fake-only-hash",
+    });
+    expect(env.FULCRA_COMMAND_CENTRE_PASSWORD_FILE).toBeUndefined();
+    expect(JSON.stringify([mocks.logInfo.mock.calls, mocks.logError.mock.calls])).not.toContain(
+      shared,
+    );
+  });
+  it.each([
+    ["empty", "", /empty/],
+    ["whitespace", " \n", /empty/],
+    ["too short", "short-secret", /shorter than 16/],
+  ])(
+    "FU-437 password file (%s) refuses the start with no fallback",
+    async (_name, content, reason) => {
+      writeFileSync(path.join(root, "command-centre-password"), content, { mode: 0o600 });
+      await expect(manager.createDaemonCommandHandlers().start_desktop_daemon()).rejects.toThrow(
+        reason,
+      );
+      expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
+      expect(mocks.keychainGet).not.toHaveBeenCalled();
+    },
+  );
+  it("FU-437 an unreadable password file refuses the start", async () => {
+    mkdirSync(path.join(root, "command-centre-password"));
+    await expect(manager.createDaemonCommandHandlers().start_desktop_daemon()).rejects.toThrow(
+      /Command Centre password file .*not a file/,
+    );
+    expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
   });
   it("first enable proves stopped before creating and verifying its credential", async () => {
     mocks.keychainGet.mockResolvedValueOnce(null).mockResolvedValue("a".repeat(64));

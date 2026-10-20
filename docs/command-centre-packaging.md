@@ -14,6 +14,16 @@ Use a generated daemon password stored in a dedicated `ai.fulcra.command-centre.
 
 Do not replace an existing user-configured daemon credential. Keychain failures must leave the setting disabled and show an actionable error. Automated verification uses a fake Keychain or dedicated `ai.fulcra.test.*` items, never a user's real items. Paired-device authentication is a later feature.
 
+### Shared password file for script starts
+
+A daemon that a script starts (a boot or recovery task) has no Command Centre unless the script turns it on. To give the app, the script and remote controllers one password, put it in a file named `command-centre-password` in the daemon home. When this file exists, the app uses it instead of the generated Keychain or safeStorage credential, and passes only its bcrypt hash to the worker.
+
+1. Write the password (16 to 1024 characters, no spaces) on one line to `<PASEO_HOME>/command-centre-password`. On macOS and Linux, run `chmod 600` on it. On Windows, keep it in the user profile.
+2. In the script, set `FULCRA_COMMAND_CENTRE=1` and `FULCRA_COMMAND_CENTRE_PASSWORD_FILE=<PASEO_HOME>/command-centre-password`, then run `paseo daemon run`.
+3. Give remote controllers the same password as their saved secret for this host.
+
+Never put the password itself in an environment variable or on the command line. An empty, short, unreadable or group-readable file stops the start with an error that names the file; there is no fallback to a generated password or to no auth. The file conflicts with a `daemon.auth.password` in config: set only one. The reader is `packages/server/src/server/command-centre-password.ts`.
+
 ## Release boundary
 
 Build controller dependencies against the same in-tree protocol/plugin/client commit as the app. No SDK publish is needed. Bundle dependencies rather than resolving through ancestor or user-installed node_modules. Keep private state in the daemon home, outside the immutable app resources, so replacing the bundle preserves it.
