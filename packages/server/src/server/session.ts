@@ -6889,7 +6889,7 @@ export class Session {
       logger: this.sessionLogger,
     }).archivePending(agentId);
     return {
-      ...(await this.agentManager.getArchiveProtection(agentId)),
+      ...(await this.agentManager.getArchiveProtection(agentId, { forSnapshot: true })),
       inFlight:
         this.agentManager.hasInFlightRun(agentId) ||
         Boolean(current?.pendingReplacement) ||

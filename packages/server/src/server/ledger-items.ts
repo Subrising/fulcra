@@ -82,6 +82,28 @@ export async function readOpenLedgerRows(dir: string, strict = false): Promise<L
   return rows;
 }
 
+// FU-423: a session snapshot (fetch_agent) reports archive protection for display. Hundreds of snapshots after a
+// restart each listed and read every project ledger again. Snapshots share one read per directory for this long;
+// an in-flight read is joined. The archive and restore actions themselves still read fresh.
+export const LEDGER_SNAPSHOT_TTL_MS = 2_000;
+const sharedLedgerReads = new Map<string, { at: number; rows: Promise<LedgerRow[]> }>();
+export function readOpenLedgerRowsShared(
+  dir: string,
+  strict = false,
+  now = Date.now(),
+): Promise<LedgerRow[]> {
+  const key = `${strict ? "strict" : "lenient"}:${dir}`;
+  const hit = sharedLedgerReads.get(key);
+  if (hit && now - hit.at >= 0 && now - hit.at < LEDGER_SNAPSHOT_TTL_MS) return hit.rows;
+  const rows = readOpenLedgerRows(dir, strict);
+  sharedLedgerReads.set(key, { at: now, rows });
+  // A failed read is not shared: the next snapshot tries again.
+  rows.catch(() => {
+    if (sharedLedgerReads.get(key)?.rows === rows) sharedLedgerReads.delete(key);
+  });
+  return rows;
+}
+
 /**
  * Match the lead title, full ID, short ID in brackets, or owner-selected project label.
  */
