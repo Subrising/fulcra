@@ -170,7 +170,7 @@ import {
   findRoleHolder,
   type LineStore,
 } from "./reporting-lines.js";
-import { noteAgentMessage } from "./agent-message-log.js";
+import { noteAgentMessage, noteAgentMessageDelivered } from "./agent-message-log.js";
 import { heldSendsFor, ProvenanceRefusedError } from "./held-sends.js";
 import {
   queuedAgentMessagesFor,
@@ -10053,7 +10053,7 @@ export class Session {
       }
     };
     const sender = msg.sender;
-    return async () => {
+    const deliverMessage = async () => {
       if (sender) noteAgentMessage(sender.agentId, agentId);
       if (sender) {
         if (msg.inputProvenance !== undefined) throw new ProvenanceRefusedError();
@@ -10110,6 +10110,11 @@ export class Session {
           throw new ProvenanceRefusedError({ cause: error });
         holdOwnerMessage();
       }
+    };
+    return async () => {
+      await deliverMessage();
+      // FU-427: only a send that did not throw may suppress the sender's finish notice.
+      if (sender) noteAgentMessageDelivered(sender.agentId, agentId);
     };
   }
 
