@@ -552,8 +552,15 @@ export class AgentStorage {
         return undefined;
       }
 
-      const record = mutate(this.cache.get(agentId) ?? null);
+      const existing = this.cache.get(agentId) ?? null;
+      const record = mutate(existing);
       if (record === null) return undefined;
+      // FU-428: a finish notice is only replaced or settled, never dropped. Name any write that drops one.
+      if (existing?.finishNotice && !record.finishNotice)
+        this.logger.info(
+          { agentId, messageId: existing.finishNotice.messageId },
+          "Finish notice removed by record write",
+        );
       await this.writeRecord(record);
       return undefined;
     });
