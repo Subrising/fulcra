@@ -8,6 +8,7 @@ import {
   type PluginHostSummary,
 } from "@getpaseo/plugin/client";
 import { readProgressHost } from "./read-progress-host";
+import { boardStatusKey, createRefreshGate } from "../shared/refresh-gate";
 import { useContract } from "./use-contract";
 import { WorkButton } from "./work-button";
 import {
@@ -533,17 +534,51 @@ export function ProgressBoardSurface(props: PluginSurfaceProps) {
       pending = false;
     }
     void refresh();
-    // A hidden page does not poll. It refreshes once when it becomes visible again.
-    const timer = setInterval(() => {
-      if (!document.hidden) void refresh();
-    }, 15000);
+    // FU-412: no polling. A session status change on a shown computer refreshes the board once a
+    // window; the window is a little longer than the host's own rebuild window, so the read finds it built.
+    let missed = false;
+    const gate = createRefreshGate(() => {
+      if (document.hidden) missed = true;
+      else void refresh();
+    }, 35_000);
+    const keys = new Map<string, string>();
+    const stops: Array<() => void> = [];
+    for (const host of targets) {
+      if (host.status !== "online") continue;
+      const client = getPaseoClient(host.serverId);
+      stops.push(
+        client.agents.subscribe((update) => {
+          const id = `${host.serverId}:${update.kind === "remove" ? update.agentId : update.agent.id}`;
+          const key = update.kind === "remove" ? null : boardStatusKey(update.agent);
+          if (key !== null && keys.get(id) === key) return;
+          if (key === null) keys.delete(id);
+          else keys.set(id, key);
+          gate.changed();
+        }),
+      );
+      // The host sends agent updates only while a subscribed list is open.
+      void client.agents
+        .list({ filter: { includeArchived: false }, page: { limit: 100 }, subscribe: {} })
+        .then(({ entries, subscription }) => {
+          for (const { agent } of entries)
+            keys.set(`${host.serverId}:${agent.id}`, boardStatusKey(agent));
+          if (disposed) void subscription.release();
+          else stops.push(() => void subscription.release());
+        })
+        .catch(() => undefined);
+    }
+    // A change seen while the page was hidden refreshes once when it is shown again.
     const onVisible = () => {
-      if (!document.hidden) void refresh();
+      if (!document.hidden && missed) {
+        missed = false;
+        void refresh();
+      }
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       disposed = true;
-      clearInterval(timer);
+      gate.close();
+      stops.forEach((stop) => stop());
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [read, hosts, selected, revision, props.host.id]);
