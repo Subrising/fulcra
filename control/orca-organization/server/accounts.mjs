@@ -311,10 +311,14 @@ export function choose(s, provider, now = Date.now(), except = [], usage = {}) {
     (a) =>
       a.provider === provider && !except.includes(a.id) && accountStatus(a, now).state === "ok",
   );
-  if (!ready.length) return null;
+  // FU-430 (the owner's rule, 11 Oct 2026): paid API credit only when every usable subscription account is capped.
+  // A free subscription account always wins, whatever the priority numbers or the default say.
+  const subscriptions = ready.filter((a) => !isApiAccount(a));
+  const eligible = subscriptions.length ? subscriptions : ready;
+  if (!eligible.length) return null;
   const used = (a) => (isApiAccount(a) ? 0 : (usage[a.id] ?? 0));
-  const room = ready.filter((a) => used(a) < WEEKLY_LAUNCH_CAP_PCT);
-  const ok = room.length ? room : [...ready].sort((x, y) => used(x) - used(y)).slice(0, 1);
+  const room = eligible.filter((a) => used(a) < WEEKLY_LAUNCH_CAP_PCT);
+  const ok = room.length ? room : [...eligible].sort((x, y) => used(x) - used(y)).slice(0, 1);
   const preferred = ok.find((a) => a.id === s.defaults?.[provider]);
   if (preferred) return preferred;
   const key = (a) =>
@@ -327,6 +331,11 @@ export function choose(s, provider, now = Date.now(), except = [], usage = {}) {
     for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1;
     return 0;
   })[0];
+}
+// FU-430: the account a limited session may move to without the owner's rotate-on-limit setting: a free subscription only.
+function freeSubscription(s, provider, now, except = [], usage = {}) {
+  const to = choose(s, provider, now, except, usage);
+  return to && !isApiAccount(to) ? to : null;
 }
 // When every account of a provider is limited: the earliest reset (null if none is only limited).
 export function earliestReset(s, provider, now = Date.now()) {
@@ -534,7 +543,13 @@ function assignInStore(s, sessionId, provider, now, except = [], usage = {}) {
   const heldState = held && !except.includes(held.id) ? accountStatus(held, now).state : null;
   // Waiting is the default: a limited account keeps its session (the launch waits for that reset) unless moving is on.
   // This holds even when the launch hook has already tried that account (`except`): it then refuses, rather than move.
-  if (held && accountStatus(held, now).state === "limited" && !s.rotateOnLimit) {
+  // FU-430: with the setting off, a limited account still gives way to a free subscription account (never to an API one).
+  if (
+    held &&
+    accountStatus(held, now).state === "limited" &&
+    !s.rotateOnLimit &&
+    !freeSubscription(s, provider, now, [held.id, ...except], usage)
+  ) {
     held.lastUsedAt = iso(now);
     s.assignments[sessionId] = { accountId: held.id, provider, at: iso(now), ended: false };
     return {
@@ -768,8 +783,10 @@ export async function rotate(
     if (!revoked) from.limitObservedAt = iso(now);
     // Moving spends another account's usage, so it needs both the caller's ask and the owner's setting.
     // A revoked token cannot work again by waiting, so it moves the session whatever the owner's limit setting is.
-    const move = reassign && cur?.accountId === from.id && (revoked || s.rotateOnLimit === true);
-    const to = move ? choose(s, provider, now, [from.id]) : null;
+    // FU-430: a free subscription account always takes the session; the setting only lets it move to an API account.
+    const free = reassign && cur?.accountId === from.id ? freeSubscription(s, provider, now, [from.id]) : null;
+    const move = reassign && cur?.accountId === from.id && (revoked || s.rotateOnLimit === true || !!free);
+    const to = move ? (free ?? choose(s, provider, now, [from.id])) : null;
     if (to) {
       s.assignments[sessionId] = { accountId: to.id, provider, at: iso(now), ended: false };
       to.lastUsedAt = iso(now);

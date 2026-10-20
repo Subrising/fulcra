@@ -30,6 +30,7 @@ import {
   readUsage,
   readAccountsAsync,
   readUsageAsync,
+  markAccountLimited,
 } from "./accounts.mjs";
 import { markAccountRevoked, accountStatus } from "./accounts.mjs";
 
@@ -168,17 +169,18 @@ test("by default a usage limit holds the session on its account until the reset;
   assert.equal(readAccounts(root).rotateOnLimit, false);
   assert.equal((await assign(root, S(1), "claude", T0)).account.id, a.id);
   const reset = new Date(T0 + 3600000).toISOString();
+  // FU-430: B is a free subscription, so the limited session moves to it whatever the setting says.
   const r = await rotate(root, S(1), "claude", { resetAt: reset }, T0 + 10);
-  assert.equal(r.to, null);
-  assert.equal(r.held, true);
-  assert.equal(accountOf(readAccounts(root), S(1)).id, a.id);
-  // Its relaunch before the reset stays on A and waits, instead of quietly spending B.
+  assert.equal(r.toName, "B");
+  assert.equal(accountOf(readAccounts(root), S(1)).name, "B");
+  // With every account limited the session is held on its account and waits for the reset.
+  await rotate(root, S(2), "claude", { resetAt: reset, accountId: accountOf(readAccounts(root), S(1)).id }, T0 + 15).catch(() => null);
+  const held = await rotate(root, S(1), "claude", { resetAt: reset }, T0 + 16);
+  assert.equal(held.to, null);
+  assert.equal(held.held, true);
   const relaunch = await assign(root, S(1), "claude", T0 + 20);
-  assert.equal(relaunch.account.id, a.id);
   assert.equal(relaunch.allLimited, true);
   assert.equal(relaunch.earliestReset, reset);
-  // A new session still avoids the limited account.
-  assert.equal((await assign(root, S(2), "claude", T0 + 30)).account.name, "B");
   // A store written before the setting existed reads as off.
   const file = path.join(root, "accounts", "accounts.json");
   const stored = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -661,18 +663,13 @@ async function admissionFixture(t, provider, count, good = []) {
   });
   return { root, accounts, reads, request, hook, keychain };
 }
-test("with moving off, a limited account whose credential is missing refuses the launch instead of moving", async (t) => {
+test("with moving off, a limited account gives way to a free subscription account at launch (FU-430)", async (t) => {
   const f = await admissionFixture(t, "claude", 2, [1]);
   await assign(f.root, f.request.agentId, "claude", T0);
-  await rotate(
-    f.root,
-    f.request.agentId,
-    "claude",
-    { resetAt: new Date(T0 + 3600000).toISOString() },
-    T0 + 1,
-  );
-  await assert.rejects(f.hook({ request: f.request }), admissionFailure);
-  assert.equal(accountOf(readAccounts(f.root), f.request.agentId).id, f.accounts[0].id);
+  await rotate(f.root, f.request.agentId, "claude", { resetAt: new Date(T0 + 3600000).toISOString() }, T0 + 1);
+  const out = await f.hook({ request: f.request });
+  assert.equal(out.env.FULCRA_ACCOUNT_ID, f.accounts[1].id);
+  assert.equal(accountOf(readAccounts(f.root), f.request.agentId).id, f.accounts[1].id);
 });
 for (const provider of ["claude", "codex"]) {
   test(`admission ${provider}: eight unavailable credentials do not hide the ninth usable account`, async (t) => {
@@ -1298,3 +1295,65 @@ test(
     assert.equal(fs.existsSync(file), true);
   },
 );
+
+// FU-430: paid API credit is only for when every subscription account of the provider is capped.
+const poolState = (accounts) => ({
+  policy: "fill",
+  defaults: {},
+  assignments: {},
+  accounts: accounts.map((a, i) => ({
+    provider: "claude",
+    enabled: true,
+    createdAt: i,
+    ...a,
+  })),
+});
+test("choose never picks an API account while a free subscription account exists, whatever the priority", () => {
+  const s = poolState([
+    { id: "api", name: "work-workspace-api", credentialKind: "api-key", priority: 3 },
+    { id: "sub", name: "Personal", credentialKind: "subscription", priority: 4 },
+  ]);
+  assert.equal(choose(s, "claude", T0).id, "sub");
+  s.defaults.claude = "api";
+  assert.equal(choose(s, "claude", T0).id, "sub", "not even as the default account");
+});
+test("choose returns the API account only when every enabled subscription account is limited", () => {
+  const s = poolState([
+    { id: "api", name: "work-workspace-api", credentialKind: "api-key", priority: 3 },
+    {
+      id: "sub",
+      name: "Personal",
+      credentialKind: "subscription",
+      priority: 4,
+      limitedUntil: new Date(T0 + 3600000).toISOString(),
+    },
+  ]);
+  assert.equal(choose(s, "claude", T0).id, "api");
+  assert.equal(choose(s, "claude", T0 + 7200000).id, "sub", "the subscription is back after its reset");
+});
+
+test("a session bound to a limited account starts its next turn on the next free subscription (FU-430)", async () => {
+  const root = scratch();
+  const a = await addAccount(root, { provider: "claude", name: "Work" }, T0);
+  const b = await addAccount(root, { provider: "claude", name: "Personal" }, T0 + 1);
+  assert.equal((await assign(root, S(1), "claude", T0)).account.id, a.id);
+  await markAccountLimited(root, a.id, { resetAt: new Date(T0 + 86400000).toISOString() }, T0 + 5);
+  const next = await assign(root, S(1), "claude", T0 + 10);
+  assert.equal(next.account.id, b.id);
+  assert.equal(next.allLimited, false);
+  const log = readAccounts(root).rotations.at(-1);
+  assert.deepEqual([log.from, log.to, log.reason], [a.id, b.id, "launch"]);
+});
+test("a limit failure mid-turn marks the account and moves the session once to a free subscription (FU-430)", async () => {
+  const root = scratch();
+  const a = await addAccount(root, { provider: "claude", name: "Work" }, T0);
+  const b = await addAccount(root, { provider: "claude", name: "Personal" }, T0 + 1);
+  await assign(root, S(1), "claude", T0);
+  const reset = new Date(T0 + 86400000).toISOString();
+  const r = await rotate(root, S(1), "claude", { resetAt: reset, stopId: "stop-1" }, T0 + 10);
+  assert.equal(r.to, b.id);
+  assert.equal(readAccounts(root).accounts.find((x) => x.id === a.id).limitedUntil, reset);
+  // The same stop never moves the session twice.
+  assert.equal(await rotate(root, S(1), "claude", { resetAt: reset, stopId: "stop-1" }, T0 + 11), null);
+  assert.equal(accountOf(readAccounts(root), S(1)).id, b.id);
+});
