@@ -16611,3 +16611,85 @@ test.each(["close", "archive"] as const)("H2 resource errors never block %s", as
     rmSync(workdir, { recursive: true, force: true });
   }
 });
+
+test("FU-425: two archives of a session whose turn ignores interrupt both finish and close it once", async () => {
+  const fixture = await createControlledInterruptFixture({
+    name: "fu425-stuck-turn",
+    agentId: "00000000-0000-4000-8000-000000000425",
+    turnId: "stuck-turn",
+    // The provider acknowledges the interrupt, but the turn goes on.
+    interrupt: async () => undefined,
+  });
+  let closeCalls = 0;
+  const close = fixture.session.close.bind(fixture.session);
+  fixture.session.close = async () => {
+    closeCalls += 1;
+    await close();
+  };
+  const stillWorking = setInterval(() => {
+    fixture.session.pushEvent({
+      type: "timeline",
+      provider: "codex",
+      turnId: "stuck-turn",
+      item: { type: "assistant_message", text: "still working" },
+    });
+  }, 20);
+  const dependencies = { agentManager: fixture.manager, agentStorage: fixture.storage, logger };
+  try {
+    await fixture.startForegroundRun();
+    const [first, second] = await Promise.all([
+      archiveSafetyCommand(dependencies, fixture.agentId),
+      archiveSafetyCommand(dependencies, fixture.agentId),
+    ]);
+    const stored = await fixture.storage.get(fixture.agentId);
+    expect(stored?.archivedAt).toEqual(expect.any(String));
+    expect(first.archivedAt).toBe(stored?.archivedAt);
+    expect(second.archivedAt).toBe(stored?.archivedAt);
+    expect(fixture.manager.getAgent(fixture.agentId)).toBeNull();
+    expect(closeCalls).toBe(1);
+  } finally {
+    clearInterval(stillWorking);
+    await fixture.manager.flush();
+    await fixture.storage.flush();
+  }
+});
+
+test("FU-425: an event for an agent that left the manager is dropped with one info line", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-fu425-late-event-"));
+  const eventLogger = createTestLogger();
+  const errors = vi.spyOn(eventLogger, "error");
+  const infos = vi.spyOn(eventLogger, "info");
+  const client = new SessionRecordingAgentClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger: eventLogger });
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+    const internal = manager as unknown as {
+      agents: Map<string, unknown>;
+      dispatchSessionEvent(): Promise<void>;
+    };
+    const live = internal.agents.get(agent.id);
+    // The stuck turn's event is in flight when a close retires the agent.
+    vi.spyOn(internal, "dispatchSessionEvent").mockImplementationOnce(async () => {
+      internal.agents.delete(agent.id);
+      throw new Error(`Unknown agent '${agent.id}'`);
+    });
+    client.sessions[0]!.pushEvent({
+      type: "timeline",
+      provider: "codex",
+      item: { type: "assistant_message", text: "late" },
+    });
+    await manager.flush();
+    expect(errors.mock.calls.some((call) => call.includes("Failed to process session event"))).toBe(
+      false,
+    );
+    expect(
+      infos.mock.calls.filter((call) =>
+        call.includes("Dropped a session event for an agent that is no longer loaded"),
+      ),
+    ).toHaveLength(1);
+    internal.agents.set(agent.id, live);
+    await manager.closeAgent(agent.id);
+  } finally {
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});

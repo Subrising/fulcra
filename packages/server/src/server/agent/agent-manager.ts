@@ -5048,7 +5048,10 @@ export class AgentManager {
             agentId,
             "archive",
             undefined,
-            () => this.archiveAgentUnlocked(agentId),
+            (lockedHandle) =>
+              this.agents.has(agentId)
+                ? this.archiveAgentUnlocked(agentId)
+                : this.archiveRetiredAgentUnlocked(agentId, lockedHandle),
             commandPayload("archive"),
             operationHandle,
           ),
@@ -5057,6 +5060,20 @@ export class AgentManager {
       commandPayload("archive"),
       handle,
     );
+  }
+
+  // FU-425: callers cancel the run before this lane. A concurrent archive or reload can retire the runtime
+  // meanwhile; archive the stored record then, instead of failing with "Unknown agent".
+  private async archiveRetiredAgentUnlocked(
+    agentId: string,
+    handle?: TrustedOperationHandle,
+  ): Promise<{ archivedAt: string }> {
+    const record = await this.requireRegistry().get(agentId);
+    if (!record) throw new Error(`Unknown agent '${agentId}'`);
+    if (record.archivedAt) return { archivedAt: record.archivedAt };
+    const archived = await this.archiveSnapshotUnlocked(agentId, new Date().toISOString(), handle);
+    if (!archived.archivedAt) throw new Error(`Agent missing archivedAt after archive: ${agentId}`);
+    return { archivedAt: archived.archivedAt };
   }
 
   private async archiveAgentUnlocked(
@@ -8476,6 +8493,14 @@ export class AgentManager {
         return;
       })
       .catch((err) => {
+        // FU-425: a close or archive can retire the agent while its event waits; that is not a failure.
+        if (!this.agents.has(agentId)) {
+          this.logger.info(
+            { agentId, eventType: event.type },
+            "Dropped a session event for an agent that is no longer loaded",
+          );
+          return;
+        }
         this.logger.error(
           { err, agentId, eventType: event.type },
           "Failed to process session event",
