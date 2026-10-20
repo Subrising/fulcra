@@ -67,6 +67,7 @@ import {
 import {
   assertFinalInputCheck,
   failFinalInputHandoff,
+  FinalInputWithdrawnError,
   recordManagerInputHandoff,
   requiresProviderInputHandoff,
 } from "./final-input-check.js";
@@ -6472,6 +6473,15 @@ export class AgentManager {
       const queued = options?.[NATIVE_QUEUED_FINAL];
       const error = queued ? nativeQueuedFailure(queued, caught) : caught;
       if (pendingRun.settled) {
+        throw error;
+      }
+      // A withdrawn input (FU-422) never started a turn: the session stays idle, with no failed turn.
+      if (error instanceof FinalInputWithdrawnError) {
+        pendingRun.start = { status: "failed", error: error.message };
+        agent.pendingReplacement = false;
+        if (!agent.activeForegroundTurnId) agent.lifecycle = "idle";
+        this.runs.settleForegroundRun(agentId, pendingRun.token);
+        this.emitState(agent);
         throw error;
       }
       if (isStaleProviderSessionError(error)) {
