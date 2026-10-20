@@ -119,7 +119,7 @@ import type {
 import type { ProviderPaseoToolsPolicy } from "@getpaseo/protocol/provider-config";
 import { isPaseoToolEnabled } from "../paseo-tool-policy.js";
 import { checkPromptLine, lineStoreOf } from "../../reporting-lines.js";
-import { noteAgentMessage } from "../../agent-message-log.js";
+import { noteAgentMessage, noteAgentMessageDelivered } from "../../agent-message-log.js";
 
 export interface PaseoToolHostDependencies {
   nativeReportOrigin?: NativeReportOrigin;
@@ -2237,6 +2237,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
             await waitForAgentRunStartWithTimeout(agentManager, agentId);
           if (result.disposition !== "turn_started") await clearBackgroundNotification();
           noteDeliveredReport(agentManager, agentId, callerAgentId);
+          if (callerAgentId) noteAgentMessageDelivered(callerAgentId, agentId);
           return result;
         } catch (error) {
           await clearBackgroundNotification();
@@ -2258,6 +2259,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
           undefined,
           resumeAt,
         );
+        noteAgentMessageDelivered(senderId, agentId);
         return {
           content: [],
           structuredContent: ensureValidJson({

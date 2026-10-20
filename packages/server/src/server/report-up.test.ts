@@ -19,7 +19,11 @@ import {
   type ReportUpDeps,
   reportUpSwitches,
 } from "./report-up.js";
-import { noteAgentMessage, resetAgentMessageLogForTests } from "./agent-message-log.js";
+import {
+  noteAgentMessage,
+  noteAgentMessageDelivered,
+  resetAgentMessageLogForTests,
+} from "./agent-message-log.js";
 import {
   parseOpenRows,
   readOpenLedgerRows,
@@ -2841,6 +2845,22 @@ describe("FU-424 a lost finish notice reaches the lead once", () => {
         });
         stream(agentId, { type: "turn_completed", provider: "claude" });
       },
+      // FU-427: a turn that may send to the lead before it ends, and may end in an error.
+      runTurn: (agentId: string, during?: () => void, error?: string) => {
+        stream(agentId, { type: "turn_started", provider: "claude" });
+        stream(agentId, {
+          type: "timeline",
+          provider: "claude",
+          item: { type: "user_message", text: "do the task" },
+        });
+        during?.();
+        stream(
+          agentId,
+          error
+            ? { type: "turn_failed", provider: "claude", error }
+            : { type: "turn_completed", provider: "claude" },
+        );
+      },
       idle: (agentId: string) =>
         service.onEvent({
           type: "agent_state",
@@ -2953,6 +2973,61 @@ describe("FU-424 a lost finish notice reaches the lead once", () => {
       expect(f.delivered).toEqual([]);
     } finally {
       f.service.stop();
+    }
+  });
+
+  test("FU-427 a turn that already sent to its lead sends no finish notice", async () => {
+    resetAgentMessageLogForTests();
+    const f = await ownedFixture({ notice: { status: "armed" } });
+    try {
+      f.runTurn(WORKER, () => noteAgentMessageDelivered(WORKER, LEAD));
+      await until(async () =>
+        expect(await f.notice()).toMatchObject({ status: "delivered", deliveredBy: "report-up" }),
+      );
+      await quiet();
+      expect(f.delivered).toEqual([]);
+    } finally {
+      f.service.stop();
+      resetAgentMessageLogForTests();
+    }
+  });
+
+  test("FU-427 a turn that ends without a send still sends one finish notice", async () => {
+    resetAgentMessageLogForTests();
+    const f = await ownedFixture({ notice: { status: "armed" } });
+    try {
+      f.runTurn(WORKER);
+      await until(async () => expect(await f.notice()).toMatchObject({ status: "delivered" }));
+      expect(f.delivered).toEqual([{ leadId: LEAD, messageId: MESSAGE_ID }]);
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  test("FU-427 an error end still sends one notice, even after a send", async () => {
+    resetAgentMessageLogForTests();
+    const f = await ownedFixture({ notice: { status: "armed" } });
+    try {
+      f.runTurn(WORKER, () => noteAgentMessageDelivered(WORKER, LEAD), "Provider crashed");
+      await until(async () => expect(await f.notice()).toMatchObject({ status: "delivered" }));
+      expect(f.delivered).toEqual([{ leadId: LEAD, messageId: MESSAGE_ID }]);
+    } finally {
+      f.service.stop();
+      resetAgentMessageLogForTests();
+    }
+  });
+
+  test("FU-427 a send from an earlier turn does not hide this turn's notice", async () => {
+    resetAgentMessageLogForTests();
+    noteAgentMessageDelivered(WORKER, LEAD, 1);
+    const f = await ownedFixture({ notice: { status: "armed" } });
+    try {
+      f.runTurn(WORKER);
+      await until(async () => expect(await f.notice()).toMatchObject({ status: "delivered" }));
+      expect(f.delivered).toEqual([{ leadId: LEAD, messageId: MESSAGE_ID }]);
+    } finally {
+      f.service.stop();
+      resetAgentMessageLogForTests();
     }
   });
 });
