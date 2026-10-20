@@ -56,8 +56,15 @@ const RecordSchema = z.object({
   reason: z.string().optional(),
   resumeAt: z.number().finite().positive().optional(),
   batchId: z.string().optional(),
+  /** When the record reached delivered or refused. Settled records leave the file a day later. */
+  settledAt: z.number().finite().positive().optional(),
 });
 type Record = z.infer<typeof RecordSchema>;
+const SETTLED_RECORD_MS = 24 * 60 * 60 * 1000;
+
+function settled(record: Record): boolean {
+  return record.state === "delivered" || record.state === "refused";
+}
 class QueuedLinesChangedError extends Error {
   constructor(readonly refused: Array<{ record: Record; reason: string }>) {
     super("The reporting line changed before delivery");
@@ -81,6 +88,8 @@ function closedReceiverReason(target: { archivedAt?: unknown } | null): string {
 /** Plain agent input and paused owner notices. Plugin capabilities never enter this queue. */
 export class QueuedAgentMessages {
   private records: Record[] = [];
+  /** The records as last written. A save with no change skips the fsync. */
+  private saved: string | null = null;
   private tail: Promise<unknown> = Promise.resolve();
   private initialized = false;
   private stopped = false;
@@ -126,7 +135,16 @@ export class QueuedAgentMessages {
 
   private async save(): Promise<void> {
     try {
-      await writeJsonQueueFile(this.deps.agentStorage.heldMessagesPath, this.records);
+      const now = Date.now();
+      for (const record of this.records) if (settled(record)) record.settledAt ??= now;
+      this.records = this.records.filter(
+        (record) => !settled(record) || record.settledAt! > now - SETTLED_RECORD_MS,
+      );
+      const text = JSON.stringify(this.records);
+      if (text !== this.saved) {
+        await writeJsonQueueFile(this.deps.agentStorage.heldMessagesPath, this.records);
+        this.saved = text;
+      }
       for (const listener of this.deliveryListeners) listener();
     } catch (error) {
       this.unhealthy = true;
@@ -143,11 +161,13 @@ export class QueuedAgentMessages {
       if (Buffer.byteLength(text) > 16 * 1024 * 1024)
         throw new Error("Message queue exceeds its size limit");
       this.records = z.array(RecordSchema).max(2000).parse(JSON.parse(text));
+      this.saved = JSON.stringify(this.records);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         this.unhealthy = true;
         throw error;
       }
+      this.saved = JSON.stringify(this.records);
     }
     // A provider may have accepted an attempted batch before the daemon stopped. Never replay it.
     const attempted = this.records.filter((record) => record.state === "dispatching");
@@ -156,7 +176,8 @@ export class QueuedAgentMessages {
       record.reason =
         "Delivery is uncertain after a daemon restart. Check the receiver before sending again.";
     }
-    if (attempted.length) await this.save();
+    // Also drops settled records past their day, and stamps older ones that carry no settle time.
+    await this.save();
     this.initialized = true;
     this.tellBatch(attempted, attempted[0]?.reason ?? "Delivery is uncertain after restart.");
   }
