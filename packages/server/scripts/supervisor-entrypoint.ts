@@ -13,6 +13,7 @@ import { packagedInspectorFlags } from "../src/server/inspector-flavour.js";
 import { daemonLogPath } from "../src/server/daemon-instance.js";
 import { PRIVATE_FILE_MODE } from "../src/server/private-files.js";
 import { loadPersistedConfig } from "../src/server/persisted-config.js";
+import { packagedWorkerSpawnArgs } from "./packaged-worker-spawn.js";
 import { runSupervisor } from "./supervisor.js";
 import { resolveSupervisorLogFile } from "./supervisor-log-config.js";
 
@@ -164,12 +165,11 @@ async function main(): Promise<void> {
     resolveWorkerSpawnSpec: packagedNodeEntrypointRunner
       ? (resolvedWorkerEntry) => ({
           command: process.execPath,
-          args: [
+          args: packagedWorkerSpawnArgs(
             packagedNodeEntrypointRunner,
-            "node-script",
             resolvedWorkerEntry,
-            ...config.workerArgs,
-          ],
+            config.workerArgs,
+          ),
           env: {
             ...workerEnv,
             ELECTRON_RUN_AS_NODE: "1",
