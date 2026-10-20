@@ -647,3 +647,62 @@ test("paseo run from a Claude plan/default session: Codex and Claude children st
   // An automatic caller's child is left to the host default (Fulcra's hook applies the owner default and its cap).
   expect(await started("auto", "codex")).toBeUndefined();
 });
+
+test.each([
+  ["a caller session", "11111111-1111-4111-8111-111111111111", 1],
+  ["no caller", null, 0],
+])(
+  "FU-173: a CLI create from %s arms the finish notice for its lead",
+  async (_label, parentAgentId, arms) => {
+    const snapshot = {
+      id: "agent-1",
+      provider: "codex",
+      cwd: "/tmp/paseo-create-test",
+      runtimeInfo: null,
+    } as ManagedAgent;
+    const armFinishNotice = vi.fn(async () => ({
+      parentId: parentAgentId,
+      owner: "report-up",
+      status: "armed",
+      messageId: "paseo-notify:test",
+    }));
+    const dependencies: Parameters<typeof createAgentCommand>[0] = {
+      agentManager: {
+        withInput: <T>(
+          id: string,
+          kind: TrustedInputKind,
+          messageId: string | undefined,
+          operation: () => T,
+        ) => new TrustedPlugins().input({ ...snapshot, id }, kind, messageId, operation),
+        createAgent: vi.fn(async () => snapshot),
+        getAgent: vi.fn(() => snapshot),
+        tryRunOutOfBand: vi.fn(() => false),
+        hasInFlightRun: vi.fn(() => false),
+        streamAgent: vi.fn(() => (async function* noop() {})()),
+        waitForAgentRunStart: vi.fn(async () => undefined),
+      } as unknown as Parameters<typeof createAgentCommand>[0]["agentManager"],
+      agentStorage: {
+        armFinishNotice,
+        getFinishNotice: vi.fn(async () => null),
+        settleFinishNotice: vi.fn(async () => undefined),
+      } as unknown as Parameters<typeof createAgentCommand>[0]["agentStorage"],
+      logger: createTestLogger(),
+      providerSnapshotManager: createProviderSnapshotManagerStub().manager,
+    };
+
+    await createAgentCommand(dependencies, {
+      kind: "session",
+      config: { provider: "codex", cwd: "/tmp/paseo-create-test" },
+      workspaceId: "ws-create-test",
+      initialPrompt: "build it",
+      labels: {},
+      parentAgentId,
+      provisionalTitle: null,
+      firstAgentContext: { attachments: [] },
+      buildSessionConfig: async (config) => ({ sessionConfig: config }),
+    });
+
+    expect(armFinishNotice).toHaveBeenCalledTimes(arms);
+    if (arms) expect(armFinishNotice).toHaveBeenCalledWith(snapshot, parentAgentId, "report-up");
+  },
+);
