@@ -47,6 +47,13 @@ import { createExternalProcessEnv } from "../server/paseo-env.js";
 import { parseGitRevParsePath, resolveGitRevParsePath } from "./git-rev-parse-path.js";
 import { expandTilde, getRealpathAwareRelativePath, isPathInsideRoot } from "./path.js";
 import { terminateWithTreeKill } from "./tree-kill.js";
+import {
+  type DependencyCacheEntry,
+  harvestDependencies,
+  isDependencyInstallCommand,
+  linkCachedDependencies,
+  resolveDependencyCacheEntry,
+} from "./worktree-dependency-reuse.js";
 
 export { slugify, validateBranchSlug } from "@getpaseo/protocol/branch-slug";
 
@@ -664,9 +671,46 @@ export async function runWorktreeSetupCommands(options: {
       ...(options.repoRootPath ? { repoRootPath: options.repoRootPath } : {}),
     }));
   const setupEnv = createStringCommandShellEnv(createExternalProcessEnv(process.env, runtimeEnv));
+  // Installs that do run read the warm npm cache first.
+  setupEnv.npm_config_prefer_offline ??= "true";
+
+  const dependencyEntry = resolveDependencyCacheEntrySafely(options.worktreePath);
+  const reusedDependencies =
+    dependencyEntry !== null &&
+    tryDependencyReuse(() => linkCachedDependencies(options.worktreePath, dependencyEntry));
 
   const results: WorktreeSetupCommandResult[] = [];
   for (const [index, cmd] of setupCommands.entries()) {
+    if (reusedDependencies && isDependencyInstallCommand(cmd)) {
+      const result: WorktreeSetupCommandResult = {
+        command: cmd,
+        cwd: options.worktreePath,
+        stdout: `Skipped: linked the installed dependencies for this lockfile from ${dependencyEntry.dir}\n`,
+        stderr: "",
+        exitCode: 0,
+        durationMs: 0,
+      };
+      options.onEvent?.({
+        type: "command_started",
+        index: index + 1,
+        total: setupCommands.length,
+        command: cmd,
+        cwd: options.worktreePath,
+      });
+      options.onEvent?.({
+        type: "command_completed",
+        index: index + 1,
+        total: setupCommands.length,
+        command: cmd,
+        cwd: options.worktreePath,
+        exitCode: 0,
+        durationMs: 0,
+        stdout: result.stdout,
+        stderr: "",
+      });
+      results.push(result);
+      continue;
+    }
     const result = options.onEvent
       ? await execSetupCommandStreamed({
           command: cmd,
@@ -696,9 +740,31 @@ export async function runWorktreeSetupCommands(options: {
         results,
       );
     }
+    if (!reusedDependencies && dependencyEntry !== null && isDependencyInstallCommand(cmd)) {
+      tryDependencyReuse(() => harvestDependencies(options.worktreePath, dependencyEntry));
+    }
   }
 
   return results;
+}
+
+function resolveDependencyCacheEntrySafely(worktreePath: string): DependencyCacheEntry | null {
+  try {
+    return resolveDependencyCacheEntry(worktreePath);
+  } catch (error) {
+    console.warn("Dependency reuse is off for this worktree:", error);
+    return null;
+  }
+}
+
+// Dependency reuse only saves time. A failure falls back to the normal install.
+function tryDependencyReuse(step: () => boolean): boolean {
+  try {
+    return step();
+  } catch (error) {
+    console.warn("Dependency reuse step failed. The normal install path is used:", error);
+    return false;
+  }
 }
 
 async function resolveBranchNameForWorktreePath(worktreePath: string): Promise<string> {
