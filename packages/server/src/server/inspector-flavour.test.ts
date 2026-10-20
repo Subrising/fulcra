@@ -27,7 +27,7 @@ describe("packaged inspector (FU-79)", () => {
     );
     // FU-413: the packaged worker starts through the entry point runner; that path needs the flags too.
     expect(read("packages/server/scripts/supervisor-entrypoint.ts")).toContain(
-      "args: packagedWorkerSpawnArgs(",
+      "packagedWorkerSpawnSpec(",
     );
     expect(read("packages/desktop/src/daemon/node-entrypoint-launcher.ts")).toContain(
       "...packagedInspectorFlags()",
