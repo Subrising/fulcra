@@ -2416,7 +2416,7 @@ test("native host-link notices use the end snapshot and respect disabled finish 
   });
   try {
     f.begin(WORKER);
-    f.end(WORKER, "native remote result");
+    f.end(WORKER, "DONE native remote result");
     await f.settle();
     expect(notices).toHaveLength(1);
     expect(notices[0]).toContain("native remote result");
