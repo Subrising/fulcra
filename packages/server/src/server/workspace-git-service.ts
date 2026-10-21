@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { resolveForgeRemoteUrl } from "../utils/forge-remote.js";
 import { readFile, stat } from "node:fs/promises";
@@ -402,6 +403,7 @@ interface WorkspaceGitServiceDependencies {
   ) => Promise<WorkspaceGitFetchResult>;
   runGitCommand: typeof runGitCommand;
   getWorkspaceGitSelfHealPhaseMs: typeof getWorkspaceGitObservationReensurePhaseMs;
+  workspaceFolderExists: (cwd: string) => boolean;
   createWatcherLivenessCanary: typeof createWatcherLivenessCanary;
   checkoutProbe: typeof checkoutProbe;
   now: () => Date;
@@ -590,6 +592,7 @@ function buildDefaultWorkspaceGitServiceDeps(
     runGitFetch: fetchWorkspaceGitRemote,
     runGitCommand,
     getWorkspaceGitSelfHealPhaseMs: getWorkspaceGitObservationReensurePhaseMs,
+    workspaceFolderExists: existsSync,
     createWatcherLivenessCanary,
     checkoutProbe,
     now: () => new Date(),
@@ -2784,8 +2787,8 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
           target.observationReensureTimer = null;
           return;
         }
-        if (isDeadWorkspaceFolder(target.cwd)) {
-          // The folder is gone or in a temp folder: stop the 60 s check for this record.
+        if (isDeadWorkspaceFolder(target.cwd, this.deps.workspaceFolderExists)) {
+          // The folder is gone: stop the 60 s check for this record.
           target.observationReensureTimer = null;
           return;
         }
