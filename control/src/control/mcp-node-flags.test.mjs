@@ -79,12 +79,12 @@ test("the plugin-local copy for the API key helper applies the same rule (FU-467
     "not json",
     "null",
     "[]",
-    "[\"--disable-sigusr1\"]",
-    "[\"--disable-sigusr1\",\"--inspect\"]",
-    "[\"--require=/tmp/x.js\"]",
-    "[\"--inspect=0\"]",
+    '["--disable-sigusr1"]',
+    '["--disable-sigusr1","--inspect"]',
+    '["--require=/tmp/x.js"]',
+    '["--inspect=0"]',
     "[1]",
-    "\"--x\"",
+    '"--x"',
   ];
   for (const value of values) {
     const env = value === undefined ? {} : { ORCA_NODE_FLAGS: value };
