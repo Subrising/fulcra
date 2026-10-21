@@ -4,6 +4,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { portable } from "../portable-config.mjs";
 import { assertColumns } from "./schema.mjs";
+import { tickDue } from "./agent-watch.mjs";
 
 export const COMPACTION_WINDOW_MS = 10 * 60_000;
 export const COMPACTION_STALL_MS = 15 * 60_000;
@@ -492,7 +493,12 @@ export class CompactionLoops {
       for (const { id } of this.db
         .prepare("SELECT id FROM sessions WHERE mode='delegated' ORDER BY rowid DESC LIMIT 64")
         .all())
-        await this.observe(id);
+        // FU-423: archived sessions are not observed; an idle, unchanged session is re-read only by the safety pass.
+        if (
+          this.control.native?.isLive?.(id) !== false &&
+          tickDue(this.control.native, id, (this.tickMemo ??= new Map()), this.now())
+        )
+          await this.observe(id);
     })().finally(() => {
       this.ticking = null;
     }));

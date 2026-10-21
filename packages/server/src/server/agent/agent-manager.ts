@@ -20,6 +20,7 @@ import { isArchiveLead, isArchiveChild, reportsToArchiveParent } from "./archive
 import {
   defaultLedgerDir,
   readOpenLedgerRows,
+  readOpenLedgerRowsShared,
   rowsOwnedBy,
   isSoleLedgerOwner,
   type LedgerRow,
@@ -457,6 +458,11 @@ export type AgentSubscriber = (event: AgentManagerEvent) => void;
 export interface SubscribeOptions {
   agentId?: string;
   replayState?: boolean;
+}
+
+interface TimelineReplayItem {
+  item: AgentTimelineItem;
+  timestamp?: string;
 }
 
 interface HydrateTimelineOptions {
@@ -4630,7 +4636,7 @@ export class AgentManager {
       },
       "agent.manager.close.start",
     );
-    await this.drainSessionEvents(agentId);
+    await this.drainQueuedSessionEvents(agentId);
     // Retain ownership until shutdown succeeds. A failed close may still own a
     // native writer, so publishing a resumable closed snapshot would orphan it.
     this.invokeReportRelaunchGuard(requireRetiringIdentity);
@@ -4653,6 +4659,8 @@ export class AgentManager {
     this.emitClosedAgent(closedAgent, { persist: false });
     // Closed history reads use the journal. Keep child facts, but release duplicate parent payloads.
     if (this.durableTimelineStore) this.timelineStore.delete(agentId);
+    // A write that raced the close fails with "Unknown agent". That failure must not outlive the runtime.
+    this.timelineFailures.delete(agentId);
     this.logger.trace(
       {
         agentId,
@@ -4774,8 +4782,11 @@ export class AgentManager {
     throw new WorkAcceptanceError("unauthorised", "Review needs a lead session or the owner.");
   }
 
-  private async archiveLedgerRows(record: StoredAgentRecord) {
-    const rows = await readOpenLedgerRows(this.archiveLedgerDirectory ?? defaultLedgerDir(), true);
+  private async archiveLedgerRows(record: StoredAgentRecord, shared = false) {
+    const dir = this.archiveLedgerDirectory ?? defaultLedgerDir();
+    const rows = shared
+      ? await readOpenLedgerRowsShared(dir, true)
+      : await readOpenLedgerRows(dir, true);
     return rowsOwnedBy(rows, {
       id: record.id,
       title: record.title ?? "",
@@ -4793,14 +4804,17 @@ export class AgentManager {
     );
   }
 
+  // FU-423: `forSnapshot` is the display copy in a session snapshot; it shares one recent ledger read. The archive and
+  // restore gates call this without it and always read the ledgers fresh.
   async getArchiveProtection(
     agentId: string,
+    { forSnapshot = false }: { forSnapshot?: boolean } = {},
   ): Promise<{ confirmationRequired: boolean; reasons: string[] }> {
     const record = await this.requireRegistry().get(agentId);
     if (!record) throw new Error(`Agent not found: ${agentId}`);
     const reasons: string[] = [];
     if (isArchiveLead(record)) reasons.push("This session is a lead or owner.");
-    const ownedRows = await this.archiveLedgerRows(record);
+    const ownedRows = await this.archiveLedgerRows(record, forSnapshot);
     for (const row of ownedRows)
       reasons.push(
         `This session owns open ledger item ${row.id} in ${row.project}. Close it: ledger close ${row.project} ${row.id} --evidence <result>. Or transfer it: ledger set ${row.project} ${row.id} --owner <lead>. Open ledger ownership must be transferred before archive.`,
@@ -5048,7 +5062,10 @@ export class AgentManager {
             agentId,
             "archive",
             undefined,
-            () => this.archiveAgentUnlocked(agentId),
+            (lockedHandle) =>
+              this.agents.has(agentId)
+                ? this.archiveAgentUnlocked(agentId)
+                : this.archiveRetiredAgentUnlocked(agentId, lockedHandle),
             commandPayload("archive"),
             operationHandle,
           ),
@@ -5057,6 +5074,20 @@ export class AgentManager {
       commandPayload("archive"),
       handle,
     );
+  }
+
+  // FU-425: callers cancel the run before this lane. A concurrent archive or reload can retire the runtime
+  // meanwhile; archive the stored record then, instead of failing with "Unknown agent".
+  private async archiveRetiredAgentUnlocked(
+    agentId: string,
+    handle?: TrustedOperationHandle,
+  ): Promise<{ archivedAt: string }> {
+    const record = await this.requireRegistry().get(agentId);
+    if (!record) throw new Error(`Unknown agent '${agentId}'`);
+    if (record.archivedAt) return { archivedAt: record.archivedAt };
+    const archived = await this.archiveSnapshotUnlocked(agentId, new Date().toISOString(), handle);
+    if (!archived.archivedAt) throw new Error(`Agent missing archivedAt after archive: ${agentId}`);
+    return { archivedAt: archived.archivedAt };
   }
 
   private async archiveAgentUnlocked(
@@ -7629,6 +7660,53 @@ export class AgentManager {
     this.timelineFailures.delete(agentId);
   }
 
+  // FU-425: a turn that does not stop writes rows while the replay rebuilds the timeline. Rebuild it as one
+  // queued write, so no live write sees the agent without a timeline and records "Unknown agent" for good.
+  // FU-441: the history rows go in the same queued write (one bulk insert), so live rows come after the
+  // replay. A failed rebuild is returned to the caller; it does not mark the timeline as failed.
+  private async resetTimelineForReplay(
+    agentId: string,
+    history: readonly TimelineReplayItem[],
+  ): Promise<AgentTimelineRow[]> {
+    await this.drainTimelineWrites(agentId);
+    this.timelineFailures.delete(agentId);
+    const outcome = await this.queueTimelineWrite(
+      agentId,
+      async (): Promise<{ rows: AgentTimelineRow[] } | { error: unknown }> => {
+        const previousRows = this.timelineStore.has(agentId)
+          ? this.timelineStore.getRows(agentId)
+          : [];
+        let deleted = false;
+        try {
+          await this.durableTimelineStore?.deleteAgent(agentId);
+          deleted = true;
+          const seed = await this.loadCommittedTimelineSeed(agentId, new Date());
+          this.timelineStore.delete(agentId);
+          this.timelineStore.initialize(agentId, seed);
+          const rows = history.map(({ item, timestamp }) =>
+            this.timelineStore.append(
+              agentId,
+              structuredClone(limitAgentTimelineItemContent(item)),
+              timestamp ? { timestamp } : undefined,
+            ),
+          );
+          await this.durableTimelineStore?.bulkInsert(agentId, rows);
+          return { rows };
+        } catch (error) {
+          // Put the old rows back, so the next write does not meet an empty durable timeline.
+          if (deleted && previousRows.length > 0) {
+            await this.durableTimelineStore
+              ?.bulkInsert(agentId, previousRows)
+              .catch(() => undefined);
+          }
+          return { error };
+        }
+      },
+    );
+    if ("error" in outcome) throw outcome.error;
+    return outcome.rows;
+  }
+
   async getLastAssistantMessage(agentId: string): Promise<string | null> {
     const agent = this.agents.get(agentId);
     if (!agent) {
@@ -8119,6 +8197,7 @@ export class AgentManager {
       | undefined;
   }): Promise<{ durableTimelineHasRows: boolean }> {
     const { agentId, now, options } = params;
+    this.timelineFailures.delete(agentId);
     const timelineAlreadyPrimed = this.timelineStore.has(agentId);
     const explicitTimelineSeed = buildExplicitTimelineSeedForRegister(now, options);
     const shouldSeedFromDurable =
@@ -8476,6 +8555,14 @@ export class AgentManager {
         return;
       })
       .catch((err) => {
+        // FU-425: a close or archive can retire the agent while its event waits; that is not a failure.
+        if (!this.agents.has(agentId)) {
+          this.logger.info(
+            { err, agentId, eventType: event.type },
+            "Dropped a session event for an agent that is no longer loaded",
+          );
+          return;
+        }
         this.logger.error(
           { err, agentId, eventType: event.type },
           "Failed to process session event",
@@ -8496,6 +8583,12 @@ export class AgentManager {
    * asynchronous session queue. Apply those events before committing the mutation's explicit
    * manager state so call order remains authoritative.
    */
+  // FU-425: a turn that does not stop keeps adding events, so close would wait for an empty queue for ever.
+  // Close applies only the events queued before it; later ones stop when the runtime unsubscribes.
+  private async drainQueuedSessionEvents(agentId: string): Promise<void> {
+    await this.sessionEventTails.get(agentId);
+  }
+
   private async drainSessionEvents(agentId: string): Promise<void> {
     while (true) {
       const tail = this.sessionEventTails.get(agentId);
@@ -8720,11 +8813,9 @@ export class AgentManager {
     }
 
     this.agentStreamCoalescer.flushAndDiscard(agent.id);
-    await this.deleteCommittedTimeline(agent.id);
-    this.timelineStore.delete(agent.id);
-    this.timelineStore.initialize(
+    const historyRows = await this.resetTimelineForReplay(
       agent.id,
-      await this.loadCommittedTimelineSeed(agent.id, new Date()),
+      historyEvents.map((event) => ({ item: event.item, timestamp: event.timestamp })),
     );
     agent.historyPrimed = true;
 
@@ -8739,12 +8830,8 @@ export class AgentManager {
         this.dispatch({ type: "provider_subagent", event: update });
       }
     }
-    for (const event of historyEvents) {
-      const row = await this.recordTimeline(
-        agent.id,
-        event.item,
-        event.timestamp ? { timestamp: event.timestamp } : undefined,
-      );
+    for (const [index, event] of historyEvents.entries()) {
+      const row = historyRows[index]!;
       if (broadcastTimeline) {
         this.dispatchStream(agent.id, event, {
           seq: row.seq,
@@ -8802,11 +8889,9 @@ export class AgentManager {
 
     // The replay is the timeline, so drop the rows a previous hydration committed.
     // Keeping them would leave getTimelineRows reading one copy per hydration.
-    await this.deleteCommittedTimeline(agent.id);
-    this.timelineStore.delete(agent.id);
-    this.timelineStore.initialize(
+    const historyRows = await this.resetTimelineForReplay(
       agent.id,
-      await this.loadCommittedTimelineSeed(agent.id, new Date()),
+      historyEvents.map((event) => ({ item: event.item, timestamp: event.timestamp })),
     );
 
     const timelineEvents: Array<{
@@ -8823,12 +8908,8 @@ export class AgentManager {
       const managerEvent: AgentManagerEvent = { type: "provider_subagent", event: update };
       this.publishHistorySubagentEvent(managerEvent, broadcast, providerSubagentEvents);
     }
-    for (const event of historyEvents) {
-      const row = await this.recordTimeline(
-        agent.id,
-        event.item,
-        event.timestamp ? { timestamp: event.timestamp } : undefined,
-      );
+    for (const [index, event] of historyEvents.entries()) {
+      const row = historyRows[index]!;
       if (deferredBroadcast) {
         timelineEvents.push({ event, row });
       } else if (broadcast) {
