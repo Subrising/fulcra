@@ -73,10 +73,13 @@ describe("plugin SDK import boundaries", () => {
 
   it("publishes owned Git capabilities without implementation helpers", () => {
     expect(Object.keys(git).sort()).toEqual([
+      "GitChildLimitError",
       "execGitCommand",
       "execGitCommandSync",
+      "isGitChildLimitError",
       "spawnGitProcess",
       "terminateGitProcess",
+      "waitForGitChildSlot",
       "withGitFetchPolicy",
     ]);
   });
