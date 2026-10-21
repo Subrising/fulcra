@@ -52,7 +52,7 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
       labels: agent.labels,
       archivedAt: agent.archivedAt,
     });
-  for (const record of await agentStorage.list()) if (!record.internal) remember(record);
+  for (const record of await agentStorage.listLoaded()) if (!record.internal) remember(record);
   for (const agent of agentManager.listAgents()) remember(agent);
   function lastWorkerMessage(agentId: string): string {
     const messages = agentManager
@@ -493,7 +493,7 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
       if (closed) return;
       for (const pending of service!.pendingNoticeWorkers()) {
         const record = agentStorage
-          .listCached()
+          .listLoadedSync()
           .find((candidate) => candidate.id === pending.agentId);
         if (!record || !pending.started || agentManager.hasInFlightRun(pending.agentId)) continue;
         if (

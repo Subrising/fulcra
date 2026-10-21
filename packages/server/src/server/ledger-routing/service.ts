@@ -454,7 +454,7 @@ export class LedgerRoutingService {
       return;
     }
     if (this.stopped) return;
-    const agents = await this.deps.agentStorage.list();
+    const agents = await this.deps.agentStorage.listLoaded();
     await this.recoverLedgerClaims(agents);
     await this.reconcile(agents);
     if (!this.deps.enabled()) return;
@@ -476,7 +476,7 @@ export class LedgerRoutingService {
       );
       return;
     }
-    const agents = await this.deps.agentStorage.list();
+    const agents = await this.deps.agentStorage.listLoaded();
     const lead = agents.find((a) => a.id === config.leadId);
     if (!lead || lead.archivedAt || this.held(lead, config)) return;
     let active = this.state.claims.filter(
@@ -484,7 +484,7 @@ export class LedgerRoutingService {
     ).length;
     for (const row of await this.rows(project)) {
       const total = this.state.claims.filter((c) =>
-        this.busy(c, this.deps.agentStorage.listCached()),
+        this.busy(c, this.deps.agentStorage.listLoadedSync()),
       ).length;
       if (this.stopped || active >= config.maxParallel || total >= MAX_ACTIVE) break;
       const selected = this.select(row, config, project);

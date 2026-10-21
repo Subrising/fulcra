@@ -212,6 +212,8 @@ import {
   killTerminalsForWorkspace,
   type ActiveWorkspaceRef,
 } from "./workspace-archive-service.js";
+import { startAutoArchiveIdle } from "./auto-archive-idle.js";
+import { defaultLedgerDir, readOpenLedgerRows } from "./ledger-items.js";
 import { setupAutoArchiveOnMerge } from "./auto-archive-on-merge/index.js";
 import { wrapSessionMessage, type SessionOutboundMessage } from "./messages.js";
 import type { TerminalManager } from "../terminal/terminal-manager.js";
@@ -482,6 +484,7 @@ export interface PaseoDaemonConfig {
   reviveOnRestart?: boolean;
   idleSleepMinutes?: number;
   idleSleepProviders?: string[];
+  autoArchiveClosedAfterHours?: number;
   autoResumeOnLimit?: boolean;
   appendSystemPrompt?: string;
   terminalProfiles?: TerminalProfile[];
@@ -1676,6 +1679,20 @@ export async function createPaseoDaemon(
       heldSends.pending(agentId) > 0 || queuedAgentMessages.pending(agentId) > 0,
   });
   // FULCRA(orchestration): a worker's finished turn reaches its lead as one notice (report-up.ts).
+  // FU-462: closed and finished-and-idle sessions that nobody needs are archived, one at a time (auto-archive-idle.ts).
+  const stopAutoArchiveIdle = startAutoArchiveIdle({
+    logger,
+    loadedRecords: () => agentStorage.listLoadedSync(),
+    lifecycleOf: (id) => agentManager.getAgent(id)?.lifecycle ?? null,
+    lastMessageOf: (id) =>
+      agentManager
+        .getTimeline(id)
+        .filter((item) => item.type === "assistant_message")
+        .at(-1)?.text ?? null,
+    readOpenLedgerRows: () => readOpenLedgerRows(defaultLedgerDir(), true),
+    closedAfterHours: () => config.autoArchiveClosedAfterHours ?? 24,
+    archive: (id) => agentManager.archiveAgent(id),
+  });
   const stopReportUp = startReportUp({
     createAgent,
     ensureRoutingWorkspace: (cwd) => ensureWorkspaceForCreateAndBroadcastExternal(cwd),
@@ -1701,10 +1718,10 @@ export async function createPaseoDaemon(
     onError: (error) => logger.warn({ err: error }, "Automations: an automation step failed"),
   });
   logger.info({ elapsed: elapsed() }, "Loading persisted agent registry");
-  const persistedRecords = await agentStorage.list();
+  const persistedRecords = await agentStorage.listLoaded();
   logger.info(
     { elapsed: elapsed() },
-    `Agent registry loaded (${persistedRecords.length} record${persistedRecords.length === 1 ? "" : "s"}); agents will initialize on demand`,
+    `Agent registry loaded (${persistedRecords.length} record${persistedRecords.length === 1 ? "" : "s"}, ${agentStorage.bootstrapRecordsSkipped} archived left on disk); agents will initialize on demand`,
   );
   // Orca R3a. Nothing runs a stored `running` turn after a restart, so it is normalised to idle with a durable
   // interruption marker before any client reads it. No agent is loaded, resumed or prompted here.
@@ -2314,6 +2331,7 @@ export async function createPaseoDaemon(
     stopSyncIoMeter();
     limitResume.stop();
     stopReportUp();
+    stopAutoArchiveIdle();
     hostLinkRuntime.close();
     heldSends.close();
     await queuedAgentMessages.close();

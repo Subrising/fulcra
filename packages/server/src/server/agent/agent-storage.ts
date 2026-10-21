@@ -2,7 +2,7 @@ import { HeldQueueFullError, MAX_HELD_PER_TARGET } from "../held-sends.js";
 import { SessionCostSchema, type SessionCost } from "@getpaseo/protocol/recorded-usage";
 import { sessionCost, SessionCostRecordsSchema } from "./session-cost.js";
 import { stripInternalPaseoMcpServer } from "./runtime-mcp-config.js";
-import { promises as fs, type Dirent } from "node:fs";
+import { promises as fs, readFileSync, type Dirent } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { z } from "zod";
@@ -206,6 +206,22 @@ function stripStoredRuntimeMcp(record: StoredAgentRecord): StoredAgentRecord {
   };
 }
 
+/**
+ * FU-462: the id of an archived record that boot may leave on disk, or null when the record must load now. A record
+ * keeps loading when something at boot reads it: a finish notice to reconcile, a daemon owner (looked up by
+ * execution), or no workspaceId (the legacy backfill stamps it).
+ */
+export function deferrableArchivedId(raw: unknown): string | null {
+  if (!raw || typeof raw !== "object") return null;
+  const record = raw as Record<string, unknown>;
+  if (typeof record.id !== "string" || !record.archivedAt) return null;
+  const prior = record.previousFinishNotices;
+  if (record.finishNotice || (Array.isArray(prior) && prior.length > 0) || record.owner)
+    return null;
+  if (typeof record.workspaceId !== "string" || !record.workspaceId) return null;
+  return record.id;
+}
+
 export class AgentStorage {
   private cache: Map<string, StoredAgentRecord> = new Map();
   private pathById: Map<string, string> = new Map();
@@ -214,6 +230,12 @@ export class AgentStorage {
   private deleting: Set<string> = new Set();
   private daemonAgentIdsByExecution: Map<string, string> = new Map();
   private daemonExecutionKeysByAgentId: Map<string, string> = new Map();
+  // FU-462: archived records stay on disk at boot. Their id and file are known here; the record is parsed and cached
+  // the first time something asks for it (get, getCached, list, a write). `bootstrapRecordsLoaded` counts the records
+  // parsed by the boot scan.
+  private archivedOnDisk: Map<string, string> = new Map();
+  bootstrapRecordsLoaded = 0;
+  bootstrapRecordsSkipped = 0;
   private loaded = false;
   private baseDir: string;
   private loadPromise: Promise<StoredAgentRecord[]> | null = null;
@@ -236,20 +258,51 @@ export class AgentStorage {
     await this.load();
   }
 
+  /** Every record, archived ones included. Parses the archived records that boot skipped: use it for history. */
   async list(): Promise<StoredAgentRecord[]> {
     await this.load();
+    this.materializeAllArchived();
+    return Array.from(this.cache.values());
+  }
+
+  /** The records already in memory: live ones, plus archived ones that boot had to keep. Parses nothing new. */
+  async listLoaded(): Promise<StoredAgentRecord[]> {
+    await this.load();
+    return Array.from(this.cache.values());
+  }
+
+  listLoadedSync(): StoredAgentRecord[] {
+    if (!this.loaded) throw new Error("Agent storage is not initialized");
     return Array.from(this.cache.values());
   }
 
   async get(agentId: string): Promise<StoredAgentRecord | null> {
     await this.load();
-    return this.cache.get(agentId) ?? null;
+    return this.cacheGet(agentId);
+  }
+
+  /** The cached record. An archived record that boot skipped is read from disk now, once. */
+  private cacheGet(agentId: string): StoredAgentRecord | null {
+    const cached = this.cache.get(agentId);
+    if (cached) return cached;
+    const filePath = this.archivedOnDisk.get(agentId);
+    if (!filePath) return null;
+    this.archivedOnDisk.delete(agentId);
+    const record = this.readRecordFileSync(filePath);
+    if (!record) return null;
+    this.cache.set(record.id, record);
+    this.indexOwner(record);
+    return record;
+  }
+
+  private materializeAllArchived(): void {
+    for (const agentId of Array.from(this.archivedOnDisk.keys())) this.cacheGet(agentId);
   }
 
   async getFinishNotice(agentId: string, messageId?: string): Promise<FinishNotice | null> {
     await this.load();
     await this.pendingWrites.get(agentId);
-    const record = this.cache.get(agentId);
+    const record = this.cacheGet(agentId) ?? undefined;
     return (messageId ? findFinishNotice(record, messageId) : record?.finishNotice) ?? null;
   }
 
@@ -483,11 +536,12 @@ export class AgentStorage {
   /** Synchronous delivery fences use the initialized cache without yielding to a line change. */
   getCached(agentId: string): StoredAgentRecord | null {
     if (!this.loaded) throw new Error("Agent storage is not initialized");
-    return this.cache.get(agentId) ?? null;
+    return this.cacheGet(agentId);
   }
 
   listCached(): StoredAgentRecord[] {
     if (!this.loaded) throw new Error("Agent storage is not initialized");
+    this.materializeAllArchived();
     return Array.from(this.cache.values());
   }
 
@@ -512,6 +566,7 @@ export class AgentStorage {
     providerHandleId: string,
   ): Promise<StoredAgentRecord[]> {
     await this.load();
+    this.materializeAllArchived();
     return Array.from(this.cache.values()).filter(
       (record) =>
         record.persistence?.provider === provider &&
@@ -522,6 +577,7 @@ export class AgentStorage {
 
   async listByWorkspace(workspaceId: string): Promise<StoredAgentRecord[]> {
     await this.load();
+    this.materializeAllArchived();
     return Array.from(this.cache.values()).filter((record) => record.workspaceId === workspaceId);
   }
 
@@ -552,7 +608,7 @@ export class AgentStorage {
         return undefined;
       }
 
-      const existing = this.cache.get(agentId) ?? null;
+      const existing = this.cacheGet(agentId);
       const record = mutate(existing);
       if (record === null) return undefined;
       // FU-428: a finish notice is only replaced or settled, never dropped. Name any write that drops one.
@@ -630,6 +686,7 @@ export class AgentStorage {
     );
 
     this.cache.delete(agentId);
+    this.archivedOnDisk.delete(agentId);
     this.removeOwnerIndex(agentId);
     this.pathById.delete(agentId);
     this.pathsById.delete(agentId);
@@ -779,6 +836,9 @@ export class AgentStorage {
 
   private async doLoad(): Promise<StoredAgentRecord[]> {
     this.cache.clear();
+    this.archivedOnDisk.clear();
+    this.bootstrapRecordsLoaded = 0;
+    this.bootstrapRecordsSkipped = 0;
     this.pathById.clear();
     this.pathsById.clear();
     this.daemonAgentIdsByExecution.clear();
@@ -835,15 +895,25 @@ export class AgentStorage {
     const allFilePaths = [...rootRecordPaths, ...projectFileLists.flat()];
     const loaded = await Promise.all(
       allFilePaths.map(async (filePath) => {
-        const record = await this.readRecordFile(filePath);
-        return record ? { record, filePath } : null;
+        const result = await this.readRecordFile(filePath, { deferArchived: true });
+        return result ? { result, filePath } : null;
       }),
     );
 
     for (const item of loaded) {
       if (!item) continue;
-      const { record, filePath } = item;
+      const { result, filePath } = item;
+      if ("archivedId" in result) {
+        // FU-462: an archived record is not parsed or cached until something asks for it.
+        this.archivedOnDisk.set(result.archivedId, filePath);
+        this.pathById.set(result.archivedId, filePath);
+        this.addIndexedPath(result.archivedId, filePath);
+        this.bootstrapRecordsSkipped += 1;
+        continue;
+      }
+      const { record } = result;
       records.push(record);
+      this.bootstrapRecordsLoaded += 1;
       this.cache.set(record.id, record);
       this.indexOwner(record);
       this.pathById.set(record.id, filePath);
@@ -853,15 +923,42 @@ export class AgentStorage {
     return records;
   }
 
-  private async readRecordFile(filePath: string): Promise<StoredAgentRecord | null> {
+  private async readRecordFile(
+    filePath: string,
+    options: { deferArchived: true },
+  ): Promise<{ record: StoredAgentRecord } | { archivedId: string } | null>;
+  private async readRecordFile(filePath: string): Promise<StoredAgentRecord | null>;
+  private async readRecordFile(
+    filePath: string,
+    options?: { deferArchived: true },
+  ): Promise<StoredAgentRecord | { record: StoredAgentRecord } | { archivedId: string } | null> {
     try {
       const content = await fs.readFile(filePath, "utf8");
       const parsed = JSON.parse(content);
-      const original = STORED_AGENT_SCHEMA.parse(parsed);
-      const record = stripStoredRuntimeMcp(original);
-      // Cleanup must retain durable finish notices and private file permissions.
-      if (record !== original) await writeJsonQueueFile(filePath, record);
-      return record;
+      if (options?.deferArchived) {
+        const archivedId = deferrableArchivedId(parsed);
+        if (archivedId) return { archivedId };
+      }
+      const record = this.finishRead(filePath, parsed);
+      return options ? { record: await record } : record;
+    } catch (error) {
+      this.logger.error({ err: error, filePath }, "Skipping invalid agent record");
+      return null;
+    }
+  }
+
+  private async finishRead(filePath: string, parsed: unknown): Promise<StoredAgentRecord> {
+    const original = STORED_AGENT_SCHEMA.parse(parsed);
+    const record = stripStoredRuntimeMcp(original);
+    // Cleanup must retain durable finish notices and private file permissions.
+    if (record !== original) await writeJsonQueueFile(filePath, record);
+    return record;
+  }
+
+  private readRecordFileSync(filePath: string): StoredAgentRecord | null {
+    try {
+      const original = STORED_AGENT_SCHEMA.parse(JSON.parse(readFileSync(filePath, "utf8")));
+      return stripStoredRuntimeMcp(original);
     } catch (error) {
       this.logger.error({ err: error, filePath }, "Skipping invalid agent record");
       return null;

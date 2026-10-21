@@ -36,7 +36,7 @@ test.runIf(process.platform !== "win32")(
           initialize: async () => {
             order.push("initialized");
           },
-          list: async () => {
+          listLoaded: async () => {
             expect(order).toEqual(["initialized"]);
             order.push("listed");
             return [{ id } as StoredAgentRecord];
@@ -63,7 +63,7 @@ test("P4: unavailable storage index prevents trusted startup", async () => {
     initializeTrustedPlugins(
       {
         initialize: async () => undefined,
-        list: async () => {
+        listLoaded: async () => {
           throw Error("storage unavailable");
         },
       },
@@ -83,7 +83,7 @@ test.runIf(process.platform === "win32")(
           initialize: async () => {
             order.push("initialized");
           },
-          list: async () => {
+          listLoaded: async () => {
             order.push("listed");
             return [];
           },
