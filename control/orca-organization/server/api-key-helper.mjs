@@ -1,5 +1,6 @@
 import { deflateRawSync } from "node:zlib";
 import { isAbsolute } from "node:path";
+import { mcpNodeFlags } from "./node-flags.mjs";
 // The helper contains code and account references only. Claude receives its stdout through apiKeyHelper.
 // Keep the runtime self-contained: plugin and controller bundles do not share a module directory.
 async function readApiKey(config) {
@@ -116,6 +117,8 @@ export function apiKeyHelperCommand({
     keychain: env.FULCRA_ACCOUNTS_KEYCHAIN || null,
     security: "/usr/bin/security",
   };
+  // FU-467: the helper briefly holds the API key, so it starts without a SIGUSR1 inspector.
+  const nodeFlags = mcpNodeFlags(env);
   const source = `(${readApiKey.toString()})(${JSON.stringify(config)})`;
   const code = `eval(Buffer.from('${Buffer.from(source).toString("base64")}','base64').toString())`;
   const quote = (s) => {
@@ -135,10 +138,10 @@ export function apiKeyHelperCommand({
     // Compression applies only to fixed code and account references, never to a key.
     const packed = deflateRawSync(Buffer.from(source)).toString("base64");
     const winCode = `eval(require('node:zlib').inflateRawSync(Buffer.from('${packed}','base64')).toString())`;
-    const script = `$env:ELECTRON_RUN_AS_NODE='1'; & ${literal(process.execPath)} '-e' ${literal(winCode)}; exit $LASTEXITCODE`;
+    const script = `$env:ELECTRON_RUN_AS_NODE='1'; & ${literal(process.execPath)} ${nodeFlags.map(literal).join(" ")}${nodeFlags.length ? " " : ""}'-e' ${literal(winCode)}; exit $LASTEXITCODE`;
     const command = `${quote(ps)} -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, "utf16le").toString("base64")}`;
     if (command.length > 7500) throw Error("Unsupported helper command length");
     return command;
   }
-  return `ELECTRON_RUN_AS_NODE=1 ${quote(process.execPath)} -e ${quote(code)}`;
+  return `ELECTRON_RUN_AS_NODE=1 ${[quote(process.execPath), ...nodeFlags.map(quote)].join(" ")} -e ${quote(code)}`;
 }

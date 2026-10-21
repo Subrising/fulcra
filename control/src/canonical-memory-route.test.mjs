@@ -15,8 +15,8 @@ test("the memory route launches only the packaged entry, scoped to this installa
     assert.deepEqual(canonicalMemoryConfig(provider), {
       type: "stdio",
       command: process.execPath,
-      args: [entry],
-      env: { ORCA_HOME: portable.home, ORCA_MEMORY_CLIENT: provider },
+      args: ["--disable-sigusr1", entry],
+      env: { ELECTRON_RUN_AS_NODE: "1", ORCA_HOME: portable.home, ORCA_MEMORY_CLIENT: provider },
     });
   }
 });
