@@ -3178,7 +3178,7 @@ export class VoiceAssistantWebSocketServer {
     } satisfies WebSocketRuntimeMetricsLogPayload;
 
     this.runtimeMetricsBusy = isRuntimeMetricsWindowBusy({
-      counters: runtimeMetrics.counters as Record<string, unknown>,
+      counters: runtimeMetrics.counters as unknown as Record<string, unknown>,
       gitActive: gitCommandMetrics.active,
       gitPending: gitCommandMetrics.pending,
     });
