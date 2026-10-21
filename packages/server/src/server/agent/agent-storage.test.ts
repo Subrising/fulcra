@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeEach, afterEach } from "vitest";
+import { describe, expect, test, beforeEach, afterEach, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
@@ -185,6 +185,27 @@ describe("AgentStorage", () => {
       status: "delivered",
       deliveredBy: "report-up",
     });
+  });
+
+  test("a record write that drops a finish notice is logged", async () => {
+    const parentId = "11111111-1111-4111-8111-111111111111";
+    const child = createManagedAgent({ id: "22222222-2222-4222-8222-222222222222" });
+    child.labels = { "paseo.parent-agent-id": parentId };
+    const info = vi.spyOn(logger, "info");
+    await storage.applySnapshot(child);
+    const stale = (await storage.get(child.id))!;
+    const armed = await storage.armFinishNotice(child, parentId, "report-up");
+    await storage.applySnapshot(child);
+    expect(info).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "Finish notice removed by record write",
+    );
+    await storage.upsert({ ...stale, title: "stale copy" });
+    expect(info).toHaveBeenCalledWith(
+      { agentId: child.id, messageId: armed.messageId },
+      "Finish notice removed by record write",
+    );
+    info.mockRestore();
   });
 
   test("a stopped turn keeps one pending notice across restart", async () => {
