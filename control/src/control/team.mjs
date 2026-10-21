@@ -5,6 +5,7 @@ import { portable, privateJson } from "../portable-config.mjs";
 import { localProgrammeRow } from "../config.mjs";
 import { COMPANY, PROGRAMME, uuid } from "./authority.mjs";
 import { managementRefusal } from "./management-refusal.mjs";
+import { renameReplacing } from "./rename-retry.mjs";
 
 // Fulcra 0.2.8: build the team from chats that already exist. Until now a seat could only be held by a chat the
 // controller had created itself, so "Make main assistant" on any chat the owner opened by hand was refused -- and the
@@ -455,10 +456,14 @@ export class Team {
     const temporary = path.join(path.dirname(this.config.tasks), `tasks-${randomUUID()}.tmp`);
     try {
       fs.writeFileSync(temporary, text, { mode: 0o600, flag: "wx" });
-      const fd = fs.openSync(temporary, "r");
-      fs.fsyncSync(fd);
-      fs.closeSync(fd);
-      fs.renameSync(temporary, this.config.tasks);
+      // FU-444b: Windows refuses fsync on a read-only handle (EPERM), so every catalog write failed there.
+      const fd = fs.openSync(temporary, "r+");
+      try {
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
+      renameReplacing(temporary, this.config.tasks);
     } finally {
       fs.rmSync(temporary, { force: true });
     }
