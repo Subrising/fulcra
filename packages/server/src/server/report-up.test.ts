@@ -289,7 +289,10 @@ describe("report-up", () => {
     const busy = fixture([lead, worker()]);
     busy.turn(WORKER);
     busy.stream(WORKER, { type: "turn_started", provider: "claude" });
-    const remote = fixture([lead, worker({ [REPORTS_TO_LABEL]: `${LEAD}@srv_other` })]);
+    const remote = fixture([
+      lead,
+      { ...worker({ [REPORTS_TO_LABEL]: `${LEAD}@srv_other` }), lastMessage: "Tests pass." },
+    ]);
     remote.turn(WORKER);
     await Promise.all([off.settle(), busy.settle(), remote.settle()]);
     expect([...off.delivered, ...busy.delivered, ...remote.delivered]).toEqual([]);
@@ -336,6 +339,106 @@ describe("report-up", () => {
 });
 
 // Fulcra 0.2.17 (FU-63): a limit text is limit state, never "finished a turn".
+describe("a result or question in the final text is never silent (FU-402)", () => {
+  test("with finished-turn notices off, a DECISION line still reaches the lead once", async () => {
+    const f = fixture([lead, { ...worker(), lastMessage: "Checked.\nDECISION merge PR #9 now?" }], {
+      enabled: false,
+    });
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered.map((notice) => notice.leadId)).toEqual([LEAD]);
+    expect(f.delivered[0]!.prompt).toContain("DECISION merge PR #9 now?");
+  });
+
+  test("with finished-turn notices off, a question in plain text reaches the lead", async () => {
+    const f = fixture(
+      [lead, { ...worker(), lastMessage: "Done: tests pass. Question: merge now?" }],
+      {
+        enabled: false,
+      },
+    );
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered.map((notice) => notice.leadId)).toEqual([LEAD]);
+    expect(f.delivered[0]!.prompt).toContain("Question: merge now?");
+  });
+
+  test("with finished-turn notices off, plain progress text stays quiet", async () => {
+    const f = fixture([lead, { ...worker(), lastMessage: "Tests pass." }], { enabled: false });
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+  });
+
+  test("a lead on another computer: the worker is told once that its result did not arrive", async () => {
+    for (const enabled of [true, false]) {
+      const f = fixture(
+        [
+          lead,
+          {
+            ...worker({ [REPORTS_TO_LABEL]: `${LEAD}@srv_other` }),
+            lastMessage: "BLOCKED no route",
+          },
+        ],
+        { enabled },
+      );
+      f.turn(WORKER);
+      await f.settle();
+      expect(f.delivered.map((notice) => notice.leadId)).toEqual([WORKER]);
+      expect(f.delivered[0]!.prompt).toContain(`${LEAD}@srv_other`);
+      expect(f.delivered[0]!.prompt).toContain("another computer");
+      // The worker's answer turn was started by that notice, so it sends nothing more.
+      f.turn(WORKER, { text: f.delivered[0]!.prompt });
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+    }
+  });
+
+  test("a result the worker already sent to its lead in this turn is not sent again", async () => {
+    resetAgentMessageLogForTests();
+    for (const [line, enabled, note] of [
+      [LEAD, false, noteAgentMessageDelivered],
+      [`${LEAD}@srv_other`, true, noteAgentMessage],
+    ] as const) {
+      const f = fixture(
+        [lead, { ...worker({ [REPORTS_TO_LABEL]: line }), lastMessage: "DONE merged" }],
+        { enabled },
+      );
+      f.stream(WORKER, { type: "turn_started", provider: "claude" });
+      note(WORKER, LEAD, f.clock.now + 1000);
+      f.clock.now += 2000;
+      f.stream(WORKER, { type: "turn_completed", provider: "claude" });
+      await f.settle();
+      expect(f.delivered).toEqual([]);
+    }
+    resetAgentMessageLogForTests();
+  });
+
+  test("a chat that has its own workers is not treated as a worker", async () => {
+    const sub = {
+      id: "66666666-6666-4666-8666-666666666666",
+      title: "Sub",
+      labels: { [REPORTS_TO_LABEL]: WORKER },
+    };
+    const f = fixture([lead, { ...worker(), lastMessage: "DECISION merge?" }, sub], {
+      enabled: false,
+    });
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+  });
+
+  test("every report-up notice turned off keeps the result quiet", async () => {
+    const f = fixture([lead, { ...worker(), lastMessage: "DECISION merge?" }], {
+      enabled: false,
+      otherEnabled: false,
+    });
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+  });
+});
+
 describe("report-up and usage limits", () => {
   const NOW = Date.parse("2026-10-11T00:00:00Z");
   const SESSION = "You've hit your session limit · resets 3pm (Australia/Brisbane)";
@@ -697,7 +800,12 @@ describe("idle-lead nudge", () => {
   const owned = [
     { project: "fulcra", id: "FU-12", owner: "Lead (11111111)", status: "IN PROGRESS" },
   ];
-  const idleWorker = (): FakeChat => ({ ...worker(), lifecycle: "idle" });
+  // Plain progress text: a result or question would be relayed with finished-turn notices off (FU-402).
+  const idleWorker = (): FakeChat => ({
+    ...worker(),
+    lastMessage: "Tests pass.",
+    lifecycle: "idle",
+  });
 
   test("the lead gets one short message that lists its open items and idle workers", async () => {
     const f = fixture([lead, idleWorker()], { ledger: owned });
@@ -1912,7 +2020,8 @@ describe("report-up coalescing", () => {
     f.timers[0]?.run();
     await f.settle();
     expect(f.delivered).toHaveLength(1);
-    const off = fixture([lead, worker()], { enabled: false });
+    // Plain progress text: a result or question is relayed even when off (FU-402).
+    const off = fixture([lead, { ...worker(), lastMessage: "Tests pass." }], { enabled: false });
     off.turn(WORKER);
     await off.settle();
     expect(off.delivered).toEqual([]);
@@ -1961,7 +2070,8 @@ describe("report-up default", () => {
 
   test("by default no 'finished a turn' or error notice is sent, but a usage-limit notice still is", async () => {
     const byDefault = reportUpSwitches(undefined);
-    const f = fixture([lead, worker()], {
+    // Plain progress text: a result or question is relayed by default (FU-402).
+    const f = fixture([lead, { ...worker(), lastMessage: "Tests pass." }], {
       enabled: byDefault.finishedTurns,
       otherEnabled: byDefault.otherNotices,
     });

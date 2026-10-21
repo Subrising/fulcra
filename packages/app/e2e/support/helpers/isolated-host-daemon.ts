@@ -7,6 +7,9 @@ import { assertTestHome } from "../../../../../scripts/test-support/test-home.cj
 import { withDisabledE2ESpeechEnv } from "./speech-env";
 import { killProcessTree, spawnTsx } from "./spawn-node";
 
+// A killed daemon's child can still write into its home while it is removed (ENOTEMPTY).
+const REMOVE_TREE = { recursive: true, force: true, maxRetries: 5, retryDelay: 200 } as const;
+
 export interface IsolatedHostDaemon {
   serverId: string;
   port: number;
@@ -90,7 +93,7 @@ export async function startIsolatedHostDaemon(
   serverId: string,
   options: IsolatedHostDaemonOptions = {},
 ): Promise<IsolatedHostDaemon> {
-  const port = await getAvailableHostDaemonPort();
+  let port = await getAvailableHostDaemonPort();
 
   const metroPort = process.env.E2E_METRO_PORT;
   if (!metroPort) throw new Error("E2E_METRO_PORT is required to start an isolated host daemon");
@@ -126,9 +129,9 @@ export async function startIsolatedHostDaemon(
       );
     } catch (error) {
       if (!options.preserveHome) {
-        await rm(paseoHome, { recursive: true, force: true });
+        await rm(paseoHome, REMOVE_TREE);
       }
-      await rm(publishedPackageRoot, { recursive: true, force: true });
+      await rm(publishedPackageRoot, REMOVE_TREE);
       throw error;
     }
   }
@@ -200,15 +203,29 @@ export async function startIsolatedHostDaemon(
     }
   };
 
+  // The free port is released before the daemon binds it. Another process can take
+  // it in between, so a first start that finds the port in use tries a new one.
+  const spawnFirstDaemon = async (): Promise<ChildProcess> => {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await spawnDaemon();
+      } catch (error) {
+        const inUse = error instanceof Error && error.message.includes("EADDRINUSE");
+        if (!inUse || attempt >= 3) throw error;
+        port = await getAvailableHostDaemonPort();
+      }
+    }
+  };
+
   let child: ChildProcess;
   try {
-    child = await spawnDaemon();
+    child = await spawnFirstDaemon();
   } catch (error) {
     if (!options.preserveHome) {
-      await rm(paseoHome, { recursive: true, force: true });
+      await rm(paseoHome, REMOVE_TREE);
     }
     if (publishedPackageRoot) {
-      await rm(publishedPackageRoot, { recursive: true, force: true });
+      await rm(publishedPackageRoot, REMOVE_TREE);
     }
     throw error;
   }
@@ -230,10 +247,10 @@ export async function startIsolatedHostDaemon(
       closed = true;
       await killProcessTree(child);
       if (!options.preserveHome) {
-        await rm(paseoHome, { recursive: true, force: true });
+        await rm(paseoHome, REMOVE_TREE);
       }
       if (publishedPackageRoot) {
-        await rm(publishedPackageRoot, { recursive: true, force: true });
+        await rm(publishedPackageRoot, REMOVE_TREE);
       }
     },
   };

@@ -7,7 +7,13 @@ runs:
       with:
         node-version: "22"
     - shell: bash
-      run: npm install --global npm@11.12.1
+      # The hosted tool cache can refuse the in-place npm replacement (ENOTEMPTY). Try three times.
+      run: |
+        for _ in 1 2 3; do
+          npm install --global npm@11.12.1 && exit 0
+          sleep 5
+        done
+        exit 1
     - id: key
       shell: bash
       env:

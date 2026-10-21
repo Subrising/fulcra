@@ -119,6 +119,7 @@ describe("reporting lines", () => {
     expect(await check({ "fulcra.reports-to": `${main.id}@${BOOK}` })).toMatchObject({
       inboundOnly: false,
       outboundServerOnly: BOOK,
+      outboundParent: `${main.id}@${BOOK}`,
     });
     expect(await check({ "fulcra.reports-to": "lead-1", "fulcra.direct-link": main.id })).toEqual({
       inboundOnly: false,
@@ -149,6 +150,72 @@ describe("reporting lines", () => {
       ).toBe(false);
     }
   });
+  it("FU-402 lets a worker on another computer reach its own lead here, and nobody else", async () => {
+    const bookWorker = agent("book-work", "Release", { "fulcra.reports-to": `${lead.id}@${MINI}` });
+    const source: LineStore = {
+      get: async (id) => (id === bookWorker.id ? bookWorker : null),
+      list: async () => [bookWorker],
+    };
+    const relayed = async (targetId: string) => ({
+      agentId: bookWorker.id,
+      serverId: BOOK,
+      ...(await decideOutboundSend(source, {
+        senderId: bookWorker.id,
+        targetId,
+        localServerId: BOOK,
+      })),
+    });
+    const atMini = async (target: LineAgent) =>
+      checkReportingLine({
+        sender: await relayed(target.id),
+        senderAgent: null,
+        target,
+        senderParent: null,
+        localServerId: MINI,
+        mainAssistantId: main.id,
+      });
+    expect(await atMini(lead)).toEqual({ allowed: true, why: "parent" });
+    expect((await atMini(otherLead)).allowed).toBe(false);
+    // The claim names the source's own line host; another host cannot use it.
+    expect(
+      checkReportingLine({
+        sender: await relayed(lead.id),
+        senderAgent: null,
+        target: lead,
+        senderParent: null,
+        localServerId: "srv_pc",
+        mainAssistantId: main.id,
+      }).allowed,
+    ).toBe(false);
+    // The mark names one lead on one host. Another target or a missing host check is refused.
+    for (const forged of [
+      { outboundServerOnly: MINI, outboundParent: `${otherLead.id}@${MINI}` },
+      { outboundServerOnly: MINI, outboundParent: `${lead.id}@srv_pc` },
+      { outboundParent: `${lead.id}@${MINI}` },
+    ])
+      expect(
+        checkReportingLine({
+          sender: { agentId: bookWorker.id, serverId: BOOK, ...forged },
+          senderAgent: null,
+          target: lead,
+          senderParent: null,
+          localServerId: MINI,
+          mainAssistantId: main.id,
+        }).allowed,
+      ).toBe(false);
+    // Without the source's confirmation the old refusal stays.
+    expect(
+      checkReportingLine({
+        sender: { agentId: bookWorker.id, serverId: BOOK },
+        senderAgent: null,
+        target: lead,
+        senderParent: null,
+        localServerId: MINI,
+        mainAssistantId: main.id,
+      }),
+    ).toMatchObject({ allowed: false, reason: expect.stringContaining("From another computer") });
+  });
+
   it("allows a send up to the parent and down to the chat's own children", () => {
     expect(send(worker, lead)).toEqual({ allowed: true, why: "parent" });
     expect(send(lead, worker)).toEqual({ allowed: true, why: "child" });
