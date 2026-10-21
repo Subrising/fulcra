@@ -582,7 +582,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "1"
       E2E_STATIC_WEB: "1"
@@ -673,7 +673,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "2"
       E2E_STATIC_WEB: "1"
@@ -686,7 +686,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "3"
       E2E_STATIC_WEB: "1"
@@ -699,7 +699,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "4"
       E2E_STATIC_WEB: "1"
@@ -712,7 +712,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "5"
       E2E_STATIC_WEB: "1"
@@ -725,7 +725,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "6"
       E2E_STATIC_WEB: "1"
@@ -738,7 +738,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "7"
       E2E_STATIC_WEB: "1"
@@ -751,7 +751,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "8"
       E2E_STATIC_WEB: "1"
@@ -764,7 +764,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "9"
       E2E_STATIC_WEB: "1"
@@ -777,7 +777,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "10"
       E2E_STATIC_WEB: "1"
@@ -790,7 +790,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "11"
       E2E_STATIC_WEB: "1"
@@ -803,7 +803,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "12"
       E2E_STATIC_WEB: "1"
@@ -816,7 +816,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "13"
       E2E_STATIC_WEB: "1"
@@ -829,7 +829,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "14"
       E2E_STATIC_WEB: "1"
@@ -842,7 +842,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "15"
       E2E_STATIC_WEB: "1"
@@ -855,7 +855,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "16"
       E2E_STATIC_WEB: "1"
@@ -868,7 +868,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "17"
       E2E_STATIC_WEB: "1"
@@ -881,7 +881,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "18"
       E2E_STATIC_WEB: "1"
@@ -894,7 +894,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "19"
       E2E_STATIC_WEB: "1"
@@ -907,7 +907,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "20"
       E2E_STATIC_WEB: "1"
@@ -920,7 +920,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "21"
       E2E_STATIC_WEB: "1"
@@ -933,7 +933,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "22"
       E2E_STATIC_WEB: "1"
@@ -946,7 +946,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "23"
       E2E_STATIC_WEB: "1"
@@ -959,7 +959,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "24"
       E2E_STATIC_WEB: "1"
@@ -972,7 +972,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "25"
       E2E_STATIC_WEB: "1"
@@ -985,7 +985,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "26"
       E2E_STATIC_WEB: "1"
@@ -998,7 +998,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "27"
       E2E_STATIC_WEB: "1"
@@ -1011,7 +1011,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "28"
       E2E_STATIC_WEB: "1"
@@ -1024,7 +1024,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "29"
       E2E_STATIC_WEB: "1"
@@ -1037,7 +1037,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "30"
       E2E_STATIC_WEB: "1"
@@ -1050,7 +1050,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "31"
       E2E_STATIC_WEB: "1"
@@ -1063,7 +1063,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: "32"
       E2E_STATIC_WEB: "1"
@@ -1076,7 +1076,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     env:
       PLAYWRIGHT_ARTIFACT: recovery
       E2E_STATIC_WEB: "0"
@@ -1091,7 +1091,7 @@ jobs:
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     continue-on-error: true
     env:
       PLAYWRIGHT_ARTIFACT: quarantine
