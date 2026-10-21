@@ -552,6 +552,34 @@ test("accountDown tells each holder once per account, and the notice names the a
   assert.match(text, /must sign the account in again/);
 });
 
+test("a paid account serving while a subscription is free wakes Main once (FU-443)", async (t) => {
+  const f = fixture(t);
+  assert.equal(
+    f.w.accountPaidWhileFree("k1", { account: "Billing" }),
+    false,
+    "no Main bound: nothing queued",
+  );
+  f.db
+    .prepare(
+      "INSERT INTO role_bindings VALUES ('prime','main',NULL,?,?,1,1,'assigned','Risk test',NULL,?)",
+    )
+    .run(T(1), T(90), new Date().toISOString());
+  assert.equal(f.w.accountPaidWhileFree("k1", { account: "Billing" }), true);
+  assert.equal(f.w.accountPaidWhileFree("k1", { account: "Billing" }), true);
+  assert.equal(
+    f.db.prepare("SELECT count(*) n FROM role_wakes WHERE kind='api-while-free'").get().n,
+    1,
+    "the same key never queues twice",
+  );
+  const text = Wakes.prototype.render.call({}, [
+    { kind: "api-while-free", session: null, payload: JSON.stringify({ account: "Billing" }) },
+  ]);
+  assert.match(
+    text,
+    /\[RISK\] Paid API account "Billing" served a turn while a subscription account was free/,
+  );
+});
+
 test("billing warnings retain Main-first and lead-first receipts across restart", async (t) => {
   for (const mainFirst of [true, false]) {
     const f = fixture(t),

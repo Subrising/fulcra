@@ -31,6 +31,9 @@ import {
   readAccountsAsync,
   readUsageAsync,
   markAccountLimited,
+  paidWhileFree,
+  pendingRiskNotices,
+  markRiskNoticeSent,
 } from "./accounts.mjs";
 import { markAccountRevoked, accountStatus } from "./accounts.mjs";
 
@@ -1429,4 +1432,109 @@ test("an expired sign-in is skipped, and an unnamed old key is not a subscriptio
     credentialKind: "subscription",
   });
   assert.equal(choose(s, "claude", T0).id, "sub");
+});
+
+// FU-443: a paid API account serves a turn while a subscription account is free -> one RISK notice per account and window.
+async function riskPool() {
+  const root = scratch();
+  const sub = await addAccount(root, { provider: "claude", name: "Personal" }, T0 + 1);
+  const api = await addAccount(root, { provider: "claude", name: "Billing" }, T0);
+  await subscriptions(root, sub);
+  await setAccount(root, api.id, { credentialKind: "api-key" });
+  return { root, sub, api };
+}
+test("paidWhileFree: notice when an API account serves while a subscription is free; none when none is free; none for a subscription (FU-443)", async () => {
+  const { root, sub, api } = await riskPool();
+  const s = readAccounts(root);
+  assert.equal(
+    paidWhileFree(
+      s,
+      "claude",
+      s.accounts.find((a) => a.id === sub.id),
+      T0,
+    ),
+    null,
+  );
+  const n = paidWhileFree(
+    s,
+    "claude",
+    s.accounts.find((a) => a.id === api.id),
+    T0,
+  );
+  assert.equal(n.accountId, api.id);
+  assert.equal(n.sent, false);
+  await markAccountLimited(root, sub.id, { resetAt: new Date(T0 + 3600000).toISOString() }, T0);
+  const capped = readAccounts(root);
+  assert.equal(
+    paidWhileFree(
+      capped,
+      "claude",
+      capped.accounts.find((a) => a.id === api.id),
+      T0 + 1,
+    ),
+    null,
+    "every subscription is capped: paid is the plan, not a risk",
+  );
+});
+test("paidWhileFree: no second notice for the same account and window, a new window raises one again (FU-443)", async () => {
+  const { root, api } = await riskPool();
+  const s = readAccounts(root);
+  const acc = s.accounts.find((a) => a.id === api.id);
+  assert.ok(paidWhileFree(s, "claude", acc, T0));
+  assert.equal(paidWhileFree(s, "claude", acc, T0 + 60000), null);
+  assert.ok(paidWhileFree(s, "claude", acc, T0 + 6 * 3600000));
+  assert.equal(s.riskNotices.length, 2);
+});
+test("pendingRiskNotices and markRiskNoticeSent: a notice stays pending until it is sent (FU-443)", async () => {
+  const { root, api } = await riskPool();
+  const n = await update(root, (s) =>
+    paidWhileFree(
+      s,
+      "claude",
+      s.accounts.find((a) => a.id === api.id),
+      T0,
+    ),
+  );
+  assert.deepEqual(
+    pendingRiskNotices(root).map((x) => x.key),
+    [n.key],
+  );
+  await markRiskNoticeSent(root, n.key);
+  assert.deepEqual(pendingRiskNotices(root), []);
+});
+test("the launch hook raises one RISK notice for a pinned API launch while a subscription is free, and none for the next launch in the window (FU-443)", async () => {
+  const { root, sub, api } = await riskPool();
+  const key = "sk-ant-api03-" + "k".repeat(40);
+  const tokens = new Map([
+    [api.id, key],
+    [sub.id, "sk-ant-oat01-" + "x".repeat(40)],
+  ]);
+  const risks = [];
+  const hook = sessionOpenHook({
+    root: () => root,
+    keychain: { get: async (id) => tokens.get(id) ?? null },
+    now: () => T0,
+    onRisk: (r) => risks.push(r),
+  });
+  const req = (id, account) => ({
+    request: {
+      agentId: id,
+      provider: "claude",
+      cwd: "/x",
+      workspaceId: null,
+      reason: "create",
+      purpose: "interactive",
+      env: account ? { FULCRA_ACCOUNT_REQUEST: account } : {},
+    },
+  });
+  assert.equal((await hook(req(S(1)))).env.FULCRA_ACCOUNT_ID, sub.id);
+  assert.equal(risks.length, 0, "a subscription launch is no risk");
+  assert.equal((await hook(req(S(2), "Billing"))).env.FULCRA_ACCOUNT_ID, api.id);
+  assert.equal(risks.length, 1);
+  assert.equal(risks[0].accountId, api.id);
+  assert.equal(pendingRiskNotices(root).length, 1);
+  await hook(req(S(3), "Billing"));
+  assert.equal(risks.length, 1, "same account and window: no repeat");
+  assert.equal(pendingRiskNotices(root).length, 1);
+  assert.equal(JSON.stringify(readAccounts(root)).includes(key), false);
 });
