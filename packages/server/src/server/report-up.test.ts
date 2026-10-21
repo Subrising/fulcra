@@ -237,7 +237,7 @@ const worker = (labels: Record<string, string> = { [REPORTS_TO_LABEL]: LEAD }): 
   id: WORKER,
   title: "Builder",
   labels,
-  lastMessage: "Done: tests pass. Merge is ready.",
+  lastMessage: "Done: tests pass. Question: merge now?",
 });
 
 describe("report-up", () => {
@@ -249,7 +249,7 @@ describe("report-up", () => {
     expect(f.delivered).toHaveLength(1);
     expect(f.delivered[0]!.leadId).toBe(LEAD);
     expect(f.delivered[0]!.prompt).toContain(
-      `Worker Builder (${WORKER}) finished a turn: Done: tests pass. Merge is ready.`,
+      `Worker Builder (${WORKER}) finished a turn: Done: tests pass. Question: merge now?`,
     );
   });
 
@@ -396,16 +396,16 @@ describe("a result or question in the final text is never silent (FU-402)", () =
 
   test("a result the worker already sent to its lead in this turn is not sent again", async () => {
     resetAgentMessageLogForTests();
-    for (const [line, enabled] of [
-      [LEAD, false],
-      [`${LEAD}@srv_other`, true],
+    for (const [line, enabled, note] of [
+      [LEAD, false, noteAgentMessageDelivered],
+      [`${LEAD}@srv_other`, true, noteAgentMessage],
     ] as const) {
       const f = fixture(
         [lead, { ...worker({ [REPORTS_TO_LABEL]: line }), lastMessage: "DONE merged" }],
         { enabled },
       );
       f.stream(WORKER, { type: "turn_started", provider: "claude" });
-      noteAgentMessage(WORKER, LEAD, f.clock.now + 1000);
+      note(WORKER, LEAD, f.clock.now + 1000);
       f.clock.now += 2000;
       f.stream(WORKER, { type: "turn_completed", provider: "claude" });
       await f.settle();
@@ -800,7 +800,12 @@ describe("idle-lead nudge", () => {
   const owned = [
     { project: "fulcra", id: "FU-12", owner: "Lead (11111111)", status: "IN PROGRESS" },
   ];
-  const idleWorker = (): FakeChat => ({ ...worker(), lifecycle: "idle" });
+  // Plain progress text: a result or question would be relayed with finished-turn notices off (FU-402).
+  const idleWorker = (): FakeChat => ({
+    ...worker(),
+    lastMessage: "Tests pass.",
+    lifecycle: "idle",
+  });
 
   test("the lead gets one short message that lists its open items and idle workers", async () => {
     const f = fixture([lead, idleWorker()], { ledger: owned });
@@ -2015,7 +2020,8 @@ describe("report-up coalescing", () => {
     f.timers[0]?.run();
     await f.settle();
     expect(f.delivered).toHaveLength(1);
-    const off = fixture([lead, worker()], { enabled: false });
+    // Plain progress text: a result or question is relayed even when off (FU-402).
+    const off = fixture([lead, { ...worker(), lastMessage: "Tests pass." }], { enabled: false });
     off.turn(WORKER);
     await off.settle();
     expect(off.delivered).toEqual([]);
@@ -2064,7 +2070,8 @@ describe("report-up default", () => {
 
   test("by default no 'finished a turn' or error notice is sent, but a usage-limit notice still is", async () => {
     const byDefault = reportUpSwitches(undefined);
-    const f = fixture([lead, worker()], {
+    // Plain progress text: a result or question is relayed by default (FU-402).
+    const f = fixture([lead, { ...worker(), lastMessage: "Tests pass." }], {
       enabled: byDefault.finishedTurns,
       otherEnabled: byDefault.otherNotices,
     });

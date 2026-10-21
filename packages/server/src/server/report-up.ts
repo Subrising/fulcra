@@ -25,7 +25,6 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { writePrivateFileAtomicSync } from "./private-files.js";
-import { lastAgentMessageAt } from "./agent-message-log.js";
 import type { Logger } from "pino";
 import {
   MAIN_ASSISTANT_ROLE,
@@ -68,7 +67,7 @@ import {
   type LedgerRow,
 } from "./ledger-items.js";
 import { finishNoticeWanted } from "./finish-notice-filter.js";
-import { lastAgentMessageDeliveredAt } from "./agent-message-log.js";
+import { lastAgentMessageAt, lastAgentMessageDeliveredAt } from "./agent-message-log.js";
 import type { HostLinkNoticeKind } from "./host-link-contracts.js";
 import { classifyEndingAssistantMessage, classifyFailedTurn } from "./limit-resume/detect.js";
 import {
@@ -225,11 +224,21 @@ interface UnseenTurn {
   startedAt: number | undefined;
 }
 
-/** A send from the worker to its lead (local, or through the source check of an SSH relay) since the turn began. */
-function sentToLeadDuring(worker: LineAgent, startedAt: number | undefined): boolean {
-  const leadId = reportsTo(worker)?.split("@", 1)[0];
+/**
+ * The worker sent to its lead since the turn began: a delivered local send (FU-427), or for a lead on another computer
+ * the source check of an SSH relay. A failed relay is shown to the worker by the CLI itself.
+ */
+function sentToLeadDuring(
+  worker: LineAgent,
+  startedAt: number | undefined,
+  localServerId: string | null,
+): boolean {
+  const [leadId, server] = reportsTo(worker)?.split("@", 2) ?? [];
   if (!leadId || startedAt === undefined) return false;
-  const at = lastAgentMessageAt(worker.id, leadId);
+  const remote = server !== undefined && server !== localServerId;
+  const at = remote
+    ? lastAgentMessageAt(worker.id, leadId)
+    : lastAgentMessageDeliveredAt(worker.id, leadId);
   return at !== null && at >= startedAt;
 }
 
@@ -1906,7 +1915,7 @@ export class ReportUpService {
         : observedLast;
     if (!parseWorkerResult(lastMessage) && !endsWithQuestion(lastMessage)) return;
     // The worker already messaged its lead during this turn, so its result is not unseen.
-    if (sentToLeadDuring(worker, startedAt)) return;
+    if (sentToLeadDuring(worker, startedAt, this.deps.localServerId)) return;
     const lead = await this.leadOf(worker);
     if ("id" in lead) {
       const leadAgent = await this.store.get(lead.id);
