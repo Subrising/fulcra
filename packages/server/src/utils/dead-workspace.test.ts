@@ -7,9 +7,9 @@ describe("isDeadWorkspaceFolder", () => {
   it("skips a folder that is gone", () => {
     expect(isDeadWorkspaceFolder("/work/gone", () => false)).toBe(true);
   });
-  it("skips a folder under /tmp even when it exists", () => {
-    expect(isDeadWorkspaceFolder("/tmp/scratch/repo", () => true)).toBe(true);
-    expect(isDeadWorkspaceFolder("/private/tmp/scratch/repo", () => true)).toBe(true);
+  it("keeps an existing folder under /tmp (live sessions work there)", () => {
+    expect(isDeadWorkspaceFolder("/tmp/scratch/repo", () => true)).toBe(false);
+    expect(isDeadWorkspaceFolder("/private/tmp/scratch/repo", () => true)).toBe(false);
   });
   it("keeps a live folder", () => {
     expect(isDeadWorkspaceFolder("/work/live", () => true)).toBe(false);

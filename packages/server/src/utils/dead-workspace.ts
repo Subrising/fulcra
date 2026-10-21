@@ -1,14 +1,10 @@
 import { existsSync } from "node:fs";
 
-const TEMP_PREFIXES = ["/tmp/", "/private/tmp/"];
-
-/** A record whose folder is gone or sits in a temp folder is not worth any more git work. */
+/** A record whose folder is gone is not worth any more git work. Live sessions may work in temp folders. */
 export function isDeadWorkspaceFolder(
   cwd: string,
   folderExists: (p: string) => boolean = existsSync,
 ): boolean {
-  const normalized = cwd.replaceAll("\\", "/");
-  if (TEMP_PREFIXES.some((prefix) => normalized.startsWith(prefix))) return true;
   return !folderExists(cwd);
 }
 
