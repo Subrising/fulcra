@@ -114,3 +114,4 @@ app.json
 
 # Project-local Serena configuration and memories.
 .serena/
+__pycache__/

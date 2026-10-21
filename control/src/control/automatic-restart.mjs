@@ -6,7 +6,8 @@ import { bootChainVerdict } from "./boot-chain.mjs";
 
 export const RESTART_SETTLE_MS = 30000,
   RESTART_STAGGER_MS = 3000,
-  RESTART_ATTEMPTS = 3;
+  RESTART_ATTEMPTS = 3,
+  HELD_RECHECK_MS = 24 * 3600 * 1000;
 const COLUMNS =
   "id,interruption,session,generation,previousBoot,boot,state,attempts,nextAt,continuation,outcome,at";
 const REASON = "Automatically continue the confirmed turn interrupted by a clean host restart";
@@ -34,6 +35,12 @@ export class AutomaticRestarts {
     this.db.exec(
       "CREATE UNIQUE INDEX IF NOT EXISTS automatic_restart_once ON automatic_restart_resumes(session,boot)",
     );
+    // FU-457: a held row without a recheck time was re-evaluated on every tick. Close the stale ones.
+    this.db
+      .prepare(
+        "UPDATE automatic_restart_resumes SET state='failed',nextAt=NULL WHERE state='held' AND nextAt IS NULL AND outcome LIKE 'No confirmed interrupted controller turn%'",
+      )
+      .run();
   }
   alive() {
     if (this.stopped || this.control.closing)
@@ -237,7 +244,8 @@ export class AutomaticRestarts {
       try {
         this.proof(i, this.store.get(row.session), current);
       } catch (error) {
-        return this.finish(row.id, "held", error.message);
+        // FU-457: re-check a held row once a day, not on every tick; a new cut-off turn is a new row.
+        return this.finish(row.id, "held", error.message, this.iso(this.now() + HELD_RECHECK_MS));
       }
     }
     if (row.attempts >= RESTART_ATTEMPTS)

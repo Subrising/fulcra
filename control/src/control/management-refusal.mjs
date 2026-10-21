@@ -6,6 +6,7 @@ export function managementRefusal(message) {
   refusals.add(error);
   return error;
 }
+export const isManagementRefusal = (error) => refusals.has(error);
 export function managementReplyFailure(error, dispatched, read) {
   if (refusals.has(error)) return { code: "invalid", message: error.message.slice(0, 2000) };
   return {
@@ -34,4 +35,13 @@ export function describeFailure(error) {
     /^at ([^\s()]+:\d+:\d+)$/.exec(frame)?.[1] ??
     "unknown location";
   return `${name} at ${where.slice(-200)}`;
+}
+// FU-444b: a write that fails after dispatch reaches the app only as "outcome uncertain" (unchanged above). Log the class,
+// the system error code (EPERM, ...) and the source location, never the message, so the cause can be found.
+export function describeWriteFailure(error) {
+  const code =
+    typeof error?.code === "string" && /^[A-Z][A-Z0-9_]{1,31}$/.test(error.code)
+      ? error.code
+      : null;
+  return `${describeFailure(error)}${code ? ` code ${code}` : ""}`;
 }
