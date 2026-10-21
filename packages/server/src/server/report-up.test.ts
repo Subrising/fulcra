@@ -63,6 +63,7 @@ function fixture(
     skipOwners?: string[];
     minIntervalMinutes?: number;
     now?: number;
+    logger?: ReportUpDeps["logger"];
     statePath?: string;
     ledgerDir?: string;
     readLedger?: ReportUpDeps["readLedger"];
@@ -112,7 +113,7 @@ function fixture(
       ? {}
       : { getNudgeMinIntervalMinutes: () => options.minIntervalMinutes! }),
     localServerId: "srv_local",
-    logger: createTestLogger(),
+    logger: options.logger ?? createTestLogger(),
     now: () => clock.now,
     ...(options.statePath ? { statePath: options.statePath } : {}),
     ...(options.ledgerDir ? { ledgerDir: options.ledgerDir } : {}),
@@ -535,6 +536,17 @@ describe("report-up and permission prompts", () => {
     f.stream(WORKER, ask("req-1", "ls"));
     await f.settle();
     expect(f.delivered).toHaveLength(0);
+  });
+
+  test("it logs turned off once per agent, not at every turn end", async () => {
+    const lines: string[] = [];
+    const logger = pino({ level: "info" }, { write: (line: string) => lines.push(line) });
+    const f = fixture([lead, worker()], { enabled: false, otherEnabled: false, logger });
+    f.turn(WORKER);
+    await f.settle();
+    f.turn(WORKER);
+    await f.settle();
+    expect(lines.filter((line) => line.includes("Report-up skipped"))).toHaveLength(1);
   });
 
   test("it stays quiet when report-up is turned off", async () => {

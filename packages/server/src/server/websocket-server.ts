@@ -57,6 +57,10 @@ import type {
   WorkspaceGitService,
   WorkspaceGitServiceMetrics,
 } from "./workspace-git-service.js";
+import {
+  isRuntimeMetricsWindowBusy,
+  nextRuntimeMetricsDelayMs,
+} from "./runtime-metrics-schedule.js";
 import type { GitCommandRuntimeMetricsSnapshot } from "../utils/git-command-runtime-metrics.js";
 import { snapshotGitCommandRuntimeMetrics } from "../utils/run-git-command.js";
 import { createPluginClientId, isPluginClientId } from "./plugins/plugin-session-identity.js";
@@ -513,7 +517,6 @@ const WS_CLOSE_INVALID_HELLO = 4002;
 const WS_CLOSE_INCOMPATIBLE_PROTOCOL = 4003;
 const WS_CLOSE_SERVER_SHUTDOWN = 1001;
 const WS_PROTOCOL_VERSION = 1;
-const WS_RUNTIME_METRICS_FLUSH_MS = 30_000;
 const OWNER_SESSION_ADMISSION: SessionAdmission = {
   principalId: "owner",
   permissions: OWNER_PERMISSIONS,
@@ -647,7 +650,8 @@ export class VoiceAssistantWebSocketServer {
   private serverCapabilities: ServerCapabilities | undefined;
   private readonly runtimeMetrics = new WebSocketRuntimeMetricsWindow();
   private lastRuntimeMetricsSnapshot: WebSocketRuntimeDiagnosticPayload | null = null;
-  private runtimeMetricsInterval: ReturnType<typeof setInterval> | null = null;
+  private runtimeMetricsInterval: ReturnType<typeof setTimeout> | null = null;
+  private runtimeMetricsBusy = false;
   private applicationSocketLeaseInterval: ReturnType<typeof setInterval> | null = null;
   private readonly applicationSocketLease = new ApplicationSocketLease<WebSocketLike>();
   private eventLoopDelayMonitor: ReturnType<typeof monitorEventLoopDelay> | null = null;
@@ -951,11 +955,15 @@ export class VoiceAssistantWebSocketServer {
   private startRuntimeMetricsInterval(): void {
     this.eventLoopDelayMonitor = monitorEventLoopDelay({ resolution: 10 });
     this.eventLoopDelayMonitor.enable();
-    const runtimeMetricsInterval = setInterval(() => {
-      this.flushRuntimeMetrics();
-    }, WS_RUNTIME_METRICS_FLUSH_MS);
-    this.runtimeMetricsInterval = runtimeMetricsInterval;
-    (runtimeMetricsInterval as unknown as { unref?: () => void }).unref?.();
+    const schedule = () => {
+      const timer = setTimeout(() => {
+        this.flushRuntimeMetrics();
+        schedule();
+      }, nextRuntimeMetricsDelayMs(this.runtimeMetricsBusy));
+      this.runtimeMetricsInterval = timer;
+      (timer as unknown as { unref?: () => void }).unref?.();
+    };
+    schedule();
   }
 
   private startApplicationSocketLeaseInterval(): void {
@@ -1278,7 +1286,7 @@ export class VoiceAssistantWebSocketServer {
     this.unsubscribeTerminalActivity?.();
     this.unsubscribeTerminalActivity = null;
     if (this.runtimeMetricsInterval) {
-      clearInterval(this.runtimeMetricsInterval);
+      clearTimeout(this.runtimeMetricsInterval);
       this.runtimeMetricsInterval = null;
     }
     if (this.applicationSocketLeaseInterval) {
@@ -3169,6 +3177,11 @@ export class VoiceAssistantWebSocketServer {
       },
     } satisfies WebSocketRuntimeMetricsLogPayload;
 
+    this.runtimeMetricsBusy = isRuntimeMetricsWindowBusy({
+      counters: runtimeMetrics.counters as Record<string, unknown>,
+      gitActive: gitCommandMetrics.active,
+      gitPending: gitCommandMetrics.pending,
+    });
     this.lastRuntimeMetricsSnapshot = {
       collectedAt: new Date().toISOString(),
       ...loggedMetrics,
