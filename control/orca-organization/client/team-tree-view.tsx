@@ -63,7 +63,7 @@ function Card({
           padding: 12,
           borderRadius: 12,
           borderWidth: 1,
-          borderColor: card.state === "waiting" || card.state === "working" ? colour : c.border,
+          borderColor: card.state === "waiting" ? colour : c.border, // FU-396: only a card that waits for you is outlined
           backgroundColor: c.surface1,
         }}
       >

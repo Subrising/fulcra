@@ -1002,6 +1002,7 @@ export function DeploySection({
         <View style={{ flexDirection: "row" }}>
           <WorkButton
             theme={theme}
+            quiet
             label="Connect another environment"
             onPress={() => setConnecting(true)}
           />

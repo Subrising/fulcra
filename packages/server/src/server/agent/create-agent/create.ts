@@ -244,19 +244,28 @@ async function armCreatedFinishNotice(
   resolved: ResolvedCreateAgent,
   snapshot: ManagedAgent,
 ): Promise<FinishNotice | null> {
-  if (
-    input.kind !== "mcp" ||
-    !input.notifyOnFinish ||
-    !input.callerAgentId ||
-    input.detached ||
-    !resolved.prompt
-  )
+  // FU-428: one line per create, so a lead that gets no finish notice can see whether one was ever armed.
+  const notArmed = (reason: string) => {
+    dependencies.logger.info({ agentId: snapshot.id, reason }, "Finish notice not armed");
     return null;
-  return dependencies.agentStorage.armFinishNotice(
-    snapshot,
-    input.callerAgentId,
-    input.reportCreation ? "native" : "report-up",
-  );
+  };
+  const arm = async (parentId: string, owner: FinishNotice["owner"]) => {
+    const notice = await dependencies.agentStorage.armFinishNotice(snapshot, parentId, owner);
+    dependencies.logger.info(
+      { agentId: snapshot.id, parentId, owner, messageId: notice.messageId },
+      "Finish notice armed",
+    );
+    return notice;
+  };
+  if (!resolved.prompt) return notArmed("no prompt");
+  // FU-173: a CLI create from inside a session (`fulcra run` from a lead) gets the same finish notice as the native
+  // tool, so the lead wakes on any route. A create with no caller session (the app, a detached run) arms none.
+  if (input.kind === "session")
+    return input.parentAgentId ? arm(input.parentAgentId, "report-up") : notArmed("no parent");
+  if (!input.notifyOnFinish) return notArmed("not notifyOnFinish");
+  if (!input.callerAgentId) return notArmed("no caller");
+  if (input.detached) return notArmed("detached");
+  return arm(input.callerAgentId, input.reportCreation ? "native" : "report-up");
 }
 
 async function resolveSessionCreateAgent(

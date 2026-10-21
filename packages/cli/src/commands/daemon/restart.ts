@@ -109,13 +109,13 @@ export async function runRestartCommand(options: CommandOptions, _command: Comma
       lastError = error;
       const code = (error as { code?: string } | null)?.code;
       if (code === "DAEMON_REPLACED" || code === "DAEMON_NOT_RUNNING") break;
-      if (!isReconnectFailure(error)) throw error;
+      if (!isRetryableAfterRestart(error)) throw error;
     }
     await delay(Math.min(100, remaining()));
   }
   throw {
     code: "RESTART_NOT_CONFIRMED",
-    message: `Replacement was not confirmed for ${describeDaemonTarget(target)}. Restart acknowledged: ${acknowledged}. Last observation: ${String(lastError)}`,
+    message: `Replacement was not confirmed for ${describeDaemonTarget(target)}. Restart acknowledged: ${acknowledged}. Last observation: ${describeObservation(lastError)}`,
   };
 }
 
@@ -132,6 +132,24 @@ function guardOwnSession(
     daemonPids: options.daemonTarget.kind === "instance" ? [instance?.pid, workerPid] : [],
     override: options.overrideSessionGuard === true,
   });
+}
+
+// Every worker boot writes a new local credential, and the worker being replaced deletes the old
+// one. A connection made during that hand-over can read a credential the daemon no longer accepts.
+// The first connection of this command already authenticated, so retry; each attempt re-reads the
+// credential. A real fault still ends at the deadline as RESTART_NOT_CONFIRMED with the last error.
+function isCredentialRotationFailure(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === "AUTH_FAILED" || code === "AUTH_REQUIRED";
+}
+
+function describeObservation(value: unknown): string {
+  const message = (value as { message?: unknown } | null)?.message;
+  return typeof message === "string" ? message : String(value);
+}
+
+function isRetryableAfterRestart(error: unknown): boolean {
+  return isReconnectFailure(error) || isCredentialRotationFailure(error);
 }
 
 function isReconnectFailure(error: unknown): boolean {

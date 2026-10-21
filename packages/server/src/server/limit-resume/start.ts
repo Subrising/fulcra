@@ -86,7 +86,11 @@ export function startLimitResume(input: {
       await waitForFinalInputHandoff(finalCheck);
     },
     onError: (error) => logger.warn({ err: error }, "Auto-resume step failed"),
-    onSkip: (agentId, reason) => logger.info({ agentId, reason }, "Auto-resume skipped"),
+    onSkip: (agentId, reason) =>
+      logger.info(
+        { agentId, reason },
+        reason === "archived" ? "Auto-resume dropped: session archived" : "Auto-resume skipped",
+      ),
   });
   service.start();
   const offHooks = input.hooks

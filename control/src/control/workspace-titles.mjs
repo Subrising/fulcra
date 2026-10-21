@@ -54,7 +54,11 @@ async function allWorkspaces(daemon, maxPages = 50) {
 
 // One-off backfill for sessions created before this fix. Each session is independent: one failure is counted and the
 // rest continue. Only untitled, UUID-named workspaces are titled, each with its session's current title.
-export async function nameExistingWorkspaces({ agents, daemon }, ids) {
+export async function nameExistingWorkspaces(
+  { agents, daemon },
+  ids,
+  { gap = async () => {} } = {},
+) {
   const result = { titled: 0, skipped: 0, failed: 0 };
   if (
     typeof daemon?.setWorkspaceTitle !== "function" ||
@@ -65,6 +69,7 @@ export async function nameExistingWorkspaces({ agents, daemon }, ids) {
     done = new Set();
   for (const id of ids) {
     try {
+      await gap();
       const { workspaceId, title } = await agentIdentity(agents, id);
       if (
         !workspaceId ||

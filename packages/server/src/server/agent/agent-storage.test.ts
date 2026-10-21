@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeEach, afterEach } from "vitest";
+import { describe, expect, test, beforeEach, afterEach, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
@@ -187,6 +187,27 @@ describe("AgentStorage", () => {
     });
   });
 
+  test("a record write that drops a finish notice is logged", async () => {
+    const parentId = "11111111-1111-4111-8111-111111111111";
+    const child = createManagedAgent({ id: "22222222-2222-4222-8222-222222222222" });
+    child.labels = { "paseo.parent-agent-id": parentId };
+    const info = vi.spyOn(logger, "info");
+    await storage.applySnapshot(child);
+    const stale = (await storage.get(child.id))!;
+    const armed = await storage.armFinishNotice(child, parentId, "report-up");
+    await storage.applySnapshot(child);
+    expect(info).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "Finish notice removed by record write",
+    );
+    await storage.upsert({ ...stale, title: "stale copy" });
+    expect(info).toHaveBeenCalledWith(
+      { agentId: child.id, messageId: armed.messageId },
+      "Finish notice removed by record write",
+    );
+    info.mockRestore();
+  });
+
   test("a stopped turn keeps one pending notice across restart", async () => {
     const parentId = "11111111-1111-4111-8111-111111111111";
     const child = createManagedAgent({ id: "22222222-2222-4222-8222-222222222222" });
@@ -301,6 +322,35 @@ describe("AgentStorage", () => {
     await expect(
       recovered.settleFinishNotice(child.id, first.messageId, "delivered", "report-up"),
     ).rejects.toThrow("Finish notice already settled");
+  });
+
+  test("FU-424 an unknown notice resolves to pending with the same id, or to delivered", async () => {
+    const parentId = "11111111-1111-4111-8111-111111111111";
+    const child = createManagedAgent({ id: "22222222-2222-4222-8222-222222222222" });
+    child.labels = { "paseo.parent-agent-id": parentId };
+    await storage.applySnapshot(child);
+    const armed = await storage.armFinishNotice(child, parentId, "report-up");
+    await storage.recordFinishNotice(child.id, "turn-1", "finished");
+    expect(
+      await storage.resolveUnknownFinishNotice(child.id, armed.messageId, { status: "pending" }),
+    ).toBeNull();
+    await storage.markFinishNoticeSending(child.id, armed.messageId);
+    await storage.markFinishNoticeUnknown(child.id, armed.messageId);
+    const recovered = new AgentStorage(storagePath, logger);
+    expect(
+      await recovered.resolveUnknownFinishNotice(child.id, armed.messageId, { status: "pending" }),
+    ).toMatchObject({ status: "pending", retryAfterRefusal: true, messageId: armed.messageId });
+    await recovered.markFinishNoticeSending(child.id, armed.messageId);
+    await recovered.markFinishNoticeUnknown(child.id, armed.messageId);
+    await recovered.resolveUnknownFinishNotice(child.id, armed.messageId, {
+      status: "delivered",
+      deliveredBy: "report-up",
+    });
+    expect(await new AgentStorage(storagePath, logger).getFinishNotice(child.id)).toMatchObject({
+      status: "delivered",
+      deliveredBy: "report-up",
+      messageId: armed.messageId,
+    });
   });
 
   test("FU-334 a full result queue refuses new work without losing pending results", async () => {

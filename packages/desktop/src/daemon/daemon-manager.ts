@@ -9,6 +9,11 @@ import { restartManagedDaemon } from "./managed-restart.js";
 import { hashDaemonPassword, isBearerTokenValidAsync } from "@getpaseo/server/auth";
 import { localServiceOwnerCredential } from "./local-service-credential.js";
 import { loadPersistedConfig } from "@getpaseo/server/configuration";
+import {
+  COMMAND_CENTRE_PASSWORD_FILE_ENV,
+  COMMAND_CENTRE_PASSWORD_FILE_NAME,
+  readCommandCentrePasswordFile,
+} from "@getpaseo/server/command-centre-password";
 import { readFileSync } from "node:fs";
 import { getElectronDeviceKey } from "../features/device-key-electron.js";
 import { createRelayIdentityCommandHandlers } from "../features/relay-identity-electron.js";
@@ -316,11 +321,22 @@ async function desktopCommandCentreCredential(create = false): Promise<string | 
   const settings = await getDesktopSettingsStore().get();
   if (settings.daemon.commandCentreEnabled !== true) return null;
   const home = getPaseoHome();
+  const configuredPassword = Boolean(loadPersistedConfig(home).daemon?.auth?.password);
+  // FU-437: a shared password file in the home gives the app, a script start and remote controllers one password.
+  // A bad file throws; it never falls back to a generated credential or to no auth.
+  const shared = readCommandCentrePasswordFile(path.join(home, COMMAND_CENTRE_PASSWORD_FILE_NAME), {
+    allowMissing: true,
+  });
+  if (shared !== null && configuredPassword)
+    throw new Error(
+      `${COMMAND_CENTRE_PASSWORD_FILE_NAME} conflicts with a configured daemon password. Set only one.`,
+    );
   // A previously configured daemon password remains its owner's responsibility.
-  if (loadPersistedConfig(home).daemon?.auth?.password) return null;
+  if (configuredPassword) return null;
   return commandCentreCredential({
     enabled: settings.daemon.commandCentreEnabled === true,
     home,
+    existingPassword: shared ?? undefined,
     keychain: commandCentreKeychain,
     create,
   });
@@ -577,6 +593,8 @@ async function startDaemon(): Promise<DesktopDaemonStatus> {
         ...(commandCentreEnabled ? { PASEO_PASSWORD: undefined } : {}),
         PASEO_CLI: getBundledCliShimPath(),
         FULCRA_COMMAND_CENTRE: commandCentreEnabled ? "1" : "0",
+        // The app reads the shared file itself and passes only the hash.
+        [COMMAND_CENTRE_PASSWORD_FILE_ENV]: undefined,
         FULCRA_COMMAND_CENTRE_AUTH_HASH: commandCentrePassword
           ? hashDaemonPassword(commandCentrePassword)
           : undefined,

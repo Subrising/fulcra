@@ -12,6 +12,7 @@ export declare const MAX_JITTER_MS = 60000;
 export declare const HANDOFF_MS = 0;
 export declare const MAX_CHAIN = 4;
 export declare const NETWORK_BACKOFF_MS: number[];
+export declare const LOOKUP_RETRY_MS: number[];
 export { NETWORK_RESUME_PROMPT, INTERRUPTED_RESUME_PROMPT };
 /** After a daemon restart: lets providers, relay and the account pool come back before sessions are woken. */
 export declare const INTERRUPTED_SETTLE_MS = 45000;

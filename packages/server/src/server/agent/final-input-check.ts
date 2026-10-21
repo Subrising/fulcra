@@ -10,6 +10,19 @@ interface State {
   resolve: () => void;
   reject: (error: unknown) => void;
 }
+/**
+ * A final check that withdraws its input on purpose: the session did not start a turn and stays as it was. The
+ * manager does not record a failed turn for it. `reason` names the condition that refused.
+ */
+export class FinalInputWithdrawnError extends Error {
+  constructor(
+    message: string,
+    readonly reason: string,
+  ) {
+    super(message);
+    this.name = "FinalInputWithdrawnError";
+  }
+}
 const checks = new WeakMap<object, State>();
 export function createFinalInputCheck(
   check: () => void,

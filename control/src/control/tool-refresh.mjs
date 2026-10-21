@@ -16,6 +16,7 @@ import path from "node:path";
 import { assertColumns } from "./schema.mjs";
 import { uuid } from "./authority.mjs";
 import { TOOL_SURFACE } from "./tool-surface.mjs";
+import { SAFETY_REREAD_MS } from "./agent-watch.mjs";
 
 export class ToolSurfaces {
   constructor(control) {
@@ -154,16 +155,28 @@ export class ToolSurfaces {
     return (this.pending = this.automatic(id, "handback"));
   }
   // Existing event reconciliation supplies retries; never reload a human-held or busy session.
-  // A refusal is visible, and is retried at most once per watchdog interval.
+  // A refusal is visible, and is retried at most once per watchdog interval. FU-423: consecutive failures of one session
+  // back off (30 s, 1, 2, 4, 8 minutes, then every 10 minutes); a success or a restart of the controller resets it.
+  // A refresh that waits for an idle session is also started by the handback itself, not only by this pass.
+  retryGap(id) {
+    const failures = this.failures.get(id) ?? 0;
+    return failures ? Math.min(SAFETY_REREAD_MS, 30000 * 2 ** (failures - 1)) : 30000;
+  }
   async reconcile() {
+    this.failures ??= new Map();
     const candidates = this.store
       .list()
-      .filter((session) => session.mode === "delegated")
+      // FU-423: an archived session has no runtime to refresh; it is never retried.
+      .filter(
+        (session) =>
+          session.mode === "delegated" && this.control.native?.isLive?.(session.id) !== false,
+      )
       .map((session) => ({ session, surface: this.describe(session.id) }))
       .filter(
-        ({ surface }) =>
+        ({ session, surface }) =>
           surface.state !== "current" &&
-          (!surface.lastAttempt || Date.now() - Date.parse(surface.lastAttempt.at) >= 30000),
+          (!surface.lastAttempt ||
+            Date.now() - Date.parse(surface.lastAttempt.at) >= this.retryGap(session.id)),
       )
       .sort(
         (a, b) =>
@@ -177,9 +190,11 @@ export class ToolSurfaces {
           expectedGeneration: session.generation,
           cause: "runtime",
         });
+        this.failures.delete(session.id);
       } catch (error) {
         if (this.store.get(session.id)?.generation === session.generation)
           this.record(session.id, session.generation, "failed", `runtime: ${error.message}`, null);
+        this.failures.set(session.id, (this.failures.get(session.id) ?? 0) + 1);
         this.lastError = { message: error.message, at: new Date().toISOString() };
       }
     }

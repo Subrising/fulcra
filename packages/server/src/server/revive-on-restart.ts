@@ -17,7 +17,11 @@ import {
 } from "./agent/agent-prompt.js";
 import { FINAL_INPUT_CHECK } from "./agent/agent-sdk-types.js";
 import type { AgentStorage, StoredAgentRecord } from "./agent/agent-storage.js";
-import { createFinalInputCheck, waitForFinalInputHandoff } from "./agent/final-input-check.js";
+import {
+  createFinalInputCheck,
+  FinalInputWithdrawnError,
+  waitForFinalInputHandoff,
+} from "./agent/final-input-check.js";
 import { writeJsonFileAtomic } from "./atomic-file.js";
 import { withTimeout } from "../utils/promise-timeout.js";
 import { heldSendsFor } from "./held-sends.js";
@@ -242,11 +246,17 @@ export interface ReviveSessions {
   changedSince(agentId: string, cutAt: string | null): Promise<string | null>;
   /** The session's account is at a limit: the reset time when known, null when not. Undefined when it is ready. */
   limitedUntil(agentId: string): Promise<Date | null | undefined>;
-  /** Sends the continue prompt; refuses at the provider handoff if the session got a message after `cutAt`. */
-  sendContinue(agentId: string, cutAt: string | null): Promise<void>;
+  /**
+   * Sends the continue prompt. The final input check withdraws it (FU-422) if the session got a message after `cutAt`,
+   * changed instance, or is now refused: the session stays idle and the result is "withdrawn".
+   */
+  sendContinue(agentId: string, cutAt: string | null): Promise<SendOutcome>;
   /** Sends the background-wake prompt (FU-362) under the same refusal rules as sendContinue. */
-  sendBackgroundWake(agentId: string, prompt: string, cutAt: string | null): Promise<void>;
+  sendBackgroundWake(agentId: string, prompt: string, cutAt: string | null): Promise<SendOutcome>;
 }
+
+/** A prompt that went out gives nothing; one the final input check withdrew gives "withdrawn". */
+export type SendOutcome = void | "withdrawn";
 
 /** "continue": the restart cut a turn off. "wake": the session was idle, waiting for background work that is gone. */
 export type ReviveMode = "continue" | "wake";
@@ -281,6 +291,12 @@ export interface ReviveResult {
   woken: string[];
   closed: ClosedSession[];
 }
+
+/** The refusal for a session a trusted plugin owns: the daemon does not continue it (the owner's fence). */
+export const OWNED_BY_PLUGIN = "owned by a trusted plugin";
+/** FU-103: the notice reason, so a plugin-owned lead cut off by the restart does not sit idle unseen. */
+export const PLUGIN_OWNED_NOT_CONTINUED =
+  "owned by Fulcra, not continued: if it is idle, send it a message";
 
 export function formatBackgroundWakePrompt(restartedAt: Date): string {
   const time = restartedAt.toLocaleString("en-GB", {
@@ -515,6 +531,7 @@ async function continueOne(
   const before = await skip();
   if (before) {
     logger.info({ agentId: id, reason: before }, "Revive on restart: no continue prompt");
+    if (before === OWNED_BY_PLUGIN) fail(PLUGIN_OWNED_NOT_CONTINUED);
     return;
   }
   // FU-25: a session with no pool account has no account record to ask, so its limit is read from its own last
@@ -541,10 +558,10 @@ async function continueOne(
   }
   try {
     if (mode === "wake") {
-      await sessions.sendBackgroundWake(id, wakePrompt, cutAt);
+      if ((await sessions.sendBackgroundWake(id, wakePrompt, cutAt)) === "withdrawn") return;
       result.woken.push(id);
     } else {
-      await sessions.sendContinue(id, cutAt);
+      if ((await sessions.sendContinue(id, cutAt)) === "withdrawn") return;
       result.continued.push(id);
     }
   } catch (error) {
@@ -557,15 +574,17 @@ async function continueOne(
 export function defaultSessions(deps: ReviveDeps): ReviveSessions {
   const { agentManager, agentStorage, logger } = deps;
   const now = deps.now ?? (() => new Date());
-  const refusal = (id: string, mode: ReviveMode = "continue"): string | null => {
+  // `ownRun`: the final check runs inside the manager's own runAgent, where this prompt's run is already registered, so
+  // an in-flight run is not a reason there (FU-422). Another turn is caught by the new-message check.
+  const refusal = (id: string, mode: ReviveMode = "continue", ownRun = false): string | null => {
     const live = agentManager.getAgent(id);
     if (!live || live.archivedAt) return "not loaded";
-    if (agentManager.hasInFlightRun(id)) return "a turn is already running";
+    if (!ownRun && agentManager.hasInFlightRun(id)) return "a turn is already running";
     // A pool-account session has a binding: limit-resume continues it.
     if (mode === "continue" && agentManager.getLimitResumeBinding(id) !== null)
       return "pool account: limit-resume continues it";
-    // The owner continues its sessions through the controller restart queue and its journal checks.
-    if (!agentManager.canRunUnscopedLimitResume(id)) return "owned by a trusted plugin";
+    // The owner's fence: the daemon does not continue it. A cut-off turn is named to its lead instead (FU-103).
+    if (!agentManager.canRunUnscopedLimitResume(id)) return OWNED_BY_PLUGIN;
     if (live.labels[LIMIT_RESUME_OPT_OUT_LABEL] === "off") return "opted out";
     return null;
   };
@@ -612,22 +631,42 @@ export function defaultSessions(deps: ReviveDeps): ReviveSessions {
     if (!live) throw new Error("session not loaded");
     const checkCurrent = () => {
       const current = agentManager.getAgent(id);
-      if (
-        !current ||
-        current.instanceId !== live.instanceId ||
-        refusal(id, mode) ||
-        liveMessageAt(id) !== cutAt
-      )
-        throw new Error("Continue after restart refused");
+      let reason: string | null = null;
+      if (!current) reason = "not loaded";
+      else if (current.instanceId !== live.instanceId) reason = "the session instance changed";
+      else reason = refusal(id, mode, true);
+      if (!reason && liveMessageAt(id) !== cutAt)
+        reason = "a new message arrived since the restart";
+      if (reason) throw new FinalInputWithdrawnError("Continue after restart refused", reason);
     };
-    checkCurrent();
+    // A refused prompt is withdrawn: the session stays idle, with no failed turn. A pool-account refusal after the
+    // load stays with limit-resume, as at the boot check ("pool account: limit-resume continues it"); a new
+    // message drives the session itself.
+    const withdraw = (error: unknown): "withdrawn" => {
+      if (!(error instanceof FinalInputWithdrawnError)) throw error;
+      logger.info(
+        { agentId: id, mode, reason: error.reason },
+        "Revive on restart: prompt withdrawn",
+      );
+      return "withdrawn";
+    };
+    try {
+      checkCurrent();
+    } catch (error) {
+      return withdraw(error);
+    }
     const finalCheck = createFinalInputCheck(checkCurrent);
     void agentManager
       .runAgent(id, prompt, { [FINAL_INPUT_CHECK]: finalCheck })
-      .catch((error: unknown) =>
-        logger.warn({ err: error, agentId: id }, "Continue after restart failed"),
-      );
-    await waitForFinalInputHandoff(finalCheck);
+      .catch((error: unknown) => {
+        if (error instanceof FinalInputWithdrawnError) return;
+        logger.warn({ err: error, agentId: id }, "Continue after restart failed");
+      });
+    try {
+      await waitForFinalInputHandoff(finalCheck);
+    } catch (error) {
+      return withdraw(error);
+    }
   }
 }
 

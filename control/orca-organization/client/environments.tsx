@@ -181,9 +181,7 @@ export function EnvironmentsSurface({
       contentContainerStyle={{
         padding: layout.compact ? 16 : 24,
         gap: 16,
-        maxWidth: 1040,
         width: "100%",
-        alignSelf: "center",
       }}
     >
       <Text accessibilityRole="header" style={{ ...text, fontSize: 26, fontWeight: "600" }}>

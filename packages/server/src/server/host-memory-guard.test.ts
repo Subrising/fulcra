@@ -82,6 +82,108 @@ describe("evaluateMemoryGuard", () => {
   });
 });
 
+describe("swap disk free space", () => {
+  const withDisk = (gb: number | null, level: HostMemoryReading["level"] = "normal") => ({
+    ...darwin(level, 20),
+    swapDiskFreeBytes: gb === null ? null : gb * GB,
+  });
+
+  test("12 GB free with normal pressure refuses", () => {
+    expect(evaluateMemoryGuard(withDisk(12), DEFAULT_MEMORY_GUARD_SETTINGS)).toEqual({
+      decision: "refuse",
+      reasons: ["swap disk 12.0 GB free"],
+    });
+  });
+
+  test("20 GB free allows, and exactly 15 GB allows", () => {
+    expect(evaluateMemoryGuard(withDisk(20), DEFAULT_MEMORY_GUARD_SETTINGS).decision).toBe("allow");
+    expect(evaluateMemoryGuard(withDisk(15), DEFAULT_MEMORY_GUARD_SETTINGS).decision).toBe("allow");
+  });
+
+  test("an unreadable disk allows", () => {
+    expect(evaluateMemoryGuard(withDisk(null), DEFAULT_MEMORY_GUARD_SETTINGS).decision).toBe(
+      "allow",
+    );
+  });
+
+  test("the setting overrides the default", () => {
+    const low = { ...DEFAULT_MEMORY_GUARD_SETTINGS, swapDiskFreeGB: 5 };
+    expect(evaluateMemoryGuard(withDisk(12), low).decision).toBe("allow");
+    const high = { ...DEFAULT_MEMORY_GUARD_SETTINGS, swapDiskFreeGB: 30 };
+    expect(evaluateMemoryGuard(withDisk(20), high).decision).toBe("refuse");
+  });
+
+  test("only macOS checks it", () => {
+    const linux = { ...withDisk(1), platform: "linux" as const };
+    expect(evaluateMemoryGuard(linux, DEFAULT_MEMORY_GUARD_SETTINGS).decision).toBe("allow");
+  });
+
+  test("swap at 90% or more with pressure warn refuses (covered by the pressure rule)", () => {
+    expect(evaluateMemoryGuard(darwin("warn", 90), DEFAULT_MEMORY_GUARD_SETTINGS).decision).toBe(
+      "refuse",
+    );
+    expect(
+      evaluateMemoryGuard(darwin("critical", 99), DEFAULT_MEMORY_GUARD_SETTINGS).decision,
+    ).toBe("refuse");
+  });
+
+  test("refusal text names the free disk space and the need", () => {
+    const text = formatMemoryGuardRefusal(withDisk(12), ["swap disk 12.0 GB free"], 15);
+    expect(text).toBe(
+      "Not started: this Mac is low on disk for swap (12 GB free on the internal disk; needs 15 GB). Free disk space or start the agent on another host.",
+    );
+  });
+
+  test("readHostMemory reads the swap volume, falls back to /, and never throws", async () => {
+    const base = {
+      platform: "darwin" as const,
+      exec: async () => "1\n",
+      readText: async () => "",
+      totalmem: () => 16 * GB,
+      freemem: () => 8 * GB,
+      timeoutMs: 50,
+    };
+    const paths: string[] = [];
+    const ok = await readHostMemory({
+      ...base,
+      freeDiskBytes: async (path) => {
+        paths.push(path);
+        if (path === "/System/Volumes/VM") throw new Error("ENOENT");
+        return 12 * GB;
+      },
+    });
+    expect(paths).toEqual(["/System/Volumes/VM", "/"]);
+    expect(ok.swapDiskFreeBytes).toBe(12 * GB);
+    const failing = await readHostMemory({
+      ...base,
+      freeDiskBytes: async () => {
+        throw new Error("boom");
+      },
+    });
+    expect(failing.swapDiskFreeBytes).toBeNull();
+    const hanging = await readHostMemory({ ...base, freeDiskBytes: () => new Promise(() => {}) });
+    expect(hanging.swapDiskFreeBytes).toBeNull();
+  });
+
+  test("the guard logs the disk number and refuses with the disk text", async () => {
+    const logger = createTestLogger();
+    const warn = vi.spyOn(logger, "warn");
+    const guard = createAgentStartMemoryGuard({
+      settings: () => DEFAULT_MEMORY_GUARD_SETTINGS,
+      logger,
+      read: async () => withDisk(12),
+      hostLabel: () => "test-host",
+    });
+    await expect(guard()).rejects.toThrow(
+      "Not started: this Mac is low on disk for swap (12 GB free on the internal disk; needs 15 GB). Free disk space or start the agent on another host.",
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ swapDiskFreeGB: 12, decision: "refuse" }),
+      "agent.start.memory_guard",
+    );
+  });
+});
+
 describe("readHostMemory", () => {
   const base = {
     totalmem: () => 16 * GB,

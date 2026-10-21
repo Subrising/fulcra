@@ -119,7 +119,44 @@ describe("PluginRegistry", () => {
     expect(second?.queryClient.getQueryData(["counter"])).toBe(3);
   });
 
-  it("replaces the query cache when the plugin bundle changes", () => {
+  it("keeps one query client and one cache per query key across reinstalls and reconnects", () => {
+    pluginRegistry.installCatalog("host-a", [{ id: "example", clientBundle: bundle("one") }]);
+    const first = pluginRegistry.getSnapshot()[0]!;
+    const observers: Array<{ destroy(): void }> = [];
+    for (let round = 0; round < 10; round++) {
+      const current = pluginRegistry.getSnapshot()[0]!;
+      expect(current.queryClient).toBe(first.queryClient);
+      const observer = new QueryObserver(current.queryClient, {
+        queryKey: ["orca-fleet", "host-a"],
+        queryFn: async () => ({ round }),
+      });
+      observer.subscribe(() => undefined);
+      observers.push(observer);
+      if (round % 2) registry.suspendHost("host-a");
+      pluginRegistry.installCatalog("host-a", [
+        { id: "example", clientBundle: bundle(String(round)) },
+      ]);
+    }
+    const last = new QueryObserver(first.queryClient, {
+      queryKey: ["orca-fleet", "host-a"],
+      queryFn: async () => ({ round: 10 }),
+    });
+    observers.push(last);
+    last.subscribe(() => undefined);
+    expect(first.queryClient.getQueryCache().findAll({ queryKey: ["orca-fleet"] })).toHaveLength(1);
+    expect(pluginRegistry.getSnapshot()[0]?.queryClient).toBe(first.queryClient);
+    for (const observer of observers) observer.destroy();
+  });
+
+  it("drops the query client when the host is removed", () => {
+    pluginRegistry.installCatalog("host-a", [{ id: "example", clientBundle: bundle("one") }]);
+    const first = pluginRegistry.getSnapshot()[0]!;
+    pluginRegistry.removeHost("host-a");
+    pluginRegistry.installCatalog("host-a", [{ id: "example", clientBundle: bundle("one") }]);
+    expect(pluginRegistry.getSnapshot()[0]?.queryClient).not.toBe(first.queryClient);
+  });
+
+  it("clears the query cache but keeps the client when the plugin bundle changes", () => {
     pluginRegistry.installCatalog("host-a", [{ id: "example", clientBundle: bundle("one") }]);
     const first = pluginRegistry.getSnapshot()[0];
     first?.queryClient.setQueryData(["counter"], 3);
@@ -127,7 +164,7 @@ describe("PluginRegistry", () => {
     pluginRegistry.installCatalog("host-a", [{ id: "example", clientBundle: bundle("two") }]);
 
     const second = pluginRegistry.getSnapshot()[0];
-    expect(second?.queryClient).not.toBe(first?.queryClient);
+    expect(second?.queryClient).toBe(first?.queryClient);
     expect(second?.queryClient.getQueryData(["counter"])).toBeUndefined();
     expect(first?.queryClient.getQueryData(["counter"])).toBeUndefined();
     expect(Reflect.get(globalThis, "__pluginCleanups")).toBe(1);
@@ -272,7 +309,8 @@ it.each(["reconnect", "remove", "uninstall", "reload", "changed", "expired"])(
         mode === "reload" ? { replacePluginId: "example" } : {},
       );
       const current = registry.getSnapshot()[0]!;
-      expect(current.queryClient).not.toBe(first.queryClient);
+      if (mode === "remove") expect(current.queryClient).not.toBe(first.queryClient);
+      else expect(current.queryClient).toBe(first.queryClient);
       expect(current.queryClient.getQueryData(["view"])).toEqual(
         mode === "reconnect" ? { selected: "saved" } : undefined,
       );

@@ -38,7 +38,7 @@ export function ChangesSurface(props: Props) {
     >
       <Text
         accessibilityRole="header"
-        style={{ color: c.foreground, fontSize: 26, fontWeight: "700" }}
+        style={{ color: c.foreground, fontSize: 26, fontWeight: "600" }}
       >
         Changes & impact
       </Text>
@@ -208,13 +208,27 @@ function ProjectChanges({
       )}
       {entries.map(({ entry, target }) => (
         <View key={entry.item.key} style={{ gap: 8, paddingVertical: 8 }}>
-          <Text style={{ color: c.foreground, fontSize: 16 }}>
-            {entry.item.title || "Untitled pull request"}
-          </Text>
-          <Text style={{ color: c.foregroundMuted }}>
-            {entry.item.state === "merged" ? "Merged" : "Open"}
-            {entry.stale ? " · Last copy" : ""}
-          </Text>
+          {/* FU-396: the state is a small badge on the title line, not a grey line of its own. */}
+          <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+            <Text style={{ color: c.foreground, fontSize: 16, flexShrink: 1 }}>
+              {entry.item.title || "Untitled pull request"}
+            </Text>
+            <Text
+              style={{
+                color: entry.item.state === "merged" ? c.foregroundMuted : c.statusSuccess,
+                fontSize: 12,
+                fontWeight: "600",
+                paddingHorizontal: 8,
+                paddingVertical: 2,
+                borderRadius: 999,
+                borderWidth: 1,
+                borderColor: entry.item.state === "merged" ? c.border : c.statusSuccess,
+              }}
+            >
+              {entry.item.state === "merged" ? "Merged" : "Open"}
+              {entry.stale ? " · Last copy" : ""}
+            </Text>
+          </View>
           {checkouts.status === "loading" && (
             <Text style={{ color: c.foregroundMuted }}>Checking this host's workspaces…</Text>
           )}
@@ -229,11 +243,6 @@ function ProjectChanges({
               </WorkButton>
             </View>
           )}
-          {checkouts.status === "ready" && target.state === "no-checkout" && (
-            <Text
-              style={{ color: c.foregroundMuted }}
-            >{`No workspace on this host is a checkout of ${target.repo}. Add its folder below to open this change.`}</Text>
-          )}
           {target.state === "unreadable" && (
             <Text style={{ color: c.foregroundMuted }}>
               This pull request's link does not match its repository, so it cannot be opened here.
@@ -242,20 +251,25 @@ function ProjectChanges({
         </View>
       ))}
       {missing.map((repo) => (
-        <AddCheckout
-          key={repo}
-          {...props}
-          repo={repo}
-          onAdded={(workspaceId) => {
-            checkouts.choose(repo, workspaceId);
-            checkouts.reload();
-            const first = entries.find(
-              ({ target }) => target.state === "no-checkout" && target.repo === repo,
-            );
-            if (first && first.target.state === "no-checkout")
-              open(workspaceId, first.target.pullRequest);
-          }}
-        />
+        // FU-396: said once per repository, above its folder field, instead of under every change.
+        <View key={repo} style={{ gap: 8 }}>
+          <Text
+            style={{ color: c.foregroundMuted }}
+          >{`No workspace on this host is a checkout of ${repo}. Add its folder below to open this change.`}</Text>
+          <AddCheckout
+            {...props}
+            repo={repo}
+            onAdded={(workspaceId) => {
+              checkouts.choose(repo, workspaceId);
+              checkouts.reload();
+              const first = entries.find(
+                ({ target }) => target.state === "no-checkout" && target.repo === repo,
+              );
+              if (first && first.target.state === "no-checkout")
+                open(workspaceId, first.target.pullRequest);
+            }}
+          />
+        </View>
       ))}
       {notice && (
         <Text accessibilityLiveRegion="polite" style={{ color: c.foreground }}>

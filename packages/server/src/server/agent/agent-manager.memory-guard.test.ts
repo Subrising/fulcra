@@ -87,3 +87,31 @@ test("the create command returns the plain-words reason to its caller", async ()
   );
   expect(manager.listAgents()).toHaveLength(0);
 });
+
+test("the create command returns the low-disk reason to its caller", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "memory-guard-"));
+  const manager = managerWith({ ...normal, swapDiskFreeBytes: 12 * 1024 ** 3 });
+  const result = createAgentCommand(
+    {
+      agentManager: manager,
+      agentStorage: {} as never,
+      logger,
+      providerSnapshotManager: {
+        resolveCreateConfig: async () => ({ modeId: "default", featureValues: undefined }),
+      } as never,
+    },
+    {
+      kind: "session",
+      config: { provider: "codex", cwd },
+      workspaceId: "ws-1",
+      labels: {},
+      provisionalTitle: null,
+      firstAgentContext: {},
+      buildSessionConfig: async (config) => ({ sessionConfig: config }),
+    },
+  );
+  await expect(result).rejects.toThrow(
+    "Not started: this Mac is low on disk for swap (12 GB free on the internal disk; needs 15 GB). Free disk space or start the agent on another host.",
+  );
+  expect(manager.listAgents()).toHaveLength(0);
+});

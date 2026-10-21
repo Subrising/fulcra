@@ -33,6 +33,7 @@ import { nameNewWorkspace, nameExistingWorkspaces } from "./workspace-titles.mjs
 import { createPaseoApi } from "./client-sdk.mjs";
 export { CONTROLLER_HOME as HOME } from "./installation-settings.mjs";
 import { CONTROLLER_HOME as HOME } from "./installation-settings.mjs";
+import { pace } from "./startup-pace.mjs";
 // The namespace the controller stamps on every prompt it dispatches. Deliberately NOT imported from
 // admission-guard.mjs: that module is the deployed, pinned guard with its own copy of this literal, and
 // coupling the controller's build to it would mean a redeploy to change either. Kept in one place here
@@ -239,6 +240,10 @@ export async function connectNative({ daemon, issueProvenance, getHandshakeBoot 
         if (update.kind === "upsert") handler(update.agent);
       }),
     watch: () => watching.watch(),
+    // FU-423: false only for a session the live directory shows archived or gone. No daemon request.
+    isLive: (id) => watching.isLive(id),
+    liveState: (id) => watching.liveState(id),
+    liveSnapshot: (id) => watching.liveSnapshot(id),
     receipt: (id, messageId, text) => receiptFor(id, CONTROL_PREFIX + messageId, text),
     refreshTools: (id, messageId) =>
       refreshToolsFor(client.agents.ref(id), messageId, verifyActivation),
@@ -436,7 +441,9 @@ export async function connectNative({ daemon, issueProvenance, getHandshakeBoot 
       };
     },
     // C2 #5: one-off, best-effort titles for workspaces of sessions created before the fix.
-    nameWorkspaces: (ids) => nameExistingWorkspaces({ agents: client.agents, daemon }, ids),
+    // FU-423: a background pass at startup, paced to two reads per second.
+    nameWorkspaces: (ids) =>
+      nameExistingWorkspaces({ agents: client.agents, daemon }, ids, { gap: () => pace() }),
     // Update-7 W3: an explicit model / effort this host's provider does not list is refused before anything is created.
     checkOverride: (a) => checkOverride(client, a.provider, a.defaults, HOME),
     checkProvider: (provider) => checkProvider(client, provider, HOME),

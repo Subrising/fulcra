@@ -246,6 +246,7 @@ export const en = {
   },
   agentStream: {
     empty: "Start chatting with this agent...",
+    emptyHint: "Describe a task to plan, build or review. Type @ to add files and / for commands.",
     scrollToBottom: "Scroll to bottom",
     historyLoadFailed: "Couldn't load agent history",
     messageCapped: "This message was capped ({{bytes}} bytes).",

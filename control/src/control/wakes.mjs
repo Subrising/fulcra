@@ -24,6 +24,7 @@
 // automation limit. NEVER to a holder under human control: its changes wait (a day at most) until it is handed back.
 import { createHash } from "node:crypto";
 import { assertColumns } from "./schema.mjs";
+import { tickDue } from "./agent-watch.mjs";
 import { uuid, RecipientBusy } from "./authority.mjs";
 
 export const OWNED_CACHE_MS = 5000,
@@ -413,13 +414,18 @@ export class Wakes {
         const active = [];
         for (const id of this.work(holder)) {
           const s = this.store.get(id);
-          if (!s || s.mode !== "delegated") continue;
-          const a = await this.control.native.snapshot(id);
-          if (a.status === "running" || (a.pendingPermissions?.length ?? 0) > 0)
+          if (!s || s.mode !== "delegated" || this.control.native.isLive?.(id) === false) continue;
+          // FU-423: the live directory already carries status and pending permissions; fetch only when it cannot.
+          const known = this.control.native.liveState?.(id);
+          const a = known ?? (await this.control.native.snapshot(id));
+          const waiting = known
+            ? known.pendingPermissions > 0
+            : (a.pendingPermissions?.length ?? 0) > 0;
+          if (a.status === "running" || waiting)
             active.push({
               sessionId: id,
               status: a.status,
-              waiting: (a.pendingPermissions?.length ?? 0) > 0,
+              waiting,
             });
         }
         if (!active.length) continue;
@@ -611,7 +617,13 @@ export class Wakes {
     if (!this.ticking)
       this.ticking = (async () => {
         this.cache = null;
-        for (const r of this.owned()) this.dirty.add(r.session);
+        // FU-423: archived sessions are not re-observed.
+        for (const r of this.owned())
+          if (
+            this.control.native?.isLive?.(r.session) !== false &&
+            tickDue(this.control.native, r.session, (this.tickMemo ??= new Map()), this.now())
+          )
+            this.dirty.add(r.session);
         await this.heartbeat();
         await this.pump();
       })()
