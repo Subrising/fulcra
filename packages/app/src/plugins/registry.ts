@@ -44,6 +44,9 @@ export class PluginRegistry {
   private readonly untrusted = new Map<string, UntrustedPlugin>();
   private untrustedSnapshot: UntrustedPlugin[] = [];
   private readonly disposed = new WeakSet<InstalledPlugin>();
+  // FU-407: one client per host and plugin for the life of the app. A new client per install left
+  // one query cache (and its fleet payload) behind for every reinstall while sidebar rows were mounted.
+  private readonly queryClients = new Map<string, QueryClient>();
   private readonly evaluationErrors = new Map<string, string>();
   // Hosts whose catalog question has been answered, however it was answered: loaded, declared
   // unsupported, or asked and failed. Routing needs "we do not know yet" to be distinct from
@@ -216,7 +219,7 @@ export class PluginRegistry {
           serverId,
           clientBundle: entry.clientBundle,
           requirements: entry.requirements,
-          queryClient: new QueryClient(),
+          queryClient: this.queryClientFor(key),
           cleanup: () => undefined,
           surfaces: [],
           settingsScreens: [],
@@ -323,6 +326,11 @@ export class PluginRegistry {
     // Plugins are unsupported here. That is an answer, not a pending one.
     this.catalogSettled.add(serverId);
     this.teardownHost(serverId);
+    for (const [key, client] of this.queryClients) {
+      if (!key.startsWith(`${serverId}/`)) continue;
+      client.clear();
+      this.queryClients.delete(key);
+    }
   }
 
   private teardownHost(serverId: string): void {
@@ -345,6 +353,15 @@ export class PluginRegistry {
     }
     this.byHost.delete(serverId);
     this.publish();
+  }
+
+  private queryClientFor(key: string): QueryClient {
+    let client = this.queryClients.get(key);
+    if (!client) {
+      client = new QueryClient();
+      this.queryClients.set(key, client);
+    }
+    return client;
   }
 
   private dispose(plugin: InstalledPlugin): void {
