@@ -304,6 +304,29 @@ describe("AgentStorage", () => {
     });
   });
 
+  test("FU-468 an archive built from an earlier copy keeps a notice settled since then", async () => {
+    const parentId = "11111111-1111-4111-8111-111111111111";
+    const child = createManagedAgent({ id: "22222222-2222-4222-8222-222222222222" });
+    child.labels = { "paseo.parent-agent-id": parentId };
+    await storage.applySnapshot(child);
+    const armed = await storage.armFinishNotice(child, parentId, "report-up");
+    await storage.recordFinishNotice(child.id, "turn-1", "finished");
+    await storage.markFinishNoticeSending(child.id, armed.messageId);
+    const copyBeforeArchive = await storage.get(child.id);
+    await storage.settleFinishNotice(child.id, armed.messageId, "delivered", "report-up");
+    await storage.upsert({
+      ...copyBeforeArchive!,
+      archivedAt: new Date().toISOString(),
+      lastStatus: "closed",
+    });
+    const recovered = new AgentStorage(storagePath, logger);
+    expect(await recovered.get(child.id)).toMatchObject({ lastStatus: "closed" });
+    expect(await recovered.getFinishNotice(child.id, armed.messageId)).toMatchObject({
+      status: "delivered",
+      deliveredBy: "report-up",
+    });
+  });
+
   test("FU-334 retained sending notices become unknown after restart without replacing the active notice", async () => {
     const parentId = "11111111-1111-4111-8111-111111111111";
     const child = createManagedAgent({ id: "22222222-2222-4222-8222-222222222222" });

@@ -599,7 +599,18 @@ export class AgentStorage {
 
   async upsert(record: StoredAgentRecord): Promise<void> {
     await this.load();
-    await this.queueRecordWrite(record);
+    // FU-468: an archive is built from a copy read earlier. A notice settled since then must not be overwritten.
+    if (!record.archivedAt) return this.queueRecordWrite(record);
+    await this.queueRecordMutation(record.id, (existing) =>
+      existing
+        ? {
+            ...record,
+            finishNotice: existing.finishNotice,
+            previousFinishNotices: existing.previousFinishNotices,
+            finishNoticeResults: existing.finishNoticeResults,
+          }
+        : record,
+    );
   }
 
   private queueRecordWrite(record: StoredAgentRecord): Promise<void> {
