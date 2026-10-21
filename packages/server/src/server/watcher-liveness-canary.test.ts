@@ -1,7 +1,7 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { createWatcherLivenessCanary } from "./watcher-liveness-canary.js";
 
 const cleanupPaths: string[] = [];
@@ -30,4 +30,19 @@ test("rejects when the watcher never reports the canary", async () => {
   const canary = createWatcherLivenessCanary(watchRoot, { timeoutMs: 10 });
 
   await expect(canary.verify()).rejects.toThrow("did not report its liveness canary");
+});
+
+test("rewrites the canary when the watcher drops the first event", async () => {
+  const watchRoot = await mkdtemp(join(tmpdir(), "paseo-watcher-canary-"));
+  cleanupPaths.push(watchRoot);
+  const canary = createWatcherLivenessCanary(watchRoot, { timeoutMs: 5_000, retryMs: 20 });
+
+  const verification = canary.verify();
+  // The first write is "lost": the watcher reports only after the canary is written again.
+  await vi.waitFor(async () => {
+    expect(await readFile(canary.path, "utf8")).toContain("canary 2");
+  });
+  canary.filterEvents([{ path: canary.path, type: "update" }]);
+
+  await expect(verification).resolves.toBeUndefined();
 });
