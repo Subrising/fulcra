@@ -101,7 +101,7 @@ describe("Claude spawn override", () => {
       await session.close();
     }
 
-    const claudeSpawnCall = spawnSpy.mock.calls.find(([, args]) => args[0] === "claude.js");
+    const claudeSpawnCall = spawnSpy.mock.calls.find(([, args]) => args.includes("claude.js"));
     expect(claudeSpawnCall).toBeDefined();
     const spawnOptions = claudeSpawnCall?.[2];
     expect(spawnOptions?.shell).toBe(false);

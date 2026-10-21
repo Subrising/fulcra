@@ -88,8 +88,10 @@ export function createDistribution({ home, bundleDirectory }) {
       supervisor = createChildSupervisor({
         boot: host.boot,
         spawn() {
+          // FU-466: the daemon passes its inspector flags. Without them the child fails closed (no SIGUSR1 inspector).
+          const nodeFlags = host.nodeFlags ?? ["--disable-sigusr1"];
           // Explicit allowlist: no daemon password, NODE_PATH, preload or caller startup options.
-          const child = spawn(process.execPath, [controllerEntry(bundleDirectory)], {
+          const child = spawn(process.execPath, [...nodeFlags, controllerEntry(bundleDirectory)], {
             cwd: bundleDirectory,
             env: {
               PATH: process.env.PATH,

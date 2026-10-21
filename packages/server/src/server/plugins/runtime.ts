@@ -1,4 +1,5 @@
 import { changePluginCacheBytes } from "../agent/history-load.js";
+import { daemonChildExecArgv } from "../child-exec-argv.js";
 import { PluginCatalogPaging, type CatalogReadState } from "./catalog-paging.js";
 import { managementFailure, managementMethod, managementReason } from "./management-error.js";
 import { readPackagedBundles } from "./packaged-bundles.js";
@@ -231,19 +232,11 @@ function resolveWorkerUrl(): URL {
   );
 }
 
-function resolveWorkerExecArgv(): string[] {
-  if (!import.meta.url.endsWith(".ts")) return [];
-  const loaderUrl = new URL("../../terminal/terminal-ts-loader.mjs", import.meta.url).href;
-  const importSource = [
-    'import { register } from "node:module";',
-    'import { pathToFileURL } from "node:url";',
-    `register(${JSON.stringify(loaderUrl)}, pathToFileURL("./"));`,
-  ].join(" ");
-  return [
-    "--experimental-strip-types",
-    "--import",
-    `data:text/javascript,${encodeURIComponent(importSource)}`,
-  ];
+export function resolveWorkerExecArgv(moduleUrl: string = import.meta.url): string[] {
+  return daemonChildExecArgv(
+    moduleUrl,
+    new URL("../../terminal/terminal-ts-loader.mjs", moduleUrl),
+  );
 }
 
 function spawnPluginChild(): PluginChild {

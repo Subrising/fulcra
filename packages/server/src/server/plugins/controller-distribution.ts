@@ -24,6 +24,8 @@ export interface ControllerDistribution {
     /** Host-owned private store path, never a shared config key or caller input. */
     intercomRateSettingsFile?: string;
     automaticResumeEnabled?: () => boolean;
+    /** Node flags for the controller child: the packaged inspector flags (FU-466). Absent means --disable-sigusr1. */
+    nodeFlags?: readonly string[];
     boot: string;
     /** The boot this one replaced (daemon-boot.ts), or null when it cannot be established. */
     previousBoot?: string | null;
