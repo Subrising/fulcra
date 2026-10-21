@@ -373,6 +373,7 @@ function buildDefaultServiceDeps() {
       signal: null,
     })),
     getWorkspaceGitSelfHealPhaseMs: vi.fn(() => 30_000),
+    workspaceFolderExists: vi.fn(() => true),
     createWatcherLivenessCanary: vi.fn(() => ({
       path: "",
       filterEvents: (events) => events,
