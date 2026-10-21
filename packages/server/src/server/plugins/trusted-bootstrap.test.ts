@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { initializeTrustedPlugins } from "./trusted-bootstrap.js";
 import { trustedClaudeDenyRules } from "./trusted.js";
-import type { StoredAgentRecord } from "../agent/agent-storage.js";
+import { AgentStorage } from "../agent/agent-storage.js";
+import { createTestLogger } from "../../test-utils/test-logger.js";
 
 // POSIX ownership admission; the paired Win32 case below asserts host refusal.
 test.runIf(process.platform !== "win32")(
@@ -36,10 +37,10 @@ test.runIf(process.platform !== "win32")(
           initialize: async () => {
             order.push("initialized");
           },
-          list: async () => {
+          knownIds: async () => {
             expect(order).toEqual(["initialized"]);
             order.push("listed");
-            return [{ id } as StoredAgentRecord];
+            return [id];
           },
         },
         bundle,
@@ -63,7 +64,7 @@ test("P4: unavailable storage index prevents trusted startup", async () => {
     initializeTrustedPlugins(
       {
         initialize: async () => undefined,
-        list: async () => {
+        knownIds: async () => {
           throw Error("storage unavailable");
         },
       },
@@ -83,7 +84,7 @@ test.runIf(process.platform === "win32")(
           initialize: async () => {
             order.push("initialized");
           },
-          list: async () => {
+          knownIds: async () => {
             order.push("listed");
             return [];
           },
@@ -93,5 +94,51 @@ test.runIf(process.platform === "win32")(
       ),
     ).rejects.toMatchObject({ code: "TRUSTED_PLUGIN_HOST_UNSUPPORTED" });
     expect(order).toEqual(["initialized", "listed"]);
+  },
+);
+
+// FU-462: after a restart an archived session is still a known agent, so unarchive, archive and delete pass the
+// trusted input check. The archived record stays on disk; only its id is read.
+test.runIf(process.platform !== "win32")(
+  "FU-462: a trusted bundle knows archived sessions that boot left on disk",
+  async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trusted-boot-archived-"));
+    const bundle = path.join(root, "bundle");
+    const directory = path.join(bundle, "fixture");
+    const id = "22222222-2222-4222-8222-222222222222";
+    await mkdir(directory, { recursive: true });
+    await mkdir(path.join(root, "agents", "project"), { recursive: true });
+    await writeFile(path.join(directory, "paseo-plugin.json"), JSON.stringify({ id: "fixture" }));
+    await writeFile(
+      path.join(directory, "index.host.js"),
+      "export const hostContract='1.1'; export default server=>{ server.inputObservations.require('" +
+        id +
+        "'); };",
+    );
+    await writeFile(
+      path.join(root, "agents", "project", id + ".json"),
+      JSON.stringify({
+        id,
+        provider: "claude",
+        cwd: "/tmp/project",
+        workspaceId: "ws-1",
+        createdAt: "2026-10-01T00:00:00.000Z",
+        updatedAt: "2026-10-01T00:00:00.000Z",
+        archivedAt: "2026-10-02T00:00:00.000Z",
+        labels: {},
+        lastStatus: "closed",
+        config: null,
+      }),
+    );
+    const storage = new AgentStorage(path.join(root, "agents"), createTestLogger());
+    let host: Awaited<ReturnType<typeof initializeTrustedPlugins>> | undefined;
+    try {
+      host = await initializeTrustedPlugins(storage, bundle, path.join(root, "home"));
+      expect(storage.bootstrapRecordsLoaded).toBe(0);
+      expect(host.requireSequence(id)).toEqual({ boot: host.boot, humanAt: 0 });
+    } finally {
+      host?.close();
+      await rm(root, { recursive: true, force: true });
+    }
   },
 );

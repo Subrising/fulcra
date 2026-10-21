@@ -875,7 +875,7 @@ export class ReportUpService {
   /** Reconcile a saved finish after native queue recovery has settled its old boot. */
   async recoverOwnedFinishes(): Promise<void> {
     await Promise.all(
-      (await this.deps.agentStorage.list()).flatMap((record) =>
+      (await this.deps.agentStorage.listLoaded()).flatMap((record) =>
         storedFinishNotices(record).map(async (notice) => {
           if (notice.status === "sending") {
             await this.deps.agentStorage.markFinishNoticeUnknown(record.id, notice.messageId);
@@ -922,7 +922,7 @@ export class ReportUpService {
         throw new OwnedFinishLineChanged(currentParentId, "reporting line changed");
       if (expectedLine === `${ROLE_REF_PREFIX}${MAIN_ASSISTANT_ROLE}`) {
         const agents = new Map<string, LineAgent>(
-          agentStorage.listCached().map((record) => [record.id, record]),
+          agentStorage.listLoadedSync().map((record) => [record.id, record]),
         );
         for (const live of agentManager.listAgents()) agents.set(live.id, live);
         const holder = findRoleHolder([...agents.values()], MAIN_ASSISTANT_ROLE);
