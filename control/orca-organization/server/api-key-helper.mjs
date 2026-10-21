@@ -1,6 +1,6 @@
 import { deflateRawSync } from "node:zlib";
 import { isAbsolute } from "node:path";
-import { mcpNodeFlags } from "../../src/control/mcp-node-flags.mjs";
+import { mcpNodeFlags } from "./node-flags.mjs";
 // The helper contains code and account references only. Claude receives its stdout through apiKeyHelper.
 // Keep the runtime self-contained: plugin and controller bundles do not share a module directory.
 async function readApiKey(config) {

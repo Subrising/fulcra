@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { mcpNodeFlags, NODE_FLAGS_ENV } from "./mcp-node-flags.mjs";
 import { canonicalMemoryConfig, CANONICAL_MEMORY_ENTRY } from "../canonical-memory-route.mjs";
 import { supervisorServer, INBOX, TOOL_SURFACE } from "./tool-surface.mjs";
+import { mcpNodeFlags as pluginNodeFlags } from "../../orca-organization/server/node-flags.mjs";
 
 // FU-467: the MCP server processes that agents start must not open an inspector on SIGUSR1 (FU-79).
 const toolSurface = fileURLToPath(new URL("./tool-surface.mjs", import.meta.url));
@@ -69,4 +70,24 @@ test("a missing or malformed flag value fails closed", () => {
 test("the tool surface digest does not depend on the flags, so live sessions are not refreshed", () => {
   assert.equal(inChild(undefined).surface, inChild("[]").surface);
   assert.equal(inChild(undefined).surface, TOOL_SURFACE);
+});
+
+test("the plugin-local copy for the API key helper applies the same rule (FU-467)", () => {
+  const values = [
+    undefined,
+    "",
+    "not json",
+    "null",
+    "[]",
+    "[\"--disable-sigusr1\"]",
+    "[\"--disable-sigusr1\",\"--inspect\"]",
+    "[\"--require=/tmp/x.js\"]",
+    "[\"--inspect=0\"]",
+    "[1]",
+    "\"--x\"",
+  ];
+  for (const value of values) {
+    const env = value === undefined ? {} : { ORCA_NODE_FLAGS: value };
+    assert.deepEqual(pluginNodeFlags(env), mcpNodeFlags(env), String(value));
+  }
 });
