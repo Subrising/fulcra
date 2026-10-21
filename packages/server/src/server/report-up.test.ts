@@ -3300,20 +3300,36 @@ more detail`),
       "Pushed the branch and opened the PR. Next I check the hooks.",
       "Read the code. Starting the change now.",
     ];
-    const turns: Array<{ message: string; error?: string }> = [
-      ...Array.from({ length: 40 }, (_, i) => ({ message: progress[i % progress.length]! })),
-      ...Array.from({ length: 6 }, (_, i) => ({ message: `DONE item ${i} PR checked` })),
-      { message: "BLOCKED the key is missing" },
-      { message: "DECISION ship the patch or wait" },
-      { message: "Two options exist. Which one do you want?" },
-      { message: "Started the render.", error: "Provider crashed" },
+    const turns: Array<{ message: string; error?: string; sends: boolean }> = [
+      ...Array.from({ length: 40 }, (_, i) => ({
+        message: progress[i % progress.length]!,
+        sends: false,
+      })),
+      ...Array.from({ length: 6 }, (_, i) => ({
+        message: `DONE item ${i} PR checked`,
+        sends: true,
+      })),
+      { message: "BLOCKED the key is missing", sends: true },
+      { message: "DECISION ship the patch or wait", sends: true },
+      { message: "Two options exist. Which one do you want?", sends: true },
+      { message: "Started the render.", error: "Provider crashed", sends: true },
     ];
+    const held = (lines: string[]) => lines.some((line) => line.includes("Finish notice held"));
     let sent = 0;
     for (const turn of turns) {
-      const f = await ownedFixture({ notice: { status: "armed" }, lastMessage: turn.message });
+      const logLines: string[] = [];
+      const f = await ownedFixture({
+        notice: { status: "armed" },
+        lastMessage: turn.message,
+        logLines,
+      });
       try {
         f.runTurn(WORKER, undefined, turn.error);
-        await new Promise((resolve) => setTimeout(resolve, 150));
+        // Wait for the turn's real outcome, not a fixed time: a send shows in delivered, a held turn logs it.
+        await until(() =>
+          turn.sends ? expect(f.delivered).toHaveLength(1) : expect(held(logLines)).toBe(true),
+        );
+        await quiet();
         sent += f.delivered.length;
       } finally {
         f.service.stop();
