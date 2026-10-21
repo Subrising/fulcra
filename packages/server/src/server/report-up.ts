@@ -1956,6 +1956,8 @@ export class ReportUpService {
       observedLast === undefined
         ? await this.deps.agentManager.getLastAssistantMessage(worker.id).catch(() => null)
         : observedLast;
+    // FU-454: a lead on another computer that reports to the main assistant gets the same FU-439 filter.
+    if (!failed && (await this.finishHeld(worker.id, lastMessage, line))) return true;
     const prompt = formatSystemNotificationPrompt(
       formatReportUpNotice({ worker: this.workerWithSpend(worker), failed, lastMessage }) +
         (!failed && parseWorkerResult(lastMessage)?.state === "DONE"
