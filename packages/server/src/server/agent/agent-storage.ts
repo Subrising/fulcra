@@ -599,11 +599,18 @@ export class AgentStorage {
 
   async upsert(record: StoredAgentRecord): Promise<void> {
     await this.load();
-    await this.queueRecordWrite(record);
-  }
-
-  private queueRecordWrite(record: StoredAgentRecord): Promise<void> {
-    return this.queueRecordMutation(record.id, () => record);
+    // FU-468: a caller writes a copy it read earlier. A notice changed since then must not be overwritten, so
+    // notice fields come only from the storage's own mutation methods.
+    await this.queueRecordMutation(record.id, (existing) =>
+      existing
+        ? {
+            ...record,
+            finishNotice: existing.finishNotice,
+            previousFinishNotices: existing.previousFinishNotices,
+            finishNoticeResults: existing.finishNoticeResults,
+          }
+        : record,
+    );
   }
 
   // A mutation may return null to leave the record exactly as it is (Orca R3: a normalisation that no longer
