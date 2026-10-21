@@ -16,6 +16,7 @@ import {
 import { parseControllerCommand, READ_METHODS } from "./command-parser.mjs";
 import { initializeRoleDefaults } from "../../orca-organization/server/role-defaults-store.mjs";
 import { firstRun } from "../config.mjs";
+import { NODE_FLAGS_ENV } from "./mcp-node-flags.mjs";
 import { recordBootStart, sealBoot } from "./boot-chain.mjs";
 export const hostContract = "1.1";
 export default function setup() {
@@ -102,6 +103,8 @@ export function createDistribution({ home, bundleDirectory }) {
                 ? { PASEO_INTERCOM_RATE_FILE: host.intercomRateSettingsFile }
                 : {}),
               ELECTRON_RUN_AS_NODE: process.env.ELECTRON_RUN_AS_NODE,
+              // FU-467: the controller gives the same flags to the MCP servers that agents start.
+              [NODE_FLAGS_ENV]: JSON.stringify(nodeFlags),
             },
             stdio: ["ignore", "inherit", "inherit", "pipe", "pipe"],
           });

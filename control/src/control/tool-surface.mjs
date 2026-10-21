@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 // tools -- so "is this session current" is an exact comparison, not a version someone must remember to bump.
 import { createHash } from "node:crypto";
 import { portable } from "../portable-config.mjs";
+import { mcpNodeFlags } from "./mcp-node-flags.mjs";
 import { canonicalMemoryConfig, CANONICAL_MEMORY_ENTRY } from "../canonical-memory-route.mjs";
 import { ROLE_TOOLS } from "./grant-file.mjs";
 import { CONTROLLER_HOME as HOME } from "./installation-settings.mjs";
@@ -34,7 +35,7 @@ export function supervisorServer(messageId) {
   return {
     type: "stdio",
     command: COMMAND,
-    args: [INBOX],
+    args: [...mcpNodeFlags(), INBOX],
     env: {
       ELECTRON_RUN_AS_NODE: "1",
       ...(portable ? { ORCA_HOME: portable.home } : {}),
@@ -61,6 +62,11 @@ export const TOOL_SURFACE = createHash("sha256")
   .update(
     JSON.stringify({
       command: COMMAND,
+      // FU-467: the Node flags of the server processes are part of the surface. Adding them changed the digest once, so
+      // every live seat and manager session gets one idle-time MCP refresh (history kept, the provider session is
+      // resumed) and drops its old unflagged server processes. Without this the old processes would live until the
+      // session ended.
+      nodeFlags: mcpNodeFlags(),
       inbox: INBOX,
       memory: CANONICAL_MEMORY_ENTRY,
       preapproved: toolPolicy().preapproved,
