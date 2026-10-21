@@ -1,4 +1,9 @@
-import { managementReplyFailure, describeFailure } from "./management-refusal.mjs";
+import {
+  managementReplyFailure,
+  describeFailure,
+  describeWriteFailure,
+  isManagementRefusal,
+} from "./management-refusal.mjs";
 import { READ_METHODS } from "./command-parser.mjs";
 import { requireManagementPrincipal } from "./management-principal.mjs";
 import net from "node:net";
@@ -155,6 +160,12 @@ async function receive(input) {
           "Management read failed:",
           String(input.command?.method ?? "").slice(0, 64),
           describeFailure(error),
+        );
+      if (managementDispatched && !readCommand && !isManagementRefusal(error))
+        console.error(
+          "Management write failed:",
+          String(input.command?.method ?? "").slice(0, 64),
+          describeWriteFailure(error),
         );
       send({
         id: input.id,

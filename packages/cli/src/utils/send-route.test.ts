@@ -165,6 +165,31 @@ it("preserves a relayed sender and the explicit notice opt-out", async () => {
   ]);
 });
 
+it("relays the source host's own-lead check to the destination (FU-402)", async () => {
+  await sshSend({
+    route,
+    agentId: "target",
+    prompt: "DECISION merge now?",
+    sender: {
+      agentId: "sender",
+      serverId: "book",
+      outboundServerOnly: "mini",
+      outboundParent: "target@mini",
+    },
+    localServerId: "book",
+    localHost: "book host",
+    options: { daemonTarget: { kind: "instance", home: "/local" } },
+  });
+  expect(JSON.parse(wire).flags).toEqual([
+    "--from",
+    "sender@book",
+    "--outbound-server-only",
+    "mini",
+    "--outbound-parent",
+    "target@mini",
+  ]);
+});
+
 it.each(["-oProxyCommand=wrong", "11111111", "not-a-session"])(
   "rejects an invalid route key: %s",
   async (key) => {

@@ -212,6 +212,12 @@ function restrictedRemoteDecision(input: LineInput): LineDecision {
     (sender.outboundServerOnly && sender.outboundServerOnly !== localServerId)
   )
     return { allowed: false, reason: sender.refusal ?? "Send this to your lead." };
+  // FU-402: a worker on another computer reports up to its own lead here. Its source host named that lead.
+  if (
+    sender.outboundParent === `${target.id}@${localServerId}` &&
+    sender.outboundServerOnly === localServerId
+  )
+    return { allowed: true, why: "parent" };
   return remoteDecision(input);
 }
 
@@ -241,6 +247,7 @@ export interface OutboundSendDecision {
   inboundOnly: boolean;
   outboundMainOnly?: true;
   outboundServerOnly?: string;
+  outboundParent?: string;
   refusal?: string;
 }
 
@@ -282,14 +289,25 @@ export async function decideOutboundSend(
       refusal: "Send this to the main assistant.",
     };
   const relation = matchingOutboundReference(line, input.targetId);
-  if (relation) {
-    const server =
-      relation.server ?? (rawLine === MAIN_ASSISTANT_REF ? input.localServerId : undefined);
-    return server
-      ? { inboundOnly: false, outboundServerOnly: server, refusal: reason }
-      : { inboundOnly: false };
-  }
+  if (relation) return lineDecision({ ...input, relation, rawLine, reason });
   return { inboundOnly: true, refusal: reason };
+}
+
+/** The target is the sender's own line. */
+function lineDecision(input: {
+  relation: { server?: string };
+  rawLine: string;
+  targetId: string;
+  localServerId?: string;
+  reason: string;
+}): OutboundSendDecision {
+  const { relation, rawLine, targetId, localServerId, reason } = input;
+  const role = rawLine === MAIN_ASSISTANT_REF;
+  const server = relation.server ?? (role ? localServerId : undefined);
+  if (!server) return { inboundOnly: false };
+  // FU-402: the destination cannot see this chat's line, so the source names its own lead on that host.
+  const parent = role ? {} : { outboundParent: `${targetId}@${server}` };
+  return { inboundOnly: false, outboundServerOnly: server, ...parent, refusal: reason };
 }
 
 async function outboundRefusal(data: {

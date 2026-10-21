@@ -67,7 +67,7 @@ import {
   type LedgerRow,
 } from "./ledger-items.js";
 import { finishNoticeWanted } from "./finish-notice-filter.js";
-import { lastAgentMessageDeliveredAt } from "./agent-message-log.js";
+import { lastAgentMessageAt, lastAgentMessageDeliveredAt } from "./agent-message-log.js";
 import type { HostLinkNoticeKind } from "./host-link-contracts.js";
 import { classifyEndingAssistantMessage, classifyFailedTurn } from "./limit-resume/detect.js";
 import {
@@ -215,6 +215,39 @@ function looksLikeWorker(worker: LineAgent): boolean {
   );
 }
 
+const LEAD_ON_ANOTHER_COMPUTER = "lead on another computer";
+
+interface UnseenTurn {
+  worker: LineAgent;
+  failed: boolean;
+  observedLast: string | null | undefined;
+  startedAt: number | undefined;
+}
+
+/**
+ * The worker sent to its lead since the turn began: a delivered local send (FU-427), or for a lead on another computer
+ * the source check of an SSH relay. A failed relay is shown to the worker by the CLI itself.
+ */
+function sentToLeadDuring(
+  worker: LineAgent,
+  startedAt: number | undefined,
+  localServerId: string | null,
+): boolean {
+  const [leadId, server] = reportsTo(worker)?.split("@", 2) ?? [];
+  if (!leadId || startedAt === undefined) return false;
+  const remote = server !== undefined && server !== localServerId;
+  const at = remote
+    ? lastAgentMessageAt(worker.id, leadId)
+    : lastAgentMessageDeliveredAt(worker.id, leadId);
+  return at !== null && at >= startedAt;
+}
+
+/** The last line of a final message asks a question (markdown emphasis allowed). */
+function endsWithQuestion(text: string | null | undefined): boolean {
+  const line = text?.trim().split(/\r?\n/).at(-1)?.trim() ?? "";
+  return /\?(?:\*\*|__|`|\*|_)*$/.test(line);
+}
+
 /** A chat's lead chat on this computer (fulcra.reports-to, else its parent), or the reason there is none. */
 export async function leadChatOf(
   store: LineStore,
@@ -230,7 +263,7 @@ export async function leadChatOf(
     leadId = role.agentId;
   }
   const [id, server] = leadId.split("@", 2);
-  if (server !== undefined && server !== localServerId) return { skip: "lead on another computer" };
+  if (server !== undefined && server !== localServerId) return { skip: LEAD_ON_ANOTHER_COMPUTER };
   if (!id || id === worker.id) return { skip: "no lead chat" };
   return { id };
 }
@@ -1839,10 +1872,12 @@ export class ReportUpService {
     if (await this.noteLimit(workerId, failed, failure, observedLast))
       return skip("ended on a usage limit");
     // OFF BY DEFAULT: the limit notice above stays on; "finished a turn" and "ended with an error" notices need the fallback.
-    if (!this.deps.isEnabled()) return skip("turned off");
+    if (!this.deps.isEnabled())
+      return skip(await this.unreported({ worker, failed, observedLast, startedAt }, "turned off"));
     if (await this.remoteFinished(worker, failed, observedLast)) return;
     const lead = await this.leadOf(worker);
-    if ("skip" in lead) return skip(lead.skip);
+    if ("skip" in lead)
+      return skip(await this.unreported({ worker, failed, observedLast, startedAt }, lead.skip));
     const leadAgent = await this.store.get(lead.id);
     if (!leadAgent || leadAgent.archivedAt) return skip("lead not here or archived");
     if (!(await this.reportingLineAllows(workerId, lead.id))) return;
@@ -1867,6 +1902,56 @@ export class ReportUpService {
       lastMessage,
       eventId: startedAt === undefined ? undefined : `${workerId}:${startedAt}`,
     });
+  }
+
+  /**
+   * FU-402: a worker's DONE, BLOCKED or DECISION line, or a question, in its final text must not stay unseen. With the
+   * "finished a turn" notices off and no finish notice armed, it goes once to a lead on this computer. A lead on another
+   * computer cannot get it from here, so the worker is told once to send it through a route that reaches that computer.
+   * Either notice starts no further notice: the answer turn was started by a notice.
+   */
+  private async unreported(turn: UnseenTurn, reason: string): Promise<string> {
+    if (!turn.failed && (reason === "turned off" || reason === LEAD_ON_ANOTHER_COMPUTER))
+      await this.relayUnseenResult(turn);
+    return reason;
+  }
+
+  private async relayUnseenResult({ worker, observedLast, startedAt }: UnseenTurn): Promise<void> {
+    if (!looksLikeWorker(worker) || (await this.hasWorkers(worker.id))) return;
+    const lastMessage =
+      observedLast === undefined
+        ? await this.deps.agentManager.getLastAssistantMessage(worker.id).catch(() => null)
+        : observedLast;
+    if (!parseWorkerResult(lastMessage) && !endsWithQuestion(lastMessage)) return;
+    // The worker already messaged its lead during this turn, so its result is not unseen.
+    if (sentToLeadDuring(worker, startedAt, this.deps.localServerId)) return;
+    const lead = await this.leadOf(worker);
+    if ("id" in lead) {
+      const leadAgent = await this.store.get(lead.id);
+      if (!leadAgent || leadAgent.archivedAt) return;
+      if (!(await this.reportingLineAllows(worker.id, lead.id))) return;
+      const prompt = formatSystemNotificationPrompt(
+        formatReportUpNotice({ worker: this.workerWithSpend(worker), failed: false, lastMessage }),
+      );
+      await this.toLead(worker.id, lead.id, prompt, "report-up");
+      return;
+    }
+    if (lead.skip !== LEAD_ON_ANOTHER_COMPUTER) return;
+    const line = reportsTo(worker)!;
+    this.deps.logger.warn(
+      { agentId: worker.id, lead: line },
+      "Worker result has no route to its lead on another computer",
+    );
+    await this.toLead(
+      worker.id,
+      worker.id,
+      formatSystemNotificationPrompt(
+        `Your lead ${line} is on another computer. Fulcra did not deliver your last message to it. ` +
+          "Send your DONE, BLOCKED or DECISION line to that lead now, through a route that reaches that computer " +
+          "(the notify command on Windows, or fulcra send over SSH).",
+      ),
+      "report-up",
+    );
   }
 
   private async remoteFinished(

@@ -373,7 +373,7 @@ export async function startController({
       .then(refreshEvents)
       .catch(onEventError);
     void control.usageLimits.tick();
-    void control.wakes.tick();
+    if (control.wakes.safetyTickDue()) void control.wakes.tick();
     void control.providerRecovery.tick();
     void control.compactionLoops.tick();
     void control.automaticRestarts.tick();

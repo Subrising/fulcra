@@ -27,6 +27,8 @@ import { assertColumns } from "./schema.mjs";
 import { tickDue } from "./agent-watch.mjs";
 import { uuid, RecipientBusy } from "./authority.mjs";
 
+// FU-457: agent updates drive wakes (onAgent); the watchdog tick is only a safety net, run this often when no heartbeat is set.
+export const WAKES_SAFETY_MS = 5 * 60_000;
 export const OWNED_CACHE_MS = 5000,
   WAKE_TTL_MS = 86400000,
   HEARTBEAT_MINUTES = 0,
@@ -611,7 +613,19 @@ export class Wakes {
         });
     return this.pumping;
   }
-  // Watchdog (30 s): every owned session is re-observed (a lost update is caught here), then the heartbeat, then delivery.
+  // The 30 s watchdog calls this: a heartbeat needs the full cadence, otherwise only the 5 min safety tick runs.
+  safetyTickDue() {
+    const now = this.now();
+    if (
+      this.heartbeatMinutes() === 0 &&
+      this.lastSafetyTick &&
+      now - this.lastSafetyTick < WAKES_SAFETY_MS
+    )
+      return false;
+    this.lastSafetyTick = now;
+    return true;
+  }
+  // Watchdog (30 s, or 5 min without a heartbeat): every owned session is re-observed (a lost update is caught here), then the heartbeat, then delivery.
   tick() {
     if (this.control.closing) return Promise.resolve();
     if (!this.ticking)
