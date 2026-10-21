@@ -1810,6 +1810,15 @@ export class ReportUpService {
     }
   }
 
+  // "turned off" is logged once per agent, not at every turn end.
+  private logSkip(workerId: string, reason: string): void {
+    if (reason === "turned off") {
+      if (this.skippedTurnedOff.has(workerId)) return;
+      this.skippedTurnedOff.add(workerId);
+    }
+    this.deps.logger.info({ agentId: workerId, reason }, "Report-up skipped");
+  }
+
   private async report(
     workerId: string,
     failed: boolean,
@@ -1817,15 +1826,8 @@ export class ReportUpService {
     startedAt?: number,
     observedLast?: string | null,
   ): Promise<void> {
-    const skip = (reason: string) => {
-      this.deps.logger.info({ agentId: workerId, reason }, "Report-up skipped");
-    };
-    if (!this.anyEnabled()) {
-      // Log "turned off" once per agent, not at every turn end.
-      if (this.skippedTurnedOff.has(workerId)) return;
-      this.skippedTurnedOff.add(workerId);
-      return skip("turned off");
-    }
+    const skip = (reason: string) => this.logSkip(workerId, reason);
+    if (!this.anyEnabled()) return skip("turned off");
     this.skippedTurnedOff.delete(workerId);
     // Idle: a follow-up turn that starts at once reports when it ends.
     await new Promise((resolve) => setImmediate(resolve));
