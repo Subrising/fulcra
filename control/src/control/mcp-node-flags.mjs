@@ -1,7 +1,9 @@
-// FU-467: Node flags for the MCP server processes that agents start (the supervisor inbox and the canonical memory
-// server). The daemon decides the flags (packagedInspectorFlags, FU-466) and hands them to the controller child in
-// this variable. control/ does not import @getpaseo/server. A missing or malformed value fails closed: no SIGUSR1
-// inspector. A valid empty list (the gate flavour) gives no flag.
+// FU-467: Node flags for the processes that agents start with the Orca node binary (the supervisor inbox and the
+// canonical memory MCP servers, and the Claude API key helper). The daemon decides the flags (packagedInspectorFlags,
+// FU-466) and hands them to the controller child in this variable. control/ does not import @getpaseo/server.
+// Only two values are accepted: exactly ["--disable-sigusr1"] or [] (the gate flavour). Anything else (other flags,
+// extra entries, wrong types, bad JSON, missing value) gives ["--disable-sigusr1"], so the variable can never put
+// --require or --inspect into a server's argv.
 export const NODE_FLAGS_ENV = "ORCA_NODE_FLAGS";
 const DEFAULT_FLAGS = ["--disable-sigusr1"];
 
@@ -14,7 +16,6 @@ export function mcpNodeFlags(env = process.env) {
   } catch {
     return [...DEFAULT_FLAGS];
   }
-  if (!Array.isArray(parsed) || parsed.some((flag) => typeof flag !== "string"))
-    return [...DEFAULT_FLAGS];
-  return parsed.filter((flag) => flag.length > 0);
+  if (Array.isArray(parsed) && parsed.length === 0) return [];
+  return [...DEFAULT_FLAGS];
 }

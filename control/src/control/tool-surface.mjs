@@ -62,11 +62,9 @@ export const TOOL_SURFACE = createHash("sha256")
   .update(
     JSON.stringify({
       command: COMMAND,
-      // FU-467: the Node flags of the server processes are part of the surface. Adding them changed the digest once, so
-      // every live seat and manager session gets one idle-time MCP refresh (history kept, the provider session is
-      // resumed) and drops its old unflagged server processes. Without this the old processes would live until the
-      // session ended.
-      nodeFlags: mcpNodeFlags(),
+      // FU-467: the Node flags are NOT in the digest. A change here makes every delegated live session stale, and
+      // reconcile() then refreshes them all (fleet-wide agent.mcp.refresh, again on a rollback). New and refreshed
+      // sessions get the flags from supervisorServer() and canonicalMemoryConfig() anyway.
       inbox: INBOX,
       memory: CANONICAL_MEMORY_ENTRY,
       preapproved: toolPolicy().preapproved,

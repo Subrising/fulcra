@@ -42,9 +42,21 @@ test("an empty flag list from the daemon (gate flavour) gives no flag and no emp
   assert.deepEqual(out.memory, [CANONICAL_MEMORY_ENTRY]);
 });
 
-test("the daemon flag list is used as given, in order, before the entry", () => {
-  const out = inChild(JSON.stringify(["--disable-sigusr1", "", "--no-warnings"]));
-  assert.deepEqual(out.inbox, ["--disable-sigusr1", "--no-warnings", INBOX]);
+test("only the exact inspector flag is accepted; any other flag gives the default", () => {
+  for (const value of [
+    JSON.stringify(["--no-warnings"]),
+    JSON.stringify(["--inspect=0"]),
+    JSON.stringify(["--require=/tmp/x.js"]),
+    JSON.stringify(["--disable-sigusr1", "--no-warnings"]),
+  ]) {
+    assert.deepEqual(inChild(value).inbox, ["--disable-sigusr1", INBOX], value);
+  }
+});
+
+test("the inspector flag with an extra entry gives the default, not both", () => {
+  assert.deepEqual(mcpNodeFlags({ [NODE_FLAGS_ENV]: '["--disable-sigusr1","--inspect"]' }), [
+    "--disable-sigusr1",
+  ]);
 });
 
 test("a missing or malformed flag value fails closed", () => {
@@ -54,9 +66,7 @@ test("a missing or malformed flag value fails closed", () => {
   assert.deepEqual(mcpNodeFlags({}), ["--disable-sigusr1"]);
 });
 
-test("the tool surface digest changes with the flags, so live sessions refresh once", () => {
-  const closed = inChild(undefined).surface,
-    open = inChild("[]").surface;
-  assert.equal(closed, TOOL_SURFACE);
-  assert.notEqual(closed, open);
+test("the tool surface digest does not depend on the flags, so live sessions are not refreshed", () => {
+  assert.equal(inChild(undefined).surface, inChild("[]").surface);
+  assert.equal(inChild(undefined).surface, TOOL_SURFACE);
 });

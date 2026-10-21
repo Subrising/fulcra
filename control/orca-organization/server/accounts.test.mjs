@@ -1251,6 +1251,16 @@ test("helper fixes the Keychain reader and uses a shell-neutral Windows entry", 
   const source = Buffer.from(encoded, "base64").toString();
   assert.equal(source.includes('"security":"/usr/bin/security"'), true);
   assert.equal(source.includes("/tmp/untrusted-reader"), false);
+  // FU-467: the flag comes before -e, on both platforms; an empty list (gate flavour) leaves it out.
+  assert.match(mac, /^ELECTRON_RUN_AS_NODE=1 '[^']+' '--disable-sigusr1' -e '/);
+  assert.match(
+    apiKeyHelperCommand({
+      ...base,
+      platform: "darwin",
+      env: { ...base.env, ORCA_NODE_FLAGS: "[]" },
+    }),
+    /^ELECTRON_RUN_AS_NODE=1 '[^']+' -e '/,
+  );
   const windows = apiKeyHelperCommand({ ...base, platform: "win32" });
   assert.match(
     windows,
@@ -1259,6 +1269,7 @@ test("helper fixes the Keychain reader and uses a shell-neutral Windows entry", 
   const script = Buffer.from(windows.split(" ").at(-1), "base64").toString("utf16le");
   assert.ok(script.startsWith("$env:ELECTRON_RUN_AS_NODE='1'; & '"));
   assert.ok(script.endsWith("; exit $LASTEXITCODE"));
+  assert.match(script, /^\$env:ELECTRON_RUN_AS_NODE='1'; & '[^']+' '--disable-sigusr1' '-e' /);
   assert.equal(windows.includes('set "'), false);
   assert.ok(windows.length < 7500);
   const { inflateRawSync } = await import("node:zlib");
