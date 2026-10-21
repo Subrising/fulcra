@@ -25,6 +25,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { writePrivateFileAtomicSync } from "./private-files.js";
+import { lastAgentMessageAt } from "./agent-message-log.js";
 import type { Logger } from "pino";
 import {
   MAIN_ASSISTANT_ROLE,
@@ -214,6 +215,21 @@ function looksLikeWorker(worker: LineAgent): boolean {
 }
 
 const LEAD_ON_ANOTHER_COMPUTER = "lead on another computer";
+
+interface UnseenTurn {
+  worker: LineAgent;
+  failed: boolean;
+  observedLast: string | null | undefined;
+  startedAt: number | undefined;
+}
+
+/** A send from the worker to its lead (local, or through the source check of an SSH relay) since the turn began. */
+function sentToLeadDuring(worker: LineAgent, startedAt: number | undefined): boolean {
+  const leadId = reportsTo(worker)?.split("@", 1)[0];
+  if (!leadId || startedAt === undefined) return false;
+  const at = lastAgentMessageAt(worker.id, leadId);
+  return at !== null && at >= startedAt;
+}
 
 /** The last line of a final message asks a question (markdown emphasis allowed). */
 function endsWithQuestion(text: string | null | undefined): boolean {
@@ -1695,10 +1711,11 @@ export class ReportUpService {
       return skip("ended on a usage limit");
     // OFF BY DEFAULT: the limit notice above stays on; "finished a turn" and "ended with an error" notices need the fallback.
     if (!this.deps.isEnabled())
-      return skip(await this.unreported(worker, failed, observedLast, "turned off"));
+      return skip(await this.unreported({ worker, failed, observedLast, startedAt }, "turned off"));
     if (await this.remoteFinished(worker, failed, observedLast)) return;
     const lead = await this.leadOf(worker);
-    if ("skip" in lead) return skip(await this.unreported(worker, failed, observedLast, lead.skip));
+    if ("skip" in lead)
+      return skip(await this.unreported({ worker, failed, observedLast, startedAt }, lead.skip));
     const leadAgent = await this.store.get(lead.id);
     if (!leadAgent || leadAgent.archivedAt) return skip("lead not here or archived");
     if (!(await this.reportingLineAllows(workerId, lead.id))) return;
@@ -1730,24 +1747,21 @@ export class ReportUpService {
    * computer cannot get it from here, so the worker is told once to send it through a route that reaches that computer.
    * Either notice starts no further notice: the answer turn was started by a notice.
    */
-  private async unreported(
-    worker: LineAgent,
-    failed: boolean,
-    observedLast: string | null | undefined,
-    reason: string,
-  ): Promise<string> {
-    if (!failed && (reason === "turned off" || reason === LEAD_ON_ANOTHER_COMPUTER))
-      await this.relayUnseenResult(worker, observedLast);
+  private async unreported(turn: UnseenTurn, reason: string): Promise<string> {
+    if (!turn.failed && (reason === "turned off" || reason === LEAD_ON_ANOTHER_COMPUTER))
+      await this.relayUnseenResult(turn);
     return reason;
   }
 
-  private async relayUnseenResult(worker: LineAgent, observedLast?: string | null): Promise<void> {
-    if (!looksLikeWorker(worker)) return;
+  private async relayUnseenResult({ worker, observedLast, startedAt }: UnseenTurn): Promise<void> {
+    if (!looksLikeWorker(worker) || (await this.hasWorkers(worker.id))) return;
     const lastMessage =
       observedLast === undefined
         ? await this.deps.agentManager.getLastAssistantMessage(worker.id).catch(() => null)
         : observedLast;
     if (!parseWorkerResult(lastMessage) && !endsWithQuestion(lastMessage)) return;
+    // The worker already messaged its lead during this turn, so its result is not unseen.
+    if (sentToLeadDuring(worker, startedAt)) return;
     const lead = await this.leadOf(worker);
     if ("id" in lead) {
       const leadAgent = await this.store.get(lead.id);

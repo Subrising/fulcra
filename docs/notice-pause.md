@@ -126,7 +126,7 @@ Other executable names cause a visible warning because they can skip the Python 
 The source sends the prompt on SSH stdin and stamps the original chat and server ID with `--from`.
 The source checks the stamped sender's own line before SSH starts.
 A selected `--host` cannot change a local sender's host identity.
-When the target is the sender's own lead, the source adds `--outbound-parent`, and the destination accepts the send up the line.
+When the target is the sender's own lead on the destination host, the source adds `--outbound-parent <lead id>@<server id>`. The destination accepts the send only when that value names the target on this host. The CLI drops a typed `--outbound-parent` before an SSH relay; only the source daemon's check sets it.
 A lead on another computer has no other route: the host-link `prompt` operation goes only from a lead to its own remote worker, and a host-link `notice` goes only to the main assistant.
 Without a matching outbound line, the destination can accept only its own child or direct-link relation.
 The destination checks that relation before a Python hold and again before daemon delivery.
@@ -140,7 +140,7 @@ Required restart warnings need an explicit endpoint; automatic SSH routing canno
 A daemon that listens only on loopback refuses `--host <tailscale address>:6767` with `ECONNREFUSED`. Use an SSH route instead.
 An SSH key restricted by a forced command (such as the Windows PC's `pc-gate` key on the Mini) refuses the relay script. That host keeps its own gated command, such as `notify`, until the gate allows the relay.
 
-When a worker ends a turn with a `DONE`, `BLOCKED` or `DECISION` line, or a question, and no finish notice reaches its lead, report-up acts once.
+When a worker ends a turn with a `DONE`, `BLOCKED` or `DECISION` line, or a question, and no finish notice reaches its lead, report-up acts once. It does nothing when the worker already sent to its lead during that turn, or when the chat has its own workers.
 A lead on this computer gets the message even with finished-turn notices off. For a lead on another computer, the worker gets one notice to resend through a working route.
 Turning off every report-up notice also turns this off.
 

@@ -388,6 +388,40 @@ describe("a result or question in the final text is never silent (FU-402)", () =
     }
   });
 
+  test("a result the worker already sent to its lead in this turn is not sent again", async () => {
+    resetAgentMessageLogForTests();
+    for (const [line, enabled] of [
+      [LEAD, false],
+      [`${LEAD}@srv_other`, true],
+    ] as const) {
+      const f = fixture(
+        [lead, { ...worker({ [REPORTS_TO_LABEL]: line }), lastMessage: "DONE merged" }],
+        { enabled },
+      );
+      f.stream(WORKER, { type: "turn_started", provider: "claude" });
+      noteAgentMessage(WORKER, LEAD, f.clock.now + 1000);
+      f.clock.now += 2000;
+      f.stream(WORKER, { type: "turn_completed", provider: "claude" });
+      await f.settle();
+      expect(f.delivered).toEqual([]);
+    }
+    resetAgentMessageLogForTests();
+  });
+
+  test("a chat that has its own workers is not treated as a worker", async () => {
+    const sub = {
+      id: "66666666-6666-4666-8666-666666666666",
+      title: "Sub",
+      labels: { [REPORTS_TO_LABEL]: WORKER },
+    };
+    const f = fixture([lead, { ...worker(), lastMessage: "DECISION merge?" }, sub], {
+      enabled: false,
+    });
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+  });
+
   test("every report-up notice turned off keeps the result quiet", async () => {
     const f = fixture([lead, { ...worker(), lastMessage: "DECISION merge?" }], {
       enabled: false,

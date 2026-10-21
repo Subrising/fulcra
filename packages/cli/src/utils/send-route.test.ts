@@ -174,7 +174,7 @@ it("relays the source host's own-lead check to the destination (FU-402)", async 
       agentId: "sender",
       serverId: "book",
       outboundServerOnly: "mini",
-      outboundParent: true,
+      outboundParent: "target@mini",
     },
     localServerId: "book",
     localHost: "book host",
@@ -186,6 +186,7 @@ it("relays the source host's own-lead check to the destination (FU-402)", async 
     "--outbound-server-only",
     "mini",
     "--outbound-parent",
+    "target@mini",
   ]);
 });
 

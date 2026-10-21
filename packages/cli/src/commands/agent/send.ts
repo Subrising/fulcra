@@ -62,7 +62,7 @@ export interface AgentSendOptions extends CommandOptions {
   inboundOnly?: boolean;
   outboundMainOnly?: boolean;
   outboundServerOnly?: string;
-  outboundParent?: boolean;
+  outboundParent?: string;
   outboundRefusal?: string;
   checkOnly?: boolean;
 }
@@ -97,8 +97,8 @@ export function addSendOptions(cmd: Command): Command {
       "Restrict a relayed send to its source-selected destination host",
     )
     .option(
-      "--outbound-parent",
-      "Mark a relayed send as checked by the source host: the receiver is the sender's own lead",
+      "--outbound-parent <lead>",
+      "Source daemon check for a relayed send: the sender's own lead, as <lead id>@<server id>",
     )
     .option(
       "--outbound-refusal <text>",
@@ -384,16 +384,18 @@ function withSourceCheck(
     inboundOnly: boolean;
     outboundMainOnly?: true;
     outboundServerOnly?: string;
-    outboundParent?: true;
+    outboundParent?: string;
     refusal?: string;
   },
 ): NonNullable<ReturnType<typeof resolveSender>> {
+  // Only the source daemon's check may name the lead. A typed --outbound-parent is dropped here.
+  const { outboundParent: _typed, ...stamped } = sender;
   return {
-    ...sender,
+    ...stamped,
     ...(check.inboundOnly ? { inboundOnly: true as const } : {}),
     ...(check.outboundMainOnly ? { outboundMainOnly: true as const } : {}),
     ...(check.outboundServerOnly ? { outboundServerOnly: check.outboundServerOnly } : {}),
-    ...(check.outboundParent ? { outboundParent: true as const } : {}),
+    ...(check.outboundParent ? { outboundParent: check.outboundParent } : {}),
     ...(check.refusal ? { refusal: check.refusal } : {}),
   };
 }
@@ -426,7 +428,7 @@ function restrictedSender(options: AgentSendOptions): ReturnType<typeof resolveS
       ...(options.inboundOnly ? { inboundOnly: true } : {}),
       ...(options.outboundMainOnly ? { outboundMainOnly: true } : {}),
       ...(options.outboundServerOnly ? { outboundServerOnly: options.outboundServerOnly } : {}),
-      ...(options.outboundParent ? { outboundParent: true as const } : {}),
+      ...(options.outboundParent ? { outboundParent: options.outboundParent } : {}),
       ...(options.outboundRefusal ? { refusal: options.outboundRefusal } : {}),
     };
   }

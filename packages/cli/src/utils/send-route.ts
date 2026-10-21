@@ -130,7 +130,7 @@ function relayFlags(input: {
     ...(sender?.inboundOnly ? ["--inbound-only"] : []),
     ...(sender?.outboundMainOnly ? ["--outbound-main-only"] : []),
     ...(sender?.outboundServerOnly ? ["--outbound-server-only", sender.outboundServerOnly] : []),
-    ...(sender?.outboundParent ? ["--outbound-parent"] : []),
+    ...(sender?.outboundParent ? ["--outbound-parent", sender.outboundParent] : []),
     ...(sender?.refusal ? ["--outbound-refusal", sender.refusal] : []),
     ...(options.notifyOnFinish === false ? ["--no-notify-on-finish"] : []),
     ...(options.steer ? ["--steer"] : []),

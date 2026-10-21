@@ -115,14 +115,11 @@ describe("reporting lines", () => {
       );
     };
     expect(await check({})).toEqual({ inboundOnly: false });
-    expect(await check({ "fulcra.reports-to": main.id })).toEqual({
-      inboundOnly: false,
-      outboundParent: true,
-    });
+    expect(await check({ "fulcra.reports-to": main.id })).toEqual({ inboundOnly: false });
     expect(await check({ "fulcra.reports-to": `${main.id}@${BOOK}` })).toMatchObject({
       inboundOnly: false,
       outboundServerOnly: BOOK,
-      outboundParent: true,
+      outboundParent: `${main.id}@${BOOK}`,
     });
     expect(await check({ "fulcra.reports-to": "lead-1", "fulcra.direct-link": main.id })).toEqual({
       inboundOnly: false,
@@ -190,6 +187,22 @@ describe("reporting lines", () => {
         mainAssistantId: main.id,
       }).allowed,
     ).toBe(false);
+    // The mark names one lead on one host. Another target or a missing host check is refused.
+    for (const forged of [
+      { outboundServerOnly: MINI, outboundParent: `${otherLead.id}@${MINI}` },
+      { outboundServerOnly: MINI, outboundParent: `${lead.id}@srv_pc` },
+      { outboundParent: `${lead.id}@${MINI}` },
+    ])
+      expect(
+        checkReportingLine({
+          sender: { agentId: bookWorker.id, serverId: BOOK, ...forged },
+          senderAgent: null,
+          target: lead,
+          senderParent: null,
+          localServerId: MINI,
+          mainAssistantId: main.id,
+        }).allowed,
+      ).toBe(false);
     // Without the source's confirmation the old refusal stays.
     expect(
       checkReportingLine({

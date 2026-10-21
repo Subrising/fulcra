@@ -10260,10 +10260,13 @@ export class Session {
         mainAssistantId: holder && "id" in holder ? holder.id : null,
       };
     } else if (input.kind === "outbound") {
-      output = {
-        kind: "outbound",
-        ...(await decideOutboundSend(store, { ...input, localServerId: this.localServerId })),
-      };
+      const decision = await decideOutboundSend(store, {
+        ...input,
+        localServerId: this.localServerId,
+      });
+      // FU-402: an SSH relay to the sender's own lead starts here, so report-up sees that the result was sent.
+      if (decision.outboundParent) noteAgentMessage(input.senderId, input.targetId);
+      output = { kind: "outbound", ...decision };
     } else {
       const target = await this.resolveSendTarget(input.agentId);
       if (!target.ok) output = { kind: "inbound", allowed: false, reason: target.error };

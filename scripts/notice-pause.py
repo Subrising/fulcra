@@ -173,7 +173,7 @@ def parse_send(args):
             if index + 1 >= len(rest): raise ValueError('Missing send option value')
             if token == '--image': requires_plain = True
             index += 2
-        elif token in ['--prompt', '--prompt-file', '--from', '--message-id', '--outbound-refusal', '--outbound-server-only']:
+        elif token in ['--prompt', '--prompt-file', '--from', '--message-id', '--outbound-refusal', '--outbound-server-only', '--outbound-parent']:
             if index + 1 >= len(rest):
                 raise ValueError('Missing send option value')
             value = rest[index + 1]
@@ -185,6 +185,8 @@ def parse_send(args):
                 source = value
             elif token == '--outbound-server-only':
                 restrictions['outboundServerOnly'] = value
+            elif token == '--outbound-parent':
+                restrictions['outboundParent'] = value
             elif token == '--outbound-refusal':
                 restrictions['refusal'] = value
             else:
@@ -440,6 +442,7 @@ class Gate:
                     if batch['sender'].get('inboundOnly'): args.append('--inbound-only')
                     if batch['sender'].get('outboundMainOnly'): args.append('--outbound-main-only')
                     if batch['sender'].get('outboundServerOnly'): args.extend(['--outbound-server-only', batch['sender']['outboundServerOnly']])
+                    if batch['sender'].get('outboundParent'): args.extend(['--outbound-parent', batch['sender']['outboundParent']])
                     if batch['sender'].get('refusal'): args.extend(['--outbound-refusal', batch['sender']['refusal']])
                     env = dict(os.environ)
                     env.pop('PASEO_AGENT_ID', None)
