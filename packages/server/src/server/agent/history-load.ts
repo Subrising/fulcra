@@ -4,6 +4,7 @@ import type { Logger } from "pino";
 
 const HISTORY_LOAD_BYTES = 128 * 1024 * 1024;
 const JOURNAL_CACHE_BYTES = 128 * 1024 * 1024;
+const ROW_CACHE_BYTES = 64 * 1024 * 1024;
 
 interface LoadWaiter {
   bytes: number;
@@ -107,6 +108,44 @@ export class JournalHistoryCache {
 }
 
 export const journalHistoryCache = new JournalHistoryCache();
+
+/**
+ * Full rows already read from a journal, keyed by their metadata entry, so repeated fetches of one
+ * agent skip the disk. An update or reload makes a new entry, so a stale row is never found again.
+ */
+export class TimelineRowCache {
+  private readonly entries = new Map<object, { row: unknown; bytes: number }>();
+  bytes = 0;
+  constructor(private readonly maximum = ROW_CACHE_BYTES) {}
+
+  get(key: object): unknown {
+    const entry = this.entries.get(key);
+    if (!entry) return undefined;
+    this.entries.delete(key);
+    this.entries.set(key, entry);
+    return entry.row;
+  }
+
+  set(key: object, row: unknown, bytes: number): void {
+    this.delete(key);
+    if (bytes > this.maximum) return;
+    this.entries.set(key, { row, bytes });
+    this.bytes += bytes;
+    for (const oldest of this.entries.keys()) {
+      if (this.bytes <= this.maximum) return;
+      this.delete(oldest);
+    }
+  }
+
+  delete(key: object): void {
+    const entry = this.entries.get(key);
+    if (!entry) return;
+    this.bytes -= entry.bytes;
+    this.entries.delete(key);
+  }
+}
+
+export const timelineRowCache = new TimelineRowCache();
 let pluginCacheBytes = 0;
 export function changePluginCacheBytes(delta: number): void {
   pluginCacheBytes += delta;

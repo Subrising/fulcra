@@ -13,6 +13,8 @@ import {
   backgroundIdsForStop,
   defaultSessions,
   formatRestartNotice,
+  OWNED_BY_PLUGIN,
+  PLUGIN_OWNED_NOT_CONTINUED,
   recordOpenSessions,
   REVIVE_FILE,
   REVIVE_LIVE_FILE,
@@ -290,6 +292,40 @@ describe("revive on restart", () => {
         ";",
       )[0],
     );
+  });
+
+  test("FU-103: a plugin-owned lead cut off by the restart gets no prompt and is named in one notice to its own lead", async () => {
+    const reports = { [REPORTS_TO_LABEL]: LEAD };
+    const f = await fixture({
+      records: [
+        { id: LEAD, lastStatus: "idle", title: "Main assistant" },
+        { id: RUNNING, title: "Fulcra lead", labels: reports },
+        { id: BACKGROUND, title: "Idle lead", labels: reports },
+      ],
+      refuse: { [RUNNING]: OWNED_BY_PLUGIN, [BACKGROUND]: OWNED_BY_PLUGIN },
+    });
+    await recordOpenSessions({
+      paseoHome: f.home,
+      agents: [
+        { id: RUNNING, lifecycle: "running" },
+        { id: BACKGROUND, lifecycle: "idle", hasBackgroundWork: true },
+      ],
+      now: new Date("2026-10-11T09:40:00Z"),
+    });
+
+    const result = await f.run();
+
+    // The daemon keeps the owner's fence: no continue or wake prompt.
+    expect(f.prompts).toEqual([]);
+    expect(f.wakes).toEqual([]);
+    // Only the cut-off turn is named: an idle session was not cut off.
+    expect(result.closed).toEqual([
+      { id: RUNNING, name: "Fulcra lead", reason: PLUGIN_OWNED_NOT_CONTINUED },
+    ]);
+    expect(f.notices).toHaveLength(1);
+    expect(f.notices[0]!.leadId).toBe(LEAD);
+    expect(f.notices[0]!.prompt).toContain(`Fulcra lead (${PLUGIN_OWNED_NOT_CONTINUED})`);
+    expect(f.notices[0]!.prompt).not.toContain("Idle lead");
   });
 
   test("each resume reads the session again: a session that got a new message after the restart is not resumed twice", async () => {
@@ -984,8 +1020,8 @@ describe("background wake on the real send path (FU-362)", () => {
   test("a message that arrived after the cut-off refuses the wake at the final check", async () => {
     const f = wakeSessions();
     f.live.lastUserMessageAt = new Date("2026-10-11T09:50:00Z");
-    await expect(f.sessions.sendBackgroundWake(BACKGROUND, "wake text", null)).rejects.toThrow(
-      "Continue after restart refused",
+    await expect(f.sessions.sendBackgroundWake(BACKGROUND, "wake text", null)).resolves.toBe(
+      "withdrawn",
     );
     expect(f.runs).toEqual([]);
   });

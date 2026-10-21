@@ -142,7 +142,14 @@ export class Team {
       .prepare("SELECT DISTINCT subject FROM team_changes WHERE kind='seat-set'")
       .all()
       .map((r) => r.subject)
-      .filter((id) => id !== holder && !stale.includes(id) && !native.route?.(id));
+      // FU-423: an archived chat costs nothing; only chats the live directory still lists are read.
+      .filter(
+        (id) =>
+          id !== holder &&
+          !stale.includes(id) &&
+          !native.route?.(id) &&
+          native.isLive?.(id) !== false,
+      );
     if (typeof native.snapshot === "function")
       for (const id of known) {
         const record = await native.snapshot(id).catch(() => null);

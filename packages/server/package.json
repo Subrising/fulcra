@@ -58,6 +58,11 @@
       "source": "./src/server/auth.ts",
       "default": "./dist/server/server/auth.js"
     },
+    "./command-centre-password": {
+      "types": "./dist/server/server/command-centre-password.d.ts",
+      "source": "./src/server/command-centre-password.ts",
+      "default": "./dist/server/server/command-centre-password.js"
+    },
     "./pairing": {
       "types": "./dist/server/server/pairing-offer.d.ts",
       "source": "./src/server/pairing-offer.ts",

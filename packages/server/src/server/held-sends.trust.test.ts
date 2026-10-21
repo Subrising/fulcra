@@ -1151,3 +1151,56 @@ test("an ancestor label read error holds Claude input", async () => {
   expect(f.pending()).toBe(1);
   expect(f.prompts).toEqual([]);
 });
+
+// FU-409: the file was rewritten with fsync many times a minute while it carried hundreds of settled records.
+test("settled held records leave the file after a day and an unchanged queue is not rewritten", async () => {
+  const f = await fixture();
+  f.busy.add(f.target.id);
+  await f.send("still waiting", f.sender.id);
+  await f.queue.close();
+  const [waiting] = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
+  const settled = (state: "delivered" | "refused", settledAt?: number) => ({
+    ...waiting,
+    id: randomUUID(),
+    request: { ...waiting.request, messageId: randomUUID() },
+    state,
+    ...(settledAt ? { settledAt } : {}),
+  });
+  const day = 24 * 60 * 60 * 1000;
+  const stale = Array.from({ length: 500 }, (_, index) =>
+    settled(index % 2 ? "delivered" : "refused", Date.now() - day - 60_000),
+  );
+  const fresh = settled("delivered", Date.now() - 60_000);
+  const legacy = settled("delivered");
+  await writeFile(f.storage.heldMessagesPath, JSON.stringify([...stale, fresh, legacy, waiting]));
+  const restored = new QueuedAgentMessages({
+    agentManager: f.manager,
+    agentStorage: f.storage,
+    logger: f.logger,
+  });
+  cleanup.push(() => restored.close());
+  await restored.start();
+  const kept = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
+  expect(kept.map((record: { id: string }) => record.id)).toEqual([
+    fresh.id,
+    legacy.id,
+    waiting.id,
+  ]);
+  // A record from before settle times were kept starts its day now.
+  expect(kept[1].settledAt).toBeGreaterThan(Date.now() - 60_000);
+
+  // Same records in other whitespace: a rewrite would show as the compact form again.
+  const spaced = JSON.stringify(kept, null, 1);
+  await writeFile(f.storage.heldMessagesPath, spaced);
+  await (restored as unknown as { save(): Promise<void> }).save();
+  expect(await readFile(f.storage.heldMessagesPath, "utf8")).toBe(spaced);
+
+  const now = Date.now();
+  vi.spyOn(Date, "now").mockReturnValue(now + day + 60_000);
+  await (restored as unknown as { save(): Promise<void> }).save();
+  expect(
+    JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8")).map(
+      (record: { id: string }) => record.id,
+    ),
+  ).toEqual([waiting.id]);
+});

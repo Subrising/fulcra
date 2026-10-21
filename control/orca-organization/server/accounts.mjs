@@ -306,15 +306,27 @@ export async function readUsageAsync(root, now = Date.now()) {
 // the pool's policy. `except` excludes accounts (the one that just hit its limit). `usage` (weekly percent by account)
 // holds back accounts at or above WEEKLY_LAUNCH_CAP_PCT while another is below it; when all are, the one with the most
 // left is used. Returns null when none is available.
+// 0 = a subscription account, 2 = an API account, 1 = a Claude account whose credential kind is not known yet.
+function tierOf(a) {
+  if (a.provider !== "claude") return 0;
+  if (isApiAccount(a) || a.credentialKind === "api-key") return 2;
+  return a.credentialKind === "subscription" ? 0 : 1;
+}
 export function choose(s, provider, now = Date.now(), except = [], usage = {}) {
   const ready = s.accounts.filter(
     (a) =>
       a.provider === provider && !except.includes(a.id) && accountStatus(a, now).state === "ok",
   );
-  if (!ready.length) return null;
+  // FU-430 (the owner's rule, 11 Oct 2026): paid API credit only when every usable subscription account is capped.
+  // A free subscription account always wins, whatever the priority numbers or the default say.
+  // Tiers by credential kind, never by name: subscription, then kind not yet known, then API. An account that is signed
+  // out, expired or revoked is not "ready", so it is skipped and never counts as capped for this rule.
+  const tiers = [0, 1, 2].map((n) => ready.filter((a) => tierOf(a) === n));
+  const eligible = tiers.find((x) => x.length) ?? [];
+  if (!eligible.length) return null;
   const used = (a) => (isApiAccount(a) ? 0 : (usage[a.id] ?? 0));
-  const room = ready.filter((a) => used(a) < WEEKLY_LAUNCH_CAP_PCT);
-  const ok = room.length ? room : [...ready].sort((x, y) => used(x) - used(y)).slice(0, 1);
+  const room = eligible.filter((a) => used(a) < WEEKLY_LAUNCH_CAP_PCT);
+  const ok = room.length ? room : [...eligible].sort((x, y) => used(x) - used(y)).slice(0, 1);
   const preferred = ok.find((a) => a.id === s.defaults?.[provider]);
   if (preferred) return preferred;
   const key = (a) =>
@@ -327,6 +339,12 @@ export function choose(s, provider, now = Date.now(), except = [], usage = {}) {
     for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1;
     return 0;
   })[0];
+}
+// FU-430: a free subscription account (not limited, not signed out), or null. A session moves only to this account
+// without the owner's rotate-on-limit setting, and only at the start of its own next turn.
+function freeSubscription(s, provider, now, except = [], usage = {}) {
+  const to = choose(s, provider, now, except, usage);
+  return to && tierOf(to) === 0 ? to : null;
 }
 // When every account of a provider is limited: the earliest reset (null if none is only limited).
 export function earliestReset(s, provider, now = Date.now()) {
@@ -521,7 +539,7 @@ export async function assign(root, sessionId, provider, now = Date.now()) {
   const usage = await readUsageAsync(root, now);
   return update(root, (s) => assignInStore(s, sessionId, provider, now, [], usage));
 }
-// `usage` applies only when the session needs an account: a session keeps its own account (no automatic switch).
+// `usage` applies only when the session needs an account: a session keeps its own account while it works. It moves only here, at the start of its own next turn: off a limited account or off an API account when a free subscription account exists (FU-430). Nothing moves idle sessions.
 function assignInStore(s, sessionId, provider, now, except = [], usage = {}) {
   const cur = s.assignments[sessionId],
     held = cur && s.accounts.find((a) => a.id === cur.accountId && a.provider === provider);
@@ -532,9 +550,15 @@ function assignInStore(s, sessionId, provider, now, except = [], usage = {}) {
   }
   if (!poolFor(s, provider)) return null;
   const heldState = held && !except.includes(held.id) ? accountStatus(held, now).state : null;
-  // Waiting is the default: a limited account keeps its session (the launch waits for that reset) unless moving is on.
+  // With no free subscription account, a limited account keeps its session (the launch waits for that reset) unless moving is on.
   // This holds even when the launch hook has already tried that account (`except`): it then refuses, rather than move.
-  if (held && accountStatus(held, now).state === "limited" && !s.rotateOnLimit) {
+  // FU-430: with the setting off, a limited account still gives way to a free subscription account (never to an API one).
+  if (
+    held &&
+    accountStatus(held, now).state === "limited" &&
+    !s.rotateOnLimit &&
+    !freeSubscription(s, provider, now, [held.id, ...except], usage)
+  ) {
     held.lastUsedAt = iso(now);
     s.assignments[sessionId] = { accountId: held.id, provider, at: iso(now), ended: false };
     return {
@@ -543,7 +567,10 @@ function assignInStore(s, sessionId, provider, now, except = [], usage = {}) {
       earliestReset: accountStatus(held, now).until,
     };
   }
-  let a = heldState === "ok" ? held : choose(s, provider, now, except, usage);
+  // A session on an API account leaves it as soon as a subscription account is free (FU-430), so it stops paying.
+  const leaveApi =
+    heldState === "ok" && isApiAccount(held) && freeSubscription(s, provider, now, except, usage);
+  let a = heldState === "ok" && !leaveApi ? held : choose(s, provider, now, except, usage);
   let allLimited = false;
   if (!a) {
     a =
@@ -768,6 +795,8 @@ export async function rotate(
     if (!revoked) from.limitObservedAt = iso(now);
     // Moving spends another account's usage, so it needs both the caller's ask and the owner's setting.
     // A revoked token cannot work again by waiting, so it moves the session whatever the owner's limit setting is.
+    // FU-430: a limit alone never moves a session (the owner's rule, 21 Oct 2026: no bulk moves). The account is marked;
+    // the session moves to a free subscription account at the start of its own next turn (assign).
     const move = reassign && cur?.accountId === from.id && (revoked || s.rotateOnLimit === true);
     const to = move ? choose(s, provider, now, [from.id]) : null;
     if (to) {

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, statfs } from "node:fs/promises";
 import os from "node:os";
 import { promisify } from "node:util";
 import type { Logger } from "pino";
@@ -15,6 +15,8 @@ export interface HostMemoryReading {
   /** Free physical memory, percent of total (Linux and Windows only). Null when unknown. */
   freePercent: number | null;
   freeBytes: number | null;
+  /** Free bytes on the volume that holds the swap files (macOS only). Null when unknown. */
+  swapDiskFreeBytes?: number | null;
 }
 
 export interface MemoryGuardSettings {
@@ -26,11 +28,16 @@ export interface MemoryGuardSettings {
   swapUsedPercent?: number;
   /** Linux and Windows: free memory below this percent of total counts as high. */
   freeMemoryPercent: number;
+  /** macOS: free space of the swap volume below this many GB refuses a start. Swap cannot grow on a full disk. */
+  swapDiskFreeGB?: number;
 }
+
+export const DEFAULT_SWAP_DISK_FREE_GB = 15;
 
 export const DEFAULT_MEMORY_GUARD_SETTINGS: MemoryGuardSettings = {
   enabled: true,
   freeMemoryPercent: 10,
+  swapDiskFreeGB: DEFAULT_SWAP_DISK_FREE_GB,
 };
 
 export interface HostMemoryProbes {
@@ -38,12 +45,17 @@ export interface HostMemoryProbes {
   /** Runs a command and returns its stdout. Rejects on error or timeout. */
   exec: (file: string, args: string[]) => Promise<string>;
   readText: (path: string) => Promise<string>;
+  /** Free bytes available to a user on the volume that holds `path`. Rejects on error. */
+  freeDiskBytes: (path: string) => Promise<number>;
   totalmem: () => number;
   freemem: () => number;
   timeoutMs: number;
 }
 
 const READ_TIMEOUT_MS = 2_000;
+
+/** macOS keeps swap files here, on the internal volume of the same APFS container as "/". */
+const DARWIN_SWAP_VOLUME = "/System/Volumes/VM";
 
 const execFileAsync = promisify(execFile);
 
@@ -59,6 +71,10 @@ function defaultProbes(): HostMemoryProbes {
     platform: process.platform,
     exec: realExec(READ_TIMEOUT_MS),
     readText: (path) => readFile(path, "utf8"),
+    freeDiskBytes: async (path) => {
+      const stats = await statfs(path);
+      return Number(stats.bavail) * Number(stats.bsize);
+    },
     totalmem: () => os.totalmem(),
     freemem: () => os.freemem(),
     timeoutMs: READ_TIMEOUT_MS,
@@ -159,10 +175,11 @@ export async function readHostMemory(
     swapUsedPercent: null,
     freePercent: null,
     freeBytes: null,
+    swapDiskFreeBytes: null,
   };
   try {
     if (probes.platform === "darwin") {
-      const [level, swap] = await Promise.all([
+      const [level, swap, diskFree] = await Promise.all([
         settle(() =>
           withTimeout(
             probes.exec("sysctl", ["-n", "kern.memorystatus_vm_pressure_level"]),
@@ -170,7 +187,16 @@ export async function readHostMemory(
           ),
         ),
         settle(() => withTimeout(probes.exec("sysctl", ["-n", "vm.swapusage"]), probes.timeoutMs)),
+        settle(() =>
+          withTimeout(
+            probes.freeDiskBytes(DARWIN_SWAP_VOLUME).catch(() => probes.freeDiskBytes("/")),
+            probes.timeoutMs,
+          ),
+        ),
       ]);
+      if (diskFree !== null && Number.isFinite(diskFree) && diskFree >= 0) {
+        reading.swapDiskFreeBytes = diskFree;
+      }
       if (level !== null) reading.level = parseDarwinPressureLevel(level);
       if (swap !== null) reading.swapUsedPercent = parseDarwinSwapUsedPercent(swap);
       return reading;
@@ -202,6 +228,8 @@ export async function readHostMemory(
   return reading;
 }
 
+const GIB = 1024 ** 3;
+
 export type MemoryGuardDecision =
   | { decision: "allow"; reasons: [] }
   | { decision: "refuse"; reasons: string[] };
@@ -224,6 +252,14 @@ export function evaluateMemoryGuard(
     reasons.push(`swap ${Math.round(reading.swapUsedPercent)}%`);
   }
   if (
+    reading.platform === "darwin" &&
+    reading.swapDiskFreeBytes !== null &&
+    reading.swapDiskFreeBytes !== undefined &&
+    reading.swapDiskFreeBytes < (settings.swapDiskFreeGB ?? DEFAULT_SWAP_DISK_FREE_GB) * GIB
+  ) {
+    reasons.push(`swap disk ${(reading.swapDiskFreeBytes / GIB).toFixed(1)} GB free`);
+  }
+  if (
     reading.platform !== "darwin" &&
     reading.freePercent !== null &&
     reading.freePercent < settings.freeMemoryPercent
@@ -241,7 +277,19 @@ function describeHost(platform: NodeJS.Platform): string {
 }
 
 /** The plain-words reason shown to the caller in the create result, the CLI output and the app. */
-export function formatMemoryGuardRefusal(reading: HostMemoryReading, reasons: string[]): string {
+export function formatMemoryGuardRefusal(
+  reading: HostMemoryReading,
+  reasons: string[],
+  swapDiskFreeGB: number = DEFAULT_SWAP_DISK_FREE_GB,
+): string {
+  const diskReason = reasons.some((reason) => reason.startsWith("swap disk "));
+  const diskGb = Math.floor((reading.swapDiskFreeBytes ?? 0) / GIB);
+  const diskText = `low on disk for swap (${diskGb} GB free on the internal disk; needs ${swapDiskFreeGB} GB)`;
+  const pressureReasons = reasons.filter((reason) => !reason.startsWith("swap disk "));
+  if (diskReason && pressureReasons.length === 0) {
+    return `Not started: this ${describeHost(reading.platform).slice("This ".length)} is ${diskText}. Free disk space or start the agent on another host.`;
+  }
+  const diskSentence = diskReason ? ` The disk is also ${diskText}.` : "";
   const free =
     reading.freeBytes === null
       ? ""
@@ -251,8 +299,8 @@ export function formatMemoryGuardRefusal(reading: HostMemoryReading, reasons: st
       ? ` Swap used: ${Math.round(reading.swapUsedPercent)}%.`
       : "";
   return (
-    `Not started: ${describeHost(reading.platform).toLowerCase()} is under memory pressure (${reasons.join(", ")}).` +
-    `${free}${swap} Start the agent on another host or wait until memory is free.`
+    `Not started: ${describeHost(reading.platform).toLowerCase()} is under memory pressure (${pressureReasons.join(", ")}).` +
+    `${free}${swap}${diskSentence} Start the agent on another host or wait until memory is free.`
   );
 }
 
@@ -291,6 +339,10 @@ export function createAgentStartMemoryGuard(
       swapUsedPercent:
         reading.swapUsedPercent === null ? null : Math.round(reading.swapUsedPercent),
       freePercent: reading.freePercent === null ? null : Math.round(reading.freePercent * 10) / 10,
+      swapDiskFreeGB:
+        reading.swapDiskFreeBytes == null
+          ? null
+          : Math.round((reading.swapDiskFreeBytes / GIB) * 10) / 10,
       decision: result.decision,
     };
     if (result.decision === "allow") {
@@ -299,7 +351,11 @@ export function createAgentStartMemoryGuard(
     }
     options.logger.warn({ ...fields, reasons: result.reasons }, "agent.start.memory_guard");
     throw new AgentStartMemoryRefusedError(
-      formatMemoryGuardRefusal(reading, result.reasons),
+      formatMemoryGuardRefusal(
+        reading,
+        result.reasons,
+        settings.swapDiskFreeGB ?? DEFAULT_SWAP_DISK_FREE_GB,
+      ),
       reading,
     );
   };

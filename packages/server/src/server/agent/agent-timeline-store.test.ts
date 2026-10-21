@@ -1132,8 +1132,9 @@ describe("live journal residency and read scheduling", () => {
       expect(reads).toBe(1);
       for (let page = 0; page < 5; page++)
         expect((await disk.fetchCommitted("live", { limit: 5 })).rows).toHaveLength(5);
-      // Each page opens one segment, not one file per source row. The index never reloads.
-      expect(reads).toBe(6);
+      // The first page opens one segment, not one file per source row. The same page again comes
+      // from the row cache. The index never reloads.
+      expect(reads).toBe(2);
       expect(cache.bytes).toBeGreaterThan(1);
       release();
       await Promise.resolve();

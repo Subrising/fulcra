@@ -96,6 +96,7 @@ files.push(
   "client/readable-update.ts",
 );
 files.push("shared/host-binding.ts", "server/host-binding.ts");
+files.push("shared/refresh-gate.ts");
 files.push("server/remote-observation.ts", "server/remote-observation.test.ts");
 files.push("client/inbox-model.ts", "client/inbox-model.test.ts");
 // Update-7: the account pool, rotation, role defaults, orchestration, Accounts & models.
