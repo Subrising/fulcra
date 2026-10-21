@@ -1,3 +1,6 @@
+// FU-457: screen polls run every 30 s and pause while the window is hidden (React Query: refetchIntervalInBackground false).
+export const SCREEN_POLL_MS = 30000;
+
 // A controller error is not a new empty observation: keep React Query's last good data.
 export async function observedList<T extends { status: string; message: string }>(
   load: () => Promise<T>,

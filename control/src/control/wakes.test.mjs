@@ -15,7 +15,7 @@ import { RoleSessions } from "./role-sessions.mjs";
 import { rpc } from "./rpc.mjs";
 import { COMPANY, PROGRAMME } from "./authority.mjs";
 import { AUTOMATION_LIMIT } from "./journal-capacity.mjs";
-import { Wakes, MAX_BATCH, MAX_WAKE_ATTEMPTS, MAX_NUDGES_PER_DAY, questionText } from "./wakes.mjs";
+import { Wakes, MAX_BATCH, MAX_WAKE_ATTEMPTS, MAX_NUDGES_PER_DAY, questionText, WAKES_SAFETY_MS } from "./wakes.mjs";
 
 const T = (n) => `33333333-3333-4333-8333-${String(n).padStart(12, "0")}`;
 const issue = (id) => ({
@@ -645,4 +645,19 @@ test("a lead's own billing event sends one wake when the lead is also Main", asy
     new Wakes(f.control).apiCreditLow("shared-holder", { sessions: [f.holder] }),
     receipts,
   );
+});
+
+test("FU-457: without a heartbeat the watchdog runs the wakes tick only every 5 minutes", async (t) => {
+  const f = fixture(t);
+  let ran = 0;
+  for (let i = 0; i < 20; i++) {
+    f.clock.now += 30_000;
+    if (f.w.safetyTickDue()) ran++;
+  }
+  assert.equal(ran, 2, "20 watchdog passes over 10 minutes: before FU-457 the tick ran 20 times");
+  f.clock.now += WAKES_SAFETY_MS;
+  assert.equal(f.w.safetyTickDue(), true);
+  f.db.prepare("INSERT OR REPLACE INTO wake_settings VALUES ('heartbeatMinutes','10','test','x')").run();
+  f.clock.now += 30_000;
+  assert.equal(f.w.safetyTickDue(), true, "a heartbeat keeps the 30 s cadence");
 });
