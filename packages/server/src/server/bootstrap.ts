@@ -1690,7 +1690,10 @@ export async function createPaseoDaemon(
     readOpenLedgerRows: () => readOpenLedgerRows(defaultLedgerDir(), true),
     closedAfterHours: () => config.autoArchiveClosedAfterHours ?? 24,
     protectedIds: () =>
-      new Set(hostLinkRuntime.service.pendingNoticeWorkers().map((worker) => worker.agentId)),
+      new Set([
+        ...hostLinkRuntime.service.pendingNoticeWorkers().map((worker) => worker.agentId),
+        ...hostLinkRuntime.service.remoteWorkerSenders(),
+      ]),
     archive: async ({ id, lastUserMessageAt }) => {
       const agent = agentManager.getAgent(id);
       if (
