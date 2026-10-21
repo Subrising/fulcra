@@ -93,6 +93,25 @@ interface RoutingDeps {
   prepareLedger?: () => Promise<void>;
   observesProject?: (project: string) => boolean;
 }
+/**
+ * FU-462: the live records, plus the record of each claimed session. A claimed session can be archived and left on
+ * disk at boot; without its record the claim reads as a lost session and sends a false BLOCKED notice.
+ */
+export async function withClaimedRecords<T extends { id: string }>(
+  loaded: readonly T[],
+  claims: ReadonlyArray<{ sessionId: string }>,
+  get: (id: string) => Promise<T | null>,
+): Promise<T[]> {
+  const agents = [...loaded];
+  const seen = new Set(agents.map((a) => a.id));
+  for (const claim of claims) {
+    if (seen.has(claim.sessionId)) continue;
+    seen.add(claim.sessionId);
+    const stored = await get(claim.sessionId);
+    if (stored) agents.push(stored);
+  }
+  return agents;
+}
 const terminal = (claim: Claim) => claim.stage === "closed" || claim.stage === "abandoned";
 const MAX_ACTIVE = 16;
 
@@ -272,6 +291,11 @@ export class LedgerRoutingService {
         r.status === "DONE" &&
         r.evidence.length >= 3 &&
         !/^(?:—|-|none|n\/a)$/i.test(r.evidence),
+    );
+  }
+  private async agentsWithClaimed(): Promise<LineAgent[]> {
+    return withClaimedRecords(await this.deps.agentStorage.listLoaded(), this.state.claims, (id) =>
+      this.deps.agentStorage.get(id),
     );
   }
   private busy(claim: Claim, agents: readonly LineAgent[]): boolean {
@@ -454,7 +478,7 @@ export class LedgerRoutingService {
       return;
     }
     if (this.stopped) return;
-    const agents = await this.deps.agentStorage.listLoaded();
+    const agents = await this.agentsWithClaimed();
     await this.recoverLedgerClaims(agents);
     await this.reconcile(agents);
     if (!this.deps.enabled()) return;
@@ -476,7 +500,7 @@ export class LedgerRoutingService {
       );
       return;
     }
-    const agents = await this.deps.agentStorage.listLoaded();
+    const agents = await this.agentsWithClaimed();
     const lead = agents.find((a) => a.id === config.leadId);
     if (!lead || lead.archivedAt || this.held(lead, config)) return;
     let active = this.state.claims.filter(

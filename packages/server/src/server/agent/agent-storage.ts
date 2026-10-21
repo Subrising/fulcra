@@ -234,6 +234,10 @@ export class AgentStorage {
   // the first time something asks for it (get, getCached, list, a write). `bootstrapRecordsLoaded` counts the records
   // parsed by the boot scan.
   private archivedOnDisk: Map<string, string> = new Map();
+  /** Archived records still on disk, not yet parsed. */
+  get archivedOnDiskCount(): number {
+    return this.archivedOnDisk.size;
+  }
   bootstrapRecordsLoaded = 0;
   bootstrapRecordsSkipped = 0;
   private loaded = false;
@@ -269,6 +273,12 @@ export class AgentStorage {
   async listLoaded(): Promise<StoredAgentRecord[]> {
     await this.load();
     return Array.from(this.cache.values());
+  }
+
+  /** Every stored agent id, archived ones included, without parsing the archived files. */
+  async knownIds(): Promise<string[]> {
+    await this.load();
+    return [...this.cache.keys(), ...this.archivedOnDisk.keys()];
   }
 
   listLoadedSync(): StoredAgentRecord[] {

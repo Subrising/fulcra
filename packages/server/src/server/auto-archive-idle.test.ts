@@ -6,7 +6,9 @@ import {
   openLedgerTextOf,
   pickAutoArchive,
   runAutoArchivePass,
+  type AutoArchiveCandidate,
   type AutoArchiveInput,
+  type AutoArchiveOutcome,
 } from "./auto-archive-idle.js";
 import { createTestLogger } from "../test-utils/test-logger.js";
 
@@ -44,7 +46,9 @@ function input(
 
 describe("pickAutoArchive closed sessions", () => {
   test("a closed session idle for 24 h is due", () => {
-    expect(pickAutoArchive(input([record("a")]))).toEqual([{ id: "a", reason: "closed-idle" }]);
+    expect(pickAutoArchive(input([record("a")]))).toEqual([
+      { id: "a", reason: "closed-idle", lastUserMessageAt: null },
+    ]);
   });
   test("a closed session idle for less than 24 h is not due", () => {
     const recent = record("a", { updatedAt: new Date(NOW - 2 * HOUR).toISOString() });
@@ -73,6 +77,33 @@ describe("pickAutoArchive closed sessions", () => {
   });
 });
 
+describe("pickAutoArchive protections", () => {
+  test("never archives a session with any seat label", () => {
+    expect(
+      pickAutoArchive(input([record("a", { labels: { "fulcra.seat": "reviewer" } })])),
+    ).toEqual([]);
+  });
+  test("never archives a session that another session reports to", () => {
+    const lead = record("lead-id");
+    const worker = record("w", { labels: { "fulcra.reports-to": "lead-id@server-1" } });
+    expect(pickAutoArchive(input([lead, worker])).map((c) => c.id)).toEqual(["w"]);
+  });
+  test("never archives a worker with a pending host-link notice", () => {
+    expect(pickAutoArchive(input([record("a")], { protectedIds: new Set(["a"]) }))).toEqual([]);
+  });
+  test("a closed session whose finish notice has not reached the lead is kept", () => {
+    const notice = {
+      parentId: "p",
+      owner: "report-up",
+      status: "pending",
+      messageId: "m",
+    } as const;
+    expect(pickAutoArchive(input([record("a", { finishNotice: notice })]))).toEqual([]);
+    const delivered = { ...notice, status: "delivered" } as const;
+    expect(pickAutoArchive(input([record("a", { finishNotice: delivered })]))).toHaveLength(1);
+  });
+});
+
 describe("pickAutoArchive finished workers", () => {
   const delivered = (endedAt: number) =>
     ({ parentId: "p", owner: "report-up", status: "delivered", messageId: "m", endedAt }) as const;
@@ -86,7 +117,9 @@ describe("pickAutoArchive finished workers", () => {
   const idle = { lifecycleOf: () => "idle", lastMessageOf: () => "DONE all merged" };
 
   test("a DONE worker whose lead got the notice is due after 30 minutes", () => {
-    expect(pickAutoArchive(input([worker()], idle))).toEqual([{ id: "w", reason: "done-idle" }]);
+    expect(pickAutoArchive(input([worker()], idle))).toEqual([
+      { id: "w", reason: "done-idle", lastUserMessageAt: null },
+    ]);
   });
   test("it waits when the idle time is under 30 minutes", () => {
     const fresh = worker({ updatedAt: new Date(NOW - 60_000).toISOString() });
@@ -111,7 +144,10 @@ describe("pickAutoArchive finished workers", () => {
 });
 
 describe("runAutoArchivePass", () => {
-  const deps = (archive: (id: string) => Promise<unknown>, records: StoredAgentRecord[]) => ({
+  const deps = (
+    archive: (candidate: AutoArchiveCandidate) => Promise<AutoArchiveOutcome>,
+    records: StoredAgentRecord[],
+  ) => ({
     logger: createTestLogger(),
     loadedRecords: () => records,
     lifecycleOf: () => null,
@@ -123,15 +159,38 @@ describe("runAutoArchivePass", () => {
   });
 
   test("archives one session per pass, the longest idle first", async () => {
-    const archive = vi.fn().mockResolvedValue(undefined);
+    const archive = vi.fn().mockResolvedValue("archived");
     const older = record("old", { updatedAt: new Date(NOW - 80 * HOUR).toISOString() });
     expect(await runAutoArchivePass(deps(archive, [record("new"), older]))).toBe("old");
     expect(archive).toHaveBeenCalledTimes(1);
   });
   test("a failed archive is logged and returns null", async () => {
-    const failing = async () => {
+    const failing = async (): Promise<AutoArchiveOutcome> => {
       throw new Error("Archive refused");
     };
     expect(await runAutoArchivePass(deps(failing, [record("a")]))).toBeNull();
+  });
+  test("a refused session does not stop the next candidate, and is not retried until it changes", async () => {
+    const refused = new Map<string, string>();
+    const stuck = record("stuck", { updatedAt: new Date(NOW - 90 * HOUR).toISOString() });
+    const next = record("next", { updatedAt: new Date(NOW - 40 * HOUR).toISOString() });
+    const archive = vi.fn(async ({ id }: AutoArchiveCandidate): Promise<AutoArchiveOutcome> => {
+      if (id === "stuck") throw new Error("Archive refused: live workers");
+      return "archived";
+    });
+    expect(await runAutoArchivePass({ ...deps(archive, [stuck, next]), refused })).toBe("next");
+    archive.mockClear();
+    expect(await runAutoArchivePass({ ...deps(archive, [stuck, next]), refused })).toBe("next");
+    expect(archive).toHaveBeenCalledTimes(1);
+    const changed = { ...stuck, updatedAt: new Date(NOW - 50 * HOUR).toISOString() };
+    archive.mockClear();
+    await runAutoArchivePass({ ...deps(archive, [changed]), refused });
+    expect(archive).toHaveBeenCalledWith(expect.objectContaining({ id: "stuck" }));
+  });
+  test("a busy session is skipped without being marked refused", async () => {
+    const refused = new Map<string, string>();
+    const busy = vi.fn(async (): Promise<AutoArchiveOutcome> => "skipped");
+    expect(await runAutoArchivePass({ ...deps(busy, [record("a")]), refused })).toBeNull();
+    expect(refused.size).toBe(0);
   });
 });

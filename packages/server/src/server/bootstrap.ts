@@ -174,7 +174,7 @@ import type { OpenAiSpeechProviderConfig } from "./speech/providers/openai/confi
 import type { LocalSpeechProviderConfig } from "./speech/providers/local/config.js";
 import type { RequestedSpeechProviders } from "./speech/speech-types.js";
 import { createSpeechService } from "./speech/speech-runtime.js";
-import { AgentManager } from "./agent/agent-manager.js";
+import { AgentManager, ArchiveNotQuietError } from "./agent/agent-manager.js";
 import { AgentStorage } from "./agent/agent-storage.js";
 import {
   FileAgentTimelineStore,
@@ -1678,7 +1678,6 @@ export async function createPaseoDaemon(
     deliveryPending: (agentId) =>
       heldSends.pending(agentId) > 0 || queuedAgentMessages.pending(agentId) > 0,
   });
-  // FULCRA(orchestration): a worker's finished turn reaches its lead as one notice (report-up.ts).
   // FU-462: closed and finished-and-idle sessions that nobody needs are archived, one at a time (auto-archive-idle.ts).
   const stopAutoArchiveIdle = startAutoArchiveIdle({
     logger,
@@ -1690,8 +1689,26 @@ export async function createPaseoDaemon(
     },
     readOpenLedgerRows: () => readOpenLedgerRows(defaultLedgerDir(), true),
     closedAfterHours: () => config.autoArchiveClosedAfterHours ?? 24,
-    archive: (id) => agentManager.archiveAgent(id),
+    protectedIds: () =>
+      new Set(hostLinkRuntime.service.pendingNoticeWorkers().map((worker) => worker.agentId)),
+    archive: async ({ id, lastUserMessageAt }) => {
+      const agent = agentManager.getAgent(id);
+      if (
+        agentManager.hasInFlightRun(id) ||
+        (agent && agent.pendingPermissions.size > 0) ||
+        (await agentManager.hasLiveBackgroundWork(id))
+      )
+        return "skipped";
+      try {
+        await agentManager.archiveAgent(id, undefined, { ifQuiet: { lastUserMessageAt } });
+        return "archived";
+      } catch (error) {
+        if (error instanceof ArchiveNotQuietError) return "skipped";
+        throw error;
+      }
+    },
   });
+  // FULCRA(orchestration): a worker's finished turn reaches its lead as one notice (report-up.ts).
   const stopReportUp = startReportUp({
     createAgent,
     ensureRoutingWorkspace: (cwd) => ensureWorkspaceForCreateAndBroadcastExternal(cwd),

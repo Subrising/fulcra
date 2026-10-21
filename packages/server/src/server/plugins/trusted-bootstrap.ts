@@ -4,17 +4,13 @@ import { loadTrustedPlugins } from "./trusted.js";
 
 /** Storage membership is complete before setup, and setup returns before any provider launch. */
 export async function initializeTrustedPlugins(
-  storage: Pick<AgentStorage, "initialize" | "listLoaded">,
+  storage: Pick<AgentStorage, "initialize" | "knownIds">,
   directory: string | undefined,
   paseoHome: string,
   management?: ManagementStartup,
 ) {
   await storage.initialize();
-  const records = await storage.listLoaded();
-  return loadTrustedPlugins(
-    directory,
-    paseoHome,
-    records.map((record) => record.id),
-    management,
-  );
+  // Archived sessions count: unarchive, archive and delete still pass the known-agent check after a restart.
+  const ids = await storage.knownIds();
+  return loadTrustedPlugins(directory, paseoHome, ids, management);
 }

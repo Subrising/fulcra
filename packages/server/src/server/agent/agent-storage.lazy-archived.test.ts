@@ -93,3 +93,20 @@ describe("AgentStorage archived records at boot (FU-462)", () => {
     expect(deferrableArchivedId({ ...base, owner: { kind: "daemon" } })).toBeNull();
   });
 });
+
+describe("AgentStorage.knownIds (FU-462)", () => {
+  test("lists live and archived ids without parsing the archived records", async () => {
+    const baseDir = mkdtempSync(path.join(os.tmpdir(), "agent-storage-ids-"));
+    try {
+      const live = rawRecord();
+      const old = rawRecord({ archivedAt: "2026-10-02T00:00:00.000Z" });
+      writeRecord(baseDir, live);
+      writeRecord(baseDir, old);
+      const storage = new AgentStorage(baseDir, createTestLogger());
+      expect((await storage.knownIds()).sort()).toEqual([live.id, old.id].sort());
+      expect(storage.bootstrapRecordsLoaded).toBe(1);
+    } finally {
+      rmSync(baseDir, { recursive: true, force: true });
+    }
+  });
+});

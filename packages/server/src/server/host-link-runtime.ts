@@ -42,6 +42,17 @@ export interface HostLinkRuntimeInput {
   logger: Logger;
   workspace: (cwd: string) => Promise<string>;
 }
+/**
+ * FU-462: the boot directory holds live sessions only. An archived session that boot left on disk is read from
+ * storage, so a host-link acknowledgement still sees that the worker is archived.
+ */
+export function workerArchivedAt(
+  entry: { archivedAt?: string | Date | null } | undefined,
+  readStored: () => { archivedAt?: string | Date | null } | null,
+): boolean {
+  return Boolean(entry?.archivedAt ?? readStored()?.archivedAt);
+}
+
 export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
   const { agentManager, agentStorage, logger } = input;
   // Seed before the listener starts. Later label writes publish state synchronously before provider admission.
@@ -362,7 +373,7 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
         worker.pendingPermissions.has(requestId),
       );
     },
-    workerArchived: (id) => Boolean(directory.get(id)?.archivedAt),
+    workerArchived: (id) => workerArchivedAt(directory.get(id), () => agentStorage.getCached(id)),
     noticeError: (error) => logger.warn({ err: error }, "Host-link finish notice remains retained"),
     chat: async (id) => {
       const live = agentManager.getAgent(id);
@@ -492,9 +503,7 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
       await service!.recoverPromptAdmissions();
       if (closed) return;
       for (const pending of service!.pendingNoticeWorkers()) {
-        const record = agentStorage
-          .listLoadedSync()
-          .find((candidate) => candidate.id === pending.agentId);
+        const record = agentStorage.getCached(pending.agentId);
         if (!record || !pending.started || agentManager.hasInFlightRun(pending.agentId)) continue;
         if (
           record.interruptedTurn ||
