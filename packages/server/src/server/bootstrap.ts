@@ -16,6 +16,7 @@ import { startReportUp } from "./report-up.js";
 import {
   backgroundIdsForStop,
   recordOpenSessions,
+  ReviveCarry,
   reviveAfterRestart,
   sealStopRecord,
   startLiveRecorder,
@@ -2029,6 +2030,7 @@ export async function createPaseoDaemon(
   logger.info({ elapsed: elapsed() }, "Bootstrap complete, ready to start listening");
 
   let liveRecorder: ReturnType<typeof startLiveRecorder> | undefined;
+  const reviveCarry = new ReviveCarry();
   const start = async () => {
     let mainStarted = false;
     try {
@@ -2303,11 +2305,13 @@ export async function createPaseoDaemon(
           localServerId: serverId,
           logger,
           isEnabled: () => daemonConfigStore.get().reviveOnRestart !== false,
+          carry: reviveCarry,
           onSessionsReady: () => {
             // The boot has read and removed the previous records: keep a crash-safe copy from now on.
             liveRecorder ??= startLiveRecorder({
               paseoHome: config.paseoHome,
-              listAgents: () => agentManager.listAgentsForRevive(),
+              listAgents: async () =>
+                reviveCarry.withUnloaded(await agentManager.listAgentsForRevive(), agentStorage),
               logger,
             });
             // The final recovery chain below owns error reporting.
@@ -2369,8 +2373,8 @@ export async function createPaseoDaemon(
     // FULCRA(orchestration): the next boot loads these sessions again (revive-on-restart.ts).
     await recordOpenSessions({
       paseoHome: config.paseoHome,
-      agents: agentManager.listAgents(),
-      backgroundIds,
+      agents: await reviveCarry.withUnloaded(agentManager.listAgents(), agentStorage),
+      backgroundIds: new Set([...backgroundIds, ...reviveCarry.pendingBackgroundIds()]),
     }).catch((err) => logger.warn({ err }, "Could not record the open sessions for the next boot"));
     // The clean record is on disk: now remove the crash-safe copy. A crash between the two writes still leaves a
     // record, and boot prefers the clean one.
