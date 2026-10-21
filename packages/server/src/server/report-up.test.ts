@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import pino from "pino";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { REPORTS_TO_LABEL, REPORTS_TO_OWNER, SEAT_LABEL } from "@getpaseo/protocol/agent-labels";
 import type { AgentManager, AgentManagerEvent } from "./agent/agent-manager.js";
@@ -210,7 +211,7 @@ function nativeFixture(chats: FakeChat[], options: Parameters<typeof fixture>[1]
     hooks.emit("agent.turn_started", { agent: agent(id), turnId: "native-turn" });
     f.stream(id, { type: "timeline", item: { type: "user_message", ...message } });
   };
-  const end = (id: string, text = "native result") =>
+  const end = (id: string, text = "DONE native result") =>
     hooks.emit("agent.turn_ended", {
       agent: agent(id),
       turnId: "native-turn",
@@ -295,7 +296,7 @@ describe("report-up", () => {
   });
 
   test("a long last message is cut to the snippet length", async () => {
-    const long = "x".repeat(REPORT_UP_SNIPPET_CHARS + 50);
+    const long = `${"x".repeat(REPORT_UP_SNIPPET_CHARS + 50)}?`;
     const f = fixture([lead, { ...worker(), lastMessage: long }]);
     f.turn(WORKER);
     await f.settle();
@@ -370,12 +371,12 @@ describe("report-up and usage limits", () => {
     const f = fixture([lead, chat], { now: NOW });
     f.turn(WORKER);
     await f.settle();
-    chat.lastMessage = "Done: tests pass.";
+    chat.lastMessage = "DONE tests pass.";
     f.clock.now = NOW + 6 * 3600_000;
     f.turn(WORKER);
     await f.settle();
     expect(f.delivered).toHaveLength(2);
-    expect(f.delivered[1]!.prompt).toContain("finished a turn: Done: tests pass.");
+    expect(f.delivered[1]!.prompt).toContain("finished a turn: DONE tests pass.");
     chat.lastMessage = SESSION;
     f.turn(WORKER);
     await f.settle();
@@ -676,7 +677,7 @@ describe("report-up limit state across a restart", () => {
     const before = fixture([lead, chat], { now: NOW, statePath });
     before.turn(WORKER);
     await before.settle();
-    const later = fixture([lead, { ...chat, lastMessage: "Done." }], {
+    const later = fixture([lead, { ...chat, lastMessage: "DONE." }], {
       now: NOW + 8 * 3600_000,
       statePath,
     });
@@ -1821,7 +1822,7 @@ describe("report-up coalescing", () => {
     id,
     title,
     labels: { [REPORTS_TO_LABEL]: LEAD },
-    lastMessage,
+    lastMessage: lastMessage.startsWith("You've hit") ? lastMessage : `DONE ${lastMessage}`,
   });
 
   test("while the lead was told in the last 5 minutes, finished workers wait and go out as ONE message", async () => {
@@ -1845,8 +1846,8 @@ describe("report-up coalescing", () => {
     expect(f.delivered).toHaveLength(2);
     const combined = f.delivered[1]!.prompt;
     expect(combined).toContain("2 workers finished a turn since your last update");
-    expect(combined).toContain(`Worker Beta (${WORKER_B}): beta done`);
-    expect(combined).toContain(`Worker Gamma (${WORKER_C}): gamma done`);
+    expect(combined).toContain(`Worker Beta (${WORKER_B}): DONE beta done`);
+    expect(combined).toContain(`Worker Gamma (${WORKER_C}): DONE gamma done`);
     expect(combined).not.toContain("Alpha");
   });
 
@@ -2007,7 +2008,7 @@ describe("combined reports and a limit that starts later", () => {
     id,
     title,
     labels: { [REPORTS_TO_LABEL]: LEAD },
-    lastMessage,
+    lastMessage: lastMessage.startsWith("You've hit") ? lastMessage : `DONE ${lastMessage}`,
   });
 
   test("the lead reaches a limit after the report was queued: nothing is sent, and the report is held until the reset", async () => {
@@ -2091,7 +2092,7 @@ test("a finish notice uses the host link when the main assistant has no local ch
         id: WORKER,
         title: "Remote reporter",
         labels: { [REPORTS_TO_LABEL]: "role:main-assistant" },
-        lastMessage: "Done.",
+        lastMessage: "DONE.",
       },
     ],
     {
@@ -2105,7 +2106,7 @@ test("a finish notice uses the host link when the main assistant has no local ch
   await f.settle();
   expect(notices).toHaveLength(1);
   expect(notices[0]).toContain(`${WORKER}:finished:`);
-  expect(notices[0]).toContain("Done.");
+  expect(notices[0]).toContain("DONE.");
   expect(f.delivered).toEqual([]);
 });
 
@@ -2115,11 +2116,11 @@ describe("report-up native policy", () => {
     const f = nativeFixture([lead, worker()]);
     try {
       f.begin(WORKER);
-      f.end(WORKER, "snapshot result");
-      f.end(WORKER, "duplicate result");
+      f.end(WORKER, "DONE snapshot result");
+      f.end(WORKER, "DONE duplicate result");
       await f.settle();
       expect(f.delivered).toHaveLength(1);
-      expect(f.delivered[0]!.prompt).toContain("snapshot result");
+      expect(f.delivered[0]!.prompt).toContain("DONE snapshot result");
       expect(f.delivered[0]!.prompt).not.toContain("Done: tests pass");
     } finally {
       f.cleanup();
@@ -2255,7 +2256,11 @@ test("WebSocket configuration and native report-up preserve armed finish ownersh
   vi.stubEnv("FULCRA_LEDGER_DIR", ledgerDir);
   const daemon = await createTestPaseoDaemon({
     agentClients: {
-      codex: createTestAgentClient("codex", { onStartTurn: (prompt) => prompts.push(prompt) }),
+      codex: createTestAgentClient("codex", {
+        onStartTurn: (prompt) => prompts.push(prompt),
+        // FU-439: only a DONE, BLOCKED or question result goes up as a finish notice.
+        response: (prompt) => `DONE ${prompt}`,
+      }),
     },
   });
   const client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws` });
@@ -2659,7 +2664,7 @@ test("worker finish notices include total session spend across turns and account
       id: WORKER,
       title: "Worker",
       labels: { [REPORTS_TO_LABEL]: LEAD },
-      lastMessage: "Done",
+      lastMessage: "DONE",
       costRecords: {
         cursors: {},
         turns: {
@@ -2754,6 +2759,9 @@ describe("FU-424 a lost finish notice reaches the lead once", () => {
     leadLifecycle?: string;
     leadHasMessage?: boolean;
     deliver?: (attempt: number) => void;
+    /** FU-439: the worker's final message; default is a DONE line. */
+    lastMessage?: string;
+    logLines?: string[];
   }) {
     const root = mkdtempSync(join(tmpdir(), "fu424-"));
     roots.push(root);
@@ -2767,7 +2775,7 @@ describe("FU-424 a lost finish notice reaches the lead once", () => {
           title: "Worker",
           labels: { [REPORTS_TO_LABEL]: LEAD },
           lifecycle: "idle",
-          lastMessage: "DONE checked",
+          lastMessage: input.lastMessage ?? "DONE checked",
         },
       ],
     ]);
@@ -2820,7 +2828,9 @@ describe("FU-424 a lost finish notice reaches the lead once", () => {
       isOtherEnabled: () => true,
       isNudgeEnabled: () => false,
       localServerId: "srv_local",
-      logger: createTestLogger(),
+      logger: input.logLines
+        ? pino({ level: "info" }, { write: (line: string) => void input.logLines!.push(line) })
+        : createTestLogger(),
       readLedger: () => [],
       setTimer: (run, ms) => timers.push({ run, ms }),
       deliver: async (leadId, _prompt, messageId) => {
@@ -3030,4 +3040,109 @@ describe("FU-424 a lost finish notice reaches the lead once", () => {
       resetAgentMessageLogForTests();
     }
   });
+
+  const sentOnce = async (lastMessage: string) => {
+    resetAgentMessageLogForTests();
+    const f = await ownedFixture({ notice: { status: "armed" }, lastMessage });
+    try {
+      f.runTurn(WORKER);
+      await until(async () => expect(await f.notice()).toMatchObject({ status: "delivered" }));
+      return f.delivered;
+    } finally {
+      f.service.stop();
+    }
+  };
+
+  test.each(["DONE tests pass", "BLOCKED needs a key", "DECISION ship now or wait"])(
+    "FU-439 (a) a final message that starts with %s delivers one notice",
+    async (message) => {
+      expect(
+        await sentOnce(`${message}
+more detail`),
+      ).toEqual([{ leadId: LEAD, messageId: MESSAGE_ID }]);
+    },
+  );
+
+  test("FU-439 (b) a final message that asks the lead a question delivers one notice", async () => {
+    expect(await sentOnce("I found two options. Which one should I use?")).toHaveLength(1);
+  });
+
+  test("FU-439 (c) an error end delivers one notice, whatever the last message", async () => {
+    const f = await ownedFixture({
+      notice: { status: "armed" },
+      lastMessage: "Started the build, will continue.",
+    });
+    try {
+      f.runTurn(WORKER, undefined, "Provider crashed");
+      await until(async () => expect(await f.notice()).toMatchObject({ status: "delivered" }));
+      expect(f.delivered).toHaveLength(1);
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  test("FU-439 (d) a permission request delivers one notice, whatever the last message", async () => {
+    const f = fixture([lead, { ...worker(), lastMessage: "Started the build, will continue." }]);
+    f.stream(WORKER, {
+      type: "permission_requested",
+      provider: "claude",
+      request: { id: "p1", name: "Bash", input: { command: "make" } },
+    });
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.prompt).toContain("Tool: Bash");
+    f.service.stop();
+  });
+
+  test("FU-439 a started X, will continue turn delivers nothing, logs the held line and stays armed", async () => {
+    const logLines: string[] = [];
+    const f = await ownedFixture({
+      notice: { status: "armed" },
+      lastMessage: "I started the render. I will continue when it finishes.",
+      logLines,
+    });
+    try {
+      f.runTurn(WORKER);
+      await until(() =>
+        expect(logLines.join(" ")).toContain("Finish notice held: no DONE/BLOCKED/question"),
+      );
+      await quiet();
+      expect(f.delivered).toEqual([]);
+      expect((await f.notice())?.status).toBe("armed");
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  // Replay: 50 worker turns. The mix is an assumption from the FU-439 ticket (80% of finish notices woke the lead
+  // for nothing): 40 progress turns, 6 DONE, 2 BLOCKED or DECISION, 1 question, 1 error.
+  test("FU-439 a replay of 50 worker turns sends only the 10 that carry a result, a question or an error", async () => {
+    const progress = [
+      "I started the build. I will continue when it finishes.",
+      "Tests are running in the background, waiting for them.",
+      "Pushed the branch and opened the PR. Next I check the hooks.",
+      "Read the code. Starting the change now.",
+    ];
+    const turns: Array<{ message: string; error?: string }> = [
+      ...Array.from({ length: 40 }, (_, i) => ({ message: progress[i % progress.length]! })),
+      ...Array.from({ length: 6 }, (_, i) => ({ message: `DONE item ${i} PR checked` })),
+      { message: "BLOCKED the key is missing" },
+      { message: "DECISION ship the patch or wait" },
+      { message: "Two options exist. Which one do you want?" },
+      { message: "Started the render.", error: "Provider crashed" },
+    ];
+    let sent = 0;
+    for (const turn of turns) {
+      const f = await ownedFixture({ notice: { status: "armed" }, lastMessage: turn.message });
+      try {
+        f.runTurn(WORKER, undefined, turn.error);
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        sent += f.delivered.length;
+      } finally {
+        f.service.stop();
+      }
+    }
+    expect(turns).toHaveLength(50);
+    expect(sent).toBe(10);
+  }, 60_000);
 });
