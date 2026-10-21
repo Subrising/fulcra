@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   buildSelfNodeCommand,
   createExternalCommandProcessEnv,
@@ -94,13 +94,26 @@ describe("paseo env contract", () => {
     });
 
     expect(command.command).toBe(process.execPath);
-    expect(command.args).toEqual(["script.js"]);
+    expect(command.args).toEqual(["--disable-sigusr1", "script.js"]);
     expect(command.env[ELECTRON_RUN_AS_NODE]).toBe("1");
     expect(command.env.CUSTOM).toBe("value");
     expect(command.env.ELECTRON_NO_ATTACH_CONSOLE).toBeUndefined();
     expect(command.env.PASEO_DESKTOP_MANAGED).toBeUndefined();
     expect(command.env[PASEO_NODE_ENV]).toBeUndefined();
     expect(command.env.PASEO_SUPERVISED).toBeUndefined();
+  });
+
+  test("buildSelfNodeCommand: a release build puts --disable-sigusr1 first", () => {
+    expect(buildSelfNodeCommand(["a", "b"]).args).toEqual(["--disable-sigusr1", "a", "b"]);
+  });
+
+  test("buildSelfNodeCommand: an empty gate flag list adds no stray entry", async () => {
+    vi.resetModules();
+    vi.doMock("./inspector-flavour.js", () => ({ packagedInspectorFlags: () => [] }));
+    const gate = await import("./paseo-env.js");
+    expect(gate.buildSelfNodeCommand(["a"]).args).toEqual(["a"]);
+    vi.doUnmock("./inspector-flavour.js");
+    vi.resetModules();
   });
 
   test("does not add Electron node mode for non-execPath commands", () => {

@@ -60,35 +60,61 @@ describe("daemon child execArgv (FU-466)", () => {
     expect(speechWorkerExecArgv(sourceUrl)[0]).toBe("--disable-sigusr1");
   });
 
+  // The child reports node:inspector.url() after SIGUSR1. --inspect-port=0 picks a free port, so the result
+  // does not depend on port 9229 being free.
+  async function inspectorUrlAfterSigusr1(execArgv: string[]): Promise<string | undefined> {
+    const dir = mkdtempSync(path.join(tmpdir(), "child-exec-argv-"));
+    const script = path.join(dir, "child.mjs");
+    writeFileSync(
+      script,
+      [
+        'import inspector from "node:inspector";',
+        'process.on("message", () => {',
+        "  setTimeout(() => {",
+        "    const url = inspector.url();",
+        "    if (url) inspector.close();",
+        "    process.send({ url });",
+        "  }, 300);",
+        "});",
+        "setInterval(() => {}, 1000);",
+        'process.send("up");',
+        "",
+      ].join("\n"),
+    );
+    const child = fork(script, [], {
+      execArgv: [...execArgv, "--inspect-port=0"],
+      stdio: ["ignore", "ignore", "ignore", "ipc"],
+    });
+    try {
+      await new Promise((resolve, reject) => {
+        child.once("message", resolve);
+        child.once("error", reject);
+        child.once("exit", () => reject(new Error("child exited before it was ready")));
+      });
+      const report = new Promise<{ url?: string }>((resolve, reject) => {
+        child.on("message", (message) => resolve(message as { url?: string }));
+        child.once("exit", () => reject(new Error("child exited after SIGUSR1")));
+      });
+      child.kill("SIGUSR1");
+      setTimeout(() => child.send("report"), 100);
+      return (await report).url;
+    } finally {
+      child.kill("SIGKILL");
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
   it.skipIf(process.platform === "win32")(
     "a forked child ignores SIGUSR1 and opens no inspector",
     async () => {
-      const dir = mkdtempSync(path.join(tmpdir(), "child-exec-argv-"));
-      const script = path.join(dir, "child.mjs");
-      writeFileSync(script, 'setInterval(() => {}, 1000); process.send("up");\n');
-      const child = fork(script, [], {
-        execArgv: terminalWorkerExecArgv(packagedUrl),
-        stdio: ["ignore", "ignore", "pipe", "ipc"],
-      });
-      let stderr = "";
-      child.stderr?.on("data", (chunk) => {
-        stderr += String(chunk);
-      });
-      try {
-        await new Promise((resolve, reject) => {
-          child.once("message", resolve);
-          child.once("error", reject);
-          child.once("exit", () => reject(new Error("child exited before it was ready")));
-        });
-        child.kill("SIGUSR1");
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        expect(child.exitCode).toBeNull();
-        expect(child.signalCode).toBeNull();
-        expect(stderr).not.toContain("Debugger listening");
-      } finally {
-        child.kill("SIGKILL");
-        rmSync(dir, { recursive: true, force: true });
-      }
+      expect(await inspectorUrlAfterSigusr1(terminalWorkerExecArgv(packagedUrl))).toBeUndefined();
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "control: the same child without the flag opens an inspector on SIGUSR1",
+    async () => {
+      expect(await inspectorUrlAfterSigusr1([])).toMatch(/^ws:\/\//);
     },
   );
 });
