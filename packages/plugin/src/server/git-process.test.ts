@@ -9,6 +9,7 @@ import {
   withGitFetchPolicy,
   spawnGitProcess,
   GIT_CHILD_LIMIT,
+  GitChildLimitError,
 } from "./git-process.js";
 const roots: string[] = [];
 afterEach(async () => {
@@ -154,6 +155,24 @@ test("global child cap refuses excess work and recovers after children close", a
     ),
   );
   expect((await execGitCommand(["status", "--porcelain"], { cwd })).stdout).toBe("");
+});
+
+test("execGitCommand waits for a free slot instead of failing when the cap is full", async () => {
+  const cwd = await repo();
+  const children = Array.from({ length: GIT_CHILD_LIMIT }, () =>
+    spawnGitProcess(["hash-object", "--stdin"], { cwd, stdio: "pipe", timeout: 5000 }),
+  );
+  let settled = false;
+  const pending = execGitCommand(["status", "--porcelain"], { cwd }).finally(() => {
+    settled = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  expect(settled).toBe(false);
+  for (const child of children) child.stdin!.end();
+  await expect(pending).resolves.toMatchObject({ stdout: "" });
+  expect(() => {
+    throw new GitChildLimitError();
+  }).toThrow("child limit");
 });
 
 test("global options still use one fetch, and distinct stdin stays separate", async () => {

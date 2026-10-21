@@ -1,6 +1,13 @@
+import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { resolveForgeRemoteUrl } from "../utils/forge-remote.js";
 import { readFile, stat } from "node:fs/promises";
+import { gitFailureLogFields } from "../utils/git-known-error.js";
+import {
+  fetchSkipTicksAfterFailures,
+  isDeadWorkspaceFolder,
+  jitterMs,
+} from "../utils/dead-workspace.js";
 import { basename, dirname, join, resolve } from "node:path";
 import { LRUCache } from "lru-cache";
 import { CheckoutDiffCache } from "./checkout-diff-cache.js";
@@ -396,6 +403,7 @@ interface WorkspaceGitServiceDependencies {
   ) => Promise<WorkspaceGitFetchResult>;
   runGitCommand: typeof runGitCommand;
   getWorkspaceGitSelfHealPhaseMs: typeof getWorkspaceGitObservationReensurePhaseMs;
+  workspaceFolderExists: (cwd: string) => boolean;
   createWatcherLivenessCanary: typeof createWatcherLivenessCanary;
   checkoutProbe: typeof checkoutProbe;
   now: () => Date;
@@ -464,6 +472,8 @@ interface RepoGitTarget {
   recovery: WatchRecoveryState;
   intervalId: NodeJS.Timeout | null;
   fetchInFlight: boolean;
+  fetchFailures: number;
+  fetchSkipTicks: number;
   bufferedFetchMetadataEvents: FileChange[];
   recentFetchRemoteRefChanges: Map<
     string,
@@ -582,6 +592,7 @@ function buildDefaultWorkspaceGitServiceDeps(
     runGitFetch: fetchWorkspaceGitRemote,
     runGitCommand,
     getWorkspaceGitSelfHealPhaseMs: getWorkspaceGitObservationReensurePhaseMs,
+    workspaceFolderExists: existsSync,
     createWatcherLivenessCanary,
     checkoutProbe,
     now: () => new Date(),
@@ -2182,6 +2193,8 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
       fallbackPollQuietTickCount: 0,
       recovery: { attemptCount: 0, timer: null, establishedAt: null },
       intervalId: null,
+      fetchFailures: 0,
+      fetchSkipTicks: 0,
       fetchInFlight: false,
       bufferedFetchMetadataEvents: [],
       recentFetchRemoteRefChanges: new Map(),
@@ -2774,9 +2787,14 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
           target.observationReensureTimer = null;
           return;
         }
+        if (isDeadWorkspaceFolder(target.cwd, this.deps.workspaceFolderExists)) {
+          // The folder is gone: stop the 60 s check for this record.
+          target.observationReensureTimer = null;
+          return;
+        }
         target.observationReensureTimer = setTimeout(
           reensureObservation,
-          WORKSPACE_GIT_OBSERVATION_REENSURE_INTERVAL_MS,
+          jitterMs(WORKSPACE_GIT_OBSERVATION_REENSURE_INTERVAL_MS),
         );
         this.scheduleWorkspaceObservationSetup(target);
       };
@@ -3575,6 +3593,10 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     if (target.fetchInFlight) {
       return;
     }
+    if (target.fetchSkipTicks > 0) {
+      target.fetchSkipTicks -= 1;
+      return;
+    }
 
     target.fetchInFlight = true;
     this.logger.debug(
@@ -3598,9 +3620,13 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
           },
           createRunGitCommand("background-fetch"),
         );
+        target.fetchFailures = 0;
       } catch (error) {
+        // After 3 failures in a row, skip 1, 2, 4... later ticks (at most 16) before the next try.
+        target.fetchFailures += 1;
+        target.fetchSkipTicks = fetchSkipTicksAfterFailures(target.fetchFailures);
         this.logger.warn(
-          { err: error, repoGitRoot: target.repoGitRoot, cwd: target.cwd },
+          gitFailureLogFields(error, { repoGitRoot: target.repoGitRoot, cwd: target.cwd }),
           "Background git fetch failed",
         );
       }

@@ -10,7 +10,7 @@ import { ManagementSection } from "./management-section";
 import { WorkButton } from "./work-button";
 import { LeadershipPanel } from "./leadership";
 import { SupervisionPanel } from "./supervision";
-import { observedList, retainRequestIdentity } from "./management-query";
+import { observedList, retainRequestIdentity, SCREEN_POLL_MS } from "./management-query";
 import { NativeQueuedInstruction } from "./native-queued-instruction";
 type SessionRole = "planning" | "orchestration" | "implementation";
 // "Default" sends no role: the session gets the installation's ordinary defaults, exactly as before roles existed.
@@ -44,7 +44,7 @@ export function ManagementPanel({
     queryKey: ["orca-fleet", host?.id],
     queryFn: () => readFleet({}),
     staleTime: 5000,
-    refetchInterval: 15000,
+    refetchInterval: SCREEN_POLL_MS,
     refetchIntervalInBackground: false,
     retry: false,
   });
@@ -87,7 +87,7 @@ export function ManagementPanel({
   const health = useQuery({
     queryKey: ["orca-management-health"],
     queryFn: checkConnection,
-    refetchInterval: 5000,
+    refetchInterval: SCREEN_POLL_MS,
     refetchIntervalInBackground: false,
     retry: false,
   });
@@ -100,7 +100,7 @@ export function ManagementPanel({
     queryKey: ["orca-management", taskId],
     queryFn: () => observedList(() => manage({ action: "list" })),
     staleTime: 5000,
-    refetchInterval: 30000,
+    refetchInterval: SCREEN_POLL_MS,
     refetchIntervalInBackground: false,
     retry: false,
   });

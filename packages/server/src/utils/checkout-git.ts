@@ -30,6 +30,8 @@ import {
   ForgeCommandError,
 } from "../services/forge-cli-command.js";
 import { parseGitRevParsePath, resolveGitRevParsePath } from "./git-rev-parse-path.js";
+import { isGitChildLimitError } from "@getpaseo/plugin/server/git";
+import { gitFailureLogFields } from "./git-known-error.js";
 import { runGitCommand, type RunGitCommand } from "./run-git-command.js";
 import { readGitFileContents } from "./git-file-contents.js";
 import { isPaseoOwnedWorktreeCwd, resolvePaseoWorktreesBaseRoot } from "./worktree.js";
@@ -1055,9 +1057,11 @@ async function getWorktreeRoot(cwd: string, context?: CheckoutContext): Promise<
     });
     return parseGitRevParsePath(stdout);
   } catch (error) {
+    // A busy git queue says nothing about the folder: never record it as non-Git.
+    if (isGitChildLimitError(error)) throw error;
     if (!isNotGitRepositoryError(error)) {
       context?.logger?.warn(
-        { err: error, cwd },
+        gitFailureLogFields(error, { cwd }),
         "Git worktree discovery failed; treating directory as non-Git",
       );
     }
