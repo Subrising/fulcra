@@ -16,7 +16,10 @@ async function controllerExecArgv(hostFlags) {
     `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(out)}, JSON.stringify(process.execArgv)); setTimeout(() => {}, 60000);\n`,
     { mode: 0o600 },
   );
-  const distribution = createDistribution({ home: path.join(root, "home"), bundleDirectory: bundle });
+  const distribution = createDistribution({
+    home: path.join(root, "home"),
+    bundleDirectory: bundle,
+  });
   // setup() only needs to record the provenance minter; every other server hook is a no-op here.
   const noop = () => new Proxy(function () {}, { get: noop, apply: noop });
   const server = new Proxy({}, { get: noop });
@@ -29,7 +32,8 @@ async function controllerExecArgv(hostFlags) {
   if (hostFlags !== undefined) host.nodeFlags = hostFlags;
   try {
     distribution.start(host);
-    for (let i = 0; i < 100 && !fs.existsSync(out); i += 1) await new Promise((r) => setTimeout(r, 100));
+    for (let i = 0; i < 100 && !fs.existsSync(out); i += 1)
+      await new Promise((r) => setTimeout(r, 100));
     return JSON.parse(fs.readFileSync(out, "utf8"));
   } finally {
     await distribution.stop().catch(() => {});
