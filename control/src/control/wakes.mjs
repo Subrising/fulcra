@@ -616,7 +616,11 @@ export class Wakes {
   // The 30 s watchdog calls this: a heartbeat needs the full cadence, otherwise only the 5 min safety tick runs.
   safetyTickDue() {
     const now = this.now();
-    if (this.heartbeatMinutes() === 0 && this.lastSafetyTick && now - this.lastSafetyTick < WAKES_SAFETY_MS)
+    if (
+      this.heartbeatMinutes() === 0 &&
+      this.lastSafetyTick &&
+      now - this.lastSafetyTick < WAKES_SAFETY_MS
+    )
       return false;
     this.lastSafetyTick = now;
     return true;
