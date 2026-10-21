@@ -32,7 +32,7 @@ import {
 import { repoState, parseStatus, GIT_ENV } from "./repo-state.mjs";
 import { rpc } from "./rpc.mjs";
 import { requireUnpinnedAdmissionGuard } from "./admission-guard-precondition.mjs";
-import { AutomaticRestarts, RESTART_SETTLE_MS, RESTART_STAGGER_MS } from "./automatic-restart.mjs";
+import { AutomaticRestarts, HELD_RECHECK_MS, RESTART_SETTLE_MS, RESTART_STAGGER_MS } from "./automatic-restart.mjs";
 import { recordBootStart, sealBoot, bootChainDir } from "./boot-chain.mjs";
 requireUnpinnedAdmissionGuard();
 
@@ -345,6 +345,40 @@ test("automatic restart holds an unsealed crash visibly without regrant or repla
   assert.match(f.queue.status().items[0].outcome, /seal|cleanly/);
   assert.equal(f.store.get(f.x.id).mode, "human");
   assert.equal(f.sends(f.x.id), 1);
+});
+
+test("FU-457: a held row is not due again on the next tick", async (t) => {
+  const f = await automaticFixture(t, { sealed: false });
+  await f.queue.tick();
+  f.advance(RESTART_SETTLE_MS);
+  await f.queue.tick();
+  assert.equal(f.queue.status().items[0].state, "held");
+  const snapshot = f.native.snapshot.bind(f.native);
+  let reads = 0;
+  f.native.snapshot = (...args) => (reads++, snapshot(...args));
+  for (let i = 0; i < 5; i++) {
+    f.advance(RESTART_STAGGER_MS * 10);
+    await f.queue.tick();
+  }
+  assert.equal(reads, 0, "a held row makes no native reads before its recheck time");
+  f.advance(HELD_RECHECK_MS);
+  await f.queue.tick();
+  assert.ok(reads > 0, "it is re-checked after the recheck time");
+});
+
+test("FU-457: stale held rows with no confirmed turn are closed when the controller starts", async (t) => {
+  const f = await automaticFixture(t);
+  f.store.db
+    .prepare(
+      "UPDATE automatic_restart_resumes SET state='held',nextAt=NULL,outcome='No confirmed interrupted controller turn; x'",
+    )
+    .run();
+  const again = new AutomaticRestarts(f.control, { currentBoot: () => f.boot, timers: false });
+  await again.stop();
+  assert.equal(
+    f.store.db.prepare("SELECT count(*) n FROM automatic_restart_resumes WHERE state='held'").get().n,
+    0,
+  );
 });
 
 test("a restart during the first turn completes the first-delivery binding with the recorded native id", async (t) => {
