@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 // tools -- so "is this session current" is an exact comparison, not a version someone must remember to bump.
 import { createHash } from "node:crypto";
 import { portable } from "../portable-config.mjs";
+import { mcpNodeFlags } from "./mcp-node-flags.mjs";
 import { canonicalMemoryConfig, CANONICAL_MEMORY_ENTRY } from "../canonical-memory-route.mjs";
 import { ROLE_TOOLS } from "./grant-file.mjs";
 import { CONTROLLER_HOME as HOME } from "./installation-settings.mjs";
@@ -34,7 +35,7 @@ export function supervisorServer(messageId) {
   return {
     type: "stdio",
     command: COMMAND,
-    args: [INBOX],
+    args: [...mcpNodeFlags(), INBOX],
     env: {
       ELECTRON_RUN_AS_NODE: "1",
       ...(portable ? { ORCA_HOME: portable.home } : {}),
@@ -61,6 +62,9 @@ export const TOOL_SURFACE = createHash("sha256")
   .update(
     JSON.stringify({
       command: COMMAND,
+      // FU-467: the Node flags are NOT in the digest. A change here makes every delegated live session stale, and
+      // reconcile() then refreshes them all (fleet-wide agent.mcp.refresh, again on a rollback). New and refreshed
+      // sessions get the flags from supervisorServer() and canonicalMemoryConfig() anyway.
       inbox: INBOX,
       memory: CANONICAL_MEMORY_ENTRY,
       preapproved: toolPolicy().preapproved,

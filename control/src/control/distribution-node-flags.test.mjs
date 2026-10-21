@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { createDistribution } from "./distribution-host.mjs";
 
 // FU-466: the controller child must start with the inspector flags that the daemon passes (FU-79).
+// FU-467: it also gets the same list in ORCA_NODE_FLAGS, for the MCP servers that agents start.
 async function controllerExecArgv(hostFlags) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "dc-flags-")));
   const bundle = path.join(root, "bundle");
@@ -13,7 +14,7 @@ async function controllerExecArgv(hostFlags) {
   const out = path.join(root, "execargv.json");
   fs.writeFileSync(
     path.join(bundle, "controller.mjs"),
-    `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(out)}, JSON.stringify(process.execArgv)); setTimeout(() => {}, 60000);\n`,
+    `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(out)}, JSON.stringify([process.execArgv, process.env.ORCA_NODE_FLAGS])); setTimeout(() => {}, 60000);\n`,
     { mode: 0o600 },
   );
   const distribution = createDistribution({
@@ -42,13 +43,19 @@ async function controllerExecArgv(hostFlags) {
 }
 
 test("controller child starts with the flags the daemon passes", async () => {
-  assert.deepEqual(await controllerExecArgv(["--disable-sigusr1"]), ["--disable-sigusr1"]);
+  assert.deepEqual(await controllerExecArgv(["--disable-sigusr1"]), [
+    ["--disable-sigusr1"],
+    '["--disable-sigusr1"]',
+  ]);
 });
 
 test("controller child fails closed when the daemon passes no flags field", async () => {
-  assert.deepEqual(await controllerExecArgv(undefined), ["--disable-sigusr1"]);
+  assert.deepEqual(await controllerExecArgv(undefined), [
+    ["--disable-sigusr1"],
+    '["--disable-sigusr1"]',
+  ]);
 });
 
 test("controller child gets no flag when the gate flavour passes an empty list", async () => {
-  assert.deepEqual(await controllerExecArgv([]), []);
+  assert.deepEqual(await controllerExecArgv([]), [[], "[]"]);
 });
