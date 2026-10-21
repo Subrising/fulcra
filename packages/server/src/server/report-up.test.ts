@@ -2256,7 +2256,11 @@ test("WebSocket configuration and native report-up preserve armed finish ownersh
   vi.stubEnv("FULCRA_LEDGER_DIR", ledgerDir);
   const daemon = await createTestPaseoDaemon({
     agentClients: {
-      codex: createTestAgentClient("codex", { onStartTurn: (prompt) => prompts.push(prompt) }),
+      codex: createTestAgentClient("codex", {
+        onStartTurn: (prompt) => prompts.push(prompt),
+        // FU-439: only a DONE, BLOCKED or question result goes up as a finish notice.
+        response: (prompt) => `DONE ${prompt}`,
+      }),
     },
   });
   const client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws` });
