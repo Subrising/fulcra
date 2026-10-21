@@ -2110,6 +2110,30 @@ test("a finish notice uses the host link when the main assistant has no local ch
   expect(f.delivered).toEqual([]);
 });
 
+test("a remote lead's turn with no DONE, BLOCKED or question is not sent to the main assistant (FU-454)", async () => {
+  const notices: string[] = [];
+  const f = fixture(
+    [
+      {
+        id: WORKER,
+        title: "Remote lead",
+        labels: { [REPORTS_TO_LABEL]: "role:main-assistant" },
+        lastMessage: "Noted. No action needed.",
+      },
+    ],
+    {
+      remoteNotice: async (id, prompt, kind) => {
+        notices.push(`${id}:${kind}:${prompt}`);
+        return true;
+      },
+    },
+  );
+  f.turn(WORKER);
+  await f.settle();
+  expect(notices).toEqual([]);
+  expect(f.delivered).toEqual([]);
+});
+
 // Native hooks select notices. Private host callbacks retain finish-owner and delivery checks.
 describe("report-up native policy", () => {
   test("the native end snapshot supplies the notice and duplicate endings send nothing", async () => {
@@ -2392,7 +2416,7 @@ test("native host-link notices use the end snapshot and respect disabled finish 
   });
   try {
     f.begin(WORKER);
-    f.end(WORKER, "native remote result");
+    f.end(WORKER, "DONE native remote result");
     await f.settle();
     expect(notices).toHaveLength(1);
     expect(notices[0]).toContain("native remote result");
