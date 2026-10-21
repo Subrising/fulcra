@@ -57,6 +57,7 @@ import {
 import { CodexAppServerRpcError } from "./agent/providers/codex/app-server-transport.js";
 import type { DaemonConfigStore } from "./daemon-config-store.js";
 import { heldSendsFor } from "./held-sends.js";
+import { leadMoveTarget, readLeadMoves, relayLeadNotice, type LeadMove } from "./lead-moves.js";
 import { isArchiveLead } from "./agent/archive-policy.js";
 import { respondToAgentPermission } from "./agent/permission-response.js";
 import {
@@ -148,6 +149,10 @@ export interface ReportUpDeps {
   getNudgeMinIntervalMinutes?: () => number;
   localServerId: string | null;
   logger: Logger;
+  /** FU-444: the leads that moved (lead-moves.ts). A notice for an old lead goes to its new lead. */
+  leadMoves?: () => readonly LeadMove[];
+  /** Runs a relay command for a lead on another computer; tests replace it. */
+  relay?: (file: string, args: string[]) => Promise<void>;
   /** The delivery step; tests replace it. */
   deliver?: (leadId: string, prompt: string, messageId?: string) => Promise<void>;
   /** The clock and the timer; tests replace them. */
@@ -323,7 +328,20 @@ export class ReportUpService {
   private ledgerDebounce?: ReturnType<typeof setTimeout>;
   private readonly nudgeDeliveredAt = new Map<string, number>();
 
-  constructor(private readonly deps: ReportUpDeps) {
+  private readonly deps: ReportUpDeps;
+
+  constructor(deps: ReportUpDeps) {
+    const deliver = deps.deliver;
+    // FU-444: the test delivery step follows lead moves as send() does.
+    this.deps = deliver
+      ? {
+          ...deps,
+          deliver: async (leadId, prompt, messageId) => {
+            const to = await this.routeMovedLead(leadId, prompt);
+            if (to) await deliver(to, prompt, messageId);
+          },
+        }
+      : deps;
     this.store = lineStoreOf({ agentManager: deps.agentManager, agentStorage: deps.agentStorage });
     this.observer = new (loadAgentPolicy("report-observer").ReportUpObserver)({
       now: () => this.now(),
@@ -2127,6 +2145,59 @@ export class ReportUpService {
     ownedFinalCheck?: () => void,
     waitForProviderStart = false,
   ): Promise<void> {
+    const dispatch = (to: string) =>
+      this.dispatchTo(
+        to,
+        prompt,
+        kind,
+        currentNotice,
+        captureHandoff,
+        ownedMessageId,
+        ownedFinalCheck,
+        waitForProviderStart,
+      );
+    if (!this.deps.leadMoves?.().length) return dispatch(leadId);
+    // A relayed notice passes the same checks first: it cannot be taken back once the other computer has it.
+    return (async () => {
+      if (!this.noticeEnabled(kind)) throw new ReportUpDisabledError();
+      ownedFinalCheck?.();
+      if (currentNotice && !currentNotice()) throw new Error("Notice is no longer current");
+      const to = await this.routeMovedLead(leadId, prompt);
+      if (to) await dispatch(to);
+    })();
+  }
+
+  /**
+   * FU-444: where a notice for `leadId` goes when that lead moved (lead-moves.ts). Returns the chat to send to here, or
+   * null when the notice went to another computer through its relay command.
+   */
+  private async routeMovedLead(leadId: string, prompt: string): Promise<string | null> {
+    const moved = this.deps.leadMoves
+      ? leadMoveTarget(this.deps.leadMoves(), leadId, this.deps.localServerId)
+      : null;
+    if (!moved) return leadId;
+    if (moved.kind === "local") {
+      this.deps.logger.info(
+        { lead: leadId, to: moved.id },
+        "Lead moved: notice sent to the new lead",
+      );
+      return moved.id;
+    }
+    await relayLeadNotice(moved, prompt, this.deps.relay);
+    this.deps.logger.info({ lead: leadId, to: moved.id }, "Lead moved: notice relayed");
+    return null;
+  }
+
+  private dispatchTo(
+    leadId: string,
+    prompt: string,
+    kind: NoticeKind,
+    currentNotice?: () => boolean,
+    captureHandoff?: (handle: object) => void,
+    ownedMessageId?: string,
+    ownedFinalCheck?: () => void,
+    waitForProviderStart = false,
+  ): Promise<void> {
     const { agentManager, agentStorage, logger } = this.deps;
     const checkCurrent = () => {
       if (!this.noticeEnabled(kind)) throw new ReportUpDisabledError();
@@ -2249,6 +2320,14 @@ export function startReportUp(input: {
         (config) => config.enabled && config.leadId === id,
       ),
     remoteNotice: input.remoteNotice,
+    ...(input.paseoHome
+      ? {
+          leadMoves: () =>
+            readLeadMoves(input.paseoHome!, (err) =>
+              input.logger.warn({ err }, "lead-moves.json not read"),
+            ),
+        }
+      : {}),
     ledgerDir: defaultLedgerDir(),
     agentManager: input.agentManager,
     agentStorage: input.agentStorage,

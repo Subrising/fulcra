@@ -72,6 +72,8 @@ function fixture(
       prompt: string,
       kind: "explicit" | "finished" | "failed" | "permission" | "limit",
     ) => Promise<boolean>;
+    leadMoves?: ReportUpDeps["leadMoves"];
+    relay?: ReportUpDeps["relay"];
   } = {},
 ) {
   const clock = { now: options.now ?? Date.now() };
@@ -101,6 +103,8 @@ function fixture(
   manager.nativeReportOwnsFinish = () => nativeOwnsFinish;
   const service = new ReportUpService({
     remoteNotice: options.remoteNotice,
+    ...(options.leadMoves ? { leadMoves: options.leadMoves } : {}),
+    ...(options.relay ? { relay: options.relay } : {}),
     routing: options.routing,
     agentManager: manager,
     agentStorage: storage,
@@ -296,6 +300,33 @@ describe("report-up", () => {
     remote.turn(WORKER);
     await Promise.all([off.settle(), busy.settle(), remote.settle()]);
     expect([...off.delivered, ...busy.delivered, ...remote.delivered]).toEqual([]);
+  });
+
+  test("FU-444: a notice for a lead that moved goes to the new lead here, or through the relay to its computer", async () => {
+    const NEW_LEAD = "33333333-3333-4333-8333-333333333333";
+    const here = fixture([lead, worker(), { id: NEW_LEAD, title: "New lead", labels: {} }], {
+      leadMoves: () => [{ from: LEAD, to: NEW_LEAD }],
+    });
+    here.turn(WORKER);
+    await here.settle();
+    expect(here.delivered.map((notice) => notice.leadId)).toEqual([NEW_LEAD]);
+
+    const relayed: Array<{ file: string; args: string[]; text: string }> = [];
+    const away = fixture([lead, worker()], {
+      leadMoves: () => [
+        { from: LEAD, to: NEW_LEAD, server: "srv_pc", relay: ["pcsend", "{id}", "{file}"] },
+      ],
+      relay: async (file, args) => {
+        relayed.push({ file, args, text: readFileSync(args[1]!, "utf8") });
+      },
+    });
+    away.turn(WORKER);
+    await away.settle();
+    expect(away.delivered).toEqual([]);
+    expect(relayed).toHaveLength(1);
+    expect(relayed[0]!.file).toBe("pcsend");
+    expect(relayed[0]!.args[0]).toBe(NEW_LEAD);
+    expect(relayed[0]!.text).toContain(`Worker Builder (${WORKER}) finished a turn`);
   });
 
   test("a long last message is cut to the snippet length", async () => {
