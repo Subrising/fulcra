@@ -59,8 +59,13 @@ function setup(
   const chats = new Map(
     [
       { id: LEAD, title: "Lead", labels: {} },
-      { id: A, title: "Alpha", labels: { [REPORTS_TO_LABEL]: LEAD }, lastMessage: "alpha done" },
-      { id: B, title: "Beta", labels: { [REPORTS_TO_LABEL]: LEAD }, lastMessage: "beta done" },
+      {
+        id: A,
+        title: "Alpha",
+        labels: { [REPORTS_TO_LABEL]: LEAD },
+        lastMessage: "DONE alpha done",
+      },
+      { id: B, title: "Beta", labels: { [REPORTS_TO_LABEL]: LEAD }, lastMessage: "DONE beta done" },
     ].map((chat) => [
       chat.id,
       { ...chat, lifecycle: "idle" } as Record<string, unknown> & { id: string },
