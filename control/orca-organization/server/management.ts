@@ -348,6 +348,10 @@ export function createManagement(
   };
 }
 
+// FU-457: after a failed task-authority read, list refreshes reuse that failure for a growing delay (30 s up to 5 min)
+// instead of calling the controller again. Any other action still reads live.
+export const AUTHORITY_BACKOFF_MS = [30_000, 60_000, 120_000, 300_000];
+
 // Read/revoke paths remain available when current task authority cannot grant new work.
 export function createTaskManagement(
   call: Call = localCall,
@@ -356,7 +360,9 @@ export function createTaskManagement(
     if (result?.allowed !== true) throw new Error("Task authority unavailable");
   },
   now = () => new Date().toISOString(),
+  clock = () => Date.now(),
 ) {
+  const failures = new Map<string, { count: number; until: number; error: string }>();
   return async (value: unknown): Promise<ContractOutput<typeof taskManagementRpc>> => {
     const { taskId, command } = taskManagementRpc.input.parse(value);
     if (
@@ -372,13 +378,24 @@ export function createTaskManagement(
     )
       return createManagement(call, now, taskId)(command);
     let taskAuthority = { allowed: true, error: null as string | null };
-    try {
-      await check(taskId);
-    } catch (error) {
-      taskAuthority = {
-        allowed: false,
-        error: error instanceof Error ? error.message.slice(0, 512) : "Task authority unavailable",
-      };
+    const failed = failures.get(taskId);
+    if (command.action === "list" && failed && clock() < failed.until) {
+      taskAuthority = { allowed: false, error: failed.error };
+    } else {
+      try {
+        await check(taskId);
+        failures.delete(taskId);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message.slice(0, 512) : "Task authority unavailable";
+        const count = (failed?.count ?? 0) + 1;
+        failures.set(taskId, {
+          count,
+          until: clock() + AUTHORITY_BACKOFF_MS[Math.min(count, AUTHORITY_BACKOFF_MS.length) - 1],
+          error: message,
+        });
+        taskAuthority = { allowed: false, error: message };
+      }
     }
     if (!taskAuthority.allowed && command.action !== "list")
       return {
