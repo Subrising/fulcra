@@ -1684,11 +1684,10 @@ export async function createPaseoDaemon(
     logger,
     loadedRecords: () => agentStorage.listLoadedSync(),
     lifecycleOf: (id) => agentManager.getAgent(id)?.lifecycle ?? null,
-    lastMessageOf: (id) =>
-      agentManager
-        .getTimeline(id)
-        .filter((item) => item.type === "assistant_message")
-        .at(-1)?.text ?? null,
+    lastMessageOf: (id) => {
+      const timeline = agentManager.getTimeline(id);
+      return timeline.findLast((item) => item.type === "assistant_message")?.text ?? null;
+    },
     readOpenLedgerRows: () => readOpenLedgerRows(defaultLedgerDir(), true),
     closedAfterHours: () => config.autoArchiveClosedAfterHours ?? 24,
     archive: (id) => agentManager.archiveAgent(id),
