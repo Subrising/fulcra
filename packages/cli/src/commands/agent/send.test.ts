@@ -191,6 +191,38 @@ describe("configured SSH sends", () => {
       }),
     );
   });
+  it("takes the own-lead mark only from the source check, never from a typed flag (FU-402)", async () => {
+    client.sendAgentMessage.mockRejectedValue(missing);
+    senderStamp.mockReturnValue({ agentId: "worker", serverId: "book" });
+    routes.readSendRoute.mockResolvedValue(selected);
+    routes.readRemoteSendHost.mockResolvedValue({ serverId: "remote", mainAssistantId: null });
+    routes.sshSend.mockResolvedValue({ agentId: selected.agentId, status: "sent", message: "" });
+    client.checkAgentMessageRoute.mockResolvedValue({
+      kind: "outbound",
+      inboundOnly: true,
+      refusal: "Send this to your lead.",
+    });
+    await parsedSend([
+      "target",
+      "draft",
+      "--no-wait",
+      "--from",
+      "worker@book",
+      "--outbound-parent",
+      `${selected.agentId}@remote`,
+    ]);
+    expect(routes.sshSend.mock.calls[0]![0].sender).not.toHaveProperty("outboundParent");
+    client.checkAgentMessageRoute.mockResolvedValue({
+      kind: "outbound",
+      inboundOnly: false,
+      outboundServerOnly: "remote",
+      outboundParent: `${selected.agentId}@remote`,
+    });
+    await parsedSend(["target", "draft", "--no-wait"]);
+    expect(routes.sshSend.mock.calls[1]![0].sender).toMatchObject({
+      outboundParent: `${selected.agentId}@remote`,
+    });
+  });
   it("does not contact SSH when the source cannot verify its sender", async () => {
     client.sendAgentMessage.mockRejectedValue(missing);
     senderStamp.mockReturnValue({ agentId: "worker" });
