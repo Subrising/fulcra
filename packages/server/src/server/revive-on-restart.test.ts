@@ -882,6 +882,16 @@ describe("live record after an unclean stop", () => {
         await new Promise((resolve) => setTimeout(resolve, 40));
       };
       const read = async () => JSON.parse(await readFile(file, "utf8"));
+      // Wait for the real file write, not a fixed time (FU-469). setTimeout and performance.now are real; Date is faked.
+      const readWhen = async (done: (record: { stoppedAt: string }) => boolean) => {
+        const deadline = performance.now() + 5_000;
+        for (;;) {
+          const record = await read().catch(() => null);
+          if (record && done(record)) return record;
+          if (performance.now() > deadline) throw new Error("the recorder did not write in 5 s");
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+      };
       await vi.waitFor(async () => expect((await read()).openIds).toEqual([IDLE]));
 
       // Several changes inside one check interval give one write that holds the last state.
@@ -895,7 +905,7 @@ describe("live record after an unclean stop", () => {
       await advance(10_000);
       expect((await read()).stoppedAt).toBe(firstWrite);
       await advance(10_000);
-      const second = await read();
+      const second = await readWhen((record) => record.stoppedAt !== firstWrite);
       expect(second.openIds.sort()).toEqual([IDLE, RUNNING].sort());
       expect(second.interruptedIds).toEqual([]);
 
@@ -903,7 +913,7 @@ describe("live record after an unclean stop", () => {
       await advance(4 * 60_000);
       expect((await read()).stoppedAt).toBe(second.stoppedAt);
       await advance(2 * 60_000);
-      expect((await read()).stoppedAt).not.toBe(second.stoppedAt);
+      await readWhen((record) => record.stoppedAt !== second.stoppedAt);
 
       await recorder.stop();
       await expect(stat(file)).rejects.toThrow();
