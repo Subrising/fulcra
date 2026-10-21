@@ -32,7 +32,12 @@ import {
 import { repoState, parseStatus, GIT_ENV } from "./repo-state.mjs";
 import { rpc } from "./rpc.mjs";
 import { requireUnpinnedAdmissionGuard } from "./admission-guard-precondition.mjs";
-import { AutomaticRestarts, HELD_RECHECK_MS, RESTART_SETTLE_MS, RESTART_STAGGER_MS } from "./automatic-restart.mjs";
+import {
+  AutomaticRestarts,
+  HELD_RECHECK_MS,
+  RESTART_SETTLE_MS,
+  RESTART_STAGGER_MS,
+} from "./automatic-restart.mjs";
 import { recordBootStart, sealBoot, bootChainDir } from "./boot-chain.mjs";
 requireUnpinnedAdmissionGuard();
 
@@ -376,7 +381,8 @@ test("FU-457: stale held rows with no confirmed turn are closed when the control
   const again = new AutomaticRestarts(f.control, { currentBoot: () => f.boot, timers: false });
   await again.stop();
   assert.equal(
-    f.store.db.prepare("SELECT count(*) n FROM automatic_restart_resumes WHERE state='held'").get().n,
+    f.store.db.prepare("SELECT count(*) n FROM automatic_restart_resumes WHERE state='held'").get()
+      .n,
     0,
   );
 });
