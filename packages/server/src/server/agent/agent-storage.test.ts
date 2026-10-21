@@ -187,7 +187,7 @@ describe("AgentStorage", () => {
     });
   });
 
-  test("a record write that drops a finish notice is logged", async () => {
+  test("an upsert of a stale copy keeps the stored finish notice and logs no removal", async () => {
     const parentId = "11111111-1111-4111-8111-111111111111";
     const child = createManagedAgent({ id: "22222222-2222-4222-8222-222222222222" });
     child.labels = { "paseo.parent-agent-id": parentId };
@@ -201,8 +201,9 @@ describe("AgentStorage", () => {
       "Finish notice removed by record write",
     );
     await storage.upsert({ ...stale, title: "stale copy" });
-    expect(info).toHaveBeenCalledWith(
-      { agentId: child.id, messageId: armed.messageId },
+    expect(await storage.getFinishNotice(child.id)).toMatchObject({ messageId: armed.messageId });
+    expect(info).not.toHaveBeenCalledWith(
+      expect.anything(),
       "Finish notice removed by record write",
     );
     info.mockRestore();
@@ -321,6 +322,25 @@ describe("AgentStorage", () => {
     });
     const recovered = new AgentStorage(storagePath, logger);
     expect(await recovered.get(child.id)).toMatchObject({ lastStatus: "closed" });
+    expect(await recovered.getFinishNotice(child.id, armed.messageId)).toMatchObject({
+      status: "delivered",
+      deliveredBy: "report-up",
+    });
+  });
+
+  test("FU-468 a title patch built from an earlier copy keeps a notice settled since then", async () => {
+    const parentId = "11111111-1111-4111-8111-111111111111";
+    const child = createManagedAgent({ id: "22222222-2222-4222-8222-222222222222" });
+    child.labels = { "paseo.parent-agent-id": parentId };
+    await storage.applySnapshot(child);
+    const armed = await storage.armFinishNotice(child, parentId, "report-up");
+    await storage.recordFinishNotice(child.id, "turn-1", "finished");
+    await storage.markFinishNoticeSending(child.id, armed.messageId);
+    const copyBeforePatch = await storage.get(child.id);
+    await storage.settleFinishNotice(child.id, armed.messageId, "delivered", "report-up");
+    await storage.upsert({ ...copyBeforePatch!, title: "Patched" });
+    const recovered = new AgentStorage(storagePath, logger);
+    expect(await recovered.get(child.id)).toMatchObject({ title: "Patched" });
     expect(await recovered.getFinishNotice(child.id, armed.messageId)).toMatchObject({
       status: "delivered",
       deliveredBy: "report-up",
