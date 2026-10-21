@@ -31,6 +31,7 @@ import { DEFAULT_RELAY_ENDPOINT } from "@getpaseo/protocol/daemon-endpoints";
 import { registerNativeRadiusScratch } from "./plugins/native-radius-scratch.js";
 import { consumeManagementDispatch } from "./plugins/management.js";
 import { controllerDistribution, type TrustedPlugins } from "./plugins/trusted.js";
+import { packagedInspectorFlags } from "./inspector-flavour.js";
 import { ControllerChannel } from "./plugins/controller-channel.js";
 import { createControllerService } from "./plugins/controller-service.js";
 import { initializeTrustedPlugins } from "./plugins/trusted-bootstrap.js";
@@ -2192,6 +2193,7 @@ export async function createPaseoDaemon(
               );
               distribution.start({
                 automaticResumeEnabled: () => daemonConfigStore.get().autoResumeOnLimit !== false,
+                nodeFlags: packagedInspectorFlags(),
                 intercomRateSettingsFile: path.join(
                   config.paseoHome,
                   "agent-requests",

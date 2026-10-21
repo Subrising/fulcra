@@ -34,6 +34,13 @@ describe("packaged inspector (FU-79)", () => {
     );
   });
 
+  it("bootstrap passes the inspector flags to the controller host (FU-466)", () => {
+    // bootstrap has no unit seam for distribution.start, so this checks the one call site in the source.
+    expect(read("packages/server/src/server/bootstrap.ts")).toContain(
+      "nodeFlags: packagedInspectorFlags(),",
+    );
+  });
+
   it("the Electron fuse for inspector arguments is off and Node mode stays on", () => {
     const config = read("packages/desktop/electron-builder.yml");
     expect(config).toMatch(/enableNodeCliInspectArguments: false/);
