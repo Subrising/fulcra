@@ -18,6 +18,10 @@ const PCM_CHANNELS = 1;
 const PCM_BITS_PER_SAMPLE = 16;
 const DEFAULT_DICTATION_FINAL_TIMEOUT_MS = 10000;
 const DEFAULT_DICTATION_AUTO_COMMIT_SECONDS = 15;
+// Clients send a chunk about every second while recording. A stream with no
+// chunk and no finish for this long is abandoned; close it so the speech
+// worker session (and the worker process) can stop.
+const DEFAULT_DICTATION_IDLE_TIMEOUT_MS = 60_000;
 const DICTATION_FINAL_TIMEOUT_MAX_MS = 5 * 60 * 1000;
 const DICTATION_FINAL_TIMEOUT_PER_PENDING_SEGMENT_MS = 15 * 1000;
 const DICTATION_FINAL_TIMEOUT_PER_PENDING_AUDIO_SECOND_MS = 1500;
@@ -93,6 +97,7 @@ interface DictationStreamState {
   finishSealed: boolean;
   finalSeq: number | null;
   finalTimeout: ReturnType<typeof setTimeout> | null;
+  idleTimeout: ReturnType<typeof setTimeout> | null;
 }
 
 export type DictationStreamOutboundMessage =
@@ -134,6 +139,7 @@ export class DictationStreamManager {
   private readonly language: string;
   private readonly finalTimeoutMs: number;
   private readonly autoCommitSeconds: number;
+  private readonly idleTimeoutMs: number;
   private readonly onIdle: (() => void) | undefined;
   private readonly streams = new Map<string, DictationStreamState>();
 
@@ -145,6 +151,7 @@ export class DictationStreamManager {
     language?: string;
     finalTimeoutMs?: number;
     autoCommitSeconds?: number;
+    idleTimeoutMs?: number;
     onIdle?: () => void;
   }) {
     this.onIdle = params.onIdle;
@@ -154,6 +161,7 @@ export class DictationStreamManager {
     this.resolveStt = toResolver(params.stt);
     this.language = params.language ?? "en";
     this.finalTimeoutMs = params.finalTimeoutMs ?? DEFAULT_DICTATION_FINAL_TIMEOUT_MS;
+    this.idleTimeoutMs = params.idleTimeoutMs ?? DEFAULT_DICTATION_IDLE_TIMEOUT_MS;
     this.autoCommitSeconds =
       params.autoCommitSeconds ??
       parseNonNegativeNumber(process.env.PASEO_DICTATION_AUTO_COMMIT_SECONDS) ??
@@ -260,7 +268,9 @@ export class DictationStreamManager {
       finishSealed: false,
       finalSeq: null,
       finalTimeout: null,
+      idleTimeout: null,
     });
+    this.touchDictationStream(dictationId);
 
     stt.on("committed", ({ segmentId }) => {
       const state = this.streams.get(dictationId);
@@ -349,6 +359,8 @@ export class DictationStreamManager {
       return;
     }
 
+    this.touchDictationStream(params.dictationId);
+
     if (params.format !== state.inputFormat) {
       void this.failAndCleanupDictationStream(
         params.dictationId,
@@ -414,6 +426,10 @@ export class DictationStreamManager {
 
     state.finishRequested = true;
     state.finalSeq = finalSeq;
+    if (state.idleTimeout) {
+      clearTimeout(state.idleTimeout);
+      state.idleTimeout = null;
+    }
 
     if (
       finalSeq >= 0 &&
@@ -485,6 +501,24 @@ export class DictationStreamManager {
 
   public handleCancel(dictationId: string): void {
     this.cleanupDictationStream(dictationId);
+  }
+
+  private touchDictationStream(dictationId: string): void {
+    const state = this.streams.get(dictationId);
+    if (!state || state.finishRequested || this.idleTimeoutMs <= 0) {
+      return;
+    }
+    if (state.idleTimeout) {
+      clearTimeout(state.idleTimeout);
+    }
+    state.idleTimeout = setTimeout(() => {
+      if (this.streams.get(dictationId) !== state) return;
+      this.logger.warn(
+        { dictationId, idleTimeoutMs: this.idleTimeoutMs },
+        "Closing abandoned dictation stream",
+      );
+      this.cleanupDictationStream(dictationId);
+    }, this.idleTimeoutMs);
   }
 
   private emitDictationAck(dictationId: string, ackSeq: number): void {
@@ -574,6 +608,9 @@ export class DictationStreamManager {
     }
     if (state.finalTimeout) {
       clearTimeout(state.finalTimeout);
+    }
+    if (state.idleTimeout) {
+      clearTimeout(state.idleTimeout);
     }
     this.streams.delete(dictationId);
     try {

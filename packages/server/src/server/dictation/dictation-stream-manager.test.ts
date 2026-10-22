@@ -585,3 +585,40 @@ it("closes every dictation stream when one provider cleanup fails", async () => 
   expect(second.closed).toBe(true);
   expect(manager.hasDemand).toBe(false);
 });
+
+it("closes a stream that gets no chunk or finish within the idle timeout", async () => {
+  vi.useFakeTimers();
+  try {
+    const session = new FakeRealtimeSession();
+    let idleCalls = 0;
+    const manager = new DictationStreamManager({
+      logger: pino({ level: "silent" }),
+      emit: () => undefined,
+      sessionId: "s1",
+      stt: new FakeSttProvider(session),
+      idleTimeoutMs: 1000,
+      onIdle: () => {
+        idleCalls += 1;
+      },
+    });
+    const format = "audio/pcm;rate=24000;bits=16";
+
+    await manager.handleStart("d-idle", format);
+    vi.advanceTimersByTime(900);
+    await manager.handleChunk({
+      dictationId: "d-idle",
+      seq: 0,
+      audioBase64: buildPcmBase64(2000, 2400),
+      format,
+    });
+    vi.advanceTimersByTime(900);
+    expect(session.closed).toBe(false);
+
+    vi.advanceTimersByTime(200);
+    expect(session.closed).toBe(true);
+    expect(manager.hasDemand).toBe(false);
+    expect(idleCalls).toBe(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
