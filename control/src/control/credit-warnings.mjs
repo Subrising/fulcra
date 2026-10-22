@@ -7,6 +7,18 @@ import {
   markBillingWarningSent,
   recoverAccountObservations,
 } from "../../orca-organization/server/account-billing.mjs";
+import {
+  pendingRiskNotices,
+  markRiskNoticeSent,
+} from "../../orca-organization/server/accounts.mjs";
+function safeName(value) {
+  const raw = String(value ?? "API account");
+  return /sk-ant-|\bsk-[A-Za-z0-9_-]{16,}|\bgh[opsu]_|github_pat_|\bxox[abp]-|\beyJ[A-Za-z0-9_-]{8,}\.|auth\.json|access_token|refresh_token|[A-Za-z0-9+/_-]{40,}/i.test(
+    raw,
+  )
+    ? "API account"
+    : raw.replace(/[\x00-\x1f\x7f]/g, "").slice(0, 60);
+}
 export function createCreditWarnings(control, root) {
   let flight;
   let dirty = false;
@@ -16,13 +28,7 @@ export function createCreditWarnings(control, root) {
     for (const event of pendingBillingWarnings(root)) {
       const account = pool.accounts.find((row) => row.id === event.accountId);
       const sessions = event.sessionId ? [event.sessionId] : [];
-      const raw = String(account?.name ?? "API account");
-      const name =
-        /sk-ant-|\bsk-[A-Za-z0-9_-]{16,}|\bgh[opsu]_|github_pat_|\bxox[abp]-|\beyJ[A-Za-z0-9_-]{8,}\.|auth\.json|access_token|refresh_token|[A-Za-z0-9+/_-]{40,}/i.test(
-          raw,
-        )
-          ? "API account"
-          : raw.replace(/[\x00-\x1f\x7f]/g, "").slice(0, 60);
+      const name = safeName(account?.name);
       const notices = control.wakes?.apiCreditLow(
         event.id,
         { account: name, accountId: event.accountId, sessions },
@@ -32,6 +38,17 @@ export function createCreditWarnings(control, root) {
         await markBillingWarningSent(root, event.id, notices);
     }
   }
+  // FU-443: paid-while-free notices the pool recorded; one per account and window.
+  async function riskOnce() {
+    for (const n of pendingRiskNotices(root))
+      if (
+        control.wakes?.accountPaidWhileFree(n.key, {
+          account: safeName(n.account),
+          accountId: n.accountId,
+        })
+      )
+        await markRiskNoticeSent(root, n.key);
+  }
   function check() {
     dirty = true;
     if (flight) return flight;
@@ -39,6 +56,7 @@ export function createCreditWarnings(control, root) {
       do {
         dirty = false;
         await checkOnce();
+        await riskOnce();
       } while (dirty);
     })().finally(() => {
       flight = null;
@@ -49,8 +67,17 @@ export function createCreditWarnings(control, root) {
     signature = "";
   function observed() {
     try {
-      const stat = fs.statSync(path.join(accountsDir(root), "billing.json"));
-      return `${stat.ino}:${stat.mtimeMs}:${stat.size}`;
+      return ["billing.json", "accounts.json"]
+        .map((file) => {
+          try {
+            const stat = fs.statSync(path.join(accountsDir(root), file));
+            return `${stat.ino}:${stat.mtimeMs}:${stat.size}`;
+          } catch (error) {
+            if (error.code === "ENOENT") return "";
+            throw error;
+          }
+        })
+        .join("|");
     } catch (error) {
       if (error.code === "ENOENT") return "";
       throw error;

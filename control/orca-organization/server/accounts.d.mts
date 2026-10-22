@@ -27,6 +27,15 @@ export interface Account {
   createdAt: string;
   lastUsedAt: string | null;
 }
+export interface RiskNotice {
+  key: string;
+  accountId: string;
+  account: string;
+  provider: string;
+  window: number;
+  at: string;
+  sent: boolean;
+}
 export interface AccountState {
   v: 1;
   policy: "priority" | "spread";
@@ -34,6 +43,7 @@ export interface AccountState {
   accounts: Account[];
   assignments: Record<string, { accountId: string; provider: string; at: string; ended: boolean }>;
   rotations: any[];
+  riskNotices: RiskNotice[];
   defaults: Record<"claude" | "codex", string | null>;
 }
 export function accountsDir(root: string): string;
@@ -233,3 +243,12 @@ export function waitForApiRuntimes(
   accountId: string,
   timeoutMs?: number,
 ): Promise<void>;
+export function paidWhileFree(
+  s: AccountState,
+  provider: string,
+  account: Account | undefined | null,
+  now?: number,
+  usage?: Record<string, unknown>,
+): RiskNotice | null;
+export function pendingRiskNotices(root: string): RiskNotice[];
+export function markRiskNoticeSent(root: string, key: string): Promise<void>;

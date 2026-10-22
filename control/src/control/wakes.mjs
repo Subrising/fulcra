@@ -299,6 +299,27 @@ export class Wakes {
     if (inserted) this.pump();
     return receipts;
   }
+  // FU-443: a paid API account served a turn while a subscription was free. Only the Main assistant hears it; the
+  // pool keeps one notice per account and window, and the identity makes a repeat a no-op.
+  accountPaidWhileFree(key, payload) {
+    const main = this.has("role_bindings")
+      ? this.db
+          .prepare(
+            "SELECT session FROM role_bindings WHERE role='prime' AND seat='main' AND state='assigned' AND session IS NOT NULL LIMIT 1",
+          )
+          .get()?.session
+      : null;
+    if (!uuid(main)) return false;
+    this.enqueue(
+      { holder: main, seat: null, session: null },
+      "api-while-free",
+      ["api-while-free", key],
+      payload,
+      { pendingOnCapacity: true },
+    );
+    this.pump();
+    return true;
+  }
   accountDown(session, r) {
     if (!r?.from) return 0;
     const holders = [];
@@ -472,6 +493,8 @@ export class Wakes {
         return `- [error] ${who} stopped with an error: "${p.error}". The controller recovers provider auth and usage-limit stops itself where it can; inspect it with role_inspect_session.`;
       if (w.kind === "api-credit-low")
         return `- [API credit] Account "${p.account}" reported a billing error. Credit may be low. Fulcra has not blocked API turns.`;
+      if (w.kind === "api-while-free")
+        return `- [RISK] Paid API account "${p.account}" served a turn while a subscription account was free. Check the account pool: it should use the subscription first.`;
       if (w.kind === "account-down")
         return `- [account down] The token of account "${p.account}" was revoked or is invalid, so its sessions cannot run. ${p.moved ? `Fulcra moved the first stopped session to "${p.moved}"; others move as they stop.` : "No other account was ready."} The owner must sign the account in again (account screen); until then the pool does not use it.`;
       if (w.kind === "account-rotated" && p.revoked)
