@@ -102,10 +102,20 @@ function identitiesStartInWindow(
 }
 
 /**
- * Journal records read from the end, newest first, and the tail page they prove. The page equals
- * the page a full replay gives once the first projected row (which the window edge can cut short)
- * stays out of it and every identity in it starts inside the window.
+ * Journal records read from the end, newest first, and the tail page (or the page before
+ * `beforeSeq`) they prove. The page equals the page a full replay gives once the first projected
+ * row (which the window edge can cut short) stays out of it and every identity in it starts inside
+ * the window. Every row after the cursor is read too, so later updates merge as in a full replay.
  */
+export interface JournalTailWindowOptions {
+  epoch: string;
+  minSeq: number;
+  limit: number;
+  direction: "tail" | "before";
+  /** A "before" page ends below this seq; without it, the page ends at the latest row. */
+  beforeSeq?: number;
+}
+
 export class JournalTailWindow {
   // Latest version of each row; rows below `lowest` are updates of rows outside the window.
   private readonly rows = new Map<number, AgentTimelineRow>();
@@ -113,7 +123,7 @@ export class JournalTailWindow {
   private nextSeq = 0;
   private checkedAt = 0;
 
-  constructor(private readonly options: { epoch: string; minSeq: number; limit: number }) {}
+  constructor(private readonly options: JournalTailWindowOptions) {}
 
   /** False when appends do not fall while reading backwards; the full load reports that fault. */
   add(record: JournalTailRecord): boolean {
@@ -139,7 +149,7 @@ export class JournalTailWindow {
 
   /** `complete` means every record was read, so the page needs no proof. */
   page(complete: boolean): AgentTimelineFetchResult | null {
-    const { epoch, minSeq, limit } = this.options;
+    const { epoch, minSeq, limit, direction, beforeSeq } = this.options;
     const window = [...this.rows.values()]
       .filter((row) => row.seq >= this.lowest)
       .sort((left, right) => left.seq - right.seq);
@@ -148,7 +158,8 @@ export class JournalTailWindow {
     const page = selectProjectedTimelinePage({
       rows: projection.getRows(),
       bounds: { minSeq, maxSeq: this.nextSeq - 1 },
-      direction: "tail",
+      direction,
+      cursorSeq: beforeSeq,
       limit,
     });
     if (!complete && !(page.hasOlder && identitiesStartInWindow(window, page.entries))) return null;
@@ -158,7 +169,7 @@ export class JournalTailWindow {
     for (const row of window) if (containsJournalSeq(ranges, row.seq)) selected.append(row);
     return {
       epoch,
-      direction: "tail",
+      direction,
       reset: false,
       staleCursor: false,
       gap: false,

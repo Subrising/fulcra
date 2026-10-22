@@ -825,6 +825,47 @@ test("retains native message correlation after a manager restart and invalidates
   }
 });
 
+// FU-471: listing the prompts of a stored session restored its provider (a Claude resume replays the whole
+// transcript, up to 1 GB) and read every payload in its journal.
+test("a stored session lists its prompts from the journal without restoring its provider", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-stored-prompts-"));
+  const directory = join(workdir, "timeline");
+  let resumes = 0;
+  const client = new (class extends TestAgentClient {
+    override async resumeSession(): Promise<AgentSession> {
+      resumes++;
+      return new TestAgentSession({ provider: "codex", cwd: workdir });
+    }
+  })();
+  const first = new AgentManager({
+    clients: { codex: client },
+    durableTimelineStore: new FileAgentTimelineStore(directory),
+    logger,
+  });
+  const second = new AgentManager({
+    clients: { codex: client },
+    durableTimelineStore: new FileAgentTimelineStore(directory),
+    logger,
+  });
+  const agent = await first.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    for (const text of ["first ask", "second ask"]) {
+      await first.appendTimelineItem(agent.id, { type: "user_message", text });
+      await first.appendTimelineItem(agent.id, { type: "assistant_message", text: "answer" });
+    }
+    const loaded = await first.getTimelinePromptIndex(agent.id);
+    expect(loaded.prompts.map((prompt) => prompt.preview)).toEqual(["first ask", "second ask"]);
+    await first.closeAgent(agent.id);
+    expect(await second.fetchStoredTimelinePromptIndex(agent.id)).toEqual(loaded);
+    expect(resumes).toBe(0);
+  } finally {
+    await first.closeAgent(agent.id);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("durable writes fence publication without blocking another session", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-write-barrier-"));
   const entered = deferred<void>(),

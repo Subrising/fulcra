@@ -201,7 +201,6 @@ import {
   AgentRunCancellationError,
   type WaitForAgentResult,
 } from "./agent/agent-manager.js";
-import { buildTimelinePromptIndex } from "./agent/timeline-prompt-index.js";
 import { getTimelineFileHistory, listTimelineTurns } from "./agent/timeline-turn-index.js";
 import { ProviderSnapshotManager } from "./agent/provider-snapshot-manager.js";
 import type {
@@ -9478,22 +9477,30 @@ export class Session {
     }
   }
 
+  /** A stored journal-backed agent lists its prompts without restoring its provider. */
+  private async fetchStoredPromptIndex(agentId: string) {
+    if (this.agentManager.getAgent(agentId) !== null) return null;
+    if (!(await this.agentStorage.get(agentId))) return null;
+    return this.agentManager.fetchStoredTimelinePromptIndex(agentId);
+  }
+
+  private async fetchLoadedPromptIndex(agentId: string) {
+    await ensureAgentLoaded(agentId, {
+      agentManager: this.agentManager,
+      agentStorage: this.agentStorage,
+      logger: this.sessionLogger,
+    });
+    return this.agentManager.getTimelinePromptIndex(agentId);
+  }
+
   private async handleAgentTimelineListPromptsRequest(
     msg: Extract<SessionInboundMessage, { type: "agent.timeline.list_prompts.request" }>,
     source?: object,
   ): Promise<void> {
     try {
-      await ensureAgentLoaded(msg.agentId, {
-        agentManager: this.agentManager,
-        agentStorage: this.agentStorage,
-        logger: this.sessionLogger,
-      });
-      const rows = await this.agentManager.getTimelineRows(msg.agentId);
-      const timeline = this.agentManager.fetchTimeline(msg.agentId, {
-        direction: "tail",
-        limit: 1,
-      });
-      const index = buildTimelinePromptIndex(timeline.epoch, rows);
+      const index =
+        (await this.fetchStoredPromptIndex(msg.agentId)) ??
+        (await this.fetchLoadedPromptIndex(msg.agentId));
       this.emitForSource(
         {
           type: "agent.timeline.list_prompts.response",
