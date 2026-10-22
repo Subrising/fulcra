@@ -670,6 +670,7 @@ export class HostRuntimeController {
   private unsubscribeClientHandlers: (() => void) | null = null;
   private probeIntervalHandle: ReturnType<typeof setInterval> | null = null;
   private started = false;
+  private lifecycleVersion = 0;
   private connectionFirstSeenAt = new Map<string, number>();
   private connectionLastProbedAt = new Map<string, number>();
   private switchCandidateConnectionId: string | null = null;
@@ -759,6 +760,7 @@ export class HostRuntimeController {
       return;
     }
     this.started = true;
+    const lifecycleVersion = ++this.lifecycleVersion;
     if (this.isPairingRequired()) return;
     this.trackConnectionFirstSeen();
     if (options?.initialConnection) {
@@ -766,13 +768,13 @@ export class HostRuntimeController {
         connectionId: options.initialConnection.connectionId,
         existingClient: options.initialConnection.existingClient,
       });
-      if (!this.started) {
+      if (!this.started || lifecycleVersion !== this.lifecycleVersion) {
         return;
       }
     }
     await this.runProbeCycleNow();
-    // stop() can run while startup is pending; a stopped controller never probes again.
-    if (!this.started) {
+    // An earlier startup must not create a timer after a close and reopen.
+    if (!this.started || lifecycleVersion !== this.lifecycleVersion) {
       return;
     }
     if (options?.autoProbe !== false && !this.isPairingRequired()) {
@@ -786,6 +788,9 @@ export class HostRuntimeController {
     this.switchRequestVersion += 1;
     this.probeRequestVersion += 1;
     this.started = false;
+    this.lifecycleVersion += 1;
+    this.probeCycleInFlight = null;
+    this.connectionLastProbedAt.clear();
     if (this.probeIntervalHandle) {
       clearInterval(this.probeIntervalHandle);
       this.probeIntervalHandle = null;
@@ -798,16 +803,15 @@ export class HostRuntimeController {
       this.unsubscribeClientHandlers();
       this.unsubscribeClientHandlers = null;
     }
-    if (this.activeClient) {
-      const prev = this.activeClient;
-      this.activeClient = null;
-      await prev.close().catch(() => undefined);
-    }
+    const prev = this.activeClient;
+    this.activeClient = null;
+    prev?.setReconnectEnabled(false);
     this.applyConnectionEvent({ type: "stopped" });
     this.updateSnapshot({
       ...toSnapshotConnectionPatch(this.connectionMachineState, this.connectionEpoch),
       client: null,
     });
+    await prev?.close().catch(() => undefined);
   }
 
   async updateHost(host: HostProfile): Promise<void> {
@@ -846,6 +850,7 @@ export class HostRuntimeController {
       }
     }
     this.trackConnectionFirstSeen();
+    if (!this.started && !this.activeClient) return;
     if (host.preferredConnectionId && previousPreferred !== host.preferredConnectionId) {
       await this.switchToConnection({ connectionId: host.preferredConnectionId });
       return;
@@ -919,6 +924,7 @@ export class HostRuntimeController {
   }
 
   async runProbeCycleNow(): Promise<void> {
+    if (!this.started && this.lifecycleVersion > 0) return;
     if (this.isPairingRequired()) return;
     if (this.probeCycleInFlight) {
       return this.probeCycleInFlight;
@@ -1603,6 +1609,8 @@ interface AgentDirectoryRefreshInput {
 
 export class HostRuntimeStore {
   private controllers = new Map<string, HostRuntimeController>();
+  private appVisible = true;
+  private appVisibilityWaiters = new Set<() => void>();
   private serverListeners = new Map<string, Set<() => void>>();
   private globalListeners = new Set<() => void>();
   private hostListListeners = new Set<() => void>();
@@ -1795,6 +1803,7 @@ export class HostRuntimeStore {
   }
 
   private async bootstrapDefaultLocalhost(): Promise<void> {
+    await this.waitUntilVisible();
     const connection = connectionFromListen(LOCALHOST_FALLBACK_ENDPOINT);
     if (!connection || registryHasConnection(this.hosts, connection)) {
       return;
@@ -1839,6 +1848,7 @@ export class HostRuntimeStore {
   ): Promise<void> {
     let attempt = 0;
     while (!registryHasConnection(this.hosts, connection)) {
+      await this.waitUntilVisible();
       attempt += 1;
       try {
         await this.probeAndUpsertConnection({
@@ -1862,6 +1872,7 @@ export class HostRuntimeStore {
   private async bootstrapInitialConnectionHint(
     hint: InitialDaemonConnectionHint,
   ): Promise<boolean> {
+    await this.waitUntilVisible();
     const connection = connectionFromListen(hint.listen);
     if (!connection) {
       return false;
@@ -2533,10 +2544,12 @@ export class HostRuntimeStore {
       const existing = this.controllers.get(host.serverId);
       if (existing) {
         void existing.updateHost(host);
-        if (initialConnection) {
+        if (initialConnection && this.appVisible) {
           void existing.activateConnection(initialConnection).catch(() => {
             void initialConnection.existingClient.close().catch(() => undefined);
           });
+        } else if (initialConnection) {
+          void initialConnection.existingClient.close().catch(() => undefined);
         }
         continue;
       }
@@ -2582,6 +2595,11 @@ export class HostRuntimeStore {
         this.syncDirectoryConnection(snapshot.serverId);
         this.emit(snapshot.serverId);
       });
+      if (!this.appVisible) {
+        void initialConnection?.existingClient.close().catch(() => undefined);
+        this.emit(host.serverId);
+        continue;
+      }
       void controller
         .start(
           initialConnection
@@ -2819,23 +2837,39 @@ export class HostRuntimeStore {
   }
 
   ensureConnectedAll(options?: { verify?: boolean }): void {
+    if (!this.appVisible) return;
     for (const controller of this.controllers.values()) {
       controller.ensureConnected(options);
     }
   }
 
-  setAppVisible(visible: boolean): void {
-    // Keep normal reconnect backoff running while hidden, for as long as the OS
-    // lets us execute. Foregrounding bypasses that backoff without closing healthy sockets.
-    if (!visible) {
-      void this.replicaCache.flush();
-      return;
+  private async waitUntilVisible(): Promise<void> {
+    while (!this.appVisible) {
+      await new Promise<void>((resolve) => this.appVisibilityWaiters.add(resolve));
     }
+  }
 
-    this.ensureConnectedAll({ verify: true });
+  setAppVisible(visible: boolean): void {
+    if (this.appVisible === visible) return;
+    this.appVisible = visible;
+    if (visible) {
+      for (const resolve of this.appVisibilityWaiters) resolve();
+      this.appVisibilityWaiters.clear();
+    }
+    for (const controller of this.controllers.values()) {
+      if (visible) {
+        void controller.start().catch((error) => {
+          if (this.appVisible) controller.markStartupError(String(error));
+        });
+      } else {
+        void controller.stop();
+      }
+    }
+    if (!visible) void this.replicaCache.flush();
   }
 
   runProbeCycleNow(serverId?: string): Promise<void> {
+    if (!this.appVisible) return Promise.resolve();
     if (serverId) {
       return this.controllers.get(serverId)?.runProbeCycleNow() ?? Promise.resolve();
     }

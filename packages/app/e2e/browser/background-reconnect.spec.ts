@@ -1,5 +1,5 @@
 import { expect, test as base } from "../support/fixtures";
-import type { Page, TestInfo } from "@playwright/test";
+import type { Page, TestInfo, WebSocket } from "@playwright/test";
 import {
   startIsolatedHostDaemon,
   type IsolatedHostDaemon,
@@ -61,26 +61,39 @@ async function openHostOverview(page: Page, daemon: IsolatedHostDaemon): Promise
   await expect(page.getByText("Online", { exact: true })).toBeVisible();
 }
 
-async function restartHostWhileHidden(page: Page, daemon: IsolatedHostDaemon): Promise<void> {
-  const reconnectedSocket = page.waitForEvent("websocket", {
-    timeout: 30_000,
-    predicate: (socket) => new URL(socket.url()).port === String(daemon.port),
-  });
-  await daemon.restart();
-  await reconnectedSocket;
-  await expect(page.getByText("Online", { exact: true })).toBeVisible({ timeout: 30_000 });
-  expect(await page.evaluate(() => document.visibilityState)).toBe("hidden");
-}
-
-test("a hidden tab reconnects after daemon restart and stays connected on refocus", async ({
+test("closes a hidden host connection and reconnects on refocus after daemon restart", async ({
   page,
   reconnectHost,
 }, testInfo) => {
+  const sockets: WebSocket[] = [];
+  page.on("websocket", (socket) => {
+    if (new URL(socket.url()).port === String(reconnectHost.port)) sockets.push(socket);
+  });
   await openHostOverview(page, reconnectHost);
   await captureHost({ page, testInfo, name: "before-hide" });
+  const openSockets = sockets.filter((socket) => !socket.isClosed());
+  expect(openSockets).toHaveLength(1);
+  const closed = Promise.all(openSockets.map((socket) => socket.waitForEvent("close")));
   await setTabVisibility(page, "hidden");
-  await restartHostWhileHidden(page, reconnectHost);
-  await captureHost({ page, testInfo, name: "reconnected-while-hidden" });
+  await closed;
+  await expect(page.getByText("Online", { exact: true })).toHaveCount(0);
+
+  const countWhileHidden = sockets.length;
+  await reconnectHost.restart();
+  expect(sockets).toHaveLength(countWhileHidden);
+  expect(sockets.every((socket) => socket.isClosed())).toBe(true);
+  expect(await page.evaluate(() => document.visibilityState)).toBe("hidden");
+  await captureHost({ page, testInfo, name: "disconnected-while-hidden" });
+
+  const reconnectedSocket = page.waitForEvent("websocket", {
+    timeout: 30_000,
+    predicate: (socket) => new URL(socket.url()).port === String(reconnectHost.port),
+  });
   await refocusConnectedTab(page);
+  await reconnectedSocket;
   await captureHost({ page, testInfo, name: "reconnected-after-refocus" });
+  const countAfterRefocus = sockets.length;
+  await refocusConnectedTab(page);
+  expect(sockets).toHaveLength(countAfterRefocus);
+  expect(sockets.filter((socket) => !socket.isClosed())).toHaveLength(1);
 });

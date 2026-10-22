@@ -897,6 +897,62 @@ describe("HostRuntimeController", () => {
     await probeCycle;
   });
 
+  it("starts one probe timer when a pending startup is closed and reopened", async () => {
+    useHostRuntimeClock();
+    const host = makeHost({ connections: [makeHost().connections[0]!] });
+    const stale =
+      createDeferred<Awaited<ReturnType<HostRuntimeControllerDeps["connectToDaemon"]>>>();
+    const oldClient = makeConnectedProbeClient(20);
+    const clients: FakeDaemonClient[] = [];
+    const deps = makeDeps({ [host.connections[0]!.id]: 20 }, clients);
+    const connect = deps.connectToDaemon;
+    let calls = 0;
+    deps.connectToDaemon = (input) => (++calls === 1 ? stale.promise : connect(input));
+    const controller = new HostRuntimeController({ host, deps });
+    const firstStart = controller.start();
+    await controller.stop();
+    await controller.start();
+    const active = controller.getClient();
+    const timers = vi.getTimerCount();
+    stale.resolve({
+      client: oldClient as unknown as DaemonClient,
+      serverId: host.serverId,
+      hostname: null,
+    });
+    await firstStart;
+    expect(oldClient.isDisposed()).toBe(true);
+    expect(controller.getClient()).toBe(active);
+    expect(vi.getTimerCount()).toBe(timers);
+    await controller.stop();
+    const stoppedCalls = calls;
+    await controller.runProbeCycleNow();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(calls).toBe(stoppedCalls);
+  });
+
+  it("publishes a closed snapshot before a slow close and keeps the reopened client", async () => {
+    const host = makeHost({ connections: [makeHost().connections[0]!] });
+    const clients: FakeDaemonClient[] = [];
+    const controller = new HostRuntimeController({
+      host,
+      deps: makeDeps({ [host.connections[0]!.id]: 20 }, clients),
+    });
+    await controller.start({ autoProbe: false });
+    const oldClient = controller.getClient() as unknown as FakeDaemonClient;
+    const closing = createDeferred<void>();
+    oldClient.close = () => closing.promise;
+    const stop = controller.stop();
+    expect(controller.getClient()).toBeNull();
+    expect(oldClient.reconnectEnabledChanges.at(-1)).toBe(false);
+    await controller.start({ autoProbe: false });
+    const active = controller.getClient();
+    closing.resolve();
+    await stop;
+    expect(controller.getClient()).toBe(active);
+    expect(controller.getSnapshot().connectionStatus).toBe("online");
+    await controller.stop();
+  });
+
   it("ranks the live connection by its heartbeat RTT without pinging it again", async () => {
     useHostRuntimeClock();
     const host = makeHost({ preferredConnectionId: "direct:lan:6767" });
@@ -1670,48 +1726,15 @@ describe("HostRuntimeController", () => {
 
 describe("HostRuntimeStore", () => {
   it.each(["active", "inactive", "background"] as const)(
-    "keeps reconnect enabled through inactive/background and resumes immediately (mounted %s)",
+    "connects only while the app is visible (mounted %s)",
     async (currentState) => {
-      const relay = (suffix: string): HostConnection => ({
-        id: `relay:relay-${suffix}.paseo.sh:443`,
-        type: "relay",
-        relayEndpoint: `relay-${suffix}.paseo.sh:443`,
-        daemonPublicKeyB64: `pk_${suffix}`,
-        deviceId: "dev_fixture",
-      });
-      const hostAConnection = relay("a");
-      const hostBConnection = relay("b");
-      const hostA = makeHost({
-        serverId: "srv_a",
-        connections: [hostAConnection],
-        preferredConnectionId: hostAConnection.id,
-      });
-      const hostB = makeHost({
-        serverId: "srv_b",
-        connections: [hostBConnection],
-        preferredConnectionId: hostBConnection.id,
-      });
-      const clientA = new FakeDaemonClient();
-      const clientB = new FakeDaemonClient();
-      clientA.setConnectionState({ status: "connected" });
-      clientB.setConnectionState({ status: "connected" });
-      const store = humanConfirmedStore({
-        claimRelayDevice: async () => "dev_testdevice000001",
-        storage: createMemoryHostRuntimeStorage(),
-        deps: {
-          createClient: () => {
-            throw new Error("initial clients are supplied");
-          },
-          connectToDaemon: async () => {
-            throw new Error("single-connection hosts reuse their active clients");
-          },
-          getClientId: async () => "cid_test_runtime",
-        },
-      });
-
-      let changeAppState: (state: AppStateStatus) => void = () => {
-        throw new Error("AppState listener not registered");
-      };
+      useHostRuntimeClock();
+      const host = makeHost();
+      const clients: FakeDaemonClient[] = [];
+      const deps = makeDeps(Object.fromEntries(host.connections.map((c) => [c.id, 20])), clients);
+      const connect = vi.spyOn(deps, "connectToDaemon");
+      const store = humanConfirmedStore({ storage: createMemoryHostRuntimeStorage(), deps });
+      let changeAppState!: (state: AppStateStatus) => void;
       const unbind = bindHostRuntimeAppState(store, {
         currentState,
         addEventListener: (_event, listener) => {
@@ -1719,53 +1742,80 @@ describe("HostRuntimeStore", () => {
           return { remove: () => {} };
         },
       });
-      store.syncHosts([hostA, hostB], {
-        initialConnectionByServerId: new Map([
-          [
-            hostA.serverId,
-            {
-              connectionId: hostAConnection.id,
-              existingClient: clientA as unknown as DaemonClient,
-            },
-          ],
-          [
-            hostB.serverId,
-            {
-              connectionId: hostBConnection.id,
-              existingClient: clientB as unknown as DaemonClient,
-            },
-          ],
-        ]),
-      });
-      await waitForHostOnline(store, hostA.serverId);
-      await waitForHostOnline(store, hostB.serverId);
-      expect(clientA.reconnectEnabledChanges.at(-1)).toBe(true);
-      expect(clientB.reconnectEnabledChanges.at(-1)).toBe(true);
-      changeAppState("inactive");
-      expect(clientA.reconnectEnabledChanges.at(-1)).toBe(true);
-      expect(clientB.reconnectEnabledChanges.at(-1)).toBe(true);
-      changeAppState("background");
-      expect(clientA.reconnectEnabledChanges.at(-1)).toBe(true);
-      expect(clientB.reconnectEnabledChanges.at(-1)).toBe(true);
-      expect(clientA.getConnectionState()).toEqual({ status: "connected" });
-      expect(clientB.getConnectionState()).toEqual({ status: "connected" });
-      expect(clientA.ensureConnectedCalls).toBe(0);
-      expect(clientB.ensureConnectedCalls).toBe(0);
-      clientA.setConnectionState({ status: "disconnected", reason: "backgrounded" });
-      clientB.setConnectionState({ status: "disconnected", reason: "backgrounded" });
-
+      store.syncHosts([host]);
+      if (currentState !== "active") {
+        await vi.advanceTimersByTimeAsync(120_000);
+        expect(connect).not.toHaveBeenCalled();
+      }
       changeAppState("active");
-      expect(clientA.reconnectEnabledChanges.at(-1)).toBe(true);
-      expect(clientB.reconnectEnabledChanges.at(-1)).toBe(true);
-      expect(clientA.ensureConnectedCalls).toBe(1);
-      expect(clientA.connectionVerifications).toBe(1);
-      expect(clientB.connectionVerifications).toBe(1);
-      expect(clientB.ensureConnectedCalls).toBe(1);
-      expect(store.getSnapshot(hostA.serverId)?.connectionStatus).toBe("online");
-      expect(store.getSnapshot(hostB.serverId)?.connectionStatus).toBe("online");
-
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.getSnapshot(host.serverId)?.connectionStatus).toBe("online");
+      changeAppState("background");
+      const calls = connect.mock.calls.length;
+      expect(store.getClient(host.serverId)).toBeNull();
+      expect(clients.every((client) => client.getConnectionState().status === "disconnected")).toBe(
+        true,
+      );
+      // Registry updates and manual probes cannot restart hidden connections.
+      store.syncHosts([{ ...host, label: "Updated label" }]);
+      await store.runProbeCycleNow();
+      store.ensureConnectedAll({ verify: true });
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(connect).toHaveBeenCalledTimes(calls);
+      changeAppState("active");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(connect.mock.calls.length).toBeGreaterThan(calls);
+      expect(store.getSnapshot(host.serverId)?.connectionStatus).toBe("online");
       unbind();
       store.syncHosts([]);
+    },
+  );
+
+  it.each(["hint", "fallback", "override"] as const)(
+    "%s bootstrap reads wait for an open app",
+    async (source) => {
+      useHostRuntimeClock();
+      const previousOverride = process.env.EXPO_PUBLIC_LOCAL_DAEMON;
+      if (source === "override") process.env.EXPO_PUBLIC_LOCAL_DAEMON = "fixture:6789";
+      else delete process.env.EXPO_PUBLIC_LOCAL_DAEMON;
+      const read = vi.fn(async () => {
+        throw Error("Fixture unavailable");
+      });
+      const store = humanConfirmedStore({
+        storage: createMemoryHostRuntimeStorage(),
+        deps: {
+          createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
+          connectToDaemon: read,
+          getClientId: async () => "fixture",
+          readInitialConnectionHint: () => (source === "hint" ? { listen: "fixture:6789" } : null),
+        },
+      });
+      try {
+        store.setAppVisible(false);
+        const boot = store.boot();
+        await vi.advanceTimersByTimeAsync(120_000);
+        expect(read).not.toHaveBeenCalled();
+        store.setAppVisible(true);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(read.mock.calls.length).toBeGreaterThan(0);
+        store.setAppVisible(false);
+        const attempts = read.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(120_000);
+        expect(read).toHaveBeenCalledTimes(attempts);
+        if (source === "override") {
+          store.setAppVisible(true);
+          await vi.advanceTimersByTimeAsync(0);
+          expect(read.mock.calls.length).toBeGreaterThan(attempts);
+          store.setAppVisible(false);
+          await vi.advanceTimersByTimeAsync(1000);
+        }
+        await boot;
+      } finally {
+        store.setAppVisible(false);
+        store.syncHosts([]);
+        if (previousOverride === undefined) delete process.env.EXPO_PUBLIC_LOCAL_DAEMON;
+        else process.env.EXPO_PUBLIC_LOCAL_DAEMON = previousOverride;
+      }
     },
   );
 

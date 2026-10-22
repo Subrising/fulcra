@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Text, TextInput, View } from "react-native";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "./read-on-open";
 import { type PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
 import {
@@ -102,8 +102,6 @@ export function ProjectGovernance({
     queryKey: ["orca-role-project", props.host?.id, project.id],
     enabled: grouped,
     retry: false,
-    refetchInterval: 30000,
-    refetchIntervalInBackground: false,
     queryFn: () => readProject({ projectId: project.id }),
   });
   const d = view.data;
@@ -124,8 +122,6 @@ export function ProjectGovernance({
     queryKey: ["orca-session-requests", props.host?.id],
     enabled: grouped,
     retry: false,
-    refetchInterval: 30000,
-    refetchIntervalInBackground: false,
     queryFn: () => readRequests({}),
   });
   const mine = (requests.data?.requests ?? []).filter((r) => r.seat === project.id);
@@ -135,8 +131,6 @@ export function ProjectGovernance({
     queryKey: ["orca-role-allowances", props.host?.id],
     enabled: grouped,
     retry: false,
-    refetchInterval: 30000,
-    refetchIntervalInBackground: false,
     queryFn: () => readAllowances({}),
   });
   const allowance = (allowances.data?.allowances ?? []).find((a) => a.seat === project.id) ?? null;

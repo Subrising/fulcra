@@ -2,7 +2,7 @@
 // team-tree.ts). Reads the same cached fleet, role and project observations as Leadership, so nothing is read twice.
 import { createContext, useContext, useState } from "react";
 import { Pressable, Text, View } from "react-native";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "./read-on-open";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
 import { WorkButton } from "./work-button";
@@ -205,7 +205,7 @@ export function TeamTreeSection(props: Pick<PluginSurfaceProps, "theme" | "host"
   const readFleet = useContract(fleetRpc),
     readProjects = useContract(projectsRpc),
     readRoles = useContract(roleDirectoryRpc);
-  const options = { retry: false, refetchInterval: 15000, refetchIntervalInBackground: false };
+  const options = { retry: false };
   const fleet = useQuery({
     queryKey: ["orca-fleet", hostId],
     queryFn: () => readFleet({}),

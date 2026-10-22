@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Linking, Pressable, Text, TextInput, View } from "react-native";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "./read-on-open";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
 import { WorkButton } from "./work-button";
@@ -392,7 +392,6 @@ export function JobProgress({
   const job = useQuery({
     queryKey: ["deploy-job", jobId],
     queryFn: () => read({ jobId }),
-    refetchInterval: (q) => (q.state.data?.status === "running" || !q.state.data ? 1500 : false),
     retry: 2,
   });
   const j = job.data;
@@ -431,6 +430,7 @@ export function JobProgress({
                 : "Deployed"
             : "Stopped"}
       </Text>
+      <WorkButton theme={theme} label="Refresh status" onPress={() => void job.refetch()} />
       {j.steps.map((s, i) => (
         <View key={i} style={{ gap: 2 }}>
           <Text style={{ color: tone[s.state] }}>
@@ -884,10 +884,6 @@ export function DeploySection({
   const overview = useQuery({
     queryKey: ["deploy-overview", host?.id],
     queryFn: () => readOverview({}),
-    refetchInterval: (q) =>
-      q.state.data?.environments.some((e) => e.runningJobId || e.state === "connecting")
-        ? 3000
-        : 30000,
     retry: false,
   });
   useEffect(() => {
@@ -1018,7 +1014,6 @@ export function useDeployWaiting(host: PluginSurfaceProps["host"]): DeployPlan[]
   const overview = useQuery({
     queryKey: ["deploy-overview", host?.id],
     queryFn: () => readOverview({}),
-    refetchInterval: 30000,
     retry: false,
   });
   return (overview.data?.plans ?? []).filter(

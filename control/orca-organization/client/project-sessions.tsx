@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Text, View } from "react-native";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "./read-on-open";
 import * as pluginClient from "@getpaseo/plugin/client";
 import { EMPTY_NATIVE } from "./live-map-model";
 import { freshness } from "./work-map-model";

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "./read-on-open";
 import { useContract } from "./use-contract";
 import { trackerViewRpc, integrationsRpc } from "../shared/cc/connectors";
 import { Button, type Colors, type Theme } from "./organisation-ui";
@@ -274,8 +274,6 @@ export function useLaunchpad({
     queries: projects.map((p) => ({
       queryKey: ["fulcra-tracker-view", hostId, p.id],
       queryFn: () => readView({ projectId: p.id }),
-      refetchInterval: 60000,
-      refetchIntervalInBackground: false,
       retry: false,
     })),
   });

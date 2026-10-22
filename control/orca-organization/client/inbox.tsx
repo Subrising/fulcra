@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { inboxHeadline, humanInboxItems } from "./inbox-model";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "./read-on-open";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
 import {
@@ -237,8 +237,6 @@ export function InboxSurface({
   const query = useQuery({
     queryKey: ["orca-organization", "inbox"],
     queryFn: () => read({}),
-    refetchInterval: 30000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const [allActivity, setAllActivity] = useState(false);

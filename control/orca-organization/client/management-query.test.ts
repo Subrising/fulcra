@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { QueryClient } from "@tanstack/react-query";
-import { observedList, SCREEN_POLL_MS } from "./management-query";
+import { observedList } from "./management-query";
 test("both controller and browser outages retain the same saved roles and observation time", async () => {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: Infinity } },
@@ -49,7 +49,4 @@ test("confirmed refusals clear retry identity; lost replies and unrelated respon
     retainRequestIdentity(current, { status: "refused", messageId: "different-request" }),
     current,
   );
-});
-test("screen polls run every 30 seconds (FU-457)", () => {
-  assert.equal(SCREEN_POLL_MS, 30000);
 });

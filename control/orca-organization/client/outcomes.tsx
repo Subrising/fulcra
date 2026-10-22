@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "./read-on-open";
 import { type PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
 import { Pressable, Text, View } from "react-native";
@@ -25,8 +25,6 @@ export function OutcomePanel({
   const query = useQuery({
     queryKey: ["orca-outcome", taskId],
     queryFn: () => read({ taskId }),
-    refetchInterval: 30000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const d = query.data,

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useRpc } from "@getpaseo/plugin/client";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "./read-on-open";
 import { Pressable, Text, TextInput, View } from "react-native";
 import { recoveryRpc, recoveryActionRpc, type RecoveryActionInput } from "../shared/recovery";
 import { lastGood } from "./last-good";
@@ -43,8 +43,6 @@ export function RecoveryBanner({
     queryKey: ["orca-recovery", host?.id],
     queryFn: () => read({}),
     staleTime: 10000,
-    refetchInterval: 30000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const [open, setOpen] = useState(false),

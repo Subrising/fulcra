@@ -1,5 +1,5 @@
 // Synthetic component tests for the Fulcra work map (run through verify-ui.mjs). Not a device test.
-import { WorkMapSurface, OVERVIEW_POLL_MS, PROJECT_POLL_MS } from "./work-map";
+import { WorkMapSurface } from "./work-map";
 import { OrganizationSurface as HomeSurface } from "./organization";
 import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
@@ -328,7 +328,7 @@ test("a failed refresh keeps the last map and says it is retained", async () => 
   await screen.findByRole("button", { name: /Main assistant delivery/ });
   fail = true;
   fireEvent.click(screen.getByRole("button", { name: "Refresh work map" }));
-  await screen.findByText(/^Last updated just now · Fulcra did not answer; retrying$/);
+  await screen.findByText(/^Last updated just now · Fulcra did not answer; refresh to try again$/);
   await screen.findByText(/STALE · retained/);
   assert(screen.getByRole("button", { name: /Main assistant delivery/ }), "retained, not dropped");
 });
@@ -365,9 +365,7 @@ test("an empty installation says where roles are assigned, without offering to a
   );
 });
 
-test("freeze stops updates and says so; polling cadence is 15 s overview / 30 s project", async () => {
-  assert.equal(OVERVIEW_POLL_MS, 15000);
-  assert.equal(PROJECT_POLL_MS, 30000);
+test("the map reads on open and keeps its freeze controls", async () => {
   serve();
   const { client } = mount(h(WorkMapSurface, props));
   await screen.findByRole("button", { name: /Main assistant delivery/ });
@@ -378,10 +376,10 @@ test("freeze stops updates and says so; polling cadence is 15 s overview / 30 s 
     assert(client.getQueryCache().find({ queryKey: ["orca-work-map-project", "mini", P2] })),
   );
   const options = (key) => client.getQueryCache().find({ queryKey: key }).observers[0].options;
-  assert.equal(options(["orca-work-map", "mini"]).refetchInterval, 15000);
-  assert.equal(options(["orca-work-map", "mini"]).refetchIntervalInBackground, false);
-  assert.equal(options(["orca-work-map-project", "mini", P2]).refetchInterval, 30000);
-  assert.equal(options(["orca-work-map-project", "mini", P2]).refetchIntervalInBackground, false);
+  assert.equal(options(["orca-work-map", "mini"]).refetchInterval, false);
+  assert.equal(options(["orca-work-map", "mini"]).refetchOnMount, "always");
+  assert.equal(options(["orca-work-map-project", "mini", P2]).refetchInterval, false);
+  assert.equal(options(["orca-work-map-project", "mini", P2]).refetchOnMount, "always");
   fireEvent.click(screen.getByRole("button", { name: "Freeze updates" }));
   await screen.findByText("Frozen");
   assert(screen.getByRole("button", { name: "Resume updates" }));
