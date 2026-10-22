@@ -11,6 +11,7 @@ import {
   ensureSileroVadModel,
   SherpaSileroTurnDetectionProvider,
 } from "./sherpa/silero-vad-provider.js";
+import { SileroSpeechSpanDetector } from "./sherpa/silero-speech-spans.js";
 import type {
   LocalSpeechWorkerConfig,
   LocalSpeechWorkerRequest,
@@ -28,6 +29,7 @@ const logger = pino({
 
 const sttEngines = new Map<string, LocalSttEngine>();
 const sttProviders = new Map<string, SherpaOnnxParakeetSTT>();
+const speechSpanDetectors = new Map<string, Promise<SileroSpeechSpanDetector>>();
 const ttsProviders = new Map<string, SherpaOnnxTTS>();
 const sessions = new Map<string, StreamingTranscriptionSession | TurnDetectionSession>();
 const unsubscribeBySessionId = new Map<string, Array<() => void>>();
@@ -194,6 +196,28 @@ function trackTurnDetectionSession(sessionId: string, session: TurnDetectionSess
   unsubscribeBySessionId.set(sessionId, []);
 }
 
+// The native VAD is not reentrant, but sessions decode on the worker's single
+// thread, so one detector per models dir and sample rate is enough.
+function getSpeechSpanDetector(
+  modelsDir: string,
+  sampleRate: number,
+): Promise<SileroSpeechSpanDetector> {
+  const key = `${modelsDir}:${sampleRate}`;
+  const existing = speechSpanDetectors.get(key);
+  if (existing) {
+    return existing;
+  }
+  const created = ensureSileroVadModel(modelsDir, logger)
+    .catch((err: unknown) => {
+      logger.warn({ err }, "Failed to provision Silero VAD model, falling back to bundled");
+      return undefined;
+    })
+    .then((modelPath) => new SileroSpeechSpanDetector({ modelPath, sampleRate }));
+  speechSpanDetectors.set(key, created);
+  created.catch(() => speechSpanDetectors.delete(key));
+  return created;
+}
+
 async function createSession(
   message: Extract<LocalSpeechWorkerRequest, { type: "session.create" }>,
 ) {
@@ -218,7 +242,10 @@ async function createSession(
   const session =
     message.kind === "voiceStt"
       ? getSttProvider(message.config, "voice").createSession({ logger })
-      : new SherpaParakeetRealtimeTranscriptionSession({ engine });
+      : new SherpaParakeetRealtimeTranscriptionSession({
+          engine,
+          speechSpans: await getSpeechSpanDetector(message.config.modelsDir, engine.sampleRate),
+        });
   trackTranscriptionSession(message.sessionId, session);
   await session.connect();
   sessions.set(message.sessionId, session);
