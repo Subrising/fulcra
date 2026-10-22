@@ -1,6 +1,6 @@
 import { useState, useSyncExternalStore } from "react";
 import { ScrollView, Text, View } from "react-native";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "./read-on-open";
 import type { PluginAgentPanelProps, PluginClientContext } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
 import { WorkButton } from "./work-button";
@@ -49,8 +49,6 @@ export function SwitchAccountPanel({
   const query = useQuery({
     queryKey: key,
     queryFn: () => read({ agentId }),
-    refetchInterval: 15000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const notice = useSyncExternalStore(subscribe, () => notices.get(agentId) ?? null);

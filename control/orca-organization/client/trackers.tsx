@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ScrollView, Text, TextInput, View } from "react-native";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "./read-on-open";
 import { useRpc, type PluginSurfaceProps } from "@getpaseo/plugin/client";
 import type { RpcOutput } from "@getpaseo/plugin";
 import { WorkButton } from "./work-button";
@@ -88,8 +88,6 @@ export function TrackersSurface({
     queryFn: () => read({}),
     retry: false,
     staleTime: 30000,
-    refetchInterval: 60000,
-    refetchIntervalInBackground: false,
   });
   const [chosen, choose] = useState<string | null>(null);
   // J0: a stalled read keeps the last good result (memory only) and says so in one plain notice.
@@ -112,7 +110,9 @@ export function TrackersSurface({
         </Text>
       ) : (
         query.isError && (
-          <Text style={{ color: c.foreground }}>Fulcra is not answering yet; retrying.</Text>
+          <Text style={{ color: c.foreground }}>
+            Fulcra is not answering yet; refresh to try again.
+          </Text>
         )
       )}
       {directory.data && !directory.data.available && (
@@ -159,8 +159,6 @@ export function TrackerProjectPanel({
   const query = useQuery({
     queryKey: ["orca-trackers-project", project.id],
     queryFn: () => read({ projectId: project.id }),
-    refetchInterval: 60000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const [linking, setLinking] = useState<string | null>(null),
@@ -244,7 +242,9 @@ export function TrackerProjectPanel({
           {last.notice}
         </Text>
       ) : (
-        query.isError && <Text style={text}>Fulcra is not answering yet; retrying.</Text>
+        query.isError && (
+          <Text style={text}>Fulcra is not answering yet; refresh to try again.</Text>
+        )
       )}
       {notice && <Text style={text}>{notice}</Text>}
       {view?.items.map((item) => {

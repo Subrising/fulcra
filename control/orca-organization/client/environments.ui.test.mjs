@@ -1,5 +1,6 @@
 // Fulcra J8 Environments behaviour with synthetic component adapters (not a Paseo/phone UI test). The test ids
 // (env-row-<key>, env-promote, env-checklist) are the ones the brief fixes. Nothing here can run a promotion.
+import { JobProgress } from "./deploy";
 import { EnvironmentsSurface } from "./environments";
 import { environmentsRpc } from "../shared/cc/environment";
 import test, { afterEach } from "node:test";
@@ -174,7 +175,9 @@ test("a promotion waiting for approval shows what changes, readiness and how to 
 test("a stalled read keeps the last view and says so", async () => {
   serve(view({ stale: true, error: "organization.environments did not finish within 20 s" }));
   mount();
-  await screen.findByText("This view may be out of date. Fulcra is slow to answer; retrying.");
+  await screen.findByText(
+    "This view may be out of date. Fulcra is slow to answer; refresh to try again.",
+  );
   assert.ok(screen.getByTestId("env-row-next"));
 });
 
@@ -228,4 +231,45 @@ test("an app without the map navigation shows no map button", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "Deploy a version" }));
   await screen.findByText(/What to deploy to Test/);
   assert.equal(screen.queryByRole("button", { name: "Open architecture map" }), null);
+});
+
+test("deployment status reads on open and updates when the user refreshes", async () => {
+  let reads = 0;
+  const finished = [];
+  setHandler(async (name) => {
+    assert.equal(name, "organization.deploy-job");
+    reads++;
+    return {
+      id: "job",
+      kind: "deploy",
+      environmentId: "environment",
+      status: reads === 1 ? "running" : "succeeded",
+      startedAt: "2026-10-22T00:00:00Z",
+      finishedAt: null,
+      steps: [],
+      log: [],
+      message: null,
+      result: null,
+    };
+  });
+  const client = new QueryClient({ defaultOptions: { queries: { gcTime: 0 } } });
+  clients.push(client);
+  const mounted = render(
+    h(
+      QueryClientProvider,
+      { client },
+      h(JobProgress, {
+        theme,
+        jobId: "job",
+        onFinished: (job) => finished.push(job.status),
+      }),
+    ),
+  );
+  await screen.findByText("Deploying…");
+  assert.equal(reads, 1);
+  fireEvent.click(screen.getByRole("button", { name: "Refresh status" }));
+  await screen.findByText("Deployed");
+  await waitFor(() => assert.deepEqual(finished, ["succeeded"]));
+  assert.equal(reads, 2);
+  mounted.unmount();
 });

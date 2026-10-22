@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ScrollView, Text, TextInput, View } from "react-native";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "./read-on-open";
 import { lastGood } from "./last-good";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { randomId } from "./random-id";
@@ -200,8 +200,6 @@ function ProjectTracking({
   const view = useQuery({
     queryKey: ["fulcra-tracker-view", hostId, project.id],
     queryFn: () => readView({ projectId: project.id }),
-    refetchInterval: 60000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const mappings = useQuery({

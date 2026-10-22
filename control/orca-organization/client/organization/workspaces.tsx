@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { ScrollView, Text, View } from "react-native";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "../read-on-open";
 import { type PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { SettingsInput, SettingsGroup, SettingsSection } from "@getpaseo/plugin/client/ui";
 import { useWorkspacesForm } from "./use-workspaces-form";

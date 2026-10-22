@@ -1,6 +1,6 @@
 import { intakeProvider } from "./creation-config.mjs";
 import { useEffect } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "../read-on-open";
 import { getPaseoClient } from "@getpaseo/plugin/client";
 import { sessionDefaultsRpc } from "../../shared/session-defaults";
 import { useContract } from "../use-contract";

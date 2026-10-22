@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Text, View } from "react-native";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "./read-on-open";
 import { type PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
 import { outcomeRpc, outcomeArtifactRpc } from "../shared/outcomes";
@@ -27,7 +27,6 @@ export function WorkBrief({
   const query = useQuery({
     queryKey: ["orca-work-brief", host?.id, taskId],
     queryFn: () => read({ taskId }),
-    refetchInterval: frozen ? false : 30000,
     refetchOnWindowFocus: !frozen,
     retry: false,
   });

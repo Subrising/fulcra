@@ -2,7 +2,7 @@
 // ("Fresh start at 14:02 · handoff"). Both read the same recovery status the Recovery panel polls.
 import { useState } from "react";
 import { Text, View } from "react-native";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "./read-on-open";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
 import { WorkButton } from "./work-button";
@@ -21,8 +21,6 @@ function useRecoveryStatus(hostId: string | undefined) {
     queryKey: ["orca-recovery", hostId],
     queryFn: () => read({}),
     staleTime: 10000,
-    refetchInterval: 30000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   return query.data?.status === "observed" ? query.data.recovery : undefined;

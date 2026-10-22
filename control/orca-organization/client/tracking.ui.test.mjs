@@ -77,7 +77,9 @@ test("a stalled read keeps the last good copy for the same host, aged from its o
   mount({ id: "host-a" });
   await screen.findByText("Trackers for Customer app");
   assert(
-    await screen.findByText(/^Last updated 12 min ago · Fulcra is slow to answer; retrying$/),
+    await screen.findByText(
+      /^Last updated 12 min ago · Fulcra is slow to answer; refresh to try again$/,
+    ),
     "the age is the observation's, not the time it arrived",
   );
   assert.equal(

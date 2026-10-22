@@ -2,7 +2,7 @@ import { CleanupSurface } from "./worktree-lifecycle";
 import { Component, useState, type ReactNode } from "react";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "./read-on-open";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { ManagementPanel } from "./management";
 import { TaskControls, UsagePanel } from "./tasks";
@@ -412,8 +412,6 @@ export function TaskSurface({ theme, layout, navigation, host }: PluginSurfacePr
     queryFn: () => read({ taskId }),
     enabled: !!taskId,
     staleTime: 10000,
-    refetchInterval: 30000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const d = query.data,

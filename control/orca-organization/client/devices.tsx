@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { ScrollView, Text, View } from "react-native";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "./read-on-open";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
 import { devicesRpc, protectionText } from "../shared/cc/devices";
@@ -19,8 +19,6 @@ export function DevicesSurface({ theme, layout }: Pick<PluginSurfaceProps, "them
   const query = useQuery({
     queryKey: ["orca-organization", "devices"],
     queryFn: () => read({}),
-    refetchInterval: 60000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const d = query.data,

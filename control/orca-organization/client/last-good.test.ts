@@ -29,7 +29,7 @@ test("a read that misses its deadline shows the last good result with the plain 
     lastGood({ data: undefined, isError: true, error: DEADLINE }, key, { now: T0 + 3 * MIN }),
     {
       data: { n: 2 },
-      notice: "Last updated 3 min ago · Fulcra is slow to answer; retrying",
+      notice: "Last updated 3 min ago · Fulcra is slow to answer; refresh to try again",
       fromMemory: true,
     },
   );
@@ -37,7 +37,7 @@ test("a read that misses its deadline shows the last good result with the plain 
     lastGood({ data: undefined, isError: true, error: new Error("socket closed") }, key, {
       now: T0 + 3 * MIN,
     }).notice,
-    "Last updated 3 min ago · Fulcra did not answer; retrying",
+    "Last updated 3 min ago · Fulcra did not answer; refresh to try again",
   );
   assert.equal(
     lastGood({ data: undefined, isError: false, error: null }, key, { now: T0 + MIN }).notice,
@@ -73,7 +73,7 @@ test("a failure that arrives as data never replaces the last good result", () =>
   );
   assert.deepEqual(stalled, {
     data: { status: "observed" },
-    notice: "Last updated 2 min ago · Fulcra is slow to answer; retrying",
+    notice: "Last updated 2 min ago · Fulcra is slow to answer; refresh to try again",
     fromMemory: true,
   });
   assert.deepEqual(recall(key), { data: { status: "observed" }, at: T0 });
@@ -87,7 +87,7 @@ test("an errored query whose own cache still holds data is shown with the notice
     }),
     {
       data: { n: 1 },
-      notice: "Last updated 5 min ago · Fulcra is slow to answer; retrying",
+      notice: "Last updated 5 min ago · Fulcra is slow to answer; refresh to try again",
       fromMemory: true,
     },
   );
@@ -109,7 +109,7 @@ test("memory is bounded, in-process only, and ages read plainly", () => {
   );
   assert.equal(
     stallNotice(T0, T0 + 30000, DEADLINE),
-    "Last updated just now · Fulcra is slow to answer; retrying",
+    "Last updated just now · Fulcra is slow to answer; refresh to try again",
   );
 });
 
@@ -123,7 +123,7 @@ test("J0-9: the age comes from the observation itself when the payload carries o
   assert.equal(
     lastGood({ data: undefined, isError: true, error: DEADLINE }, key, { now: T0 + 2 * MIN })
       .notice,
-    "Last updated 12 min ago · Fulcra is slow to answer; retrying",
+    "Last updated 12 min ago · Fulcra is slow to answer; refresh to try again",
   );
   // A payload claiming a future time never makes a result look newer than when it arrived.
   lastGood(

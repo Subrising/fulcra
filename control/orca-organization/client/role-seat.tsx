@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Text, TextInput, View } from "react-native";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "./read-on-open";
 import { type PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
 import { taskManagementRpc } from "../shared/management";
