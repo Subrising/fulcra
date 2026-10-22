@@ -541,19 +541,23 @@ test("explicit close records are retained while no screen is mounted", async (t)
       if (check()) return;
       watcher.close();
       reject(Error("No saved close record after the file event"));
-    }, 2000);
+    }, 10000);
     const watcher = fs.watch(root, (_event, name) => {
       // Directory events can coalesce. Read after the project's observer saves its result.
       if (name === "history.json") setImmediate(check);
     });
   });
-  // Give the native watch registration one event-loop turn before the write.
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  fs.writeFileSync(
-    file + ".next",
-    `${header}\n| FU-1 | Task | FIX | Worker | DONE | Closed at 2026-10-16T02:00:00Z; PR 12 | brief |`,
-  );
-  fs.renameSync(file + ".next", file);
+  // A native watch can start delivering events some time after fs.watch returns (inotify and
+  // FSEvents under load), so write the close record again until one write is observed.
+  const close = `${header}\n| FU-1 | Task | FIX | Worker | DONE | Closed at 2026-10-16T02:00:00Z; PR 12 | brief |`;
+  let seen = false;
+  const stop = () => (seen = true);
+  observed.then(stop, stop);
+  for (let attempt = 0; attempt < 100 && !seen; attempt++) {
+    fs.writeFileSync(file + ".next", close);
+    fs.renameSync(file + ".next", file);
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+  }
   await observed;
   const saved = JSON.parse(fs.readFileSync(historyFile, "utf8"));
   assert.equal(saved.rows["fixture:FU-1"].status, "DONE");

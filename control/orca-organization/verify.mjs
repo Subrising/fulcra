@@ -574,6 +574,13 @@ try {
     { cwd: root, stdio: ["ignore", output, output], timeout: 300000 },
   );
 } catch {
+  // Show the failing tests in the log: the TAP file is not kept after a CI run.
+  const failed = fs
+    .readFileSync(tapFile, "utf8")
+    .split("\n")
+    .filter((l) => /^\s*(not ok|error:|expected:|actual:|message:)/.test(l))
+    .slice(0, 80);
+  console.error(failed.join("\n"));
   throw new Error("Plugin source tests failed; see " + tapFile);
 } finally {
   fs.closeSync(output);
