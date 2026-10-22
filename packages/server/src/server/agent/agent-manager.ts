@@ -135,6 +135,7 @@ import {
 import { TrustedPlugins } from "../plugins/trusted.js";
 import type { InputSequence, TrustedInputKind } from "@getpaseo/plugin/server";
 import { projectTimelineRows } from "./timeline-projection.js";
+import { buildTimelinePromptIndex, type TimelinePromptIndex } from "./timeline-prompt-index.js";
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/index.js";
 import { AutomaticInputLimits } from "../limit-resume/automatic-input.js";
@@ -3144,12 +3145,32 @@ export class AgentManager {
   async getTimelineRows(id: string): Promise<AgentTimelineRow[]> {
     this.requireAgent(id);
     if (this.durableTimelineStore) {
-      return projectTimelineRows({
-        rows: await this.durableTimelineStore.getCommittedRows(id),
-        mode: "projected",
-      }).map((entry) => Object.assign({ seq: entry.seqEnd }, entry));
+      return projectCommittedRows(await this.durableTimelineStore.getCommittedRows(id));
     }
     return this.timelineStore.getRows(id);
+  }
+
+  /** The prompt list of a loaded agent. A journal reads user messages only, not every payload. */
+  async getTimelinePromptIndex(id: string): Promise<TimelinePromptIndex> {
+    this.requireAgent(id);
+    const store = this.durableTimelineStore;
+    const rows = store
+      ? projectCommittedRows(
+          await (store.getCommittedPromptRows?.(id) ?? store.getCommittedRows(id)),
+        )
+      : this.timelineStore.getRows(id);
+    return buildTimelinePromptIndex(this.timelineStore.getEpoch(id), rows);
+  }
+
+  /** The prompt list of an unloaded journal-backed agent, read without restoring its provider. */
+  async fetchStoredTimelinePromptIndex(agentId: string): Promise<TimelinePromptIndex | null> {
+    const store = this.durableTimelineStore;
+    if (this.agents.has(agentId) || !store?.fetchExistingCommitted) return null;
+    const page = await store.fetchExistingCommitted(agentId, { limit: 1 });
+    if (!page || this.agents.has(agentId)) return null;
+    const rows = await (store.getCommittedPromptRows?.(agentId) ?? store.getCommittedRows(agentId));
+    if (this.agents.has(agentId)) return null;
+    return buildTimelinePromptIndex(page.epoch, projectCommittedRows(rows));
   }
 
   fetchTimeline(id: string, options?: AgentTimelineFetchOptions): AgentTimelineFetchResult {
@@ -11000,5 +11021,11 @@ function isSameBackgroundWork(
     left.source === right.source &&
     left.since === right.since &&
     left.kinds.join(",") === right.kinds.join(",")
+  );
+}
+
+function projectCommittedRows(rows: readonly AgentTimelineRow[]): AgentTimelineRow[] {
+  return projectTimelineRows({ rows, mode: "projected" }).map((entry) =>
+    Object.assign({ seq: entry.seqEnd }, entry),
   );
 }

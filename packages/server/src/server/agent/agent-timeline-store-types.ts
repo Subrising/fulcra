@@ -82,6 +82,8 @@ export interface AgentTimelineStore {
   ): Promise<AgentTimelineFetchResult | null>;
   getLatestCommittedSeq(agentId: string): Promise<number>;
   getCommittedRows(agentId: string): Promise<AgentTimelineRow[]>;
+  /** The committed user messages, read without the payloads of other rows. */
+  getCommittedPromptRows?(agentId: string): Promise<AgentTimelineRow[]>;
   getLastItem(agentId: string): Promise<AgentTimelineItem | null>;
   getLastAssistantMessage(agentId: string): Promise<string | null>;
   deleteAgent(agentId: string): Promise<void>;
