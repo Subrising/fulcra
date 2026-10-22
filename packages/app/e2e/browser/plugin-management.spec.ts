@@ -500,8 +500,10 @@ async function toggleRemoveAndReinstallLocalPlugin(page: Page, directory: string
 
   await installPlugin(page, directory);
   await expect(page.getByLabel("e2e-plugin running")).toBeVisible();
+  expect(await page.evaluate(() => sessionStorage.getItem("paseo-plugin-cleanups"))).toBe("7");
   await gotoAppShell(page);
-  await openContribution(page, "Plugin v3", "Plugin v3 cleanup 7");
+  // Closing the page disconnects the host and disposes its plugin once more.
+  await openContribution(page, "Plugin v3", "Plugin v3 cleanup 8");
 }
 
 async function prepareCompactGitInstall(page: Page, pluginEnvironment: PluginEnvironment) {

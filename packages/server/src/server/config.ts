@@ -647,6 +647,7 @@ export function resolveConfigFromPersisted(
     reviveOnRestart: persistedSettings.reviveOnRestart,
     idleSleepMinutes: persistedSettings.idleSleepMinutes,
     idleSleepProviders: persistedSettings.idleSleepProviders,
+    autoArchiveClosedAfterHours: persistedSettings.autoArchiveClosedAfterHours,
     autoResumeOnLimit: persistedSettings.autoResumeOnLimit,
     appendSystemPrompt,
     terminalProfiles,
@@ -711,6 +712,7 @@ function orchestrationSettings(persisted: PersistedConfig) {
     reviveOnRestart: daemon?.reviveOnRestart ?? true,
     idleSleepMinutes: daemon?.idleSleepMinutes ?? 20,
     idleSleepProviders: daemon?.idleSleepProviders ?? ["claude"],
+    autoArchiveClosedAfterHours: daemon?.autoArchiveClosedAfterHours ?? 24,
   };
 }
 

@@ -1,5 +1,5 @@
 import { useCallback, useReducer, useState } from "react";
-import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
+import { skipToken, useQuery, useQueryClient } from "./read-on-open";
 import { z } from "zod";
 import type { GraphIntent } from "./work-graph";
 

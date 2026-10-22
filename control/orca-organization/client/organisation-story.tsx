@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Text, View } from "react-native";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "./read-on-open";
 import { useContract } from "./use-contract";
 import { projectBriefRpc, type ProjectBrief } from "../shared/cc/brief";
 import type { Owner } from "../shared/cc/remit";
@@ -44,8 +44,6 @@ export function ProjectStory({
   const query = useQuery({
     queryKey: ["orca-organisation", hostId, "brief", projectId],
     queryFn: () => read({ projectId }),
-    refetchInterval: 60000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const [details, setDetails] = useState(false);

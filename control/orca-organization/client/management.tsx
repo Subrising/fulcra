@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "./read-on-open";
 import { Pressable, Text, TextInput, View } from "react-native";
 import { taskManagementRpc, type ManagementInput } from "../shared/management";
 import { fleetRpc } from "../shared/fleet";
@@ -10,7 +10,7 @@ import { ManagementSection } from "./management-section";
 import { WorkButton } from "./work-button";
 import { LeadershipPanel } from "./leadership";
 import { SupervisionPanel } from "./supervision";
-import { observedList, retainRequestIdentity, SCREEN_POLL_MS } from "./management-query";
+import { observedList, retainRequestIdentity } from "./management-query";
 import { NativeQueuedInstruction } from "./native-queued-instruction";
 type SessionRole = "planning" | "orchestration" | "implementation";
 // "Default" sends no role: the session gets the installation's ordinary defaults, exactly as before roles existed.
@@ -44,8 +44,6 @@ export function ManagementPanel({
     queryKey: ["orca-fleet", host?.id],
     queryFn: () => readFleet({}),
     staleTime: 5000,
-    refetchInterval: SCREEN_POLL_MS,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const nodes = fleet.data?.nodes.filter((n) => n.task === taskId) ?? [];
@@ -87,8 +85,6 @@ export function ManagementPanel({
   const health = useQuery({
     queryKey: ["orca-management-health"],
     queryFn: checkConnection,
-    refetchInterval: SCREEN_POLL_MS,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const [clock, setClock] = useState(Date.now());
@@ -100,8 +96,6 @@ export function ManagementPanel({
     queryKey: ["orca-management", taskId],
     queryFn: () => observedList(() => manage({ action: "list" })),
     staleTime: 5000,
-    refetchInterval: SCREEN_POLL_MS,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const [provider, setProvider] = useState<"claude" | "codex">("claude"),

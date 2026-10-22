@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { DeployNeedsYou, useDeployWaiting } from "./deploy";
 import { Pressable, ScrollView, Text, View } from "react-native";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "./read-on-open";
 import * as pluginClient from "@getpaseo/plugin/client";
 import { EMPTY_NATIVE } from "./live-map-model";
 import { freshness } from "./work-map-model";
@@ -14,7 +14,6 @@ import { inboxRpc } from "../shared/cc/decision";
 import { recoveryRpc } from "../shared/recovery";
 import { RecoveryBanner } from "./recovery";
 import { PendingQuestions, questionCardsSupported, questionServerId } from "./pending-questions";
-import { OVERVIEW_POLL_MS } from "./work-map";
 import { DecisionCard, HeldCard, viaFor } from "./inbox";
 import { Button, Notice, Pill, type Colors, type Theme } from "./organisation-ui";
 import {
@@ -367,26 +366,23 @@ export function TodaySurface({
     readBrief = useContract(projectBriefRpc),
     readInbox = useContract(inboxRpc),
     readRecovery = useRpc(recoveryRpc);
-  const poll = { refetchIntervalInBackground: false, retry: false } as const;
+  const options = { retry: false } as const;
   // Same query keys as the Organisation tab, the Inbox and the recovery banner, so Today adds no second poll of them.
   const map = useQuery({
     queryKey: ["orca-work-map", hostId],
     queryFn: () => readMap({}),
-    refetchInterval: OVERVIEW_POLL_MS,
-    ...poll,
+    ...options,
   });
   const inbox = useQuery({
     queryKey: ["orca-organization", "inbox"],
     queryFn: () => readInbox({}),
-    refetchInterval: 30000,
-    ...poll,
+    ...options,
   });
   const recovery = useQuery({
     queryKey: ["orca-recovery", hostId],
     queryFn: () => readRecovery({}),
     staleTime: 10000,
-    refetchInterval: 30000,
-    ...poll,
+    ...options,
   });
   const ids = (map.data?.projects ?? []).map((p) => p.projectId);
   const active = new Set(
@@ -397,8 +393,7 @@ export function TodaySurface({
       queryKey: ["orca-fleet", hostId, "project", projectId],
       queryFn: () => readFleet({ projectId }),
       enabled: active.has(projectId),
-      refetchInterval: 30000,
-      ...poll,
+      ...options,
     })),
   });
   // Sessions outside every project (a main assistant) also ask questions: the whole host's fleet, read under the
@@ -406,15 +401,13 @@ export function TodaySurface({
   const hostFleet = useQuery({
     queryKey: ["orca-fleet", hostId],
     queryFn: () => readFleet({}),
-    refetchInterval: 30000,
-    ...poll,
+    ...options,
   });
   const briefs = useQueries({
     queries: ids.map((projectId) => ({
       queryKey: ["orca-organisation", hostId, "brief", projectId],
       queryFn: () => readBrief({ projectId }),
-      refetchInterval: 60000,
-      ...poll,
+      ...options,
     })),
   });
   const [now, setNow] = useState(() => Date.now());

@@ -1,3 +1,4 @@
+import { useOperationPause } from "./read-on-open";
 import { useState, type ReactNode } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
@@ -8,7 +9,7 @@ import {
   cleanupRetentionRpc,
 } from "../shared/worktree-lifecycle";
 import type { CleanupPreview } from "../shared/worktree-lifecycle";
-const pause = () => new Promise((resolve) => setTimeout(resolve, 1500));
+
 const size = (n: number) =>
   n < 1048576
     ? `${Math.round(n / 1024)} KB`
@@ -20,6 +21,7 @@ export function CleanupSurface({
   layout,
   header,
 }: Pick<PluginSurfaceProps, "theme" | "layout"> & { header?: ReactNode }) {
+  const pause = useOperationPause(1500);
   const preview = useContract(cleanupPreviewRpc),
     apply = useContract(cleanupApplyRpc),
     setting = useContract(cleanupRetentionRpc);

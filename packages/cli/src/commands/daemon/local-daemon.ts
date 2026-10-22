@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { startDaemonInstance, resolvePaseoHome } from "@getpaseo/server/daemon-control";
+import { packagedInspectorFlags } from "@getpaseo/server/inspector-flavour";
 const require = createRequire(import.meta.url);
 function resolveServerRunnerFromDir(currentDir: string): string | null {
   const packageJsonPath = path.join(currentDir, "package.json");
@@ -40,6 +41,12 @@ function resolveDaemonRunnerEntry(): string {
   throw new Error("Unable to resolve @getpaseo/server package root for daemon runner");
 }
 
+/** Node args for the supervisor. A packaged supervisor gets the inspector flags first (FU-466). */
+export function daemonRunnerArgs(entry: string): string[] {
+  if (entry.endsWith(".ts")) return ["--import", "tsx", entry];
+  return [...packagedInspectorFlags().filter((flag) => flag.length > 0), entry];
+}
+
 export async function launchLocalDaemon(options: {
   home: string;
   timeoutMs?: number;
@@ -54,7 +61,7 @@ export async function launchLocalDaemon(options: {
     return await startDaemonInstance({
       home: resolvePaseoHome({ PASEO_HOME: options.home }),
       command: process.execPath,
-      args: [...(entry.endsWith(".ts") ? ["--import", "tsx"] : []), entry],
+      args: daemonRunnerArgs(entry),
       env: process.env,
       mode: options.foreground ? "deployment" : "managed",
       foreground: options.foreground,

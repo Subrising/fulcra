@@ -54,6 +54,11 @@ import { lineStoreOf } from "./reporting-lines.js";
 // A clean stop saves every open session as "closed", so the stop first records them in $PASEO_HOME/revive-at-boot.json.
 // After a crash the records still say "idle"/"running". daemon.reviveOnRestart = false turns it off.
 //
+// A reopened session is not loaded, so the agent manager does not list it. The stop and live records therefore also
+// take the boot's own ReviveCarry: the sessions the boot reopened that are still open, and, until revive has finished,
+// the cut-off turns and background wakes it has not handled yet. A second restart during or after revive keeps them
+// (FU-460).
+//
 // A crash (a watchdog SIGKILL) writes no stop record. While the daemon runs, startLiveRecorder() therefore keeps a
 // crash-safe copy of the same record in $PASEO_HOME/revive-live.json. Boot uses it only when revive-at-boot.json is
 // missing, and deletes it either way. A clean stop deletes it too, so it exists only after an unclean stop.
@@ -131,6 +136,59 @@ export async function backgroundIdsForStop(input: {
       input.logger,
     );
     return new Set(previous?.backgroundIds);
+  }
+}
+
+/**
+ * What this boot reopened and still owes, for the next stop and live records. Reads storage only: it loads nothing.
+ * A session closed by hand, archived or internal since the boot is not carried.
+ */
+export class ReviveCarry {
+  private candidates: string[] = [];
+  private pendingInterrupted = new Set<string>();
+  private pendingBackground = new Set<string>();
+
+  /** The boot's whole reopen list and the turns and wakes revive has still to handle. */
+  set(input: {
+    openIds: readonly string[];
+    interrupted: readonly string[];
+    background: readonly string[];
+  }) {
+    this.candidates = [...new Set([...input.openIds, ...input.interrupted, ...input.background])];
+    this.pendingInterrupted = new Set(input.interrupted);
+    this.pendingBackground = new Set(input.background);
+  }
+
+  /** The item is handled: a later record no longer carries it as pending. */
+  done(id: string): void {
+    this.pendingInterrupted.delete(id);
+    this.pendingBackground.delete(id);
+  }
+
+  /** The loaded sessions plus the carried sessions that are open but not loaded. */
+  async withUnloaded(
+    loaded: readonly LiveAgent[],
+    agentStorage: Pick<AgentStorage, "get">,
+  ): Promise<LiveAgent[]> {
+    const loadedIds = new Set(loaded.map((agent) => agent.id));
+    const extra: LiveAgent[] = [];
+    for (const id of this.candidates) {
+      if (loadedIds.has(id)) continue;
+      const stored = await agentStorage.get(id);
+      if (!stored || stored.archivedAt || stored.internal || stored.lastStatus === "closed")
+        continue;
+      extra.push({
+        id,
+        lifecycle: this.pendingInterrupted.has(id) ? "running" : "idle",
+        hasBackgroundWork: this.pendingBackground.has(id),
+      });
+    }
+    return [...loaded, ...extra];
+  }
+
+  /** Background wakes not yet sent. A loaded session's own flag does not cover them. */
+  pendingBackgroundIds(): string[] {
+    return [...this.pendingBackground];
   }
 }
 
@@ -268,6 +326,8 @@ export interface ReviveDeps {
   localServerId: string | null;
   logger: Logger;
   isEnabled: () => boolean;
+  /** Filled by the boot for the stop and live records (FU-460). */
+  carry?: ReviveCarry;
   now?: () => Date;
   settleMs?: number;
   gapMs?: number;
@@ -443,13 +503,10 @@ export async function reviveAfterRestart(
   };
   const isLoaded = (id: string) => agentManager.getAgent(id) !== null;
 
-  result.reopened = await agentStorage.reopenAfterRestart(
-    (stopRecord?.openIds ?? []).filter(eligible).filter(notLaterThanStop),
-    isLoaded,
-  );
+  const openIds = (stopRecord?.openIds ?? []).filter(eligible).filter(notLaterThanStop);
+  result.reopened = await agentStorage.reopenAfterRestart(openIds, isLoaded);
   await fs.rm(file, { force: true });
   await fs.rm(liveFile, { force: true });
-  deps.onSessionsReady?.();
   const interrupted = [
     ...new Set([
       // The live record can be older than the crash: a turn it lists may have ended since. Only the boot's own
@@ -464,6 +521,8 @@ export async function reviveAfterRestart(
     (id) => eligible(id) && notLaterThanStop(id),
     logger,
   );
+  // Before the live recorder starts, so that no record is written without the set.
+  signalReady(deps, { openIds, interrupted, background });
   logger.info(
     { reopened: result.reopened, interrupted },
     `Revive on restart: ${result.reopened.length} reopened, ${interrupted.length} cut-off turn(s) to continue`,
@@ -477,8 +536,18 @@ export async function reviveAfterRestart(
     background,
     wakePrompt: formatBackgroundWakePrompt(restartedAt),
     gapMs: deps.gapMs ?? STAGGER_MS,
-    run: (item, wakePrompt) =>
-      continueOne(item.id, byId.get(item.id)!, sessions, result, logger, item.mode, wakePrompt),
+    run: async (item, wakePrompt) => {
+      await continueOne(
+        item.id,
+        byId.get(item.id)!,
+        sessions,
+        result,
+        logger,
+        item.mode,
+        wakePrompt,
+      );
+      deps.carry?.done(item.id);
+    },
   });
   logger.info(
     {
@@ -490,6 +559,15 @@ export async function reviveAfterRestart(
   );
   await tellLeads(deps, restartedAt, result.closed, byId);
   return result;
+}
+
+/** The boot's set goes to the carry first, so no live record is written without it. */
+function signalReady(
+  deps: ReviveDeps,
+  pending: { openIds: string[]; interrupted: string[]; background: string[] },
+): void {
+  deps.carry?.set(pending);
+  deps.onSessionsReady?.();
 }
 
 async function continueOne(

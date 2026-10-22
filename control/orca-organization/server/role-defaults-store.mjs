@@ -57,11 +57,9 @@ export const SEED = Object.freeze({
     codex: sel("codex/gpt-6.1-sol", "medium"),
   },
 });
-// Update-7 W3 (owner, 01:29Z): the default permission mode for new sessions, per provider. Claude `auto` is the model
-// classifier (not bypassPermissions, which is never offered); Codex `auto-review` preserves its review policy. The
-// choices are what Settings offers and what a stored value may be.
+// Settings validates each stored permission mode against these choices.
 export const MODE_CHOICES = Object.freeze({
-  claude: Object.freeze(["auto", "acceptEdits", "default", "plan"]),
+  claude: Object.freeze(["auto", "acceptEdits", "default", "plan", "bypassPermissions"]),
   codex: Object.freeze(["full-access", "auto-review", "auto"]),
 });
 export const SEED_MODES = Object.freeze({ claude: "auto", codex: "auto-review" });

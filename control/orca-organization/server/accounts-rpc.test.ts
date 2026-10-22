@@ -7,7 +7,8 @@ import os from "node:os";
 import path from "node:path";
 import { createAccountHandlers } from "./accounts-rpc";
 import { withManagementInvocation } from "./management-context.mjs";
-import { readRoleDefaults } from "./role-defaults-store.mjs";
+import { roleDefaultsHook } from "./session-defaults";
+import { readRoleDefaults, hookRoles } from "./role-defaults-store.mjs";
 import { addAccount, readAccounts, setAccount, update } from "./accounts.mjs";
 
 const scratch = () =>
@@ -143,14 +144,14 @@ test("W3: Settings shows the default permission modes and their choices, and edi
   // The Codex default is auto-review since 0.2.5 (SEED_MODES); full-access is a choice, never the seed.
   assert.deepEqual(view.defaults.modes, { claude: "auto", codex: "auto-review" });
   assert.deepEqual(view.defaults.modeChoices.codex, ["full-access", "auto-review", "auto"]);
-  assert.ok(!view.defaults.modeChoices.claude.includes("bypassPermissions"));
+  assert.ok(view.defaults.modeChoices.claude.includes("bypassPermissions"));
   assert.equal(
     (await h.settings({ mode: { provider: "codex", modeId: "full-access" } }, paseo as any)).ok,
     true,
   );
   assert.deepEqual(readRoleDefaults(root).modes, { claude: "auto", codex: "full-access" });
   const bad = await h.settings(
-    { mode: { provider: "claude", modeId: "bypassPermissions" } } as any,
+    { mode: { provider: "claude", modeId: "unknown-mode" } } as any,
     paseo as any,
   );
   assert.equal(bad.ok, false);
@@ -1040,5 +1041,40 @@ test("account switch and takeover skip archived native sessions without changing
     assert.match(result.message!, /archived/i);
     assert.deepEqual(readAccounts(root), before);
     assert.equal(calls, 0);
+  }
+});
+
+test("Settings accepts Bypass and a new lead receives the saved mode", async () => {
+  const root = scratch();
+  try {
+    const h = handlers(root);
+    assert.deepEqual(
+      await h.settings({ mode: { provider: "claude", modeId: "bypassPermissions" } }, paseo),
+      { ok: true, message: null },
+    );
+    const hook = roleDefaultsHook(
+      () => hookRoles(readRoleDefaults(root)),
+      () => readRoleDefaults(root).modes,
+    );
+    const request = {
+      config: { provider: "claude", cwd: root },
+      labels: { "fulcra.role": "orchestration" },
+    };
+    const created = await hook({ request }, { paseo });
+    assert.equal(created.config.modeId, "bypassPermissions");
+    const explicit = await hook(
+      { request: { ...request, config: { ...request.config, modeId: "plan" } } },
+      { paseo },
+    );
+    assert.equal(explicit.config.modeId, "plan");
+    const saved = fs.readFileSync(path.join(root, "accounts", "defaults.json"), "utf8");
+    assert.equal(
+      (await h.settings({ mode: { provider: "claude", modeId: "bypassPermissions" } }, paseo, true))
+        .ok,
+      false,
+    );
+    assert.equal(fs.readFileSync(path.join(root, "accounts", "defaults.json"), "utf8"), saved);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });

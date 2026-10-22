@@ -2,14 +2,16 @@ import { EventEmitter } from "node:events";
 import { v4 as uuidv4 } from "uuid";
 
 import type { StreamingTranscriptionSession } from "../../../speech-provider.js";
-import { pcm16lePeakAbs, pcm16leToFloat32 } from "../../../audio.js";
+import { decodeDictationFinal, decodeDictationPartial } from "./dictation-decode.js";
 import { SherpaOfflineRecognizerEngine } from "./sherpa-offline-recognizer.js";
+import type { SpeechSpanDetector } from "./silero-speech-spans.js";
 
 export class SherpaParakeetRealtimeTranscriptionSession
   extends EventEmitter
   implements StreamingTranscriptionSession
 {
   private readonly engine: SherpaOfflineRecognizerEngine;
+  private readonly speechSpans: SpeechSpanDetector;
   private connected = false;
 
   public readonly requiredSampleRate: number;
@@ -23,9 +25,14 @@ export class SherpaParakeetRealtimeTranscriptionSession
   private pendingDecode = false;
   private readonly minDecodeIntervalMs: number;
 
-  constructor(params: { engine: SherpaOfflineRecognizerEngine; minDecodeIntervalMs?: number }) {
+  constructor(params: {
+    engine: SherpaOfflineRecognizerEngine;
+    speechSpans: SpeechSpanDetector;
+    minDecodeIntervalMs?: number;
+  }) {
     super();
     this.engine = params.engine;
+    this.speechSpans = params.speechSpans;
     this.requiredSampleRate = this.engine.sampleRate;
     this.minDecodeIntervalMs = params.minDecodeIntervalMs ?? 350;
   }
@@ -60,8 +67,11 @@ export class SherpaParakeetRealtimeTranscriptionSession
 
     void (async () => {
       try {
-        await this.maybeDecode(true);
-        const finalText = this.lastPartialText;
+        const finalText = decodeDictationFinal({
+          engine: this.engine,
+          detector: this.speechSpans,
+          pcm16: this.pcm16,
+        });
         const segmentId = this.currentSegmentId!;
         const previousSegmentId = this.previousSegmentId;
 
@@ -130,34 +140,6 @@ export class SherpaParakeetRealtimeTranscriptionSession
   }
 
   private async decodeNow(): Promise<string> {
-    if (this.pcm16.length === 0) {
-      return "";
-    }
-
-    const peak = pcm16lePeakAbs(this.pcm16);
-    const peakFloat = peak / 32768.0;
-    const targetPeak = 0.6;
-    const maxGain = 50;
-    const gain =
-      peakFloat > 0 && peakFloat < targetPeak ? Math.min(maxGain, targetPeak / peakFloat) : 1;
-
-    const stream = this.engine.createStream();
-    try {
-      const floatSamples = pcm16leToFloat32(this.pcm16, gain);
-      this.engine.acceptWaveform(stream, this.engine.sampleRate, floatSamples);
-      this.engine.recognizer.decode(stream);
-      const result = this.engine.recognizer.getResult(stream);
-      return String(
-        (typeof result === "object" && result && "text" in result ? result.text : undefined) ??
-          result ??
-          "",
-      ).trim();
-    } finally {
-      try {
-        stream.free?.();
-      } catch {
-        // ignore
-      }
-    }
+    return decodeDictationPartial(this.engine, this.pcm16);
   }
 }

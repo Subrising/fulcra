@@ -37,11 +37,16 @@ History loading reads JSONL one record at a time. The journal cache keeps byte l
 compact projection and file-index facts. Page reads load only contributing records from disk.
 The original journal remains authoritative. Active sessions can still keep their displayed timeline.
 
-A plain tail fetch (no cursor or turn, limit 1 to 1,000) of an unloaded journal of 1 MiB or more
-does not open the journal: it reads records backward from the end of the last segment, at most
-8 MiB, and keeps the page in the row cache until a segment changes. Tool calls and plugin rows
-merge with earlier rows of the same identity, so the tail read falls back to a full load when the
-page holds one whose start it has not read. Plugins must not poll timelines for activity; use the
+A tail fetch or a `before` page (no turn, limit 1 to 1,000) of an unloaded journal of 1 MiB or
+more does not open the journal: it reads records backward from the end of the last segment, at
+most 8 MiB. Tool calls and plugin rows merge with earlier rows of the same identity, so the tail
+read falls back to a full load when the page holds one whose start it has not read. A `before`
+page far from the end also falls back.
+
+Every fetch result, and the prompt list, stays in the row cache keyed by the request and the size,
+inode and mtime of each segment, so a repeat read of an unchanged journal reads no file. Unused
+journal metadata is often larger than its cache allowance, so without this a sweep over many idle
+sessions replayed each journal on every pass. Plugins must not poll timelines for activity; use the
 agent record and turn events.
 
 The process shares a 128 MiB input allowance across full transcript and journal replays.

@@ -15,7 +15,7 @@ import type { GraphPage } from "./work-graph-layout";
 import type { ReactNode } from "react";
 import { historyRpc, type HistoryCursor } from "../shared/history";
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "./read-on-open";
 import { useRpc, type PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
 import { View, Text, Pressable, ScrollView, TextInput } from "react-native";
@@ -35,7 +35,6 @@ import {
   appLinkTargets,
   fleetReadState,
 } from "./fleet-live";
-import { FLEET_AUTO_RETRY_LIMIT } from "./fleet-live-model";
 import { AppLinkSections } from "./fleet-app-link";
 type Node = Fleet["nodes"][number];
 const NO_NODES: Node[] = [];
@@ -88,8 +87,6 @@ export function Activity({
   const query = useQuery({
     queryKey: ["orca-activity-history-messages", host?.id, node.task, node.id, cursor],
     queryFn: () => read({ taskId: node.task, sessionId: node.id, cursor, includeMessages: true }),
-    refetchInterval: frozen || cursor ? false : 15000,
-    refetchIntervalInBackground: false,
     refetchOnWindowFocus: !frozen && !cursor,
     retry: false,
     gcTime: 0,
@@ -381,8 +378,6 @@ function GraphMode({
     queryKey: ["orca-trackers", props.host?.id, subjects],
     queryFn: () => readTrackers({ subjects }),
     enabled: showTrackers && subjects.length > 0,
-    refetchInterval: frozen ? false : 60000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const native = props.layout.platform === "android" || props.layout.platform === "ios";
@@ -492,7 +487,6 @@ export function FleetSurface(props: PluginSurfaceProps & { onTask: (id: string) 
   const directory = useQuery({
     queryKey: ["orca-projects", props.host?.id],
     queryFn: async () => projectsRpc.output.parse(await readProjects({})),
-    refetchInterval: frozen ? false : 30000,
     refetchOnWindowFocus: !frozen,
     retry: false,
   });
@@ -512,12 +506,10 @@ export function FleetSurface(props: PluginSurfaceProps & { onTask: (id: string) 
   const hostList = useQuery({
     queryKey: ["orca-fleet-hosts", props.host?.id],
     queryFn: () => readHosts({}),
-    refetchInterval: frozen ? false : 60000,
     refetchOnWindowFocus: !frozen,
     retry: false,
   });
-  // Bounded retries: after FLEET_AUTO_RETRY_LIMIT failures in a row with nothing to show, the page stops refetching
-  // on its own and says why; "Try again" starts over. Counted per view (host, search, page).
+  // Count failures per view. "Try again" starts a new read.
   const fleetKey = JSON.stringify([props.host?.id, serverSearch, host, offset]);
   const errorsAtSuccess = useRef(new Map<string, number>());
   const failuresOf = (errorCount: number) =>
@@ -525,14 +517,6 @@ export function FleetSurface(props: PluginSurfaceProps & { onTask: (id: string) 
   const query = useQuery({
     queryKey: ["orca-fleet", props.host?.id, serverSearch, host, offset],
     queryFn: () => read({ search: serverSearch, host, offset }),
-    refetchInterval: (q) =>
-      frozen ||
-      (q.state.status === "error" &&
-        !q.state.data &&
-        failuresOf(q.state.errorUpdateCount) >= FLEET_AUTO_RETRY_LIMIT)
-        ? false
-        : 15000,
-    refetchIntervalInBackground: false,
     refetchOnWindowFocus: !frozen,
     refetchOnMount: !frozen,
     retry: false,
@@ -647,7 +631,7 @@ export function FleetSurface(props: PluginSurfaceProps & { onTask: (id: string) 
             (stale ? (d ? "May be out of date" : readState.message) : "Updating every 15s"))}
         {d ? " · across your saved sessions" : ""}
       </Text>
-      {(readState.kind === "retrying" || readState.kind === "failed") && (
+      {readState.kind === "failed" && (
         <View
           testID="fleet-read-error"
           style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 12 }}

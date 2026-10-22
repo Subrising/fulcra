@@ -1,4 +1,4 @@
-import { useQueries } from "@tanstack/react-query";
+import { useQueries } from "../read-on-open";
 import { getPaseoClient, useHosts } from "@getpaseo/plugin/client";
 import { readOrganizationNativeCatalog } from "./native-catalog.mjs";
 export function useNativeCatalog() {

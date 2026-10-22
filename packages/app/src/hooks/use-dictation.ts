@@ -14,6 +14,9 @@ import {
   type UseDictationResult,
 } from "./use-dictation.shared";
 
+// Capture this long after the user stops, so the last word is not cut off.
+const DICTATION_STOP_TAIL_MS = 400;
+
 // Dictation method changes need the owner's approval (decision log, 10 Oct).
 // Phone composer dictation records PCM and sends it to the host for transcription.
 // use-dictation.lock.test.ts fails if that changes.
@@ -366,7 +369,7 @@ export function useDictation(options: UseDictationOptions): UseDictationResult {
     const attemptId = attemptGuardRef.current.next();
 
     try {
-      await audio.stop();
+      await audio.stop({ tailMs: DICTATION_STOP_TAIL_MS });
       attemptGuardRef.current.assertCurrent(attemptId);
 
       setStatus("uploading");
@@ -375,6 +378,8 @@ export function useDictation(options: UseDictationOptions): UseDictationResult {
 
       const finalSeq = senderRef.current?.getFinalSeq() ?? -1;
       if (finalSeq < 0) {
+        // The daemon may already hold a stream (and a speech session) for this attempt.
+        senderRef.current?.cancel();
         handleStreamingTranscriptionSuccess("", generateMessageId());
         return;
       }

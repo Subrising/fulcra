@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "./read-on-open";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
 import { workMapProjectRpc, workMapRpc } from "../shared/work-map";
@@ -19,7 +19,7 @@ import { ProjectSessions } from "./project-sessions";
 import { ProjectStory } from "./organisation-story";
 import { RemitSheet } from "./organisation-remit";
 import { Button, Notice, SectionTitle, type Theme } from "./organisation-ui";
-import { WorkMapSurface, OVERVIEW_POLL_MS } from "./work-map";
+import { WorkMapSurface } from "./work-map";
 
 /**
  * Fulcra › Organisation (J1; CC-PLAN §5). Your primes, each with its remit in one line, then their projects, each
@@ -87,22 +87,16 @@ export function OrganisationSurface(
   const map = useQuery({
     queryKey: ["orca-work-map", hostId],
     queryFn: () => readMap({}),
-    refetchInterval: OVERVIEW_POLL_MS,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const fleet = useQuery({
     queryKey: ["orca-fleet", hostId],
     queryFn: () => readFleet({}),
-    refetchInterval: 15000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const remits = useQuery({
     queryKey: ["orca-organisation", hostId, "remits"],
     queryFn: () => readRemits({}),
-    refetchInterval: 30000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const scroll = useRef<ScrollView>(null);

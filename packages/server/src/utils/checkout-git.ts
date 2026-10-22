@@ -1048,9 +1048,39 @@ async function getRebaseHeadBranch(cwd: string, context?: CheckoutContext): Prom
   return results.find((result): result is string => result !== null) ?? null;
 }
 
-async function getWorktreeRoot(cwd: string, context?: CheckoutContext): Promise<string | null> {
+/** A folder's own entry: creating `.git` in it changes its mtime. Null when it is missing. */
+async function directoryStamp(cwd: string): Promise<string | null> {
   try {
-    const { stdout } = await getRunGitCommand(context)(["rev-parse", "--show-toplevel"], {
+    const stats = await statFile(cwd);
+    return `${stats.ino}:${stats.mtimeMs}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Folders git reported as non-Git (or that are missing), by git runner, so each status cycle skips
+ * their `git rev-parse` until the folder changes. Other failures are retried every cycle, since
+ * they can be transient, but each is logged once per folder.
+ */
+const nonGitDirectories = new WeakMap<RunGitCommand, Map<string, string | null>>();
+const loggedDiscoveryFailures = new Set<string>();
+
+async function isKnownNonGit(cwd: string, run: RunGitCommand): Promise<boolean> {
+  const known = nonGitDirectories.get(run);
+  if (!known?.has(cwd)) return false;
+  if (known.get(cwd) === (await directoryStamp(cwd)) && !existsSync(resolve(cwd, ".git")))
+    return true;
+  known.delete(cwd);
+  return false;
+}
+
+async function getWorktreeRoot(cwd: string, context?: CheckoutContext): Promise<string | null> {
+  const run = getRunGitCommand(context);
+  if (await isKnownNonGit(cwd, run)) return null;
+  const stamp = await directoryStamp(cwd);
+  try {
+    const { stdout } = await run(["rev-parse", "--show-toplevel"], {
       cwd,
       envOverlay: READ_ONLY_GIT_ENV,
       logger: context?.logger,
@@ -1059,7 +1089,16 @@ async function getWorktreeRoot(cwd: string, context?: CheckoutContext): Promise<
   } catch (error) {
     // A busy git queue says nothing about the folder: never record it as non-Git.
     if (isGitChildLimitError(error)) throw error;
-    if (!isNotGitRepositoryError(error)) {
+    const notGit = isNotGitRepositoryError(error);
+    if (notGit || stamp === null) {
+      const known = nonGitDirectories.get(run) ?? new Map<string, string | null>();
+      known.set(cwd, stamp);
+      nonGitDirectories.set(run, known);
+    }
+    const failure = `${cwd}\0${error instanceof Error ? error.message : String(error)}`;
+    if (!notGit && !loggedDiscoveryFailures.has(failure)) {
+      if (loggedDiscoveryFailures.size >= 1000) loggedDiscoveryFailures.clear();
+      loggedDiscoveryFailures.add(failure);
       context?.logger?.warn(
         gitFailureLogFields(error, { cwd }),
         "Git worktree discovery failed; treating directory as non-Git",

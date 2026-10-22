@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Text, View } from "react-native";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "./read-on-open";
 import { type PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
 import { briefingRpc } from "../shared/briefing";
@@ -21,8 +21,6 @@ export function ProjectBriefing(
   const query = useQuery({
     queryKey: ["orca-project-briefing", props.host?.id, after],
     queryFn: () => read({ after }),
-    refetchInterval: 30000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const d = query.data,
