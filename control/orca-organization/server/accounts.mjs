@@ -54,6 +54,8 @@ const empty = () => ({
   defaults: { claude: null, codex: null },
   // The owner's choice: a session waits for its own account's reset unless he turns moving on (it spends another account).
   rotateOnLimit: false,
+  // FU-443: RISK notices for Main, one per paid API account and usage window. `sent` flips when Main has been told.
+  riskNotices: {},
 });
 
 // ---- store
@@ -67,6 +69,7 @@ function parseAccounts(raw) {
     assignments: s.assignments ?? {},
     rotations: Array.isArray(s.rotations) ? s.rotations : [],
     rotateOnLimit: s.rotateOnLimit === true,
+    riskNotices: s.riskNotices && typeof s.riskNotices === "object" ? s.riskNotices : {},
     defaults: Object.fromEntries(
       PROVIDERS.map((p) => [p, typeof s.defaults?.[p] === "string" ? s.defaults[p] : null]),
     ),
@@ -345,6 +348,44 @@ export function choose(s, provider, now = Date.now(), except = [], usage = {}) {
 function freeSubscription(s, provider, now, except = [], usage = {}) {
   const to = choose(s, provider, now, except, usage);
   return to && tierOf(to) === 0 ? to : null;
+}
+// FU-443: a paid API account serves a turn while a subscription account of the same pool is free. One RISK notice per
+// account and usage window (DEFAULT_LIMIT_MS) is written to the pool store; the controller tells Main from there
+// (credit-warnings.mjs), so a repeat launch in the same window adds nothing. Returns the new notice, or null.
+const MAX_RISK_NOTICES = 50;
+export function recordPaidWhileFree(s, account, sessionId, now = Date.now(), usage = {}) {
+  if (!account || !isApiAccount(account)) return null;
+  const free = freeSubscription(s, account.provider, now, [], usage);
+  if (!free) return null;
+  const window = Math.floor(now / DEFAULT_LIMIT_MS);
+  const key = `${account.id}:${window}`;
+  s.riskNotices ??= {};
+  if (s.riskNotices[key]) return null;
+  const notice = {
+    key,
+    at: iso(now),
+    window,
+    provider: account.provider,
+    accountId: account.id,
+    accountName: account.name,
+    freeAccountId: free.id,
+    freeAccountName: free.name,
+    session: sessionId ?? null,
+    sent: false,
+  };
+  s.riskNotices[key] = notice;
+  const keys = Object.keys(s.riskNotices);
+  for (const k of keys.slice(0, Math.max(0, keys.length - MAX_RISK_NOTICES)))
+    delete s.riskNotices[k];
+  return notice;
+}
+export function pendingRiskNotices(s) {
+  return Object.values(s.riskNotices ?? {}).filter((n) => !n.sent);
+}
+export async function markRiskNoticeSent(root, key) {
+  return update(root, (s) => {
+    if (s.riskNotices?.[key]) s.riskNotices[key].sent = true;
+  });
 }
 // When every account of a provider is limited: the earliest reset (null if none is only limited).
 export function earliestReset(s, provider, now = Date.now()) {
@@ -1432,6 +1473,7 @@ export function sessionOpenHook({
             return null;
           }
           if (provider === "claude") account.credentialKind = credentialKind(token);
+          recordPaidWhileFree(s, account, sessionId, now(), usage);
           // The current assignment/one-use intent and account eligibility are checked together,
           // immediately before publishing this launch's environment. Labels are never admission evidence.
           return {

@@ -157,6 +157,15 @@ export function codexLogin(
   o?: { codex?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number },
 ): Promise<string>;
 export function codexSignedIn(root: string, id: string): boolean;
+export function recordPaidWhileFree(
+  s: any,
+  account: any,
+  sessionId: string | null | undefined,
+  now?: number,
+  usage?: Record<string, number>,
+): any;
+export function pendingRiskNotices(s: any): any[];
+export function markRiskNoticeSent(root: string, key: string): Promise<void>;
 export function sessionOpenHook(o: {
   root: () => string;
   keychain?: any;

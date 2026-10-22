@@ -31,6 +31,10 @@ import {
   readAccountsAsync,
   readUsageAsync,
   markAccountLimited,
+  recordPaidWhileFree,
+  DEFAULT_LIMIT_MS,
+  pendingRiskNotices,
+  markRiskNoticeSent,
 } from "./accounts.mjs";
 import { markAccountRevoked, accountStatus } from "./accounts.mjs";
 
@@ -1429,4 +1433,96 @@ test("an expired sign-in is skipped, and an unnamed old key is not a subscriptio
     credentialKind: "subscription",
   });
   assert.equal(choose(s, "claude", T0).id, "sub");
+});
+
+// FU-443: a RISK notice for Main when a paid API account serves while a subscription account is free.
+const riskPool = (subExtra = {}) => ({
+  ...poolState([
+    { id: "api", name: "work-workspace-api", credentialKind: "api-key", priority: 3 },
+    { id: "sub", name: "Personal", credentialKind: "subscription", priority: 4, ...subExtra },
+  ]),
+  riskNotices: {},
+});
+test("recordPaidWhileFree raises a notice naming both accounts when a subscription is free", () => {
+  const s = riskPool();
+  const n = recordPaidWhileFree(s, s.accounts[0], S(1), T0);
+  assert.equal(n.accountId, "api");
+  assert.equal(n.freeAccountId, "sub");
+  assert.equal(n.freeAccountName, "Personal");
+  assert.equal(n.sent, false);
+  assert.deepEqual(
+    pendingRiskNotices(s).map((x) => x.key),
+    [n.key],
+  );
+});
+test("recordPaidWhileFree stays silent when no subscription is free, or the account is not paid", () => {
+  const limited = riskPool({ limitedUntil: new Date(T0 + 3600000).toISOString() });
+  assert.equal(recordPaidWhileFree(limited, limited.accounts[0], S(1), T0), null);
+  const s = riskPool();
+  assert.equal(
+    recordPaidWhileFree(s, s.accounts[1], S(1), T0),
+    null,
+    "a subscription account serving is no risk",
+  );
+  const lone = poolState([{ id: "api", name: "x", credentialKind: "api-key", priority: 1 }]);
+  assert.equal(recordPaidWhileFree(lone, lone.accounts[0], S(1), T0), null);
+});
+test("recordPaidWhileFree gives no second notice for the same account and window, but one for the next window", () => {
+  const s = riskPool();
+  assert.ok(recordPaidWhileFree(s, s.accounts[0], S(1), T0));
+  assert.equal(recordPaidWhileFree(s, s.accounts[0], S(2), T0 + 60000), null);
+  assert.ok(recordPaidWhileFree(s, s.accounts[0], S(2), T0 + DEFAULT_LIMIT_MS));
+});
+test("recordPaidWhileFree keeps at most 50 notices", () => {
+  const s = riskPool();
+  for (let i = 0; i < 60; i++)
+    recordPaidWhileFree(s, s.accounts[0], S(1), T0 + i * DEFAULT_LIMIT_MS);
+  assert.equal(Object.keys(s.riskNotices).length, 50);
+});
+test("markRiskNoticeSent clears a notice from the pending list in the store", async () => {
+  const root = scratch();
+  await addAccount(root, { provider: "claude", name: "A" }, T0);
+  await update(root, (s) => {
+    s.riskNotices = { k: { key: "k", sent: false } };
+  });
+  assert.equal(pendingRiskNotices(readAccounts(root)).length, 1);
+  await markRiskNoticeSent(root, "k");
+  assert.equal(pendingRiskNotices(readAccounts(root)).length, 0);
+});
+test("the launch hook writes one RISK notice when a pinned API account launches while a subscription is free", async () => {
+  const root = scratch();
+  const api = await addAccount(root, { provider: "claude", name: "Paid" }, T0);
+  const sub = await addAccount(root, { provider: "claude", name: "Personal" }, T0 + 1);
+  await setAccount(root, api.id, { credentialKind: "api-key" });
+  await setAccount(root, sub.id, { credentialKind: "subscription" });
+  const keychain = {
+    get: async (id) =>
+      id === api.id ? "sk-ant-api03-" + "x".repeat(40) : "sk-ant-oat01-" + "x".repeat(40),
+  };
+  const hook = sessionOpenHook({ root: () => root, keychain, now: () => T0 });
+  const req = (n, account) => ({
+    request: { agentId: S(n), provider: "claude", env: { FULCRA_ACCOUNT_REQUEST: account } },
+  });
+  const out = await hook(req(1, "Paid"));
+  assert.equal(out.env.FULCRA_ACCOUNT_ID, api.id);
+  await hook(req(2, "Paid"));
+  const pending = pendingRiskNotices(readAccounts(root));
+  assert.equal(pending.length, 1, "one notice for the same account and window");
+  assert.equal(pending[0].accountId, api.id);
+  assert.equal(pending[0].freeAccountId, sub.id);
+  await hook({ request: { agentId: S(3), provider: "claude", env: {} } });
+  assert.equal(pendingRiskNotices(readAccounts(root)).length, 1, "a subscription launch adds none");
+});
+test("the launch hook raises no notice when the only subscription is limited", async () => {
+  const root = scratch();
+  const api = await addAccount(root, { provider: "claude", name: "Paid" }, T0);
+  const sub = await addAccount(root, { provider: "claude", name: "Personal" }, T0 + 1);
+  await setAccount(root, api.id, { credentialKind: "api-key" });
+  await setAccount(root, sub.id, { credentialKind: "subscription" });
+  await markAccountLimited(root, sub.id, { resetAt: new Date(T0 + 3600000).toISOString() }, T0);
+  const keychain = { get: async () => "sk-ant-api03-" + "x".repeat(40) };
+  const hook = sessionOpenHook({ root: () => root, keychain, now: () => T0 });
+  const out = await hook({ request: { agentId: S(1), provider: "claude", env: {} } });
+  assert.equal(out.env.FULCRA_ACCOUNT_ID, api.id);
+  assert.equal(pendingRiskNotices(readAccounts(root)).length, 0);
 });

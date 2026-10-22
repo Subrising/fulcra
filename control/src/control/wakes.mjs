@@ -299,6 +299,30 @@ export class Wakes {
     if (inserted) this.pump();
     return receipts;
   }
+  // FU-443: a paid API account served a turn while a subscription account was free. Main hears it once per notice key
+  // (the pool writes one per account and usage window). Returns true when Main has a durable row for it.
+  accountRisk(notice) {
+    if (!notice?.key || !this.has("role_bindings")) return false;
+    const main = this.db
+      .prepare(
+        "SELECT session FROM role_bindings WHERE role='prime' AND seat='main' AND state='assigned' AND session IS NOT NULL LIMIT 1",
+      )
+      .get()?.session;
+    if (!uuid(main)) return false;
+    const added = this.enqueue(
+      { holder: main, seat: null, session: null },
+      "account-risk",
+      ["account-risk", notice.key],
+      {
+        account: clip(notice.accountName, 60),
+        accountId: notice.accountId,
+        freeAccount: clip(notice.freeAccountName, 60),
+        freeAccountId: notice.freeAccountId,
+      },
+    );
+    if (added) this.pump();
+    return true;
+  }
   accountDown(session, r) {
     if (!r?.from) return 0;
     const holders = [];
@@ -468,6 +492,8 @@ export class Wakes {
         return `- [error] ${who} stopped with an error: "${p.error}". The controller recovers provider auth and usage-limit stops itself where it can; inspect it with role_inspect_session.`;
       if (w.kind === "api-credit-low")
         return `- [API credit] Account "${p.account}" reported a billing error. Credit may be low. Fulcra has not blocked API turns.`;
+      if (w.kind === "account-risk")
+        return `- [RISK] Paid API account "${p.account}" served a turn while subscription account "${p.freeAccount}" was free, so Fulcra spent API credit it could have saved. Check why that session did not use the subscription.`;
       if (w.kind === "account-down")
         return `- [account down] The token of account "${p.account}" was revoked or is invalid, so its sessions cannot run. ${p.moved ? `Fulcra moved the first stopped session to "${p.moved}"; others move as they stop.` : "No other account was ready."} The owner must sign the account in again (account screen); until then the pool does not use it.`;
       if (w.kind === "account-rotated" && p.revoked)

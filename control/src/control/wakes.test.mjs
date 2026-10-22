@@ -552,6 +552,48 @@ test("accountDown tells each holder once per account, and the notice names the a
   assert.match(text, /must sign the account in again/);
 });
 
+// FU-443: the RISK notice reaches Main once per notice key, and the text names both accounts.
+test("accountRisk queues one RISK notice for Main per key and renders both account names", () => {
+  const MAIN = T(61),
+    queued = [];
+  const fake = {
+    has: () => true,
+    db: { prepare: () => ({ get: () => ({ session: MAIN }) }) },
+    enqueue(r, kind, identity, payload) {
+      const key = JSON.stringify([r.holder, ...identity]);
+      if (queued.some((q) => q.key === key)) return false;
+      queued.push({ key, holder: r.holder, kind, payload });
+      return true;
+    },
+    pump: () => {},
+  };
+  const n = {
+    key: "api-1:7",
+    accountName: "Work API",
+    accountId: "api-1",
+    freeAccountName: "Sub",
+    freeAccountId: "sub-1",
+  };
+  assert.equal(Wakes.prototype.accountRisk.call(fake, n), true);
+  assert.equal(
+    Wakes.prototype.accountRisk.call(fake, n),
+    true,
+    "a repeat is still received, not requeued",
+  );
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].holder, MAIN);
+  assert.equal(queued[0].kind, "account-risk");
+  const none = { ...fake, db: { prepare: () => ({ get: () => undefined }) } };
+  assert.equal(Wakes.prototype.accountRisk.call(none, n), false, "no Main bound: stays pending");
+  const text = Wakes.prototype.render.call({}, [
+    { kind: "account-risk", session: null, payload: JSON.stringify(queued[0].payload) },
+  ]);
+  assert.match(
+    text,
+    /\[RISK\] Paid API account "Work API" served a turn while subscription account "Sub" was free/,
+  );
+});
+
 test("billing warnings retain Main-first and lead-first receipts across restart", async (t) => {
   for (const mainFirst of [true, false]) {
     const f = fixture(t),

@@ -1,7 +1,12 @@
 // Billing observations notify owners. They never block, switch or stop a session.
 import fs from "node:fs";
 import path from "node:path";
-import { accountsDir, readAccounts } from "../../orca-organization/server/accounts.mjs";
+import {
+  accountsDir,
+  readAccounts,
+  pendingRiskNotices,
+  markRiskNoticeSent,
+} from "../../orca-organization/server/accounts.mjs";
 import {
   pendingBillingWarnings,
   markBillingWarningSent,
@@ -13,6 +18,9 @@ export function createCreditWarnings(control, root) {
   async function checkOnce() {
     await recoverAccountObservations(root);
     const pool = readAccounts(root);
+    // FU-443: RISK notices the pool wrote (a paid account served while a subscription was free) go to Main once.
+    for (const notice of pendingRiskNotices(pool))
+      if (control.wakes?.accountRisk?.(notice)) await markRiskNoticeSent(root, notice.key);
     for (const event of pendingBillingWarnings(root)) {
       const account = pool.accounts.find((row) => row.id === event.accountId);
       const sessions = event.sessionId ? [event.sessionId] : [];
