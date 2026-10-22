@@ -73,6 +73,8 @@ function fixture(
       prompt: string,
       kind: "explicit" | "finished" | "failed" | "permission" | "limit",
     ) => Promise<boolean>;
+    leadMoves?: ReportUpDeps["leadMoves"];
+    relay?: ReportUpDeps["relay"];
   } = {},
 ) {
   const clock = { now: options.now ?? Date.now() };
@@ -102,6 +104,8 @@ function fixture(
   manager.nativeReportOwnsFinish = () => nativeOwnsFinish;
   const service = new ReportUpService({
     remoteNotice: options.remoteNotice,
+    ...(options.leadMoves ? { leadMoves: options.leadMoves } : {}),
+    ...(options.relay ? { relay: options.relay } : {}),
     routing: options.routing,
     agentManager: manager,
     agentStorage: storage,
@@ -297,6 +301,33 @@ describe("report-up", () => {
     remote.turn(WORKER);
     await Promise.all([off.settle(), busy.settle(), remote.settle()]);
     expect([...off.delivered, ...busy.delivered, ...remote.delivered]).toEqual([]);
+  });
+
+  test("FU-444: a notice for a lead that moved goes to the new lead here, or through the relay to its computer", async () => {
+    const NEW_LEAD = "33333333-3333-4333-8333-333333333333";
+    const here = fixture([lead, worker(), { id: NEW_LEAD, title: "New lead", labels: {} }], {
+      leadMoves: () => [{ from: LEAD, to: NEW_LEAD }],
+    });
+    here.turn(WORKER);
+    await here.settle();
+    expect(here.delivered.map((notice) => notice.leadId)).toEqual([NEW_LEAD]);
+
+    const relayed: Array<{ file: string; args: string[]; text: string }> = [];
+    const away = fixture([lead, worker()], {
+      leadMoves: () => [
+        { from: LEAD, to: NEW_LEAD, server: "srv_pc", relay: ["pcsend", "{id}", "{file}"] },
+      ],
+      relay: async (file, args) => {
+        relayed.push({ file, args, text: readFileSync(args[1]!, "utf8") });
+      },
+    });
+    away.turn(WORKER);
+    await away.settle();
+    expect(away.delivered).toEqual([]);
+    expect(relayed).toHaveLength(1);
+    expect(relayed[0]!.file).toBe("pcsend");
+    expect(relayed[0]!.args[0]).toBe(NEW_LEAD);
+    expect(relayed[0]!.text).toContain(`Worker Builder (${WORKER}) finished a turn`);
   });
 
   test("a long last message is cut to the snippet length", async () => {
@@ -3269,20 +3300,36 @@ more detail`),
       "Pushed the branch and opened the PR. Next I check the hooks.",
       "Read the code. Starting the change now.",
     ];
-    const turns: Array<{ message: string; error?: string }> = [
-      ...Array.from({ length: 40 }, (_, i) => ({ message: progress[i % progress.length]! })),
-      ...Array.from({ length: 6 }, (_, i) => ({ message: `DONE item ${i} PR checked` })),
-      { message: "BLOCKED the key is missing" },
-      { message: "DECISION ship the patch or wait" },
-      { message: "Two options exist. Which one do you want?" },
-      { message: "Started the render.", error: "Provider crashed" },
+    const turns: Array<{ message: string; error?: string; sends: boolean }> = [
+      ...Array.from({ length: 40 }, (_, i) => ({
+        message: progress[i % progress.length]!,
+        sends: false,
+      })),
+      ...Array.from({ length: 6 }, (_, i) => ({
+        message: `DONE item ${i} PR checked`,
+        sends: true,
+      })),
+      { message: "BLOCKED the key is missing", sends: true },
+      { message: "DECISION ship the patch or wait", sends: true },
+      { message: "Two options exist. Which one do you want?", sends: true },
+      { message: "Started the render.", error: "Provider crashed", sends: true },
     ];
+    const held = (lines: string[]) => lines.some((line) => line.includes("Finish notice held"));
     let sent = 0;
     for (const turn of turns) {
-      const f = await ownedFixture({ notice: { status: "armed" }, lastMessage: turn.message });
+      const logLines: string[] = [];
+      const f = await ownedFixture({
+        notice: { status: "armed" },
+        lastMessage: turn.message,
+        logLines,
+      });
       try {
         f.runTurn(WORKER, undefined, turn.error);
-        await new Promise((resolve) => setTimeout(resolve, 150));
+        // Wait for the turn's real outcome, not a fixed time: a send shows in delivered, a held turn logs it.
+        await until(() =>
+          turn.sends ? expect(f.delivered).toHaveLength(1) : expect(held(logLines)).toBe(true),
+        );
+        await quiet();
         sent += f.delivered.length;
       } finally {
         f.service.stop();

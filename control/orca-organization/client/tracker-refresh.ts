@@ -1,10 +1,8 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "./read-on-open";
 import { useContract } from "./use-contract";
 import { trackerRefreshRpc, type TrackerView } from "../shared/cc/connectors";
 
-// L36: tracker items are fetched and stored only by the refresh (a write); the views read what is stored. Refresh when a
-// project's tracking or changes are opened and every few minutes while they stay open, and show its result at once.
-export const TRACKER_REFRESH_MS = 300000;
+// Tracker refresh stores items when a view opens or the user requests a refresh.
 /** M5: refresh the stored tracker items of every listed project now (Today's Refresh and the LaunchPad's). Same RPC and
  *  same view update as useTrackerRefresh; resolves when all have answered, whatever each answered. */
 export function useRefreshTrackers(hostId: string | null) {
@@ -48,8 +46,6 @@ export function useTrackerRefresh(hostId: string | null, projectId: string) {
       void client.invalidateQueries({ queryKey: view, exact: true });
       return fresh;
     },
-    refetchInterval: TRACKER_REFRESH_MS,
-    refetchIntervalInBackground: false,
     retry: false,
     staleTime: 60000,
   });

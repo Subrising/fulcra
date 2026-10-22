@@ -825,6 +825,47 @@ test("retains native message correlation after a manager restart and invalidates
   }
 });
 
+// FU-471: listing the prompts of a stored session restored its provider (a Claude resume replays the whole
+// transcript, up to 1 GB) and read every payload in its journal.
+test("a stored session lists its prompts from the journal without restoring its provider", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-stored-prompts-"));
+  const directory = join(workdir, "timeline");
+  let resumes = 0;
+  const client = new (class extends TestAgentClient {
+    override async resumeSession(): Promise<AgentSession> {
+      resumes++;
+      return new TestAgentSession({ provider: "codex", cwd: workdir });
+    }
+  })();
+  const first = new AgentManager({
+    clients: { codex: client },
+    durableTimelineStore: new FileAgentTimelineStore(directory),
+    logger,
+  });
+  const second = new AgentManager({
+    clients: { codex: client },
+    durableTimelineStore: new FileAgentTimelineStore(directory),
+    logger,
+  });
+  const agent = await first.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    for (const text of ["first ask", "second ask"]) {
+      await first.appendTimelineItem(agent.id, { type: "user_message", text });
+      await first.appendTimelineItem(agent.id, { type: "assistant_message", text: "answer" });
+    }
+    const loaded = await first.getTimelinePromptIndex(agent.id);
+    expect(loaded.prompts.map((prompt) => prompt.preview)).toEqual(["first ask", "second ask"]);
+    await first.closeAgent(agent.id);
+    expect(await second.fetchStoredTimelinePromptIndex(agent.id)).toEqual(loaded);
+    expect(resumes).toBe(0);
+  } finally {
+    await first.closeAgent(agent.id);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("durable writes fence publication without blocking another session", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-write-barrier-"));
   const entered = deferred<void>(),
@@ -10268,8 +10309,8 @@ test("archiveAgent re-reads a child before deciding whether to cascade", async (
   class ChildOpensAfterCascadeListStorage extends AgentStorage {
     childId: string | null = null;
 
-    override async list(): Promise<StoredAgentRecord[]> {
-      const records = await super.list();
+    override async listLoaded(): Promise<StoredAgentRecord[]> {
+      const records = await super.listLoaded();
       const parentIsArchived = records.some(
         (record) => record.id !== this.childId && Boolean(record.archivedAt),
       );
@@ -16982,4 +17023,67 @@ test("FU-441: a failed rebuild keeps the old rows and leaves the timeline writab
     await manager.closeAgent(manager.listAgents()[0]?.id ?? "").catch(() => undefined);
     rmSync(workdir, { recursive: true, force: true });
   }
+});
+
+test("archiveAgent with ifQuiet refuses a session whose user message changed since it was picked", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-quiet-archive-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const manager = new AgentManager({
+    clients: { codex: new NativeArchiveRecordingClient() },
+    registry: storage,
+    logger,
+  });
+  const agent = await manager.createAgent(
+    { provider: "codex", cwd: workdir, title: "Quiet archive target" },
+    undefined,
+    { workspaceId: undefined },
+  );
+
+  await expect(
+    manager.archiveAgent(agent.id, undefined, {
+      ifQuiet: { lastUserMessageAt: "2026-10-21T10:00:00.000Z" },
+    }),
+  ).rejects.toThrow("no longer quiet");
+  expect((await storage.get(agent.id))?.archivedAt ?? null).toBeNull();
+
+  await manager.archiveAgent(agent.id, undefined, { ifQuiet: { lastUserMessageAt: null } });
+  expect((await storage.get(agent.id))?.archivedAt).toBeTruthy();
+});
+
+test("archiving a live session does not read the archived records that boot left on disk", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-archive-guard-"));
+  const agentsDir = join(workdir, "agents");
+  mkdirSync(join(agentsDir, "project"), { recursive: true });
+  for (let i = 0; i < 3; i++) {
+    const id = `00000000-0000-4000-8000-00000000000${i}`;
+    writeFileSync(
+      join(agentsDir, "project", `${id}.json`),
+      JSON.stringify({
+        id,
+        provider: "codex",
+        cwd: workdir,
+        workspaceId: "workspace-a",
+        createdAt: "2026-10-01T00:00:00.000Z",
+        updatedAt: "2026-10-01T00:00:00.000Z",
+        archivedAt: "2026-10-02T00:00:00.000Z",
+        labels: {},
+        lastStatus: "closed",
+        config: null,
+      }),
+    );
+  }
+  const storage = new AgentStorage(agentsDir, logger);
+  const manager = new AgentManager({
+    clients: { codex: new NativeArchiveRecordingClient() },
+    registry: storage,
+    logger,
+  });
+  const agent = await manager.createAgent(
+    { provider: "codex", cwd: workdir, title: "Live" },
+    undefined,
+    { workspaceId: "workspace-a" },
+  );
+  expect(storage.archivedOnDiskCount).toBe(3);
+  await manager.archiveAgent(agent.id);
+  expect(storage.archivedOnDiskCount).toBe(3);
 });

@@ -862,11 +862,18 @@ export class HostLinks {
       if (!currentKeys.has(key)) this.sharedLimits.delete(key);
     return result;
   }
+  /**
+   * FU-462: the local sessions that started a worker on another host. That worker reports back to its sender, so the
+   * daemon must not archive the sender while the worker exists.
+   */
+  remoteWorkerSenders(): Set<string> {
+    const senders = new Set<string>();
+    for (const entry of Object.values(this.journal(this.outboxFile)))
+      if (entry.receipt.state === "created") senders.add(entry.sender);
+    return senders;
+  }
   private isLead(chat: HostLinkChat): boolean {
-    if (chat.isLead) return true;
-    return Object.values(this.journal(this.outboxFile)).some(
-      (entry) => entry.sender === chat.id && entry.receipt.state === "created",
-    );
+    return chat.isLead || this.remoteWorkerSenders().has(chat.id);
   }
   async receive(token: string | null, raw: unknown): Promise<HostLinkReceipt> {
     const link = this.incoming(token);

@@ -18,6 +18,7 @@ import {
   recordOpenSessions,
   REVIVE_FILE,
   REVIVE_LIVE_FILE,
+  ReviveCarry,
   reviveAfterRestart,
   sealStopRecord,
   startLiveRecorder,
@@ -52,6 +53,9 @@ async function fixture(input: {
   /** Sessions whose limit state cannot be read (FU-25). */
   limitUnreadable?: string[];
   onSessionsReady?: () => void;
+  carry?: ReviveCarry;
+  /** Holds every load until it resolves: revive stays running. */
+  loadGate?: Promise<void>;
 }) {
   const home = await mkdtemp(path.join(tmpdir(), "revive-on-restart-"));
   cleanup.push(home);
@@ -89,6 +93,7 @@ async function fixture(input: {
   const sessions: ReviveSessions = {
     load: async (id) => {
       loads.push(id);
+      await input.loadGate;
       const failure = input.failLoad?.[id];
       if (failure) throw new Error(failure);
       loaded.add(id);
@@ -123,6 +128,7 @@ async function fixture(input: {
         settleMs: 0,
         gapMs: 0,
         onSessionsReady: input.onSessionsReady,
+        carry: input.carry,
         sessions,
         deliver: async (leadId, prompt) => {
           notices.push({ leadId, prompt });
@@ -131,7 +137,7 @@ async function fixture(input: {
       { records, crashInterrupted },
     );
   const status = (id: string) => byId.get(id)?.lastStatus;
-  return { home, run, loads, prompts, wakes, notices, status, reads };
+  return { home, run, loads, prompts, wakes, notices, status, reads, byId, storage };
 }
 
 describe("revive on restart", () => {
@@ -876,6 +882,16 @@ describe("live record after an unclean stop", () => {
         await new Promise((resolve) => setTimeout(resolve, 40));
       };
       const read = async () => JSON.parse(await readFile(file, "utf8"));
+      // Wait for the real file write, not a fixed time (FU-469). setTimeout and performance.now are real; Date is faked.
+      const readWhen = async (done: (record: { stoppedAt: string }) => boolean) => {
+        const deadline = performance.now() + 5_000;
+        for (;;) {
+          const record = await read().catch(() => null);
+          if (record && done(record)) return record;
+          if (performance.now() > deadline) throw new Error("the recorder did not write in 5 s");
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+      };
       await vi.waitFor(async () => expect((await read()).openIds).toEqual([IDLE]));
 
       // Several changes inside one check interval give one write that holds the last state.
@@ -889,7 +905,7 @@ describe("live record after an unclean stop", () => {
       await advance(10_000);
       expect((await read()).stoppedAt).toBe(firstWrite);
       await advance(10_000);
-      const second = await read();
+      const second = await readWhen((record) => record.stoppedAt !== firstWrite);
       expect(second.openIds.sort()).toEqual([IDLE, RUNNING].sort());
       expect(second.interruptedIds).toEqual([]);
 
@@ -897,7 +913,7 @@ describe("live record after an unclean stop", () => {
       await advance(4 * 60_000);
       expect((await read()).stoppedAt).toBe(second.stoppedAt);
       await advance(2 * 60_000);
-      expect((await read()).stoppedAt).not.toBe(second.stoppedAt);
+      await readWhen((record) => record.stoppedAt !== second.stoppedAt);
 
       await recorder.stop();
       await expect(stat(file)).rejects.toThrow();
@@ -1024,5 +1040,82 @@ describe("background wake on the real send path (FU-362)", () => {
       "withdrawn",
     );
     expect(f.runs).toEqual([]);
+  });
+});
+
+describe("the stop record keeps every open session (FU-460)", () => {
+  const OTHER = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  /** A clean stop: the record, then every session closes. */
+  async function stop(f: Awaited<ReturnType<typeof fixture>>, carry: ReviveCarry) {
+    await recordOpenSessions({
+      paseoHome: f.home,
+      agents: await carry.withUnloaded([], f.storage),
+      backgroundIds: new Set(carry.pendingBackgroundIds()),
+    });
+    for (const record of f.byId.values()) record.lastStatus = "closed";
+  }
+
+  test("ReviveCarry.withUnloaded: sessions reopened and still unloaded are in the next boot's reopen set", async () => {
+    const carry = new ReviveCarry();
+    const f = await fixture({ records: [{ id: IDLE }, { id: OTHER }, { id: RUNNING }], carry });
+    await recordOpenSessions({
+      paseoHome: f.home,
+      agents: [IDLE, OTHER, RUNNING].map((id) => ({ id, lifecycle: "idle" })),
+    });
+    expect((await f.run()).reopened.sort()).toEqual([IDLE, OTHER, RUNNING].sort());
+    await stop(f, carry);
+    expect((await f.run()).reopened.sort()).toEqual([IDLE, OTHER, RUNNING].sort());
+  });
+
+  test("a stop during revive keeps the pending cut-off turns and background wakes for the next boot", async () => {
+    const carry = new ReviveCarry();
+    const CUT = [RUNNING, LIMITED, NO_FOLDER];
+    let release: () => void = () => undefined;
+    const loadGate = new Promise<void>((resolve) => (release = resolve));
+    let ready: () => void = () => undefined;
+    const sessionsReady = new Promise<void>((resolve) => (ready = resolve));
+    const f = await fixture({
+      records: [...CUT, BACKGROUND, IDLE].map((id) => ({ id })),
+      carry,
+      loadGate,
+      onSessionsReady: ready,
+    });
+    await recordOpenSessions({
+      paseoHome: f.home,
+      agents: [
+        ...CUT.map((id) => ({ id, lifecycle: "running" })),
+        { id: BACKGROUND, lifecycle: "idle", hasBackgroundWork: true },
+        { id: IDLE, lifecycle: "idle" },
+      ],
+    });
+    const revive = f.run();
+    await sessionsReady;
+    // Two cut-off turns are mid-load, the rest wait in the queue: the stop comes now.
+    await stop(f, carry);
+    const record = JSON.parse(await readFile(path.join(f.home, REVIVE_FILE), "utf8"));
+    expect(record.openIds.sort()).toEqual([...CUT, BACKGROUND, IDLE].sort());
+    expect(record.interruptedIds.sort()).toEqual([...CUT].sort());
+    expect(record.backgroundIds).toEqual([BACKGROUND]);
+    release();
+    await revive;
+    const next = await f.run();
+    expect(next.reopened.sort()).toEqual([...CUT, BACKGROUND, IDLE].sort());
+  });
+
+  test("a session closed by hand or archived between boot and stop is not carried", async () => {
+    const carry = new ReviveCarry();
+    const f = await fixture({
+      records: [{ id: IDLE }, { id: CLOSED_BY_HAND }, { id: OTHER }],
+      carry,
+    });
+    await recordOpenSessions({
+      paseoHome: f.home,
+      agents: [IDLE, CLOSED_BY_HAND, OTHER].map((id) => ({ id, lifecycle: "idle" })),
+    });
+    await f.run();
+    f.byId.get(CLOSED_BY_HAND)!.lastStatus = "closed";
+    f.byId.get(OTHER)!.archivedAt = "2026-10-11T09:50:00Z";
+    const agents = await carry.withUnloaded([], f.storage);
+    expect(agents.map((agent) => agent.id)).toEqual([IDLE]);
   });
 });

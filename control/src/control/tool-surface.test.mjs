@@ -45,7 +45,7 @@ const noVerify = () => {};
 test("the creation surface is exactly the pre-H6 one, and it carries the G7/G8 tools", () => {
   const m = randomUUID(),
     s = supervisorServer(m);
-  assert.deepEqual(s.args, [INBOX]);
+  assert.deepEqual(s.args, ["--disable-sigusr1", INBOX]);
   assert.equal(path.basename(INBOX), "inbox.mjs");
   assert.equal(s.type, "stdio");
   assert.deepEqual(

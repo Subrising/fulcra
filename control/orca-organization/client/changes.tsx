@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ScrollView, Text, TextInput, View } from "react-native";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "./read-on-open";
 import * as pluginClient from "@getpaseo/plugin/client";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
@@ -143,8 +143,6 @@ function ProjectChanges({
   const query = useQuery({
     queryKey: ["fulcra-tracker-view", props.host.id, project.id],
     queryFn: () => read({ projectId: project.id }),
-    refetchInterval: 60000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   useTrackerRefresh(props.host.id, project.id);

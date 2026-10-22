@@ -1,3 +1,4 @@
+import { useOperationPause } from "./read-on-open";
 // The top of Settings → Clean-up: the automatic clean-up choices and "Clean up now" (preview, then confirm).
 import { useEffect, useState } from "react";
 import { Pressable, Text, View } from "react-native";
@@ -16,14 +17,13 @@ import {
   type CleanupSettingsValue,
 } from "./cleanup-now";
 
-const pause = () => new Promise((resolve) => setTimeout(resolve, 1000));
-
 type Phase =
   | { kind: "idle" }
   | { kind: "preview"; previewId: string; items: CleanupItem[]; partial: boolean }
   | { kind: "done"; items: CleanupItem[] };
 
 export function CleanupNowSection({ theme }: Pick<PluginSurfaceProps, "theme">) {
+  const pause = useOperationPause(1000);
   const settingsRpc = useContract(cleanupSettingsRpc),
     nowRpc = useContract(cleanupNowRpc);
   const [settings, setSettings] = useState<CleanupSettingsValue | null>(null);

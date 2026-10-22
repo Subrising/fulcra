@@ -1,4 +1,5 @@
 import { fork } from "node:child_process";
+import { daemonChildExecArgv } from "../../../child-exec-argv.js";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
@@ -98,21 +99,11 @@ function resolveWorkerUrl(): URL {
   return new URL("./worker-process.js", currentUrl);
 }
 
-function resolveWorkerExecArgv(): string[] {
-  if (!import.meta.url.endsWith(".ts")) {
-    return [];
-  }
-  const loaderUrl = new URL("../../../../terminal/terminal-ts-loader.mjs", import.meta.url).href;
-  const importSource = [
-    'import { register } from "node:module";',
-    'import { pathToFileURL } from "node:url";',
-    `register(${JSON.stringify(loaderUrl)}, pathToFileURL("./"));`,
-  ].join(" ");
-  return [
-    "--experimental-strip-types",
-    "--import",
-    `data:text/javascript,${encodeURIComponent(importSource)}`,
-  ];
+export function resolveWorkerExecArgv(moduleUrl: string = import.meta.url): string[] {
+  return daemonChildExecArgv(
+    moduleUrl,
+    new URL("../../../../terminal/terminal-ts-loader.mjs", moduleUrl),
+  );
 }
 
 function forkLocalSpeechWorker(): LocalSpeechWorkerProcess {

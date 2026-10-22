@@ -83,7 +83,7 @@ const view = (over = {}) => ({
     orchestrationGuard: false,
     modes: { claude: "auto", codex: "full-access" },
     modeChoices: {
-      claude: ["auto", "acceptEdits", "default", "plan"],
+      claude: ["auto", "acceptEdits", "default", "plan", "bypassPermissions"],
       codex: ["full-access", "auto-review", "auto"],
     },
   },
@@ -247,7 +247,13 @@ test("W3: Settings shows the default permission mode per provider and saves a ch
       input: { mode: { provider: "codex", modeId: "auto-review" } },
     }),
   );
-  assert.equal(screen.queryByRole("button", { name: /bypass/i }), null);
+  fireEvent.click(screen.getByRole("button", { name: "Claude permission mode Bypass" }));
+  await waitFor(() =>
+    assert.deepEqual(writes.at(-1), {
+      name: "organization.accounts.settings",
+      input: { mode: { provider: "claude", modeId: "bypassPermissions" } },
+    }),
+  );
 });
 // ---- W1: Switch account… (a session's menu and /account in its chat) and the default account for new sessions
 const session = (over = {}) => ({

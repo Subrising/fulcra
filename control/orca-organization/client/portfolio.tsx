@@ -3,7 +3,7 @@ import { quotaLabel, quotaIsStale } from "./quota-wait";
 import { workName as name, sessionName, sessionStatus } from "./work-labels";
 import { useEffect, useState } from "react";
 import { ScrollView, Text, View } from "react-native";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "./read-on-open";
 import { type PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
 import { fleetRpc } from "../shared/fleet";
@@ -29,8 +29,6 @@ export function PortfolioSurface(props: PluginSurfaceProps & { onTask: (id: stri
   const directory = useQuery({
     queryKey: ["orca-projects", props.host?.id],
     queryFn: () => readProjects({}),
-    refetchInterval: 30000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   // J0: stalled reads keep their last good result (memory only).
@@ -42,8 +40,6 @@ export function PortfolioSurface(props: PluginSurfaceProps & { onTask: (id: stri
   const query = useQuery({
     queryKey: ["orca-fleet", props.host?.id],
     queryFn: () => read({}),
-    refetchInterval: 15000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const last = lastGood(query, ["orca-fleet", props.host?.id], { now });
@@ -164,7 +160,7 @@ export function PortfolioSurface(props: PluginSurfaceProps & { onTask: (id: stri
                 ? (last.notice ?? "This view may be out of date. Fulcra is checking again.")
                 : query.isPending
                   ? "Finding your leads…"
-                  : "Fulcra is not answering yet; retrying."}
+                  : "Fulcra is not answering yet; refresh to try again."}
             </Text>
           )}
           {d?.partial && <Text style={muted}>{partialSentence(d)}</Text>}

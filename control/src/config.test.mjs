@@ -109,6 +109,11 @@ test("memory entry paths work when the installed package directory contains spac
     fs.mkdirSync(source);
     for (const name of ["canonical-memory-route.mjs", "portable-config.mjs", "config.mjs"])
       fs.copyFileSync(new URL(name, import.meta.url), path.join(source, name));
+    fs.mkdirSync(path.join(source, "control"));
+    fs.copyFileSync(
+      new URL("control/mcp-node-flags.mjs", import.meta.url),
+      path.join(source, "control/mcp-node-flags.mjs"),
+    );
     const server = path.join(home, "orca-organization/server");
     fs.mkdirSync(server, { recursive: true });
     // config.mjs checks private files through the shared ownership helper.
@@ -122,7 +127,7 @@ test("memory entry paths work when the installed package directory contains spac
     );
     assert.equal(canonicalMemoryConfig("claude").env.ELECTRON_RUN_AS_NODE, "1");
     assert.equal(
-      canonicalMemoryConfig("claude").args[0],
+      canonicalMemoryConfig("claude").args[1],
       path.join(source, "portable-memory", "entry.mjs"),
     );
   } finally {

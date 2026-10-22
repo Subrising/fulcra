@@ -1,6 +1,6 @@
 // The Sessions page's live overlay hook. The rules live in fleet-live-model.ts; this file only reaches the app.
 import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "./read-on-open";
 import * as pluginClient from "@getpaseo/plugin/client";
 import type { Fleet } from "../shared/fleet";
 import {
@@ -53,8 +53,6 @@ export function useLiveHostOverlay(
     queryKey: ["orca-fleet-live", key],
     queryFn: () => readLiveOverlay(nodes, hosts, localHostName, hostApi.getPaseoClient),
     enabled: key.length > 0,
-    refetchInterval: frozen ? false : 15000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   return key.length > 0 ? (query.data ?? EMPTY_OVERLAY) : EMPTY_OVERLAY;
@@ -89,8 +87,6 @@ export function useAppLinkSections(
     queryKey: ["orca-fleet-app-link", key],
     queryFn: () => readAppLinkSections(targets, hosts, hostApi.getPaseoClient, enrolledAgentIds),
     enabled: targets.length > 0,
-    refetchInterval: frozen ? false : 30000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   return targets.length > 0 ? (query.data ?? NO_SECTIONS) : NO_SECTIONS;

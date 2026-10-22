@@ -1,3 +1,5 @@
+import { packagedInspectorFlags } from "./inspector-flavour.js";
+
 const PASEO_NODE_ENV = "PASEO_NODE_ENV";
 const ELECTRON_RUN_AS_NODE = "ELECTRON_RUN_AS_NODE";
 
@@ -71,7 +73,8 @@ export function buildSelfNodeCommand(
   }
   return {
     command: process.execPath,
-    args,
+    // FU-466: this child holds the pool account token, so it must not open an inspector on SIGUSR1.
+    args: [...packagedInspectorFlags().filter((flag) => flag.length > 0), ...args],
     env,
   };
 }

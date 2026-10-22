@@ -135,6 +135,7 @@ import {
 import { TrustedPlugins } from "../plugins/trusted.js";
 import type { InputSequence, TrustedInputKind } from "@getpaseo/plugin/server";
 import { projectTimelineRows } from "./timeline-projection.js";
+import { buildTimelinePromptIndex, type TimelinePromptIndex } from "./timeline-prompt-index.js";
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/index.js";
 import { AutomaticInputLimits } from "../limit-resume/automatic-input.js";
@@ -288,6 +289,18 @@ function submittedPromptText(prompt: AgentPromptInput): string {
     .flatMap((block) => (block.type === "text" && !("mimeType" in block) ? [block.text] : []))
     .join("\n")
     .trim();
+}
+
+/** The daemon's own archive found the session busy again; nothing was changed. */
+export class ArchiveNotQuietError extends Error {
+  constructor() {
+    super("Archive skipped: the session is no longer quiet.");
+  }
+}
+
+/** What the daemon saw when it picked a session to archive (auto-archive-idle.ts). */
+export interface QuietArchiveExpectation {
+  lastUserMessageAt: string | null;
 }
 
 export class AgentManagerShuttingDownError extends Error {
@@ -2397,7 +2410,7 @@ export class AgentManager {
         const matches = (value: string) => canonical(value) === canonical(cwd);
         if ([...this.agents.values()].some((agent) => matches(agent.cwd))) return true;
         if (
-          (await this.registry.list()).some(
+          (await this.registry.listLoaded()).some(
             (record) => matches(record.cwd) && !record.archivedAt && record.lastStatus !== "closed",
           )
         )
@@ -3132,12 +3145,32 @@ export class AgentManager {
   async getTimelineRows(id: string): Promise<AgentTimelineRow[]> {
     this.requireAgent(id);
     if (this.durableTimelineStore) {
-      return projectTimelineRows({
-        rows: await this.durableTimelineStore.getCommittedRows(id),
-        mode: "projected",
-      }).map((entry) => Object.assign({ seq: entry.seqEnd }, entry));
+      return projectCommittedRows(await this.durableTimelineStore.getCommittedRows(id));
     }
     return this.timelineStore.getRows(id);
+  }
+
+  /** The prompt list of a loaded agent. A journal reads user messages only, not every payload. */
+  async getTimelinePromptIndex(id: string): Promise<TimelinePromptIndex> {
+    this.requireAgent(id);
+    const store = this.durableTimelineStore;
+    const rows = store
+      ? projectCommittedRows(
+          await (store.getCommittedPromptRows?.(id) ?? store.getCommittedRows(id)),
+        )
+      : this.timelineStore.getRows(id);
+    return buildTimelinePromptIndex(this.timelineStore.getEpoch(id), rows);
+  }
+
+  /** The prompt list of an unloaded journal-backed agent, read without restoring its provider. */
+  async fetchStoredTimelinePromptIndex(agentId: string): Promise<TimelinePromptIndex | null> {
+    const store = this.durableTimelineStore;
+    if (this.agents.has(agentId) || !store?.fetchExistingCommitted) return null;
+    const page = await store.fetchExistingCommitted(agentId, { limit: 1 });
+    if (!page || this.agents.has(agentId)) return null;
+    const rows = await (store.getCommittedPromptRows?.(agentId) ?? store.getCommittedRows(agentId));
+    if (this.agents.has(agentId)) return null;
+    return buildTimelinePromptIndex(page.epoch, projectCommittedRows(rows));
   }
 
   fetchTimeline(id: string, options?: AgentTimelineFetchOptions): AgentTimelineFetchResult {
@@ -5020,7 +5053,8 @@ export class AgentManager {
       protection.confirmationRequired = false;
       protection.reasons = [];
     }
-    records = await this.requireRegistry().list();
+    // Live sessions only: an archived record is never a live worker. Listing them would read every archived file.
+    records = await this.requireRegistry().listLoaded();
     const record = records.find((candidate) => candidate.id === agentId);
     if (!record || record.archivedAt) return;
     // App confirmation protects lead seats. It never abandons open ledger ownership.
@@ -5051,6 +5085,7 @@ export class AgentManager {
   async archiveAgent(
     agentId: string,
     handle?: TrustedOperationHandle,
+    options?: { ifQuiet?: QuietArchiveExpectation },
   ): Promise<{ archivedAt: string }> {
     return this.withInput(
       agentId,
@@ -5062,10 +5097,12 @@ export class AgentManager {
             agentId,
             "archive",
             undefined,
-            (lockedHandle) =>
-              this.agents.has(agentId)
+            (lockedHandle) => {
+              if (options?.ifQuiet) this.assertQuietForAutoArchive(agentId, options.ifQuiet);
+              return this.agents.has(agentId)
                 ? this.archiveAgentUnlocked(agentId)
-                : this.archiveRetiredAgentUnlocked(agentId, lockedHandle),
+                : this.archiveRetiredAgentUnlocked(agentId, lockedHandle);
+            },
             commandPayload("archive"),
             operationHandle,
           ),
@@ -5074,6 +5111,23 @@ export class AgentManager {
       commandPayload("archive"),
       handle,
     );
+  }
+
+  /**
+   * FU-462: the daemon's own archive picks a session from a list read earlier. Inside the lifecycle lane it checks
+   * again that the session is still quiet, so a turn started since then is never closed.
+   */
+  private assertQuietForAutoArchive(agentId: string, expected: QuietArchiveExpectation): void {
+    const agent = this.agents.get(agentId);
+    if (!agent) return;
+    const lastUser = agent.lastUserMessageAt?.toISOString() ?? null;
+    if (
+      agent.lifecycle !== "idle" ||
+      this.hasInFlightRun(agentId) ||
+      agent.pendingPermissions.size > 0 ||
+      lastUser !== expected.lastUserMessageAt
+    )
+      throw new ArchiveNotQuietError();
   }
 
   // FU-425: callers cancel the run before this lane. A concurrent archive or reload can retire the runtime
@@ -5132,7 +5186,7 @@ export class AgentManager {
   /** Freeze and admit the entire cascade before any parent storage/provider effect. */
   private async admitArchiveDescendants(parentAgentId: string): Promise<CascadeArchivePlan> {
     const registry = this.requireRegistry();
-    const records = await registry.list();
+    const records = await registry.listLoaded();
     await this.assertArchiveSafe(parentAgentId, records);
     const plan: CascadeArchivePlan = new Map();
     const visited = new Set([parentAgentId]);
@@ -5183,7 +5237,7 @@ export class AgentManager {
     if (!parent) throw new Error(`Archived parent ${parentAgentId} not found in storage`);
     // V1 has no payload-bound plan: preserve its dynamic child/open-tab reconciliation.
     if (!this.trustedPlugins.hasV11Authority()) {
-      for (const child of await registry.list()) {
+      for (const child of await registry.listLoaded()) {
         if (!child.archivedAt && isArchiveChild(parent, child, this.archiveServerId))
           plan.set(child.id, {
             parentId: parentAgentId,
@@ -10967,5 +11021,11 @@ function isSameBackgroundWork(
     left.source === right.source &&
     left.since === right.since &&
     left.kinds.join(",") === right.kinds.join(",")
+  );
+}
+
+function projectCommittedRows(rows: readonly AgentTimelineRow[]): AgentTimelineRow[] {
+  return projectTimelineRows({ rows, mode: "projected" }).map((entry) =>
+    Object.assign({ seq: entry.seqEnd }, entry),
   );
 }

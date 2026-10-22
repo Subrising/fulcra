@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { ScrollView, Text, TextInput, View } from "react-native";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "./read-on-open";
 import * as pluginClient from "@getpaseo/plugin/client";
 import { type PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
@@ -56,17 +56,10 @@ type Props = PluginSurfaceProps & { onTask: (id: string) => void };
  * Query keys are the ones the other surfaces already use, key shape included, so Leadership,
  * Workstreams and the briefing panel read one cached observation rather than three that age apart.
  */
-function useObservation<T>(
-  queryKey: unknown[],
-  run: () => Promise<T>,
-  now: number,
-  interval: number,
-) {
+function useObservation<T>(queryKey: unknown[], run: () => Promise<T>, now: number) {
   const query = useQuery({
     queryKey,
     queryFn: run,
-    refetchInterval: interval,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   // J0: a stalled read keeps the last good result (memory only) and says so in one plain notice.
@@ -661,22 +654,16 @@ export function PrimeSurface(props: Props) {
   }, []);
   const hostId = props.host?.id;
   const observed = useObservedChats();
-  const fleet = useObservation(["orca-fleet", hostId], () => readFleet({}), now, 15000);
-  const directory = useObservation(["orca-projects", hostId], () => readProjects({}), now, 30000);
+  const fleet = useObservation(["orca-fleet", hostId], () => readFleet({}), now);
+  const directory = useObservation(["orca-projects", hostId], () => readProjects({}), now);
   const briefing = useObservation(
     ["orca-project-briefing", hostId, null],
     () => readBriefing({ after: null }),
     now,
-    30000,
   );
-  const roles = useObservation(["orca-role-directory", hostId], () => readRoles({}), now, 30000);
+  const roles = useObservation(["orca-role-directory", hostId], () => readRoles({}), now);
   const readRemits = useContract(remitsRpc);
-  const remits = useObservation(
-    ["orca-organisation", hostId, "remits"],
-    () => readRemits({}),
-    now,
-    30000,
-  );
+  const remits = useObservation(["orca-organisation", hostId, "remits"], () => readRemits({}), now);
   const h = buildHierarchy(fleet.data, directory.data, briefing.data, roles.data);
   const chosen = h.projects.find((p) => p.id === project) ?? null,
     node = fleet.data?.nodes.find((n) => n.id === session);
@@ -745,7 +732,7 @@ export function PrimeSurface(props: Props) {
             ? (fleet.notice ?? "This view may be out of date. Fulcra is checking again.")
             : fleet.query.isPending
               ? "Reading who leads what…"
-              : "Fulcra is not answering yet; retrying."}
+              : "Fulcra is not answering yet; refresh to try again."}
         </Text>
       )}
       {fleet.data?.partial && <Text style={muted}>{partialSentence(fleet.data)}</Text>}

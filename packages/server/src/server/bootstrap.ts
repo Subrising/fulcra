@@ -16,6 +16,7 @@ import { startReportUp } from "./report-up.js";
 import {
   backgroundIdsForStop,
   recordOpenSessions,
+  ReviveCarry,
   reviveAfterRestart,
   sealStopRecord,
   startLiveRecorder,
@@ -31,6 +32,7 @@ import { DEFAULT_RELAY_ENDPOINT } from "@getpaseo/protocol/daemon-endpoints";
 import { registerNativeRadiusScratch } from "./plugins/native-radius-scratch.js";
 import { consumeManagementDispatch } from "./plugins/management.js";
 import { controllerDistribution, type TrustedPlugins } from "./plugins/trusted.js";
+import { packagedInspectorFlags } from "./inspector-flavour.js";
 import { ControllerChannel } from "./plugins/controller-channel.js";
 import { createControllerService } from "./plugins/controller-service.js";
 import { initializeTrustedPlugins } from "./plugins/trusted-bootstrap.js";
@@ -174,7 +176,7 @@ import type { OpenAiSpeechProviderConfig } from "./speech/providers/openai/confi
 import type { LocalSpeechProviderConfig } from "./speech/providers/local/config.js";
 import type { RequestedSpeechProviders } from "./speech/speech-types.js";
 import { createSpeechService } from "./speech/speech-runtime.js";
-import { AgentManager } from "./agent/agent-manager.js";
+import { AgentManager, ArchiveNotQuietError } from "./agent/agent-manager.js";
 import { AgentStorage } from "./agent/agent-storage.js";
 import {
   FileAgentTimelineStore,
@@ -212,6 +214,8 @@ import {
   killTerminalsForWorkspace,
   type ActiveWorkspaceRef,
 } from "./workspace-archive-service.js";
+import { startAutoArchiveIdle } from "./auto-archive-idle.js";
+import { defaultLedgerDir, readOpenLedgerRows } from "./ledger-items.js";
 import { setupAutoArchiveOnMerge } from "./auto-archive-on-merge/index.js";
 import { wrapSessionMessage, type SessionOutboundMessage } from "./messages.js";
 import type { TerminalManager } from "../terminal/terminal-manager.js";
@@ -482,6 +486,7 @@ export interface PaseoDaemonConfig {
   reviveOnRestart?: boolean;
   idleSleepMinutes?: number;
   idleSleepProviders?: string[];
+  autoArchiveClosedAfterHours?: number;
   autoResumeOnLimit?: boolean;
   appendSystemPrompt?: string;
   terminalProfiles?: TerminalProfile[];
@@ -1675,6 +1680,39 @@ export async function createPaseoDaemon(
     deliveryPending: (agentId) =>
       heldSends.pending(agentId) > 0 || queuedAgentMessages.pending(agentId) > 0,
   });
+  // FU-462: closed and finished-and-idle sessions that nobody needs are archived, one at a time (auto-archive-idle.ts).
+  const stopAutoArchiveIdle = startAutoArchiveIdle({
+    logger,
+    loadedRecords: () => agentStorage.listLoadedSync(),
+    lifecycleOf: (id) => agentManager.getAgent(id)?.lifecycle ?? null,
+    lastMessageOf: (id) => {
+      const timeline = agentManager.getTimeline(id);
+      return timeline.findLast((item) => item.type === "assistant_message")?.text ?? null;
+    },
+    readOpenLedgerRows: () => readOpenLedgerRows(defaultLedgerDir(), true),
+    closedAfterHours: () => config.autoArchiveClosedAfterHours ?? 24,
+    protectedIds: () =>
+      new Set([
+        ...hostLinkRuntime.service.pendingNoticeWorkers().map((worker) => worker.agentId),
+        ...hostLinkRuntime.service.remoteWorkerSenders(),
+      ]),
+    archive: async ({ id, lastUserMessageAt }) => {
+      const agent = agentManager.getAgent(id);
+      if (
+        agentManager.hasInFlightRun(id) ||
+        (agent && agent.pendingPermissions.size > 0) ||
+        (await agentManager.hasLiveBackgroundWork(id))
+      )
+        return "skipped";
+      try {
+        await agentManager.archiveAgent(id, undefined, { ifQuiet: { lastUserMessageAt } });
+        return "archived";
+      } catch (error) {
+        if (error instanceof ArchiveNotQuietError) return "skipped";
+        throw error;
+      }
+    },
+  });
   // FULCRA(orchestration): a worker's finished turn reaches its lead as one notice (report-up.ts).
   const stopReportUp = startReportUp({
     createAgent,
@@ -1701,10 +1739,10 @@ export async function createPaseoDaemon(
     onError: (error) => logger.warn({ err: error }, "Automations: an automation step failed"),
   });
   logger.info({ elapsed: elapsed() }, "Loading persisted agent registry");
-  const persistedRecords = await agentStorage.list();
+  const persistedRecords = await agentStorage.listLoaded();
   logger.info(
     { elapsed: elapsed() },
-    `Agent registry loaded (${persistedRecords.length} record${persistedRecords.length === 1 ? "" : "s"}); agents will initialize on demand`,
+    `Agent registry loaded (${persistedRecords.length} record${persistedRecords.length === 1 ? "" : "s"}, ${agentStorage.bootstrapRecordsSkipped} archived left on disk); agents will initialize on demand`,
   );
   // Orca R3a. Nothing runs a stored `running` turn after a restart, so it is normalised to idle with a durable
   // interruption marker before any client reads it. No agent is loaded, resumed or prompted here.
@@ -1993,6 +2031,7 @@ export async function createPaseoDaemon(
   logger.info({ elapsed: elapsed() }, "Bootstrap complete, ready to start listening");
 
   let liveRecorder: ReturnType<typeof startLiveRecorder> | undefined;
+  const reviveCarry = new ReviveCarry();
   const start = async () => {
     let mainStarted = false;
     try {
@@ -2156,6 +2195,7 @@ export async function createPaseoDaemon(
               );
               distribution.start({
                 automaticResumeEnabled: () => daemonConfigStore.get().autoResumeOnLimit !== false,
+                nodeFlags: packagedInspectorFlags(),
                 intercomRateSettingsFile: path.join(
                   config.paseoHome,
                   "agent-requests",
@@ -2267,11 +2307,13 @@ export async function createPaseoDaemon(
           localServerId: serverId,
           logger,
           isEnabled: () => daemonConfigStore.get().reviveOnRestart !== false,
+          carry: reviveCarry,
           onSessionsReady: () => {
             // The boot has read and removed the previous records: keep a crash-safe copy from now on.
             liveRecorder ??= startLiveRecorder({
               paseoHome: config.paseoHome,
-              listAgents: () => agentManager.listAgentsForRevive(),
+              listAgents: async () =>
+                reviveCarry.withUnloaded(await agentManager.listAgentsForRevive(), agentStorage),
               logger,
             });
             // The final recovery chain below owns error reporting.
@@ -2314,6 +2356,7 @@ export async function createPaseoDaemon(
     stopSyncIoMeter();
     limitResume.stop();
     stopReportUp();
+    stopAutoArchiveIdle();
     hostLinkRuntime.close();
     heldSends.close();
     await queuedAgentMessages.close();
@@ -2332,8 +2375,8 @@ export async function createPaseoDaemon(
     // FULCRA(orchestration): the next boot loads these sessions again (revive-on-restart.ts).
     await recordOpenSessions({
       paseoHome: config.paseoHome,
-      agents: agentManager.listAgents(),
-      backgroundIds,
+      agents: await reviveCarry.withUnloaded(agentManager.listAgents(), agentStorage),
+      backgroundIds: new Set([...backgroundIds, ...reviveCarry.pendingBackgroundIds()]),
     }).catch((err) => logger.warn({ err }, "Could not record the open sessions for the next boot"));
     // The clean record is on disk: now remove the crash-safe copy. A crash between the two writes still leaves a
     // record, and boot prefers the clean one.
