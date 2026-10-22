@@ -1513,39 +1513,44 @@ test("pendingRiskNotices and markRiskNoticeSent: a notice stays pending until it
   await markRiskNoticeSent(root, n.key);
   assert.deepEqual(pendingRiskNotices(root), []);
 });
-test("the launch hook raises one RISK notice for a pinned API launch while a subscription is free, and none for the next launch in the window (FU-443)", async () => {
-  const { root, sub, api } = await riskPool();
-  const key = "sk-ant-api03-" + "k".repeat(40);
-  const tokens = new Map([
-    [api.id, key],
-    [sub.id, "sk-ant-oat01-" + "x".repeat(40)],
-  ]);
-  const risks = [];
-  const hook = sessionOpenHook({
-    root: () => root,
-    keychain: { get: async (id) => tokens.get(id) ?? null },
-    now: () => T0,
-    onRisk: (r) => risks.push(r),
-  });
-  const req = (id, account) => ({
-    request: {
-      agentId: id,
-      provider: "claude",
-      cwd: "/x",
-      workspaceId: null,
-      reason: "create",
-      purpose: "interactive",
-      env: account ? { FULCRA_ACCOUNT_REQUEST: account } : {},
-    },
-  });
-  assert.equal((await hook(req(S(1)))).env.FULCRA_ACCOUNT_ID, sub.id);
-  assert.equal(risks.length, 0, "a subscription launch is no risk");
-  assert.equal((await hook(req(S(2), "Billing"))).env.FULCRA_ACCOUNT_ID, api.id);
-  assert.equal(risks.length, 1);
-  assert.equal(risks[0].accountId, api.id);
-  assert.equal(pendingRiskNotices(root).length, 1);
-  await hook(req(S(3), "Billing"));
-  assert.equal(risks.length, 1, "same account and window: no repeat");
-  assert.equal(pendingRiskNotices(root).length, 1);
-  assert.equal(JSON.stringify(readAccounts(root)).includes(key), false);
-});
+// An API-key launch needs a helper command, which exists only on macOS and Windows.
+test(
+  "the launch hook raises one RISK notice for a pinned API launch while a subscription is free, and none for the next launch in the window (FU-443)",
+  { skip: !["darwin", "win32"].includes(process.platform) },
+  async () => {
+    const { root, sub, api } = await riskPool();
+    const key = "sk-ant-api03-" + "k".repeat(40);
+    const tokens = new Map([
+      [api.id, key],
+      [sub.id, "sk-ant-oat01-" + "x".repeat(40)],
+    ]);
+    const risks = [];
+    const hook = sessionOpenHook({
+      root: () => root,
+      keychain: { get: async (id) => tokens.get(id) ?? null },
+      now: () => T0,
+      onRisk: (r) => risks.push(r),
+    });
+    const req = (id, account) => ({
+      request: {
+        agentId: id,
+        provider: "claude",
+        cwd: "/x",
+        workspaceId: null,
+        reason: "create",
+        purpose: "interactive",
+        env: account ? { FULCRA_ACCOUNT_REQUEST: account } : {},
+      },
+    });
+    assert.equal((await hook(req(S(1)))).env.FULCRA_ACCOUNT_ID, sub.id);
+    assert.equal(risks.length, 0, "a subscription launch is no risk");
+    assert.equal((await hook(req(S(2), "Billing"))).env.FULCRA_ACCOUNT_ID, api.id);
+    assert.equal(risks.length, 1);
+    assert.equal(risks[0].accountId, api.id);
+    assert.equal(pendingRiskNotices(root).length, 1);
+    await hook(req(S(3), "Billing"));
+    assert.equal(risks.length, 1, "same account and window: no repeat");
+    assert.equal(pendingRiskNotices(root).length, 1);
+    assert.equal(JSON.stringify(readAccounts(root)).includes(key), false);
+  },
+);
