@@ -383,6 +383,9 @@ function buildSerializableConfig(config: AgentSessionConfig): SerializableAgentC
   if (config.mcpServers) {
     serializable.mcpServers = config.mcpServers;
   }
+  if (config.launchEnv?.CLAUDE_CONFIG_DIR) {
+    serializable.launchEnv = { CLAUDE_CONFIG_DIR: config.launchEnv.CLAUDE_CONFIG_DIR };
+  }
   return Object.keys(serializable).length ? serializable : null;
 }
 

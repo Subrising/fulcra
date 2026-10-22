@@ -667,6 +667,8 @@ export interface AgentSessionConfig {
   providerOptions?: ProviderOptions;
   toolPolicy?: ToolPolicy;
   mcpServers?: Record<string, McpServerConfig>;
+  /** FU-479: the Claude config dir the session was created with. Persisted so a revive keeps the same account. */
+  launchEnv?: { CLAUDE_CONFIG_DIR?: string };
   /** Launch-only app grants, resolved from this job's creation label. */
   computerUse?: { allowApps: string[]; decisions?: Record<string, "accept" | "decline"> };
   /**

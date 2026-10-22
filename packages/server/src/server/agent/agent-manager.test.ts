@@ -17087,3 +17087,41 @@ test("archiving a live session does not read the archived records that boot left
   await manager.archiveAgent(agent.id);
   expect(storage.archivedOnDiskCount).toBe(3);
 });
+
+// FU-479: a restarted session ran with the daemon's Claude config, not the one it was created with.
+test("a session keeps its CLAUDE_CONFIG_DIR across a daemon restart", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-config-dir-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const resumed: Array<string | undefined> = [];
+  const client = new (class extends TestAgentClient {
+    override async resumeSession(
+      _handle: AgentPersistenceHandle,
+      config?: Partial<AgentSessionConfig>,
+      context?: AgentLaunchContext,
+    ): Promise<AgentSession> {
+      resumed.push(context?.env?.CLAUDE_CONFIG_DIR);
+      return new TestAgentSession({ provider: "codex", cwd: config?.cwd ?? workdir });
+    }
+  })();
+  const first = new AgentManager({ clients: { codex: client }, registry: storage, logger });
+  const second = new AgentManager({ clients: { codex: client }, registry: storage, logger });
+  const agent = await first.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+    env: { CLAUDE_CONFIG_DIR: "/accounts/second" },
+  });
+  try {
+    await first.flush();
+    await first.closeAgent(agent.id);
+    await ensureAgentLoaded(agent.id, {
+      agentManager: second,
+      agentStorage: storage,
+      validProviders: ["codex"],
+      logger,
+    });
+    expect(resumed).toEqual(["/accounts/second"]);
+  } finally {
+    await first.closeAgent(agent.id).catch(() => undefined);
+    await second.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});

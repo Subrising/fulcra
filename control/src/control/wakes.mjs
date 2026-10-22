@@ -355,7 +355,11 @@ export class Wakes {
   // ---- item 1: observe one owned session ----
   async observe(r) {
     const s = this.store.get(r.session);
-    if (!s || s.mode !== "delegated" || this.control.busy.has(r.session)) return; // a human-held session is its human's
+    if (!s || s.mode !== "delegated") return; // a human-held session is its human's
+    if (this.control.busy.has(r.session)) {
+      this.dirty.add(r.session); // FU-478: keep it for the next pump, not the 5 min tick
+      return;
+    }
     const a = await this.control.native.snapshot(r.session);
     const pending = Array.isArray(a.pendingPermissions) ? a.pendingPermissions : [];
     for (const p of pending) {
@@ -621,6 +625,7 @@ export class Wakes {
             try {
               await this.observe(r);
             } catch (e) {
+              this.dirty.add(id); // FU-478: a failed observation is tried again
               this.lastError = { session: id, message: e.message, at: this.iso() };
             }
           }

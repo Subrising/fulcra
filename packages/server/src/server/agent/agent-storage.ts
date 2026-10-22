@@ -61,6 +61,7 @@ const SERIALIZABLE_CONFIG_SCHEMA = z
       .optional(),
     systemPrompt: z.string().nullable().optional(),
     mcpServers: z.record(z.string(), z.any()).nullable().optional(),
+    launchEnv: z.object({ CLAUDE_CONFIG_DIR: z.string().optional() }).nullable().optional(),
   })
   .nullable()
   .optional();
@@ -158,6 +159,7 @@ export type SerializableAgentConfig = Pick<
   | "toolPolicy"
   | "systemPrompt"
   | "mcpServers"
+  | "launchEnv"
 >;
 
 export type StoredAgentRecord = z.infer<typeof STORED_AGENT_SCHEMA>;

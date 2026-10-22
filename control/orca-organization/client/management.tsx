@@ -14,6 +14,9 @@ import { observedList, retainRequestIdentity } from "./management-query";
 import { NativeQueuedInstruction } from "./native-queued-instruction";
 type SessionRole = "planning" | "orchestration" | "implementation";
 // "Default" sends no role: the session gets the installation's ordinary defaults, exactly as before roles existed.
+// One window for list and health. Both are read when the view opens or is refreshed; act() runs a live check before any write.
+const FRESH_MS = 60000;
+
 const ROLE_CHOICES: ReadonlyArray<readonly [SessionRole | null, string]> = [
   [null, "Default"],
   ["planning", "Planning"],
@@ -139,10 +142,10 @@ export function ManagementPanel({
   const connected =
     list.data?.status === "observed" &&
     !list.isError &&
-    clock - Date.parse(list.data.observedAt) < 60000 &&
+    clock - Date.parse(list.data.observedAt) < FRESH_MS &&
     health.data?.status === "observed" &&
     !health.isError &&
-    clock - health.dataUpdatedAt < 8000;
+    clock - health.dataUpdatedAt < FRESH_MS;
   const fresh = connected && list.data?.taskAuthority?.allowed === true;
   const idFor = (actionKey: string) => {
     const key = `${taskId}:${actionKey}`;

@@ -727,7 +727,7 @@ test("freshness and connection failures disable new work even when retained rows
   await waitFor(() => assert.equal(create().disabled, true));
   await act(async () => {
     client.setQueryData(key, freshList);
-    client.setQueryData(["orca-management-health"], health, { updatedAt: clock - 8000 });
+    client.setQueryData(["orca-management-health"], health, { updatedAt: clock - 60000 });
   });
   await waitFor(() => assert.equal(create().disabled, true));
   await act(async () =>

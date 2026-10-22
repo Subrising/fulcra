@@ -303,6 +303,24 @@ export interface QuietArchiveExpectation {
   lastUserMessageAt: string | null;
 }
 
+// FU-479: a create's CLAUDE_CONFIG_DIR is kept in the stored config, so a revive launches with the same Claude account.
+function applyLaunchEnv(
+  config: AgentSessionConfig,
+  options: CreateAgentOptions,
+): { config: AgentSessionConfig; options: CreateAgentOptions } {
+  const dir = options.env?.CLAUDE_CONFIG_DIR ?? config.launchEnv?.CLAUDE_CONFIG_DIR;
+  if (!dir) return { config, options };
+  return {
+    config: { ...config, launchEnv: { CLAUDE_CONFIG_DIR: dir } },
+    options: { ...options, env: { CLAUDE_CONFIG_DIR: dir, ...options.env } },
+  };
+}
+
+function persistedLaunchEnv(config: AgentSessionConfig): Record<string, string> | undefined {
+  const dir = config.launchEnv?.CLAUDE_CONFIG_DIR;
+  return dir ? { CLAUDE_CONFIG_DIR: dir } : undefined;
+}
+
 export class AgentManagerShuttingDownError extends Error {
   constructor() {
     super("Agent manager is shutting down");
@@ -3253,6 +3271,7 @@ export class AgentManager {
       config = { ...request.config, internal: config.internal };
       options = { ...options, env: request.env };
     }
+    ({ config, options } = applyLaunchEnv(config, options));
     // Update-7 W3 (R1 P-1): an internal helper agent (branch names, commit and PR text -- fed untrusted repository
     // text) skips plugin hooks, so it never gets a host's owner default; with no mode of its own it runs in its
     // provider's conservative internal mode, explicitly, never in the daemon's general default.
@@ -3448,7 +3467,7 @@ export class AgentManager {
       client,
       storedConfig.cwd,
       paseoToolPolicy,
-      undefined,
+      persistedLaunchEnv(mergedConfig),
       {
         reason: "resume",
         purpose,

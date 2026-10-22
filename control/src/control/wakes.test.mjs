@@ -698,3 +698,17 @@ test("FU-457: without a heartbeat the watchdog runs the wakes tick only every 5 
   f.clock.now += 30_000;
   assert.equal(f.w.safetyTickDue(), true, "a heartbeat keeps the 30 s cadence");
 });
+test("FU-478: an update seen while the session is busy is observed on the next pump, not the 5 min tick", async (t) => {
+  const f = fixture(t);
+  await f.delegate(f.holder);
+  const r = f.started();
+  await f.delegate(r);
+  f.completions.set(f.instructed(r), { ended: true, progress: { outputPreview: "done" } });
+  f.control.busy.add(r);
+  f.w.dirty.add(r);
+  await f.w.pump();
+  assert.equal(f.sent.length, 0);
+  f.control.busy.delete(r);
+  await f.w.pump();
+  assert.equal(f.sent.length, 1, "the skipped observation was kept");
+});
