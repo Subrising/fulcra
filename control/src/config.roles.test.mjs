@@ -95,8 +95,8 @@ test("unknown roles, keys, providers, families, thinking levels and refused mode
       /Invalid model selection/,
     );
     assert.throws(
-      () => configuredDefaults(bad({ planning: { claude: { modeId: "bypassPermissions" } } })),
-      /Refused mode for claude/,
+      () => configuredDefaults(bad({ planning: { claude: { modeId: "autoo" } } })),
+      /Unsupported mode for claude/,
     );
     // Update-7 W3: Codex full-access is owner-approved, so a role may name it.
     assert.equal(

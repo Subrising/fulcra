@@ -165,14 +165,14 @@ export function explicitSelection(provider, { model, effort } = {}) {
   return Object.keys(out).length ? out : undefined;
 }
 // Update-7 W3 (owner, 01:29Z: "the default should be auto-mode/full-access"): Codex full-access is no longer refused; it
-// is the default for new Codex sessions. Claude's bypassPermissions stays refused: Claude's automatic mode is `auto`
-// (the classifier), so bypass is never needed to avoid prompts. Fulcra's own approval layer (W2) keeps escalating the
-// dangerous classes.
-export const REFUSED = { claude: ["bypassPermissions"], codex: [] };
+// is the default for new Codex sessions. FU-477 (owner, 22 Oct 2026: full permissions; new leads default to
+// bypassPermissions): Claude's bypassPermissions is no longer refused and may be saved as the default. The product
+// default for Claude stays `auto`. Fulcra's own approval layer (W2) keeps escalating the dangerous classes.
+export const REFUSED = { claude: [], codex: [] };
 // The runtime's unattended modes the owner has explicitly approved as selectable (and default). Every OTHER unattended
 // mode must be refused; provider-mode.test.mjs asserts REFUSED + this equals the runtime's unattended set exactly.
 export const OWNER_APPROVED_UNATTENDED = Object.freeze({
-  claude: Object.freeze([]),
+  claude: Object.freeze(["bypassPermissions"]),
   codex: Object.freeze(["full-access"]),
 });
 // The provider's own mode ids, from the same AGENT_PROVIDER_DEFINITIONS the comment at the top of this

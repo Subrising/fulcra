@@ -108,8 +108,8 @@ controller will select:
 
 Anything else is refused by name, with the selectable list in the message — a
 typo such as `autoo` is rejected rather than passed through to session creation.
-`bypassPermissions` and `full-access` are real provider modes and are refused
-separately, for the reason in the next section.
+`bypassPermissions` (claude) and `full-access` (codex) are real provider modes
+that the owner approved. A settings file may name them as a saved default.
 
 The file must be **owned by you and private** — mode `0600`, in a canonical
 directory, not a symlink. This is the same rule the portable config already
@@ -269,18 +269,15 @@ a fault.
 
 ## What settings cannot do
 
-**They cannot select a refused mode.** `bypassPermissions` (claude) and
-`full-access` (codex) are refused wherever they appear — product default,
-installation file, or per-spawn override. They broaden filesystem and network
-access rather than automating approval, which is a security change wearing a
-mode's clothes. A settings file is not a way around a refusal, and the
-controller refuses to start a spawn that asks for one.
+**They cannot select a refused mode.** No mode is refused now: `bypassPermissions`
+(claude) and `full-access` (codex) are owner-approved (FU-477). The `REFUSED` table
+stays as the place to add a mode the owner does not approve. An unknown mode,
+such as `autoo`, is still refused wherever it appears.
 
-**A refused mode anywhere in the file refuses every spawn.** The whole `modes`
-map is validated before a provider is chosen, so naming `bypassPermissions` for
-claude also stops codex sessions being created. That is deliberate: a settings
-file asking for a refused mode is a file to fix, and letting the providers it
-does not name carry on would leave the dangerous entry sitting there unnoticed.
+**An unknown mode anywhere in the file refuses every spawn.** The whole `modes`
+map is validated before a provider is chosen, so a typo for claude also stops
+codex sessions being created. That is deliberate: a settings file with a bad
+entry is a file to fix.
 
 **They cannot name a prototype member.** `__proto__`, `constructor` and
 `prototype` are refused as keys anywhere in the file, by name and with that

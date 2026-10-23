@@ -624,10 +624,10 @@ receives instructions back the same way.
 inlines its own options object. It reads the pinned runtime's own
 `AGENT_PROVIDER_DEFINITIONS`:
 
-| Provider | Automatic mode | What it is                                                                                                                 | Refused             |
-| -------- | -------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------------- |
-| `claude` | `auto`         | model classifier reviews permission prompts                                                                                | `bypassPermissions` |
-| `codex`  | `auto-review`  | same workspace-write permissions as its default, eligible `on-request` approvals routed through the auto-reviewer subagent | `full-access`       |
+| Provider | Automatic mode | What it is                                                                                                                 | Refused       |
+| -------- | -------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| `claude` | `auto`         | model classifier reviews permission prompts                                                                                | none          |
+| `codex`  | `auto-review`  | same workspace-write permissions as its default, eligible `on-request` approvals routed through the auto-reviewer subagent | `full-access` |
 
 Thinking option defaults to `medium` for Claude and `high` for Codex (`DEFAULT_THINKING_BY_PROVIDER`), unless a role default or an installation setting says otherwise (see `session-defaults.md`). Codex also carries its sandbox and approval
 pins **explicitly**, derived from the chosen mode rather than hardcoded, so a
@@ -638,15 +638,15 @@ sandbox is impossible and the mapping cannot drift by transcription. Claude
 carries none: the old `ask: ['Write','Edit']` pin was the opposite of automatic
 approval.
 
-`REFUSED` is asserted **equal** to the set of modes the runtime itself flags
-`isUnattended`, in both directions. A new unattended mode added upstream fails
+`REFUSED` plus `OWNER_APPROVED_UNATTENDED` is asserted **equal** to the set of
+modes the runtime itself flags `isUnattended`, in both directions. A new unattended mode added upstream fails
 the test rather than becoming quietly selectable.
 
 **Codex has no classifier mode.** `auto-review` is its closest _supported_
 automatic policy and is named as such rather than relabelled "Auto".
-`bypassPermissions` and `full-access` are refused outright — both are marked
-`isUnattended` by the runtime, and using either would broaden access to imitate
-another provider rather than automate approval.
+`bypassPermissions` and `full-access` are marked `isUnattended` by the runtime.
+The owner approved both as selectable and as a saved default (FU-477, 22 Oct 2026:
+full permissions); the product default for Claude stays `auto`.
 
 A deliberate `defaults` on the create call wins; under it an installation may set
 `defaults.thinkingOptionId` and `defaults.modes.<provider>` in `ORCA_HOME`
