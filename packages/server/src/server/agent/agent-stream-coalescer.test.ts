@@ -171,6 +171,34 @@ describe("AgentStreamCoalescer", () => {
     ]);
   });
 
+  test("holds the rest of a burst until the last flush has committed", async () => {
+    const flushes: AgentStreamCoalescerFlush[] = [];
+    let commit = () => {};
+    const coalescer = new AgentStreamCoalescer({
+      timers: { setTimeout, clearTimeout },
+      onFlush: (payload) => {
+        flushes.push(payload);
+        return new Promise<void>((resolve) => {
+          commit = resolve;
+        });
+      },
+    });
+
+    coalescer.handle("agent-1", assistant("a"));
+    for (let window = 0; window < 5; window++) {
+      coalescer.handle("agent-1", assistant("b"));
+      await vi.advanceTimersByTimeAsync(AGENT_STREAM_COALESCE_DEFAULT_WINDOW_MS);
+    }
+    expect(flushes.map((flush) => flush.item)).toEqual([{ type: "assistant_message", text: "a" }]);
+
+    commit();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(flushes.map((flush) => flush.item)).toEqual([
+      { type: "assistant_message", text: "a" },
+      { type: "assistant_message", text: "bbbbb" },
+    ]);
+  });
+
   test("uses constructor windowMs instead of a hard-coded value", async () => {
     const { coalescer, flushes } = createHarness(10);
 

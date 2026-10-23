@@ -2390,6 +2390,7 @@ export class AgentManager {
           return undefined;
         });
         this.trackBackgroundTask(task);
+        return task;
       },
     });
     this.updateProviderRegistry({
@@ -9060,7 +9061,9 @@ export class AgentManager {
       this.touchUpdatedAt(agent);
       if (this.agentStreamCoalescer.handle(agent.id, event)) {
         this.traceCoalescerBuffered(agent, event, eventTurnId);
-        await this.drainTimelineWrites(agent.id);
+        // A buffered chunk does not wait for this agent's commits. Waiting made every provider
+        // delta its own commit and message whenever a slow journal read held the queue. Any
+        // event that is not buffered flushes and drains below, so nothing overtakes the text.
         this.assertTimelineHealthy(agent.id);
         return false;
       }
