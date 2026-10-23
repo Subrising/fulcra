@@ -60,6 +60,31 @@ base provider's options unless it sets its own options record.
 See the [SDK provider options guide](../public-docs/sdk/provider-options.md) for
 per-agent examples and provider-specific keys.
 
+## Claude prompt cache TTL
+
+The daemon launches Claude Code with `ENABLE_PROMPT_CACHING_1H=1`, so every cache write uses
+the 1-hour TTL. Without it, Claude Code writes subagent caches with the 5-minute TTL, and a helper
+that waits on a 5-60 minute job rewrites its whole context when it wakes. A 1-hour write costs 2x
+base input against 1.25x for 5 minutes. On the 22-23 Oct 2026 fleet transcripts, the 1-hour TTL
+was cheaper for Sonnet helpers and for main sessions, which already get it by default on a Claude
+subscription (FU-484).
+
+An explicit value wins. To go back to the Claude Code default, set it in the provider env:
+
+```json
+{
+  "agents": {
+    "providers": {
+      "claude": { "env": { "ENABLE_PROMPT_CACHING_1H": "0" } }
+    }
+  }
+}
+```
+
+Claude Code's own controls also override it: `FORCE_PROMPT_CACHING_5M`,
+`CLAUDE_CODE_PROMPT_CACHE_TTL` and `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL` (`5m` or `1h`), the
+`promptCacheTtl` and `subagentPromptCacheTtl` settings, and agent frontmatter.
+
 ---
 
 ## Table of Contents
