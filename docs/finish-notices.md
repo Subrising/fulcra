@@ -16,6 +16,11 @@ A busy parent gets it when it becomes idle. The saved notice is the retry record
 An `unknown` outcome is checked against the parent's session. If the parent has no copy, the notice goes again with the same message ID.
 Paused input stays held. Its finish notice stays unarmed until resume. See [provider pauses](notice-pause.md).
 
+A finished child turn wakes its parent only when the final message has DONE, BLOCKED, DECISION, QUESTION or RISK at the start of a line.
+Any other end of turn is held: the notice stays armed and no parent turn starts. An error, a permission request or a usage limit always wakes the parent.
+A delivery notice (queued, delivered, accepted) never starts a parent turn.
+The rule is in `packages/server/src/server/finish-notice-filter.ts`.
+
 Use `fulcra send <child> --prompt-file task.txt --no-wait` on the parent host.
 Use `--steer` to join the current turn when the provider supports steering.
 Use `--no-notify-on-finish` to opt out for that message.

@@ -247,12 +247,6 @@ function sentToLeadDuring(
   return at !== null && at >= startedAt;
 }
 
-/** The last line of a final message asks a question (markdown emphasis allowed). */
-function endsWithQuestion(text: string | null | undefined): boolean {
-  const line = text?.trim().split(/\r?\n/).at(-1)?.trim() ?? "";
-  return /\?(?:\*\*|__|`|\*|_)*$/.test(line);
-}
-
 /** A chat's lead chat on this computer (fulcra.reports-to, else its parent), or the reason there is none. */
 export async function leadChatOf(
   store: LineStore,
@@ -825,7 +819,7 @@ export class ReportUpService {
     return true;
   }
 
-  /** FU-439: true (and logged) when a finished turn has no DONE, BLOCKED or question for the lead. */
+  /** FU-483: true (and logged) when a finished turn has no result line for the lead. */
   private async finishHeld(
     workerId: string,
     observed: string | null | undefined,
@@ -838,7 +832,7 @@ export class ReportUpService {
     if (finishNoticeWanted(text)) return false;
     this.deps.logger.info(
       { childId: workerId, parentId: leadId },
-      "Finish notice held: no DONE/BLOCKED/question",
+      "Finish notice held: no result line",
     );
     return true;
   }
@@ -1940,7 +1934,7 @@ export class ReportUpService {
       observedLast === undefined
         ? await this.deps.agentManager.getLastAssistantMessage(worker.id).catch(() => null)
         : observedLast;
-    if (!parseWorkerResult(lastMessage) && !endsWithQuestion(lastMessage)) return;
+    if (!lastMessage || !finishNoticeWanted(lastMessage)) return;
     // The worker already messaged its lead during this turn, so its result is not unseen.
     if (sentToLeadDuring(worker, startedAt, this.deps.localServerId)) return;
     const lead = await this.leadOf(worker);
