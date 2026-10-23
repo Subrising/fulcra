@@ -27,7 +27,8 @@ export interface AgentStreamCoalescerOptions {
   windowMs?: number;
   timers: AgentStreamCoalescerTimers;
   now?: () => number;
-  onFlush: (payload: AgentStreamCoalescerFlush) => void;
+  /** Return the commit to hold the next timed flush until it settles. */
+  onFlush: (payload: AgentStreamCoalescerFlush) => void | Promise<unknown>;
 }
 
 interface PendingTextEntry {
@@ -54,6 +55,7 @@ interface PendingAgentStreamBuffer {
   timer: ReturnType<typeof setTimeout> | null;
   flushing: boolean;
   lastFlushAt: number | null;
+  commit: Promise<unknown> | null;
 }
 
 function isCoalescableTimelineEvent(event: AgentStreamEvent): event is CoalescableTimelineEvent {
@@ -88,7 +90,7 @@ function isSameTextStream(previous: PendingTextEntry, next: PendingTextEntry): b
 
 export class AgentStreamCoalescer {
   private readonly buffers = new Map<string, PendingAgentStreamBuffer>();
-  private readonly onFlush: (payload: AgentStreamCoalescerFlush) => void;
+  private readonly onFlush: (payload: AgentStreamCoalescerFlush) => void | Promise<unknown>;
   private readonly timers: AgentStreamCoalescerTimers;
   private readonly windowMs: number;
   private readonly now: () => number;
@@ -114,6 +116,13 @@ export class AgentStreamCoalescer {
 
     if (isTerminalToolCall(event.item)) {
       this.flushBuffer(agentId);
+      return true;
+    }
+
+    // While the last flush is still committing, the rest of the burst waits for it and leaves as
+    // one item. A journal held by a slow read would otherwise get one queued write per window and
+    // hand a remote client the reply at the journal's pace.
+    if (buffer.commit) {
       return true;
     }
 
@@ -166,6 +175,7 @@ export class AgentStreamCoalescer {
       timer: null,
       flushing: false,
       lastFlushAt: null,
+      commit: null,
     };
     this.buffers.set(agentId, buffer);
     return buffer;
@@ -207,10 +217,10 @@ export class AgentStreamCoalescer {
     buffer.entries.push(entry);
   }
 
-  private scheduleFlush(buffer: PendingAgentStreamBuffer): void {
+  private scheduleFlush(buffer: PendingAgentStreamBuffer, delayMs = this.windowMs): void {
     const timer = this.timers.setTimeout(() => {
       this.flushBuffer(buffer.agentId, buffer);
-    }, this.windowMs);
+    }, delayMs);
     timer.unref?.();
     buffer.timer = timer;
   }
@@ -246,9 +256,10 @@ export class AgentStreamCoalescer {
     buffer.flushing = true;
     buffer.lastFlushAt = this.now();
 
+    const commits: Promise<unknown>[] = [];
     try {
       for (const entry of this.collapseEntries(entries)) {
-        this.onFlush({
+        const commit = this.onFlush({
           agentId,
           item:
             entry.kind === "text"
@@ -260,10 +271,37 @@ export class AgentStreamCoalescer {
           provider: entry.provider,
           ...(entry.turnId !== undefined ? { turnId: entry.turnId } : {}),
         });
+        if (commit) commits.push(commit);
       }
     } finally {
       buffer.flushing = false;
     }
+    if (commits.length === 0) {
+      return;
+    }
+    const commit = Promise.allSettled(commits);
+    buffer.commit = commit;
+    void commit.then(() => this.settleCommit(agentId, buffer, commit));
+  }
+
+  private settleCommit(
+    agentId: string,
+    buffer: PendingAgentStreamBuffer,
+    commit: Promise<unknown>,
+  ): void {
+    if (buffer.commit !== commit) {
+      return;
+    }
+    buffer.commit = null;
+    if (this.buffers.get(agentId) !== buffer || buffer.timer || buffer.entries.length === 0) {
+      return;
+    }
+    const elapsed = buffer.lastFlushAt === null ? this.windowMs : this.now() - buffer.lastFlushAt;
+    if (elapsed >= this.windowMs) {
+      this.flushBuffer(agentId, buffer);
+      return;
+    }
+    this.scheduleFlush(buffer, this.windowMs - elapsed);
   }
 
   private collapseEntries(entries: PendingAgentStreamEntry[]): PendingAgentStreamEntry[] {

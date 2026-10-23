@@ -6,7 +6,8 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import { AgentManager, type AgentManagerEvent } from "./agent-manager.js";
 import { AGENT_STREAM_COALESCE_DEFAULT_WINDOW_MS } from "./agent-stream-coalescer.js";
-import type { AgentTimelineRow } from "./agent-timeline-store-types.js";
+import type { AgentTimelineRow, AgentTimelineStore } from "./agent-timeline-store-types.js";
+import { FileAgentTimelineStore } from "./file-agent-timeline-store.js";
 import { projectTimelineRows } from "./timeline-projection.js";
 import type {
   AgentCapabilityFlags,
@@ -243,13 +244,19 @@ interface Harness {
   cleanup: () => void;
 }
 
-function createHarness(options?: { provider?: AgentProvider }): Harness {
+function createHarness(options?: {
+  provider?: AgentProvider;
+  durableTimelineStore?: AgentTimelineStore;
+}): Harness {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-stream-coalescing-"));
   const client = new TestAgentClient(options?.provider ?? "codex");
   const manager = new AgentManager({
     clients: { [client.provider]: client },
     idFactory: createIdFactory(),
     logger: createTestLogger(),
+    ...(options?.durableTimelineStore
+      ? { durableTimelineStore: options.durableTimelineStore }
+      : {}),
   });
   const events: AgentManagerEvent[] = [];
   manager.subscribe((event) => events.push(event), { replayState: false });
@@ -1373,6 +1380,71 @@ describe("target coalesced behavior", () => {
       });
     } finally {
       harness.cleanup();
+    }
+  });
+
+  test("merges text that arrives while a durable commit waits into one write", async () => {
+    vi.useFakeTimers();
+    // A slow read holds the agent's journal queue, so the next commit waits behind it. Text that
+    // arrives meanwhile must not become one queued write per window: a remote client would
+    // then see it trickle in at the store's pace long after the model has finished.
+    const journal = mkdtempSync(join(tmpdir(), "agent-manager-stream-coalescing-journal-"));
+    const store = new FileAgentTimelineStore(journal);
+    const inserts: string[][] = [];
+    let held: Promise<void> | null = null;
+    let release = () => {};
+    const durableTimelineStore = new Proxy(store, {
+      get(target, key) {
+        if (key === "bulkInsert") {
+          return async (id: string, rows: readonly AgentTimelineRow[]) => {
+            inserts.push(rows.map((row) => ("text" in row.item ? row.item.text : row.item.type)));
+            await held;
+            return target.bulkInsert(id, rows);
+          };
+        }
+        const value = Reflect.get(target, key, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const harness = createHarness({ durableTimelineStore });
+    try {
+      const { agentId, session } = await createManagedSession(harness);
+      held = new Promise((resolve) => {
+        release = resolve;
+      });
+
+      session.pushEvent(assistant("a"));
+      await waitForSessionEventQueue();
+      for (let window = 0; window < 10; window++) {
+        session.pushEvent(assistant("b"));
+        await waitForSessionEventQueue();
+        await vi.advanceTimersByTimeAsync(COALESCE_WINDOW_MS);
+      }
+      expect(getTimelineStreamEvents(harness.events, agentId)).toHaveLength(0);
+
+      release();
+      await harness.manager.flush();
+
+      expect(inserts).toEqual([["a"], ["b".repeat(10)]]);
+      expect(
+        getTimelineStreamEvents(harness.events, agentId).map((event) =>
+          event.type === "agent_stream" ? event.event : null,
+        ),
+      ).toEqual([
+        { type: "timeline", provider: "codex", item: { type: "assistant_message", text: "a" } },
+        {
+          type: "timeline",
+          provider: "codex",
+          item: { type: "assistant_message", text: "b".repeat(10) },
+        },
+      ]);
+      expect(getProjectedTimelineItems(await harness.manager.getTimelineRows(agentId))).toEqual([
+        { type: "assistant_message", text: `a${"b".repeat(10)}` },
+      ]);
+    } finally {
+      release();
+      harness.cleanup();
+      rmSync(journal, { recursive: true, force: true });
     }
   });
 
