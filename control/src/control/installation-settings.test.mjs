@@ -60,12 +60,13 @@ test("refused provider settings stay refused and malformed config does not fall 
   // Update-7 W3: Codex full-access is owner-approved (the default for new Codex sessions); Claude bypass stays refused.
   write(dir, { modes: { codex: "full-access" } });
   assert.equal(chosen(dir, "codex").modeId, "full-access");
-  for (const [provider, mode] of [["claude", "bypassPermissions"]]) {
-    write(dir, { modes: { [provider]: mode } });
-    assert.throws(() => chosen(dir, provider), /broadens access/);
-    write(dir, {});
-    assert.throws(() => chosen(dir, provider, { modeId: mode }), /broadens access/);
-  }
+  // FU-477: Claude bypass is owner-approved too; only unknown modes are refused.
+  write(dir, { modes: { claude: "bypassPermissions" } });
+  assert.equal(chosen(dir, "claude").modeId, "bypassPermissions");
+  write(dir, { modes: { claude: "autoo" } });
+  assert.throws(() => chosen(dir, "claude"), /Unsupported mode for claude/);
+  write(dir, {});
+  assert.throws(() => chosen(dir, "claude", { modeId: "autoo" }), /Unsupported mode for claude/);
   write(dir, { ask: { codex: ["Write"] } });
   assert.throws(() => chosen(dir, "codex"), /codex has no ask list/);
   fs.writeFileSync(settingsPath(dir), "not json");

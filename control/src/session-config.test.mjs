@@ -26,7 +26,7 @@ const configs = ask(`
     claude: sessionConfig('claude/claude-opus-5'),
     codex: sessionConfig('codex/gpt-6-astra'),
     overridden: sessionConfig('claude/claude-opus-5', { modeId: 'plan', thinkingOptionId: 'low' }),
-    refused: await (async () => { try { sessionConfig('claude/claude-opus-5', { modeId: 'bypassPermissions' }); return null; } catch (e) { return e.message; } })(),
+    refused: await (async () => { try { sessionConfig('claude/claude-opus-5', { modeId: 'autoo' }); return null; } catch (e) { return e.message; } })(),
   }));`);
 
 test("the trial-worker path now takes its mode from the one selector", () => {
@@ -61,7 +61,7 @@ test("the inline approval pins are gone for claude and derived for codex", () =>
 test("a deliberate override still wins, and a refused mode is still refused", () => {
   assert.equal(configs.overridden.modeId, "plan");
   assert.equal(configs.overridden.thinkingOptionId, "low");
-  assert.match(configs.refused, /broadens access rather than automating approval/);
+  assert.match(configs.refused, /Unsupported mode for claude: autoo/);
 });
 
 test("everything this change was not supposed to touch is unchanged", () => {
