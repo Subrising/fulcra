@@ -44,6 +44,14 @@ export interface LineInput {
 
 export type LineDecision = { allowed: true; why: string } | { allowed: false; reason: string };
 
+/** The chats that created a record, as the controller or the product recorded them. */
+function creatorsOf(agent: LineAgent | null): string[] {
+  const labels = agent?.labels ?? {};
+  return [labels[CONTROLLER_PARENT_LABEL], labels[PARENT_AGENT_ID_LABEL]]
+    .map((ref) => ref?.trim())
+    .filter((ref): ref is string => Boolean(ref));
+}
+
 /** The chat a record reports to: its reporting line, else the parent that created it. */
 export function reportsTo(agent: LineAgent | null): string | null {
   const labels = agent?.labels ?? {};
@@ -144,7 +152,7 @@ function titleOf(agent: LineAgent | null): string {
 const name = (agent: LineAgent | null, fallback: string) =>
   `${titleOf(agent) || fallback} (${(agent?.id ?? fallback).slice(0, 8)})`;
 
-/** The target reports to the sender, or allowed the sender as its direct link. */
+/** The target reports to the sender, was created by it, or allowed the sender as its direct link. */
 function inboundDecision(
   input: LineInput,
   senderKey: string,
@@ -153,7 +161,15 @@ function inboundDecision(
   const { sender, target, localServerId } = input;
   const targetLine = resolveLineRef(reportsTo(target), input.mainAssistantId ?? null);
   const senderServer = remote ? (sender.serverId ?? null) : localServerId;
-  if (targetLine === senderKey || sameChat(targetLine, sender.agentId, senderServer)) {
+  // FU-485: a chat may send to a chat it created, also when that chat reports to another line.
+  const startedBySender = creatorsOf(target).some(
+    (ref) => ref === senderKey || sameChat(ref, sender.agentId, senderServer),
+  );
+  if (
+    startedBySender ||
+    targetLine === senderKey ||
+    sameChat(targetLine, sender.agentId, senderServer)
+  ) {
     if (target.labels?.["fulcra.hold"] === "done")
       return {
         allowed: false,

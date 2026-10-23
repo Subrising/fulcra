@@ -242,7 +242,7 @@ const worker = (labels: Record<string, string> = { [REPORTS_TO_LABEL]: LEAD }): 
   id: WORKER,
   title: "Builder",
   labels,
-  lastMessage: "Done: tests pass. Question: merge now?",
+  lastMessage: "DONE tests pass.\nQUESTION merge now?",
 });
 
 describe("report-up", () => {
@@ -254,7 +254,7 @@ describe("report-up", () => {
     expect(f.delivered).toHaveLength(1);
     expect(f.delivered[0]!.leadId).toBe(LEAD);
     expect(f.delivered[0]!.prompt).toContain(
-      `Worker Builder (${WORKER}) finished a turn: Done: tests pass. Question: merge now?`,
+      `Worker Builder (${WORKER}) finished a turn: DONE tests pass.\nQUESTION merge now?`,
     );
   });
 
@@ -331,11 +331,11 @@ describe("report-up", () => {
   });
 
   test("a long last message is cut to the snippet length", async () => {
-    const long = `${"x".repeat(REPORT_UP_SNIPPET_CHARS + 50)}?`;
+    const long = `DONE ${"x".repeat(REPORT_UP_SNIPPET_CHARS + 50)}`;
     const f = fixture([lead, { ...worker(), lastMessage: long }]);
     f.turn(WORKER);
     await f.settle();
-    expect(f.delivered[0]!.prompt).toContain(`${"x".repeat(REPORT_UP_SNIPPET_CHARS)}…`);
+    expect(f.delivered[0]!.prompt).toContain("…");
     expect(f.delivered[0]!.prompt).not.toContain("x".repeat(REPORT_UP_SNIPPET_CHARS + 1));
   });
 
@@ -384,7 +384,7 @@ describe("a result or question in the final text is never silent (FU-402)", () =
 
   test("with finished-turn notices off, a question in plain text reaches the lead", async () => {
     const f = fixture(
-      [lead, { ...worker(), lastMessage: "Done: tests pass. Question: merge now?" }],
+      [lead, { ...worker(), lastMessage: "DONE tests pass.\nQUESTION merge now?" }],
       {
         enabled: false,
       },
@@ -392,7 +392,7 @@ describe("a result or question in the final text is never silent (FU-402)", () =
     f.turn(WORKER);
     await f.settle();
     expect(f.delivered.map((notice) => notice.leadId)).toEqual([LEAD]);
-    expect(f.delivered[0]!.prompt).toContain("Question: merge now?");
+    expect(f.delivered[0]!.prompt).toContain("QUESTION merge now?");
   });
 
   test("with finished-turn notices off, plain progress text stays quiet", async () => {
@@ -2435,7 +2435,7 @@ test("WebSocket configuration and native report-up preserve armed finish ownersh
     agentClients: {
       codex: createTestAgentClient("codex", {
         onStartTurn: (prompt) => prompts.push(prompt),
-        // FU-439: only a DONE, BLOCKED or question result goes up as a finish notice.
+        // FU-483: only a result line goes up as a finish notice.
         response: (prompt) => `DONE ${prompt}`,
       }),
     },
@@ -3230,18 +3230,40 @@ describe("FU-424 a lost finish notice reaches the lead once", () => {
     }
   };
 
-  test.each(["DONE tests pass", "BLOCKED needs a key", "DECISION ship now or wait"])(
-    "FU-439 (a) a final message that starts with %s delivers one notice",
-    async (message) => {
-      expect(
-        await sentOnce(`${message}
+  test.each([
+    "DONE tests pass",
+    "BLOCKED needs a key",
+    "DECISION ship now or wait",
+    "QUESTION which option",
+    "RISK the key may leak",
+  ])("FU-483 (a) a final message that starts with %s delivers one notice", async (message) => {
+    expect(
+      await sentOnce(`${message}
 more detail`),
-      ).toEqual([{ leadId: LEAD, messageId: MESSAGE_ID }]);
-    },
-  );
+    ).toEqual([{ leadId: LEAD, messageId: MESSAGE_ID }]);
+  });
 
-  test("FU-439 (b) a final message that asks the lead a question delivers one notice", async () => {
-    expect(await sentOnce("I found two options. Which one should I use?")).toHaveLength(1);
+  test("FU-483 (b) a final message that ends with a question mark but has no result line delivers nothing", async () => {
+    const logLines: string[] = [];
+    const f = await ownedFixture({
+      notice: { status: "armed" },
+      lastMessage: "I found two options. Which one should I use?",
+      logLines,
+    });
+    try {
+      f.runTurn(WORKER);
+      await until(() => expect(logLines.join(" ")).toContain("Finish notice held"));
+      await quiet();
+      expect(f.delivered).toEqual([]);
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  test("FU-483 (b2) a result line after other text wakes the lead", async () => {
+    expect(await sentOnce("I found two options.\nQUESTION which one should I use?")).toHaveLength(
+      1,
+    );
   });
 
   test("FU-439 (c) an error end delivers one notice, whatever the last message", async () => {
@@ -3271,7 +3293,7 @@ more detail`),
     f.service.stop();
   });
 
-  test("FU-439 a started X, will continue turn delivers nothing, logs the held line and stays armed", async () => {
+  test("FU-483 a started X, will continue turn delivers nothing, logs the held line and stays armed", async () => {
     const logLines: string[] = [];
     const f = await ownedFixture({
       notice: { status: "armed" },
@@ -3280,9 +3302,7 @@ more detail`),
     });
     try {
       f.runTurn(WORKER);
-      await until(() =>
-        expect(logLines.join(" ")).toContain("Finish notice held: no DONE/BLOCKED/question"),
-      );
+      await until(() => expect(logLines.join(" ")).toContain("Finish notice held: no result line"));
       await quiet();
       expect(f.delivered).toEqual([]);
       expect((await f.notice())?.status).toBe("armed");
@@ -3293,7 +3313,7 @@ more detail`),
 
   // Replay: 50 worker turns. The mix is an assumption from the FU-439 ticket (80% of finish notices woke the lead
   // for nothing): 40 progress turns, 6 DONE, 2 BLOCKED or DECISION, 1 question, 1 error.
-  test("FU-439 a replay of 50 worker turns sends only the 10 that carry a result, a question or an error", async () => {
+  test("FU-483 a replay of 50 worker turns sends only the 10 that carry a result line or an error", async () => {
     const progress = [
       "I started the build. I will continue when it finishes.",
       "Tests are running in the background, waiting for them.",
@@ -3311,7 +3331,7 @@ more detail`),
       })),
       { message: "BLOCKED the key is missing", sends: true },
       { message: "DECISION ship the patch or wait", sends: true },
-      { message: "Two options exist. Which one do you want?", sends: true },
+      { message: "Two options exist.\nQUESTION which one do you want?", sends: true },
       { message: "Started the render.", error: "Provider crashed", sends: true },
     ];
     const held = (lines: string[]) => lines.some((line) => line.includes("Finish notice held"));

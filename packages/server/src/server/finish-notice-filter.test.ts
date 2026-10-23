@@ -1,17 +1,18 @@
 import { describe, expect, test } from "vitest";
 import { finishNoticeWanted } from "./finish-notice-filter.js";
 
-describe("finishNoticeWanted (FU-439)", () => {
+describe("finishNoticeWanted (FU-483)", () => {
   test.each([
     "DONE tests pass",
     "**DONE** shipped",
     "BLOCKED needs a key",
     "DECISION ship now or wait",
+    "QUESTION which branch?",
+    "RISK the key may leak",
     "Summary of the work.\nDONE PR #5",
-    "Which option do you want?",
-    "Should I merge it? **Yes or no?**",
+    "DONE PR #5\nExtra detail after the result line.",
     "BLOCKED",
-  ])("sends %s", (message) => {
+  ])("wakes the parent for %j", (message) => {
     expect(finishNoticeWanted(message)).toBe(true);
   });
 
@@ -19,14 +20,16 @@ describe("finishNoticeWanted (FU-439)", () => {
     "I started the build. I will continue when it finishes.",
     "Waiting for the tests.",
     "Done with step one, starting step two.",
-    "I wonder? Then I carried on.",
+    "Which option do you want?",
+    "I think this is DONE but I am not sure.",
     "",
     "   ",
-  ])("holds %j", (message) => {
+  ])("does not wake the parent for %j", (message) => {
     expect(finishNoticeWanted(message)).toBe(false);
   });
 
-  test("sends when the final message could not be read", () => {
+  test("wakes the parent when the final message could not be read", () => {
     expect(finishNoticeWanted(undefined)).toBe(true);
+    expect(finishNoticeWanted(null)).toBe(true);
   });
 });
