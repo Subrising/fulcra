@@ -328,3 +328,46 @@ test.each(["api-key", "subscription"] as const)(
     }
   },
 );
+
+describe("Claude prompt cache TTL", () => {
+  async function launchEnv(options: {
+    runtimeEnv?: Record<string, string>;
+    launchEnv?: Record<string, string>;
+  }) {
+    const client = new ClaudeAgentClient({
+      logger: createTestLogger(),
+      queryFactory: vi.fn(),
+      resolveBinary: async () => "/test/claude/bin",
+      runtimeSettings: options.runtimeEnv ? { env: options.runtimeEnv } : undefined,
+    });
+    const session = await client.createSession(
+      { provider: "claude", cwd: process.cwd() },
+      { env: options.launchEnv },
+    );
+    const env = session.usageSession?.()?.env;
+    await session.close();
+    return env;
+  }
+
+  test("turns on the 1-hour cache for main turns and subagents by default", async () => {
+    vi.stubEnv("ENABLE_PROMPT_CACHING_1H", undefined);
+    try {
+      expect((await launchEnv({}))?.ENABLE_PROMPT_CACHING_1H).toBe("1");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  test.each([
+    ["daemon env", { daemonEnv: "0" }],
+    ["provider runtime settings", { runtimeEnv: { ENABLE_PROMPT_CACHING_1H: "0" } }],
+    ["launch env", { launchEnv: { ENABLE_PROMPT_CACHING_1H: "0" } }],
+  ])("keeps an explicit value from the %s", async (_source, options) => {
+    vi.stubEnv("ENABLE_PROMPT_CACHING_1H", "daemonEnv" in options ? options.daemonEnv : undefined);
+    try {
+      expect((await launchEnv(options))?.ENABLE_PROMPT_CACHING_1H).toBe("0");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});

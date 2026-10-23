@@ -477,6 +477,22 @@ interface ClaudeAgentClientOptions {
 // How long a resolved Claude Code version is reused for the catalogue cache key before `--version` reruns.
 const CLAUDE_VERSION_KEY_TTL_MS = 60_000;
 
+// Claude Code writes subagent caches (Agent-tool helpers, workflows, background requests) with the
+// 5-minute TTL unless this is set. Helpers that wait 5-60 minutes on a long job then rewrite their whole
+// context on every wake (FU-484: 49% of cold-write cost). With it, every Claude Code cache write uses the
+// 1-hour TTL. Claude Code's own precedence still applies: FORCE_PROMPT_CACHING_5M, the
+// CLAUDE_CODE_(SUBAGENT_)PROMPT_CACHE_TTL env vars, the promptCacheTtl / subagentPromptCacheTtl settings
+// and agent frontmatter all win over it.
+const CLAUDE_PROMPT_CACHE_1H_ENV = "ENABLE_PROMPT_CACHING_1H";
+
+/** Adds ENABLE_PROMPT_CACHING_1H=1 unless the daemon env, runtime settings or launch env already set it. */
+function claudePromptCacheTtlDefault(
+  sources: Array<Record<string, string | undefined> | undefined>,
+): Record<string, string> | undefined {
+  const alreadySet = sources.some((source) => source?.[CLAUDE_PROMPT_CACHE_1H_ENV] !== undefined);
+  return alreadySet ? undefined : { [CLAUDE_PROMPT_CACHE_1H_ENV]: "1" };
+}
+
 interface ClaudeAgentSessionOptions {
   defaults?: { agents?: Record<string, AgentDefinition> };
   runtimeSettings?: ProviderRuntimeSettings;
@@ -3892,6 +3908,7 @@ class ClaudeAgentSession implements AgentSession {
       baseEnv: process.env,
       runtimeSettings: this.runtimeSettings,
       overlays: [
+        claudePromptCacheTtlDefault([process.env, this.runtimeSettings?.env, this.launchEnv]),
         this.launchEnv,
         // Makes the CLI announce session_state_changed, whose "idle" is the safety net that closes
         // an autonomous turn (see consumeSessionStateChange).
