@@ -379,6 +379,74 @@ describe("reporting lines", () => {
     expect(send(made, main).allowed).toBe(false);
   });
 
+  describe("FU-485 a chat sends to a chat it created", () => {
+    const made = agent("made-2", "Partner", {
+      "fulcra.reports-to": "owner",
+      "paseo.parent-agent-id": "lead-1",
+    });
+    const direct = (from: LineAgent, to: LineAgent, serverId?: string) =>
+      checkReportingLine({
+        sender: { agentId: from.id, ...(serverId ? { serverId } : {}) },
+        senderAgent: serverId ? null : from,
+        target: to,
+        senderParent: null,
+        localServerId: MINI,
+      });
+
+    it("allows a send to a child by parent id when its reporting line names another chat", () => {
+      expect(direct(lead, made)).toEqual({ allowed: true, why: "child" });
+      expect(direct(otherLead, made).allowed).toBe(false);
+    });
+
+    it("allows the controller's parent label too, and a qualified parent from another computer", () => {
+      const byController = agent("made-3", "Worker", {
+        "fulcra.reports-to": "owner",
+        "fulcra.parent-session": "lead-1",
+      });
+      expect(direct(lead, byController)).toEqual({ allowed: true, why: "child" });
+      const remoteChild = agent("made-4", "Worker", {
+        "fulcra.reports-to": "owner",
+        "paseo.parent-agent-id": `lead-1@${BOOK}`,
+      });
+      expect(direct(lead, remoteChild, BOOK)).toEqual({ allowed: true, why: "child" });
+    });
+
+    it("still refuses a held child", () => {
+      const held = agent("made-5", "Partner", {
+        "paseo.parent-agent-id": "lead-1",
+        "fulcra.reports-to": "owner",
+        "fulcra.hold": "done",
+      });
+      expect(direct(lead, held)).toMatchObject({ allowed: false });
+    });
+
+    it("keeps a three-level chain: a lead sends down to what it started, a worker only to its lead", () => {
+      const gag = agent("gag-1", "Gag games lead", { "fulcra.reports-to": "main-1" });
+      const shipIt = agent("ship-1", "Ship It lead", {
+        "fulcra.reports-to": "main-1",
+        "paseo.parent-agent-id": "gag-1",
+      });
+      const shipWorker = agent("ship-w", "Ship It worker", {
+        "fulcra.reports-to": "main-1",
+        "paseo.parent-agent-id": "ship-1",
+      });
+      const chain = new Map<string, LineAgent>();
+      for (const a of [main, gag, shipIt, shipWorker]) chain.set(a.id, a);
+      const run = (from: LineAgent, to: LineAgent) =>
+        checkReportingLine({
+          sender: { agentId: from.id },
+          senderAgent: from,
+          target: to,
+          senderParent: chain.get(from.labels?.["fulcra.reports-to"] ?? "") ?? null,
+          localServerId: MINI,
+        });
+      expect(run(shipIt, shipWorker)).toEqual({ allowed: true, why: "child" });
+      expect(run(gag, shipIt)).toEqual({ allowed: true, why: "child" });
+      expect(run(shipWorker, gag).allowed).toBe(false);
+      expect(run(shipWorker, shipIt).allowed).toBe(false);
+    });
+  });
+
   describe("a prompt through the Paseo MCP tool", () => {
     const store = (agents: LineAgent[]): LineStore => ({
       get: async (id) => agents.find((a) => a.id === id) ?? null,
