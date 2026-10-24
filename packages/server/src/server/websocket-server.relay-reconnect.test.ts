@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import { DeviceRegistry } from "./pairing/device-registry.js";
 import { RELAY_DEVICE_DEFAULT_PERMISSIONS } from "./authorization/index.js";
 import { createControllerService } from "./plugins/controller-service.js";
@@ -7,6 +8,9 @@ const deviceAdmission = {
   permissions: RELAY_DEVICE_DEFAULT_PERMISSIONS,
 };
 import { AccountActionsAudit } from "./plugins/account-actions.js";
+=======
+import { createWorkspaceRuntimeStore } from "./workspace-runtime-store/index.js";
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
 import { SessionDelivery } from "./session/owned-subscriptions/index.js";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { Server as HTTPServer } from "http";
@@ -83,6 +87,18 @@ const sessionMock = vi.hoisted(() => {
     wantsSourceEvent = (source: object) => !this.delivery.isModern(source);
     getSessionId = vi.fn(() => "mock-session-id");
     getPermissions = vi.fn(() => this.args.permissions as string[]);
+    setPermissions = (permissions: string[]) => {
+      this.args.permissions = permissions;
+    };
+    private routed = false;
+    setRouted = (routed: boolean) => {
+      this.routed = routed;
+    };
+    isRouted = () => this.routed;
+    setHostSource = (sourceId: string) => {
+      this.args.sourceId = sourceId;
+    };
+    getHostSourceId = () => this.args.sourceId as string;
     allowsInbound = vi.fn(() => true);
     allowsPermission = vi.fn(() => true);
     publish = vi.fn((message: unknown) => {
@@ -299,6 +315,7 @@ function createServer(options?: {
     null,
     { allowedOrigins: new Set(), startPaused: options?.startPaused },
     createWorkspaceAutoNameStub(),
+    createWorkspaceRuntimeStore(),
     options?.auth,
     speechReadiness
       ? {
@@ -502,16 +519,12 @@ function holdNextSessionMessage(session: (typeof sessionMock.instances)[number])
 function holdSessionCleanup(session: (typeof sessionMock.instances)[number]): {
   finish: () => void;
 } {
-  let finish = () => {};
-  session.cleanup.mockImplementationOnce(
-    () =>
-      new Promise<void>((resolve) => {
-        finish = resolve;
-      }),
-  );
-  return {
-    finish: () => finish(),
-  };
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  session.cleanup.mockImplementationOnce(() => pending);
+  return { finish };
 }
 
 const PLUGIN_DENIAL: Record<string, string> = {
@@ -549,6 +562,7 @@ describe("relay external socket reconnect behavior", () => {
     expect(sessionMock.instances[0].handleMessage).not.toHaveBeenCalled();
     await server.close();
   });
+<<<<<<< HEAD
   test.each([
     { type: "daemon.get_pairing_offer.request" },
     { type: "daemon.list_paired_devices.request" },
@@ -582,6 +596,13 @@ describe("relay external socket reconnect behavior", () => {
         payload: {
           error: PLUGIN_DENIAL[rpc.type] ?? "Pair new devices from this Mac",
         },
+=======
+  test("admits a relay hello password, but rejects a wrong or missing password", async () => {
+    const server = createServer({
+      auth: {
+        password: "$2b$12$OLxyuuP9uLK30Uzc4wQX0O6liuU/Q1t5P2b0Ebf36mULvpVK3DRZW",
+        localCredential: () => "local-token",
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
       },
     });
     expect(list).not.toHaveBeenCalled();
@@ -672,6 +693,7 @@ describe("relay external socket reconnect behavior", () => {
       .mockResolvedValue(undefined);
     const audit = vi.spyOn(AccountActionsAudit.prototype, "list");
     try {
+<<<<<<< HEAD
       for (const [rpc, error] of [
         [
           {
@@ -691,6 +713,42 @@ describe("relay external socket reconnect behavior", () => {
       }
       expect(set).not.toHaveBeenCalled();
       expect(audit).not.toHaveBeenCalled();
+=======
+      const passwordSocket = new MockSocket();
+      await server.attachExternalSocket(passwordSocket, { transport: "relay" });
+      passwordSocket.emit(
+        "message",
+        JSON.stringify({
+          ...createHelloMessage("relay-password"),
+          auth: { kind: "password", password: "correct-password" },
+        }),
+      );
+      await vi.waitFor(() => expect(sentServerInfoEnvelopes(passwordSocket)).toHaveLength(1));
+
+      const legacySocket = new MockSocket();
+      await server.attachExternalSocket(legacySocket, { transport: "relay" });
+      legacySocket.emit("message", JSON.stringify(createHelloMessage("relay-legacy")));
+      await vi.waitFor(() => expect(legacySocket.readyState).toBe(3));
+      expect(sentServerInfoEnvelopes(legacySocket)).toHaveLength(0);
+
+      const wrongSocket = new MockSocket();
+      await server.attachExternalSocket(wrongSocket, { transport: "relay" });
+      wrongSocket.emit(
+        "message",
+        JSON.stringify({
+          ...createHelloMessage("relay-wrong"),
+          auth: { kind: "password", password: "wrong" },
+        }),
+      );
+      await vi.waitFor(() => expect(wrongSocket.readyState).toBe(3));
+      expect(wrongSocket.sent).toContain(
+        JSON.stringify({
+          type: "hello.rejected",
+          reason: "incorrect_password",
+          accepts: ["password"],
+        }),
+      );
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
     } finally {
       set.mockRestore();
       audit.mockRestore();

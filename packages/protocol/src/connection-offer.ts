@@ -7,6 +7,7 @@ import { relayUsesTls } from "./daemon-endpoints.js";
  * `serverId` is a stable daemon identifier scoped to `PASEO_HOME`, and is also
  * used as the relay session identifier.
  */
+<<<<<<< HEAD
 export const ConnectionOfferV3Schema = z
   .object({
     v: z.literal(3, { error: "Update Fulcra to pair" }),
@@ -32,6 +33,25 @@ export const ConnectionOfferV3Schema = z
   });
 export const ConnectionOfferSchema = ConnectionOfferV3Schema;
 export type ConnectionOffer = z.infer<typeof ConnectionOfferSchema>;
+=======
+export const ConnectionOfferV2Schema = z.object({
+  v: z.literal(2),
+  serverId: z.string().min(1),
+  daemonPublicKeyB64: z.string().min(1),
+  relay: z.object({
+    endpoint: z.string().min(1),
+    useTls: z.boolean().optional(),
+  }),
+  // COMPAT(relayProtectedSecurity): added in v0.13.0. Present when the daemon requires
+  // protected endpoint security; clients pin it before their first handshake.
+  minimumSecurityMode: z.literal("protected").optional(),
+});
+
+export type ConnectionOfferV2 = z.infer<typeof ConnectionOfferV2Schema>;
+
+export const ConnectionOfferSchema = ConnectionOfferV2Schema;
+export type ConnectionOffer = ConnectionOfferV2;
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
 
 function decodeBase64UrlToUtf8(input: string): string {
   const base64 = input.replace(/-/g, "+").replace(/_/g, "/");

@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import type {
   ComponentType,
   FunctionComponent,
@@ -19,45 +20,15 @@ import type {
   TextInputProps,
 } from "react-native";
 import type { PluginIconProps } from "./contracts.js";
+=======
+// COMPAT(pluginReactNativeEntrypoint): added in v0.13.0, remove after 2027-04-20
+/** @deprecated Import Paseo UI from @getpaseo/plugin/client/ui. */
+export * from "./ui.js";
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
 
-export interface ModalProps {
-  title: string;
-  icon?: ReactNode;
-  open: boolean;
-  onOpenChange(open: boolean): void;
-  children: ReactNode;
-}
-
-export interface ModalContentProps {
-  children: ReactNode;
-  /** Paint the full body below the header. */
-  style?: StyleProp<ViewStyle>;
-  /** Overrides the default 24px padding and 16px gap. Safe-area clearance stays host-owned. */
-  contentContainerStyle?: StyleProp<ViewStyle>;
-  /** Default true. Set false for a bounded body with your own ScrollView or FlatList. */
-  scrollable?: boolean;
-}
-
-export interface ModalComponent extends FunctionComponent<ModalProps> {
-  Content: ComponentType<ModalContentProps>;
-}
-
-export type ToastVariant = "default" | "info" | "success" | "warning" | "error";
-
-export interface ToastOptions {
-  variant?: ToastVariant;
-  durationMs?: number;
-}
-
-export interface ToastApi {
-  show(message: string, options?: ToastOptions): void;
-  error(message: string): void;
-}
-
-export declare const Icon: ComponentType<PluginIconProps>;
-export declare const Modal: ModalComponent;
-export declare function useToast(): ToastApi;
+/** @deprecated Render StreamedText from @getpaseo/plugin/client/ui. Removed after 2027-04-20 with this entry. */
 export declare function useRevealedText(text: string, phase: "streaming" | "complete"): string;
+<<<<<<< HEAD
 
 export type { PluginIconProps } from "./contracts.js";
 
@@ -91,3 +62,5 @@ export declare const PanScrollView: ForwardRefExoticComponent<
 >;
 /** Native pan arbitration; child buttons retain ordinary tap/accessibility behavior. */
 export declare const PanSurface: ComponentType<PanSurfaceProps>;
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
