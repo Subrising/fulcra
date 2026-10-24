@@ -108,6 +108,7 @@ import { z } from "zod";
 import { renderPromptAttachmentAsText } from "../prompt-attachments.js";
 import { composeSystemPromptParts } from "../system-prompt.js";
 import { curateAgentActivity } from "../activity-curator.js";
+import { assertCodexRolloutSize } from "./codex/rollout-size.js";
 import { CodexAsyncQuestions, codexAsyncQuestionToTimeline } from "./codex/async-questions.js";
 import {
   mapCodexToolCallEnvelope,
@@ -4330,6 +4331,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       if (ids.includes(this.currentThreadId)) {
         return;
       }
+      await assertCodexRolloutSize(this.codexHome, preparedThread);
       const response = await this.client.request("thread/resume", params);
       this.rememberResolvedThreadConfig(response);
       this.markPublicBaselineSubmitted(preparedClient, params, preparedThread);

@@ -1,3 +1,4 @@
+import { limitChildOutput } from "../../utils/child-output-limit.js";
 import { createHash } from "node:crypto";
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -85,6 +86,7 @@ export function ledgerLease(root: string): LedgerLease {
   const child: ChildProcessWithoutNullStreams = spawn("python3", [script], {
     stdio: ["pipe", "pipe", "pipe"],
   });
+  limitChildOutput(child);
   let alive = true;
   child.once("exit", () => {
     alive = false;
@@ -98,11 +100,14 @@ export function ledgerLease(root: string): LedgerLease {
   });
   const ready = new Promise<boolean>((resolve) => {
     let output = "";
+    let answered = false;
     child.once("error", () => resolve(false));
     child.once("exit", () => resolve(false));
     child.stdout.on("data", (chunk: Buffer) => {
+      if (answered) return;
       output += chunk.toString();
       if (!output.includes("\n")) return;
+      answered = true;
       try {
         resolve(Result.parse(JSON.parse(output.split("\n")[0])).ok);
       } catch {
