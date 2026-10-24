@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 // FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
 import { configuredControllerPluginId } from "@getpaseo/protocol/bundled-controller";
 import { readPagedPluginCatalog } from "./plugin-catalog-paging.js";
@@ -22,6 +23,9 @@ import type {
   AgentMcpRefreshResult,
   AgentMcpRefreshState,
 } from "@getpaseo/protocol/messages";
+=======
+import { messageTooLargeError } from "./daemon-client-transport-utils.js";
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
 import { legacyUsageIcon } from "./legacy-usage-icons.js";
 import { subscribeTimeline, type TimelineMessage } from "./timeline-subscription/index.js";
 import { ProviderSnapshotUpdates } from "./provider-snapshots/index.js";
@@ -37,6 +41,7 @@ import type { z } from "zod";
 import type { SessionEventSubscription } from "@getpaseo/protocol/messages";
 import type { ClientCapability } from "@getpaseo/protocol/client-capabilities";
 import type { AgentAttentionNotificationPayload } from "@getpaseo/protocol/agent-attention-notification";
+import { MAX_WEBSOCKET_MESSAGE_BYTES } from "@getpaseo/protocol/websocket-message-limit";
 import {
   AgentCreateFailedStatusPayloadSchema,
   AgentCreatedStatusPayloadSchema,
@@ -509,11 +514,15 @@ export interface DaemonClientTrace {
 }
 
 export interface SendMessageOptions {
+<<<<<<< HEAD
   /** Parent sends arm a finish notice by default. */
   notifyOnFinish?: boolean;
   queue?: boolean;
   /** Reports queue admission or a steering fallback. This is not task completion. */
   onDelivery?: (note: string, state?: "held") => void;
+=======
+  sourceAgentId?: string;
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
   messageId?: string;
   /** Keep the original Unix milliseconds when retrying a remote message ID. */
   issuedAt?: number;
@@ -626,6 +635,7 @@ export interface CreateAgentRequestOptions extends AgentConfigOverrides {
   git?: GitSetupOptions;
   worktree?: CreateAgentRequestMessage["worktree"];
   autoArchive?: CreateAgentRequestMessage["autoArchive"];
+  background?: CreateAgentRequestMessage["background"];
   // COMPAT(createAgentWorktree): low-level old callers may still send the
   // create-agent worktree field. Added in v0.2.0; remove after 2027-01-17.
   worktreeName?: string;
@@ -636,6 +646,9 @@ export interface CreateAgentRequestOptions extends AgentConfigOverrides {
 export interface CreateWorkspaceRequestOptions {
   source: WorkspaceCreateRequest["source"];
   title?: string;
+  /** Workspace discovery visibility; contents retain normal durability. */
+  background?: boolean;
+  callerAgentId?: string;
   idempotencyKey?: string;
   workspaceId?: string;
   agent?: Omit<
@@ -1318,6 +1331,19 @@ function getTransportFrameSize(frame: string | Uint8Array | ArrayBuffer): number
   return frame.byteLength;
 }
 
+function assertTransportFrameFits(frame: string | Uint8Array | ArrayBuffer): void {
+  if (typeof frame !== "string") {
+    if (frame.byteLength > MAX_WEBSOCKET_MESSAGE_BYTES)
+      throw messageTooLargeError(frame.byteLength, MAX_WEBSOCKET_MESSAGE_BYTES);
+    return;
+  }
+  // UTF-8 needs at most three bytes per UTF-16 unit, so only a string near the limit is measured.
+  if (frame.length * 3 <= MAX_WEBSOCKET_MESSAGE_BYTES) return;
+  const size = new TextEncoder().encode(frame).byteLength;
+  if (size > MAX_WEBSOCKET_MESSAGE_BYTES)
+    throw messageTooLargeError(size, MAX_WEBSOCKET_MESSAGE_BYTES);
+}
+
 function describeInboundTransportFrame(
   frame: unknown,
   rawBytes: Uint8Array | null,
@@ -1414,6 +1440,25 @@ function assertManagedContentOutput(
 // COMPAT(providerUsageList): added in v0.1.98, remove after 2027-03-26.
 export function supportsUsageReports(features: ServerInfoStatusPayload["features"]): boolean {
   return features?.usageSources === true || features?.providerUsageList === true;
+}
+
+function buildFetchAgentsRequest(
+  options: FetchAgentsOptions | undefined,
+  requestId: string,
+): SessionInboundMessage {
+  return SessionInboundMessageSchema.parse({
+    type: "fetch_agents_request",
+    requestId,
+    ...(options?.scope ? { scope: options.scope } : {}),
+    ...(options?.filter ? { filter: options.filter } : {}),
+    ...(options?.sort ? { sort: options.sort } : {}),
+    ...(options?.page ? { page: options.page } : {}),
+    ...(options?.subscribe ? { subscribe: options.subscribe } : {}),
+    ...(options?.sync ? { sync: options.sync } : {}),
+    ...(options?.includeBackground !== undefined
+      ? { includeBackground: options.includeBackground }
+      : {}),
+  });
 }
 
 export class DaemonClient {
@@ -2005,6 +2050,8 @@ export class DaemonClient {
     if (!this.transport) {
       throw new DaemonConnectionError("Transport not connected");
     }
+    // The daemon closes the connection on an oversized message, and creations resubmit on reconnect.
+    assertTransportFrameFits(frame);
     const isOpen = this.beginTraceSection("paseo.ws.frame.outbound", {
       kind: typeof frame === "string" ? "text" : "binary",
       size: String(getTransportFrameSize(frame)),
@@ -2625,6 +2672,8 @@ export class DaemonClient {
   observeAgents(
     options: Omit<FetchAgentsOptions, "subscribe"> = {},
   ): OwnedSubscription<FetchAgentsPayload> {
+    if (options.includeBackground || options.filter?.includeBackground)
+      this.requireBackgroundWorkspaces();
     const { signal, requestId, timeout, ...query } = options;
     return this.observe(
       "fetch_agents_response",
@@ -2636,6 +2685,8 @@ export class DaemonClient {
   observeWorkspaces(
     options: Omit<FetchWorkspacesOptions, "subscribe"> = {},
   ): OwnedSubscription<FetchWorkspacesPayload> {
+    if (options.includeBackground || options.filter?.includeBackground)
+      this.requireBackgroundWorkspaces();
     const { signal, requestId, ...query } = options;
     return this.observe(
       "fetch_workspaces_response",
@@ -2651,6 +2702,8 @@ export class DaemonClient {
   async fetchAgents(
     options?: FetchAgentsOptions,
   ): Promise<FetchAgentsPayload & { subscription?: OwnedSubscription<FetchAgentsPayload> }> {
+    if (options?.includeBackground || options?.filter?.includeBackground)
+      this.requireBackgroundWorkspaces();
     if (options?.subscribe) {
       if (options.subscribe.subscriptionId !== undefined)
         throw new Error("Subscription IDs are assigned by the host");
@@ -2658,16 +2711,7 @@ export class DaemonClient {
       return { ...(await subscription.ready), subscription };
     }
     const resolvedRequestId = this.createRequestId(options?.requestId);
-    const message = SessionInboundMessageSchema.parse({
-      type: "fetch_agents_request",
-      requestId: resolvedRequestId,
-      ...(options?.scope ? { scope: options.scope } : {}),
-      ...(options?.filter ? { filter: options.filter } : {}),
-      ...(options?.sort ? { sort: options.sort } : {}),
-      ...(options?.page ? { page: options.page } : {}),
-      ...(options?.subscribe ? { subscribe: options.subscribe } : {}),
-      ...(options?.sync ? { sync: options.sync } : {}),
-    });
+    const message = buildFetchAgentsRequest(options, resolvedRequestId);
     return this.sendRequest({
       requestId: resolvedRequestId,
       message,
@@ -2686,6 +2730,7 @@ export class DaemonClient {
   }
 
   async fetchAgentHistory(options?: FetchAgentHistoryOptions): Promise<FetchAgentHistoryPayload> {
+    if (options?.filter?.includeBackground) this.requireBackgroundWorkspaces();
     const resolvedRequestId = this.createRequestId(options?.requestId);
     const message = SessionInboundMessageSchema.parse({
       type: "fetch_agent_history_request",
@@ -2749,6 +2794,8 @@ export class DaemonClient {
   ): Promise<
     FetchWorkspacesPayload & { subscription?: OwnedSubscription<FetchWorkspacesPayload> }
   > {
+    if (options?.includeBackground || options?.filter?.includeBackground)
+      this.requireBackgroundWorkspaces();
     if (options?.subscribe) {
       if (options.subscribe.subscriptionId !== undefined)
         throw new Error("Subscription IDs are assigned by the host");
@@ -2758,12 +2805,8 @@ export class DaemonClient {
     const resolvedRequestId = this.createRequestId(options?.requestId);
     const message = SessionInboundMessageSchema.parse({
       type: "fetch_workspaces_request",
+      ...options,
       requestId: resolvedRequestId,
-      ...(options?.filter ? { filter: options.filter } : {}),
-      ...(options?.sort ? { sort: options.sort } : {}),
-      ...(options?.page ? { page: options.page } : {}),
-      ...(options?.subscribe ? { subscribe: options.subscribe } : {}),
-      ...(options?.sync ? { sync: options.sync } : {}),
     });
     return this.sendRequest({
       requestId: resolvedRequestId,
@@ -3136,7 +3179,19 @@ export class DaemonClient {
     legacyWorkspace: (input) => this.createLegacyWorkspace(input, input.requestId),
   });
 
+  // Background workspaces are gated once at the transport boundary.
+  private requireBackgroundWorkspaces(): void {
+    if (this.lastServerInfoMessage?.features?.backgroundWorkspaces !== true) {
+      throw new Error("Update the host to use background workspaces.");
+    }
+  }
+
+  supportsBackgroundWorkspaces(): boolean {
+    return this.lastServerInfoMessage?.features?.backgroundWorkspaces === true;
+  }
+
   async createAgent(options: CreateAgentRequestOptions): Promise<AgentSnapshotPayload> {
+    if (options.background !== undefined) this.requireBackgroundWorkspaces();
     const result = await this.creations.createAgent({
       ...options,
       config: resolveAgentConfig(options),
@@ -3169,6 +3224,7 @@ export class DaemonClient {
       ...(options.git ? { git: options.git } : {}),
       ...(options.worktree ? { worktree: options.worktree } : {}),
       ...(options.autoArchive !== undefined ? { autoArchive: options.autoArchive } : {}),
+      ...(options.background !== undefined ? { background: options.background } : {}),
       ...(options.worktreeName ? { worktreeName: options.worktreeName } : {}),
       ...(options.labels && Object.keys(options.labels).length > 0
         ? { labels: options.labels }
@@ -4018,7 +4074,16 @@ export class DaemonClient {
     text: string,
     options?: SendMessageOptions,
   ): Promise<void> {
+<<<<<<< HEAD
     this.requireAgentMessageQueue(options);
+=======
+    if (
+      options?.sourceAgentId &&
+      this.lastServerInfoMessage?.features?.agentMessageProvenance !== true
+    ) {
+      throw new Error("Update the Paseo host to send messages with agent provenance.");
+    }
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
     const requestId = this.createRequestId();
     const messageId = options?.messageId ?? crypto.randomUUID();
     const requestTime = this.remoteMessageTime(agentId, options);
@@ -4027,8 +4092,12 @@ export class DaemonClient {
       requestId,
       agentId,
       text,
+<<<<<<< HEAD
       ...(options?.notifyOnFinish !== undefined ? { notifyOnFinish: options.notifyOnFinish } : {}),
       ...(options?.queue ? { queue: true } : {}),
+=======
+      sourceAgentId: options?.sourceAgentId,
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
       ...(messageId ? { messageId } : {}),
       ...requestTime,
       ...(options?.activeTurnBehavior ? { activeTurnBehavior: options.activeTurnBehavior } : {}),
@@ -5456,6 +5525,9 @@ export class DaemonClient {
     requestId?: string,
   ): Promise<WorkspaceCreatePayload> {
     const resolvedRequestId = this.createRequestId(requestId ?? input.requestId);
+    if (input.background !== undefined || input.callerAgentId) this.requireBackgroundWorkspaces();
+    if (input.agent?.background !== undefined)
+      throw new Error("Configure background on the workspace, not its initial agent.");
     const result = await this.creations.createWorkspace({
       ...input,
       requestId: resolvedRequestId,
@@ -5487,6 +5559,8 @@ export class DaemonClient {
           ? { idempotencyKey: input.idempotencyKey }
           : {}),
         ...(input.title !== undefined ? { title: input.title } : {}),
+        ...(input.background !== undefined ? { background: input.background } : {}),
+        ...(input.callerAgentId ? { callerAgentId: input.callerAgentId } : {}),
         ...(input.firstAgentContext !== undefined
           ? { firstAgentContext: input.firstAgentContext }
           : {}),
@@ -5600,6 +5674,7 @@ export class DaemonClient {
     requestId?: string,
     acceptBinary = false,
     maxBytes?: number,
+    timeout?: number,
   ): Promise<FileExplorerPayload> {
     return this.sendCorrelatedSessionRequest({
       requestId,
@@ -5612,6 +5687,7 @@ export class DaemonClient {
         ...(maxBytes ? { maxBytes } : {}),
       },
       responseType: "file_explorer_response",
+      timeout,
     });
   }
 
@@ -5630,11 +5706,17 @@ export class DaemonClient {
     return payload.directory;
   }
 
+  /**
+   * `timeout` bounds the whole transfer, not each frame. `0` disables the timer (as
+   * `workspace.create` does) for files that legitimately take longer than the default over a
+   * slow link; a dead connection still rejects on disconnect.
+   */
   async readFile(
     cwd: string,
     path: string,
     requestId?: string,
     maxBytes?: number,
+    timeout?: number,
   ): Promise<FileReadResult> {
     const resolvedRequestId = this.createRequestId(requestId);
     this.pendingBinaryFileReads.set(resolvedRequestId, { cwd, path, maxBytes });
@@ -5646,6 +5728,7 @@ export class DaemonClient {
         resolvedRequestId,
         true,
         maxBytes,
+        timeout,
       );
       if (payload.error) {
         throw new Error(payload.error);
@@ -7194,6 +7277,10 @@ export class DaemonClient {
       requestId,
       message: { type: `plugin.${action}.request`, requestId, pluginId },
       responseType: `plugin.${action}.response`,
+      // Reload tears the plugin down and starts it again before the daemon answers, and it queues
+      // behind other plugin lifecycle work. Wait for that answer instead of failing the reload at
+      // the request deadline while the daemon keeps loading it.
+      ...(action === "reload" ? { timeout: 0 } : {}),
     });
     return payload.plugin;
   }
@@ -8113,6 +8200,18 @@ export class DaemonClient {
       return;
     }
 
+    const received = transfer.chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
+    if (received !== transfer.size) {
+      this.activeBinaryFileTransfers.delete(frame.requestId);
+      this.rejectWaitersForRequestId(
+        frame.requestId,
+        new Error(
+          `File transfer incomplete: expected ${transfer.size} bytes, received ${received}.`,
+        ),
+      );
+      return;
+    }
+
     const bytes = concatByteChunks(transfer.chunks, transfer.size);
     this.activeBinaryFileTransfers.delete(frame.requestId);
     this.completedBinaryFileReads.set(frame.requestId, {
@@ -8567,6 +8666,7 @@ function resolveAgentConfig(options: CreateAgentRequestOptions): AgentSessionCon
     attachments: _attachments,
     worktree: _worktree,
     autoArchive: _autoArchive,
+    background: _background,
     env: _env,
     workspaceId: _workspaceId,
     initialPrompt: _initialPrompt,

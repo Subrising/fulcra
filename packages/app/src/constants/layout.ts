@@ -38,12 +38,18 @@ export {
   getIsElectronMac as getIsElectronRuntimeMac,
 } from "./platform";
 
+/** Compact layouts are the breakpoints below `md`. */
+export function isCompactBreakpoint(breakpoint: string | undefined): boolean {
+  return breakpoint === "xs" || breakpoint === "sm";
+}
+
 /**
  * Reactive hook — re-renders the component when the breakpoint changes.
  * Always use this instead of reading UnistylesRuntime.breakpoint directly.
  */
 export function useIsCompactFormFactor(): boolean {
   const { rt } = useUnistyles();
+<<<<<<< HEAD
   const finePointer = useHasFinePointer();
   return isCompactFormFactor(rt.breakpoint, rt.screen.height, isNative || !finePointer);
 }
@@ -58,6 +64,9 @@ export function isCompactFormFactor(
     return true;
   }
   return touch && breakpoint === "md" && height < COMPACT_FORM_FACTOR_MAX_HEIGHT;
+=======
+  return isCompactBreakpoint(rt.breakpoint);
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
 }
 
 // SplitContainer relies on dnd-kit and DOM-backed accessibility helpers.

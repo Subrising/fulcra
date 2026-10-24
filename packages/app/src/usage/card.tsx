@@ -12,7 +12,7 @@ import { useCompactTimeAgo } from "@/hooks/use-time-ago";
 import { UsageBalanceBar } from "./balance-bar";
 import { usageCopy } from "./copy";
 import type { UsageDisplay } from "./display";
-import { formatUsageFreshness, type UsageRefresh } from "./model";
+import { formatUsageFreshness, resolveUsageReport, type UsageRefresh } from "./model";
 import { useReportRefresh } from "./queries";
 import { UsageSourceIcon } from "./source-icon";
 import type { UsageReport, UsageReportEntry, UsageWindow } from "./types";
@@ -21,31 +21,6 @@ import { UsageWindowBar } from "./window-bar";
 function statusText(report: UsageReport): string | null {
   if (report.status === "available") return null;
   return report.status === "error" ? "Error" : "Unavailable";
-}
-
-function reportContent(report: UsageReport) {
-  if (report.status === "available")
-    return {
-      windows: report.windows,
-      balances: report.balances ?? [],
-      details: report.details ?? [],
-      message: undefined,
-    };
-  const message =
-    report.status === "unavailable" ? usageCopy.problem(report.problem) : report.error;
-  return { windows: [], balances: [], details: [], message };
-}
-
-function reportMessages(entry: UsageReportEntry): string[] {
-  if (entry.report.status === "available") return [];
-  if (entry.loginErrors)
-    return entry.loginErrors.map(
-      (login) => `${login.harness}: ${reportContent(login.report).message}`,
-    );
-  // COMPAT(usageLoginErrors): added in v0.11.0, remove after 2027-04-05 once daemon floor >= v0.11.0.
-  return [
-    entry.report.status === "error" ? entry.report.error : usageCopy.problem(entry.report.problem),
-  ];
 }
 
 const ThemedRotateCw = withUnistyles(RotateCw);
@@ -77,8 +52,8 @@ export function UsageCard({
   const usage = entry.report;
   const status = statusText(usage);
   const footer = entry.account.label ?? null;
-  const { windows, balances, details } = reportContent(usage);
-  const messages = reportMessages(entry);
+  const { windows, balances, details, planLabel, successfulAt, retained, messages } =
+    resolveUsageReport(entry);
 
   const containerStyle = useMemo(
     () => [styles.container, compact ? styles.containerCompact : styles.containerPadded],
@@ -100,9 +75,7 @@ export function UsageCard({
         <Text style={styles.name} numberOfLines={1}>
           {entry.sourceLabel}
         </Text>
-        {usage.status === "available" && usage.planLabel ? (
-          <StatusBadge label={usage.planLabel} variant="muted" size="xs" />
-        ) : null}
+        {planLabel ? <StatusBadge label={planLabel} variant="muted" size="xs" /> : null}
         <View style={styles.headerSpacer} />
         {status ? (
           <View style={styles.statusRow}>
@@ -113,7 +86,8 @@ export function UsageCard({
         {refreshable ? (
           <UsageRefreshButton
             sourceLabel={entry.sourceLabel}
-            fetchedAt={entry.fetchedAt}
+            successfulAt={successfulAt}
+            retained={retained}
             refreshState={refreshState}
             onRefresh={refresh}
             compact={isCompact}
@@ -134,12 +108,13 @@ export function UsageCard({
               key={window.id}
               entry={entry}
               window={window}
+              retained={retained}
               display={display}
               pinnable={pinnable}
             />
           ))}
           {balances.map((balance) => (
-            <UsageBalanceBar key={balance.id} balance={balance} />
+            <UsageBalanceBar key={balance.id} balance={balance} retained={retained} />
           ))}
         </View>
       ) : null}
@@ -166,7 +141,8 @@ export function UsageCard({
           </Text>
           {showsFreshnessInline ? (
             <UsageFreshness
-              fetchedAt={entry.fetchedAt}
+              successfulAt={successfulAt}
+              retained={retained}
               style={styles.freshness}
               testID="usage-freshness"
             />
@@ -188,7 +164,9 @@ function CardWindowBar({
   window,
   display,
   pinnable,
+  retained,
 }: {
+  retained: boolean;
   entry: UsageReportEntry;
   window: UsageWindow;
   display: UsageDisplay;
@@ -203,6 +181,7 @@ function CardWindowBar({
   return (
     <UsageWindowBar
       window={window}
+      retained={retained}
       displayAs={display.displayAs}
       pinnable={pinnable}
       pinned={display.isPinned(pin)}
@@ -216,13 +195,15 @@ function CardWindowBar({
 /** Refreshes this one report. Its tooltip says when the report on screen was fetched. */
 function UsageRefreshButton({
   sourceLabel,
-  fetchedAt,
+  successfulAt,
+  retained,
   refreshState,
   onRefresh,
   compact,
 }: {
   sourceLabel: string;
-  fetchedAt: string;
+  successfulAt: string | null;
+  retained: boolean;
   refreshState: UsageRefresh;
   onRefresh: () => void;
   compact: boolean;
@@ -232,12 +213,13 @@ function UsageRefreshButton({
   const freshness = useMemo(
     () => (
       <UsageFreshness
-        fetchedAt={fetchedAt}
+        successfulAt={successfulAt}
+        retained={retained}
         style={styles.tooltipText}
         testID="usage-freshness-tooltip"
       />
     ),
-    [fetchedAt],
+    [successfulAt, retained],
   );
   return (
     <ToolbarButton
@@ -261,18 +243,20 @@ function UsageRefreshButton({
 
 /** Its own component so the relative-time clock re-renders one `<Text>`, not the card. */
 function UsageFreshness({
-  fetchedAt,
+  successfulAt,
+  retained,
   style,
   testID,
 }: {
-  fetchedAt: string;
+  successfulAt: string | null;
+  retained: boolean;
   style: StyleProp<TextStyle>;
   testID: string;
 }) {
-  const elapsed = useCompactTimeAgo(new Date(fetchedAt));
+  const elapsed = useCompactTimeAgo(successfulAt ? new Date(successfulAt) : null);
   return (
     <Text style={style} numberOfLines={1} testID={testID}>
-      {formatUsageFreshness(elapsed)}
+      {successfulAt ? formatUsageFreshness(elapsed, retained) : "No successful update"}
     </Text>
   );
 }

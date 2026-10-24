@@ -277,7 +277,6 @@ test("mcp create accepts provider-only internal input and leaves model undefined
     workspaceId: "ws-create-test",
     title: "provider default",
     initialPrompt: "hello",
-    background: true,
     notifyOnFinish: false,
   });
 
@@ -395,7 +394,6 @@ test("mcp create stamps the new worktree's workspaceId, not the parent's", async
         provider: "codex/gpt-5.4",
         title: "child",
         initialPrompt: "do the thing",
-        background: true,
         notifyOnFinish: false,
         callerAgentId: parent.id,
         worktree: { worktreeName: "feature", baseBranch: "main" },
@@ -449,7 +447,6 @@ test("mcp create exposes the created worktree before dispatching the initial pro
         cwd: workdir,
         title: "worktree callback",
         initialPrompt: "Say done.",
-        background: true,
         notifyOnFinish: false,
         worktree: { worktreeName: "feature", baseBranch: "main" },
         onCreated: ({ agentId, createdWorktree: callbackWorktree }) => {
@@ -543,6 +540,7 @@ test("session create keeps an explicit title after the initial prompt settles", 
   }
 });
 
+<<<<<<< HEAD
 test("controller-created session attributes its first prompt to an agent-bound token", async () => {
   const authority = new TrustedPlugins();
   let sdk!: import("@getpaseo/plugin/server").LegacyTrustedPluginServer;
@@ -763,3 +761,48 @@ test.each([
     if (arms) expect(armFinishNotice).toHaveBeenCalledWith(snapshot, parentAgentId, "report-up");
   },
 );
+=======
+test("session create with an internal config skips provider session persistence", async () => {
+  const snapshot = {
+    id: "agent-1",
+    provider: "codex",
+    cwd: "/tmp/paseo-create-test",
+    runtimeInfo: null,
+  } as ManagedAgent;
+  const createAgent = vi.fn(async () => snapshot);
+  const dependencies: Parameters<typeof createAgentCommand>[0] = {
+    agentManager: {
+      createAgent,
+    } as unknown as Parameters<typeof createAgentCommand>[0]["agentManager"],
+    agentStorage: {} as Parameters<typeof createAgentCommand>[0]["agentStorage"],
+    logger: createTestLogger(),
+    providerSnapshotManager: createProviderSnapshotManagerStub().manager,
+  };
+  const input = {
+    kind: "session" as const,
+    workspaceId: "ws-create-test",
+    labels: {},
+    provisionalTitle: null,
+    firstAgentContext: { attachments: [] },
+    buildSessionConfig: async (config: AgentSessionConfig) => ({ sessionConfig: config }),
+  };
+
+  await createAgentCommand(dependencies, {
+    ...input,
+    config: { provider: "codex", cwd: "/tmp/paseo-create-test", internal: true },
+  });
+  await createAgentCommand(dependencies, {
+    ...input,
+    config: { provider: "codex", cwd: "/tmp/paseo-create-test" },
+  });
+
+  expect(createAgent).toHaveBeenNthCalledWith(
+    1,
+    expect.objectContaining({ provider: "codex", internal: true }),
+    undefined,
+    expect.objectContaining({ persistSession: false }),
+  );
+  expect(createAgent.mock.calls[1]?.[0]).not.toHaveProperty("internal");
+  expect(createAgent.mock.calls[1]?.[2]).not.toHaveProperty("persistSession");
+});
+>>>>>>> refs/remotes/upstream/tags/v0.12.0

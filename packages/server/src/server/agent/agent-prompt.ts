@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import { sessionCost } from "./session-cost.js";
 import { loadAgentPolicy } from "../limit-resume/policy.js";
 import { noticePaused, NoticePausedError } from "../notice-pause.js";
@@ -11,6 +12,9 @@ import { randomUUID } from "node:crypto";
 import { deferredPromptPayload as promptPayload } from "./trusted-operation.js";
 import { TRUSTED_OPERATION, FINAL_INPUT_CHECK } from "./agent-sdk-types.js";
 import type { TrustedOperationHandle } from "../plugins/trusted.js";
+=======
+import { prepareAgentMessage, type AgentPromptSource } from "./agent-messages/index.js";
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
 import type { Logger } from "pino";
 
 import type {
@@ -46,6 +50,8 @@ export type AgentRunController = Pick<
 };
 
 export interface StartAgentRunOptions {
+  /** Called after selecting the run, before consuming its events. */
+  onDispatch?: (disposition: PromptDispatchDisposition) => void;
   replaceRunning?: boolean;
   activeTurnBehavior?: ActiveTurnBehavior;
   runOptions?: AgentRunOptions;
@@ -201,6 +207,26 @@ export async function startAgentRun(
     }),
     options?.runOptions?.[TRUSTED_OPERATION],
   );
+<<<<<<< HEAD
+=======
+  // Out-of-band commands (e.g. /goal pause) must run WITHOUT canceling an
+  // in-flight turn — replaceAgentRun would interrupt the running turn. The
+  // intercept lives at this layer so it covers every prompt entrypoint.
+  if (agentManager.tryRunOutOfBand(agentId, prompt, options?.runOptions)) {
+    options?.onDispatch?.("out_of_band");
+    return { disposition: "out_of_band" };
+  }
+  try {
+    return await startAgentRunInner(agentManager, agentId, prompt, logger, options);
+  } catch (error) {
+    if (!isStaleProviderSessionError(error)) throw error;
+    logger.info({ agentId, err: error }, "Provider session went stale; reopening from persistence");
+    // The live session belongs to a retired plugin runtime. Reload swaps in a
+    // fresh session on the current runtime while preserving history and labels.
+    await agentManager.reloadAgentSession(agentId);
+    return await startAgentRunInner(agentManager, agentId, prompt, logger, options);
+  }
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
 }
 
 async function startAgentRunInner(
@@ -215,6 +241,7 @@ async function startAgentRunInner(
   const snapshot = agentManager.getAgent(agentId);
   const steered = await steerOrReplaceActiveRun(agentManager, agentId, prompt, options);
   if (steered?.disposition === "steered") {
+    options?.onDispatch?.("steered");
     return steered;
   }
   finishCheck?.();
@@ -230,6 +257,7 @@ async function startAgentRunInner(
     },
     "agent.session.start_stream.iterator_returned",
   );
+  options?.onDispatch?.("turn_started");
   void (async () => {
     try {
       try {
@@ -293,27 +321,14 @@ export async function unarchiveAgentState(
   return true;
 }
 
-/**
- * Wrap a body in <paseo-system>…</paseo-system> so the receiving agent
- * recognizes the prompt as system-injected context — not a user turn.
- * Used by chat mentions, schedule fires, and notify-on-finish.
- */
-export function formatSystemNotificationPrompt(reason: string): string {
-  return `<paseo-system>\n${reason}\n</paseo-system>`;
-}
-
-const SYSTEM_ENVELOPE_PATTERN = /^<paseo-system>\n[\s\S]*\n<\/paseo-system>$/;
-
-export function isSystemInjectedEnvelope(text: string): boolean {
-  return SYSTEM_ENVELOPE_PATTERN.test(text);
-}
-
 export interface SendPromptToAgentParams {
+  onDispatch?: StartAgentRunOptions["onDispatch"];
   agentManager: AgentManager;
   agentStorage: AgentStorage;
   agentId: string;
   /** Prompt to dispatch to the provider (may include image blocks or wrapped text). */
   prompt: AgentPromptInput;
+  source?: AgentPromptSource;
   messageId?: string;
   activeTurnBehavior?: ActiveTurnBehavior;
   /** With "steer": never replace a running turn; throws SteerUnavailableError instead. */
@@ -334,10 +349,12 @@ export interface SendPromptToAgentParams {
 }
 
 export interface StartCreatedAgentInitialPromptParams {
+  agentStorage: AgentStorage;
   agentManager: AgentManager;
   agentId: string;
   snapshot?: ManagedAgent;
   prompt: AgentPromptInput | null;
+  source?: AgentPromptSource;
   runOptions?: AgentRunOptions;
   logger: Logger;
 }
@@ -380,6 +397,18 @@ export async function waitForAgentRunStartWithTimeout(
   } finally {
     clearTimeout(startTimeout);
   }
+}
+
+async function resolvePromptSource(
+  source: AgentPromptSource | undefined,
+  manager: Pick<AgentManager, "getAgent">,
+  storage: AgentStorage,
+): Promise<AgentPromptSource | undefined> {
+  if (!source) return undefined;
+  const title = (
+    manager.getAgent(source.agentId)?.config.title ?? (await storage.get(source.agentId))?.title
+  )?.trim();
+  return title ? { ...source, title } : source;
 }
 
 /**
@@ -487,6 +516,27 @@ export async function sendPromptToAgentAndWaitForStart(
   } finally {
     stop();
   }
+<<<<<<< HEAD
+=======
+
+  if (params.sessionMode) {
+    await params.agentManager.setAgentMode(params.agentId, params.sessionMode);
+  }
+
+  const source = await resolvePromptSource(params.source, params.agentManager, params.agentStorage);
+  const delivery = prepareAgentMessage(params.prompt, source, params.messageId);
+  const runOptions = delivery.messageId
+    ? { ...params.runOptions, clientMessageId: delivery.messageId }
+    : params.runOptions;
+
+  return await startAgentRun(params.agentManager, params.agentId, delivery.prompt, params.logger, {
+    replaceRunning: true,
+    onDispatch: params.onDispatch,
+    activeTurnBehavior: params.activeTurnBehavior,
+    clearPendingPermissions: params.clearPendingPermissions,
+    runOptions,
+  });
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
 }
 
 export async function startCreatedAgentInitialPrompt(
@@ -501,14 +551,17 @@ export async function startCreatedAgentInitialPrompt(
     return currentSnapshot;
   }
 
+  const delivery = prepareAgentMessage(
+    params.prompt,
+    await resolvePromptSource(params.source, params.agentManager, params.agentStorage),
+    params.runOptions?.clientMessageId,
+  );
   const dispatchResult = await startAgentRun(
     params.agentManager,
     params.agentId,
-    params.prompt,
+    delivery.prompt,
     params.logger,
-    {
-      runOptions: params.runOptions,
-    },
+    { runOptions: { ...params.runOptions, clientMessageId: delivery.messageId } },
   );
 
   if (dispatchResult.disposition === "turn_started") {
@@ -528,12 +581,33 @@ export interface SetupFinishNotificationParams {
   childAgentId: string;
   callerAgentId: string;
   requireParentOwnership?: boolean;
+<<<<<<< HEAD
   /** Arm before dispatch without reporting the previous turn's current outcome. */
   forNextTurn?: boolean;
+=======
+  /** Retain pre-dispatch outcomes only when dispatch keeps the existing turn. */
+  dispatchResult?: Promise<PromptDispatchDisposition | false>;
+  /** A replacement must observe its new start, not the displaced running snapshot. */
+  waitForTurnStart?: boolean;
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
   logger: Logger;
 }
 
-type FinishNotificationReason = "finished" | "errored" | "needs permission" | "was closed";
+type FinishNotificationReason =
+  | "finished"
+  | "errored"
+  | "needs permission"
+  | "was closed"
+  | "was canceled";
+
+const finishNotificationEvents = {
+  finished: "finished",
+  errored: "errored",
+  "needs permission": "permission-required",
+  "was closed": "closed",
+  // Use the existing failure event so older clients still parse agent-message metadata.
+  "was canceled": "errored",
+} as const;
 
 const FINISH_NOTIFICATION_MESSAGE_LIMIT = 4000;
 
@@ -578,6 +652,7 @@ interface NotifySafelyOptions {
   permissionRequest?: AgentPermissionRequest;
 }
 
+<<<<<<< HEAD
 /**
  * FIX-8 W3: the message id prefix of the daemon's finish notice to a caller. The notice is admitted with source
  * "daemon" (it has no ambient human or agent context), and a trusted plugin (Fulcra's controller) can tell it from a
@@ -648,17 +723,38 @@ export async function armPromptFinishNotification(
 }
 
 export function setupFinishNotification(params: SetupFinishNotificationParams): void {
+=======
+// Pending follow-ups coexist until acknowledgement. A successful dispatch replaces
+// every earlier observation for the caller/child pair; a failure removes only itself.
+interface ArmedFinishNotification {
+  stop(): void;
+  supersedeWhen(accepted: Promise<boolean>): void;
+}
+
+const armedFinishNotifications = new WeakMap<
+  AgentManager,
+  Map<string, Set<ArmedFinishNotification>>
+>();
+
+export function setupFinishNotification(params: SetupFinishNotificationParams): () => void {
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
   const {
     agentManager,
     agentStorage,
     childAgentId,
     callerAgentId,
     requireParentOwnership = false,
+    waitForTurnStart = false,
     logger,
   } = params;
+<<<<<<< HEAD
   const finishEventId = `${childAgentId}:${randomUUID()}`;
   let hasSeenRunning = agentManager.getAgent(childAgentId)?.lifecycle === "running";
   let waitingForTurn = params.forNextTurn === true;
+=======
+  let hasSeenRunning = false;
+  let hasSeenTurn = false;
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
   let stopped = false;
   let superseded = false;
   const checkIdentity = agentManager.captureFinishNotificationCheck(childAgentId, callerAgentId);
@@ -674,6 +770,7 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
   const armedByManager = armedFinishNotifications.get(agentManager) ?? new Map();
   armedFinishNotifications.set(agentManager, armedByManager);
   const armedKey = JSON.stringify([childAgentId, callerAgentId]);
+<<<<<<< HEAD
   armedByManager.get(armedKey)?.();
   const cancel = () => {
     superseded = true;
@@ -684,19 +781,70 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
     cancel();
     armedByManager.delete(armedKey);
     return;
+=======
+  const registrations = armedByManager.get(armedKey) ?? new Set<ArmedFinishNotification>();
+  armedByManager.set(armedKey, registrations);
+  const previous = [...registrations];
+  let superseded = Promise.resolve(false);
+  let dispatchPending = Boolean(params.dispatchResult);
+  const registration: ArmedFinishNotification = {
+    stop,
+    supersedeWhen(accepted) {
+      superseded = superseded.then(
+        async (alreadySuperseded) => alreadySuperseded || (await accepted),
+      );
+    },
+  };
+  registrations.add(registration);
+  if (params.dispatchResult) {
+    const dispatchAccepted = params.dispatchResult.then((result) => result !== false);
+    for (const observer of previous) observer.supersedeWhen(dispatchAccepted);
+    void params.dispatchResult.then((accepted) => {
+      dispatchPending = false;
+      if (accepted) {
+        for (const observer of previous) observer.stop();
+        if (stopped || accepted === "turn_started") stop();
+      } else {
+        stop();
+      }
+      return undefined;
+    });
+  } else {
+    for (const observer of previous) {
+      observer.supersedeWhen(Promise.resolve(true));
+      observer.stop();
+    }
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
   }
 
   function stop(): void {
-    if (stopped) return;
     stopped = true;
     unsubscribe?.();
+<<<<<<< HEAD
+=======
+    // Pending observations remain visible to overlapping sends until acknowledgement.
+    if (!dispatchPending) {
+      registrations.delete(registration);
+      if (registrations.size === 0 && armedByManager.get(armedKey) === registrations) {
+        armedByManager.delete(armedKey);
+      }
+    }
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
   }
 
   async function notify(
     reason: FinishNotificationReason,
     permissionRequest?: AgentPermissionRequest,
   ): Promise<void> {
+<<<<<<< HEAD
     checkCurrent();
+=======
+    if (params.dispatchResult) {
+      const result = await params.dispatchResult;
+      if (result === false || result === "turn_started") return;
+    }
+    if (await superseded) return;
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
     const callerRecord = await agentStorage.get(callerAgentId);
     checkCurrent();
     if (callerRecord?.archivedAt) {
@@ -719,6 +867,7 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
       permissionRequest,
     });
 
+<<<<<<< HEAD
     const cost = sessionCost(
       agentManager.getAgent(childAgentId)?.costRecords ?? record?.costRecords,
     );
@@ -762,6 +911,22 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
       );
     // Wait for the delivery: the notice stays armed until it is sent, so a newer arm still supersedes it.
     await heldSendsFor(agentManager, logger).holdAndWait(callerAgentId, deliver);
+=======
+    await sendPromptToAgent({
+      agentManager,
+      agentStorage,
+      agentId: callerAgentId,
+      prompt: body,
+      source: {
+        kind: "agent-notification",
+        agentId: childAgentId,
+        event: finishNotificationEvents[reason],
+      },
+      activeTurnBehavior: "steer",
+      unarchive: false,
+      logger,
+    });
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
   }
 
   function notifySafely(reason: FinishNotificationReason, options: NotifySafelyOptions = {}): void {
@@ -783,6 +948,35 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
       });
   }
 
+  function observeState(agent: ManagedAgent): void {
+    for (const requestId of notifiedPermissionRequestIds) {
+      if (!agent.pendingPermissions.has(requestId)) {
+        notifiedPermissionRequestIds.delete(requestId);
+      }
+    }
+    if (agent.lifecycle === "running") {
+      if (waitForTurnStart && !hasSeenTurn) return;
+      hasSeenTurn = true;
+      if (agent.pendingPermissions.size === 0) {
+        hasSeenRunning = true;
+      }
+      return;
+    }
+    // Prior terminal state is not this task's outcome. A failure before turn start
+    // is reported by the dispatch acknowledgement instead of a finish callback.
+    if (agent.lifecycle === "error" && hasSeenTurn) {
+      notifySafely("errored");
+      return;
+    }
+    // Idle is published before the terminal stream event for both completion
+    // and cancellation. Let that event identify the outcome instead.
+    if (agent.lifecycle === "closed") {
+      notifySafely("was closed");
+      return;
+    }
+    return;
+  }
+
   unsubscribe = agentManager.subscribe(
     (event) => {
       if (stopped) {
@@ -790,6 +984,7 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
       }
 
       if (event.type === "agent_state") {
+<<<<<<< HEAD
         for (const requestId of notifiedPermissionRequestIds) {
           if (!event.agent.pendingPermissions.has(requestId)) {
             notifiedPermissionRequestIds.delete(requestId);
@@ -815,10 +1010,31 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
           notifySafely("was closed");
           return;
         }
+=======
+        observeState(event.agent);
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
         return;
       }
 
       if (event.type === "timeline_replacement") {
+        return;
+      }
+
+      if (event.event.type === "turn_started") {
+        hasSeenTurn = true;
+        hasSeenRunning = true;
+        return;
+      }
+
+      if (event.event.type === "turn_completed" || event.event.type === "turn_canceled") {
+        // Replacing a turn keeps the child running through the displaced turn's
+        // cancellation. The task settles only when the child becomes idle.
+        if (agentManager.getAgent(childAgentId)?.lifecycle !== "idle") return;
+        if (event.event.type === "turn_completed" && hasSeenRunning) {
+          notifySafely("finished");
+        } else if (event.event.type === "turn_canceled" && hasSeenTurn) {
+          notifySafely("was canceled");
+        }
         return;
       }
 
@@ -857,11 +1073,11 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
   const childSnapshot = agentManager.getAgent(childAgentId);
   if (!childSnapshot || childSnapshot.lifecycle === "closed") {
     stop();
-    return;
+    return stop;
   }
-  if (childSnapshot.lifecycle === "running") {
+  if (childSnapshot.lifecycle === "running" && !waitForTurnStart) {
+    hasSeenTurn = true;
     hasSeenRunning = true;
-  } else if (childSnapshot.lifecycle === "error") {
-    notifySafely("errored");
   }
+  return stop;
 }

@@ -111,6 +111,7 @@ test("pane retargeting replaces the viewed agent and duplicate panes collapse to
   }).toEqual({ duplicate: ["agent-a"], retargeted: ["agent-a", "agent-b"] });
 });
 
+<<<<<<< HEAD
 test("the selected agent panel keeps its native chat visible and focused", () => {
   const target = {
     kind: "plugin" as const,
@@ -142,5 +143,26 @@ test("the selected agent panel keeps its native chat visible and focused", () =>
   expect(agentIdForViewedTab({ kind: "terminal", terminalId: "terminal" })).toBeNull();
   expect(
     selectVisibleAgentIds({ layout, tabs, routeFocused: false, focusedPaneOnly: true }),
+=======
+test("the agent shown in the workspace sheet is viewed alongside the pane under it", () => {
+  const layout: WorkspaceLayout = {
+    focusedPaneId: "main",
+    root: { kind: "pane", pane: { id: "main", tabIds: ["a"], focusedTabId: "a" } },
+  };
+  const tabs: WorkspaceTab[] = [
+    { tabId: "a", target: { kind: "agent", agentId: "agent-a" }, createdAt: 1 },
+  ];
+  const sheetTab: WorkspaceTab = {
+    tabId: "sheet",
+    target: { kind: "agent", agentId: "agent-child" },
+    createdAt: 2,
+  };
+
+  expect(
+    selectVisibleAgentIds({ layout, tabs, sheetTab, routeFocused: true, focusedPaneOnly: true }),
+  ).toEqual(["agent-a", "agent-child"]);
+  expect(
+    selectVisibleAgentIds({ layout, tabs, sheetTab, routeFocused: false, focusedPaneOnly: true }),
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
   ).toEqual([]);
 });
