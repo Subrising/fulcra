@@ -1,14 +1,24 @@
 import type { ChildProcess } from "node:child_process";
 import { expect, test, vi } from "vitest";
 
+// The shared limiter has a real 64 MiB subprocess test. These cases check each
+// reader's wiring with a small limit, so parser work does not race request timers.
+vi.mock("./child-output-limit.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./child-output-limit.js")>();
+  return {
+    ...original,
+    limitChildOutput: (child: ChildProcess) => original.limitChildOutput(child, 4096),
+  };
+});
+
 const observed = vi.hoisted(() => ({ errors: [] as Error[] }));
 vi.mock("node:child_process", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:child_process")>();
   const source = `
     setImmediate(async () => {
       const out = process.env.OVERSIZED_TEST_STDERR ? process.stderr : process.stdout;
-      const chunk = Buffer.alloc(1024 * 1024, 120);
-      for (let i = 0; i < 65; i++) {
+      const chunk = Buffer.alloc(1024, 120);
+      for (let i = 0; i < 5; i++) {
         if (!out.write(chunk)) await new Promise(r => out.once('drain', r));
       }
       process.exit(0);
@@ -52,7 +62,7 @@ test("inspectOutOfProcess bounds a malformed child line and leaves the path unre
   });
   expect(result.get("/example")).toBe("unreadable");
   expect(observed.errors.map((e) => e.message)).toEqual([
-    "Child output line exceeds 67108864 bytes on stdout; history too large to resume; start a new session",
+    "Child output line exceeds 4096 bytes on stdout; history too large to resume; start a new session",
   ]);
 });
 
@@ -63,7 +73,7 @@ test("ledgerLease refuses an oversized readiness line and closes only its child"
   await lease.close();
   expect(lease.alive()).toBe(false);
   expect(observed.errors.map((e) => e.message)).toEqual([
-    "Child output line exceeds 67108864 bytes on stdout; history too large to resume; start a new session",
+    "Child output line exceeds 4096 bytes on stdout; history too large to resume; start a new session",
   ]);
 });
 
@@ -74,7 +84,7 @@ test("forkLocalSpeechWorker bounds stderr before its line reader receives it", a
   child.stderr!.resume();
   await closed;
   expect(observed.errors.map((e) => e.message)).toEqual([
-    "Child output line exceeds 67108864 bytes on stderr; history too large to resume; start a new session",
+    "Child output line exceeds 4096 bytes on stderr; history too large to resume; start a new session",
   ]);
 });
 
