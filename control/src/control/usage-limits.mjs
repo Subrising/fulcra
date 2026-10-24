@@ -13,8 +13,7 @@
 // stop observed hours later (a controller restart) still resolves to the right reset.
 //
 // RESUME (FU-490). At resetAt + 2 min the stop is re-verified -- the same limit message is still the newest entry and no
-// human input arrived since -- and then ONE continuation is sent to the session on the SAME account: never a move to
-// another account. A delegated session is sent through control.send (every fence); a human-held session through the
+// human input arrived since -- and then ONE continuation is sent to the session on the SAME account (it moves only if rotateOnLimit is on or the token is revoked). A delegated session is sent through control.send (every fence); a human-held session through the
 // native adapter, once, after the same re-check. Its message id is derived from the stop, so a retry can never send
 // twice. A busy session is retried with backoff, bounded. If the continued turn stops at a limit again soon after, or
 // the resume fails or cannot be timed, ONE BLOCKED line goes to the session's parent (wakes.limitBlocked), never silent.
@@ -83,7 +82,9 @@ export function continuationText(stop, rotation = null) {
       "and do NOT repeat an external action (push, merge, deploy, message, channel send, session start, or a write outside your directory) unless you have verified it did not happen."
     );
   return (
-    `[Orca controller: your previous turn stopped at the Claude usage limit ("${stop.line}", recorded ${stop.stoppedAt}); the limit has now reset.]\n` +
+    (rotation?.to
+      ? `[Orca controller: your previous turn stopped at the Claude usage limit ("${stop.line}", recorded ${stop.stoppedAt}). ${rotationNote(rotation)}]\n`
+      : `[Orca controller: your previous turn stopped at the Claude usage limit ("${stop.line}", recorded ${stop.stoppedAt}); the limit has now reset.]\n`) +
     "Continue exactly where you stopped. First check your working tree, git log and any receipts or artifacts to see how far that turn got, " +
     "and do NOT repeat an external action (push, merge, deploy, message, channel send, session start, or a write outside your directory) unless you have verified it did not happen."
   );
@@ -207,9 +208,8 @@ export class UsageLimits {
         at,
       });
     if (!Number(inserted.changes)) return this.row(row.id);
-    // A usage limit only marks the account limited, so the pool skips it for new sessions; the session stays on its
-    // account. A revoked token (FU-112) is not a usage window: that session still moves to a working account.
-    const revoked = stop.kind === "revoked";
+    // The account is marked limited. The session moves to another account only when rotateOnLimit is on (or the
+    // token is revoked); otherwise it stays on its account and is continued there after the reset.
     const rotation = await rotateOnLimit(this.control, {
       session: id,
       provider: "claude",
@@ -218,10 +218,10 @@ export class UsageLimits {
       note: row.line,
       stopId: row.id,
       now: this.now(),
-      delegated: revoked && s.mode === "delegated",
+      delegated: s.mode === "delegated",
       kind: stop.kind,
     });
-    if (revoked && rotation?.to && s.mode === "delegated") {
+    if (rotation?.to && s.mode === "delegated") {
       this.db
         .prepare("UPDATE usage_limit_stops SET state='waiting',nextAt=?,outcome=?,at=? WHERE id=?")
         .run(
@@ -242,7 +242,7 @@ export class UsageLimits {
       this.block(
         row,
         "unresolved",
-        "The account token is revoked or invalid; nothing is resumed automatically",
+        "The account token is revoked or invalid and no other account is ready; nothing is resumed automatically",
       );
     else if (!row.resetAt)
       this.block(

@@ -237,7 +237,7 @@ export class ProviderRecovery {
         note: error.slice(0, 200),
         stopId: rid,
         now: this.now(),
-        delegated: false, // FU-490: only marks the account limited; the session stays on its account and waits for the reset
+        delegated: s.mode === "delegated",
       });
       if (rotation?.to && s.mode === "delegated")
         this.db
