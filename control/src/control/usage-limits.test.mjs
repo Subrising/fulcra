@@ -20,13 +20,7 @@ import {
   readAccounts,
   accountStatus,
 } from "../../orca-organization/server/accounts.mjs";
-import {
-  parseLimitLine,
-  detectStop,
-  UsageLimits,
-  MAX_ATTEMPTS,
-  MAX_RESUMES_PER_DAY,
-} from "./usage-limits.mjs";
+import { parseLimitLine, detectStop, UsageLimits, MAX_ATTEMPTS } from "./usage-limits.mjs";
 
 const T = (n) => `33333333-3333-4333-8333-${String(n).padStart(12, "0")}`;
 const issue = (id) => ({
@@ -227,7 +221,11 @@ test("a stop is the newest entry, an assistant message, on an idle Claude sessio
   assert.equal(detectStop(limitTail({ status: "running" })), null);
   assert.equal(detectStop(limitTail({ maxSeq: 5698 })), null, "something newer exists");
   assert.equal(
-    detectStop(limitTail({ entries: [entry(5697, { type: "user_message", text: LINE })] })),
+    detectStop(
+      limitTail({
+        entries: [entry(5697, { type: "user_message", text: LINE })],
+      }),
+    ),
     null,
     "user text is never read as a limit",
   );
@@ -272,7 +270,8 @@ function fixture(t) {
   const sent = [],
     states = new Map(),
     tails = new Map(),
-    notices = [];
+    notices = [],
+    blocked = [];
   const native = {
     route: () => undefined,
     inspect: async (id) => ({
@@ -291,7 +290,11 @@ function fixture(t) {
     },
     limitTail: async (id) => tails.get(id) ?? null,
   };
-  const control = new Controller({ store, native, authority: async (id) => issue(id) });
+  const control = new Controller({
+    store,
+    native,
+    authority: async (id) => issue(id),
+  });
   control.confirmAccountLimit = async ({ accountId, resetAt, kind }) => ({
     accountId,
     resetAt,
@@ -299,7 +302,11 @@ function fixture(t) {
   });
   const clock = { now: at("2026-09-24T11:48:00Z") };
   control.recovery = new Recovery(control, { now: () => clock.now });
-  control.usageLimits = new UsageLimits(control, { now: () => clock.now, random: () => 0 });
+  control.usageLimits = new UsageLimits(control, { now: () => clock.now });
+  control.wakes = {
+    status: () => ({}),
+    limitBlocked: (session, p) => blocked.push({ session, ...p }),
+  };
   control.limitNotifier = async (n) => {
     notices.push(n);
   };
@@ -317,6 +324,7 @@ function fixture(t) {
     states,
     tails,
     notices,
+    blocked,
     clock,
     enrol,
     request: rpc(control, "test-operator"),
@@ -330,14 +338,19 @@ test("a delegated session that stopped at the limit is resumed once, after the r
   const f = fixture(t),
     id = f.enrol();
   await f.delegate(id);
-  await f.limits.onAgent({ id, provider: "claude", status: "idle", updatedAt: "u1" });
+  await f.limits.onAgent({
+    id,
+    provider: "claude",
+    status: "idle",
+    updatedAt: "u1",
+  });
   let r = row(f, id);
   assert.deepEqual(
     [r.state, r.resetAt, r.nextAt, r.turnId, r.seq, r.mode],
     [
       "waiting",
       "2026-09-24T14:50:00.000Z",
-      "2026-09-24T14:50:30.000Z",
+      "2026-09-24T14:52:00.000Z",
       "foreground-turn-18",
       5697,
       "delegated",
@@ -345,7 +358,7 @@ test("a delegated session that stopped at the limit is resumed once, after the r
   );
   await f.limits.tick();
   assert.equal(f.sent.length, 0, "nothing before the reset");
-  f.clock.now = at("2026-09-24T14:50:31Z");
+  f.clock.now = at("2026-09-24T14:52:01Z");
   await f.limits.tick();
   assert.equal(f.sent.length, 1);
   assert.match(f.sent[0].text, /Continue exactly where you stopped/);
@@ -359,7 +372,12 @@ test("a delegated session that stopped at the limit is resumed once, after the r
     "journaled like every controller send",
   );
   await f.limits.tick();
-  await f.limits.onAgent({ id, provider: "claude", status: "idle", updatedAt: "u1" });
+  await f.limits.onAgent({
+    id,
+    provider: "claude",
+    status: "idle",
+    updatedAt: "u1",
+  });
   await f.limits.observe(id);
   assert.equal(f.sent.length, 1, "never twice");
   assert.equal(f.store.db.prepare("SELECT count(*) n FROM usage_limit_stops").get().n, 1);
@@ -367,32 +385,98 @@ test("a delegated session that stopped at the limit is resumed once, after the r
   // so the journal returns the delivered send and nothing is dispatched again.
   f.store.db
     .prepare("UPDATE usage_limit_stops SET state='waiting',nextAt=? WHERE id=?")
-    .run("2026-09-24T14:50:30.000Z", r.id);
+    .run("2026-09-24T14:52:00.000Z", r.id);
   await f.limits.tick();
   assert.equal(f.sent.length, 1, "a retry after a crash does not send again");
   assert.equal(row(f, id).state, "resumed");
-  const status = await f.request({ method: "recovery-status", operator: "test-operator" });
+  const status = await f.request({
+    method: "recovery-status",
+    operator: "test-operator",
+  });
   assert.equal(status.usageLimits.stops[0].state, "resumed");
   assert.equal(status.usageLimits.stops[0].interruptedTurn.turnId, "foreground-turn-18");
 });
-test("a human-held session is never sent anything: its human is notified once", async (t) => {
+test("a human-held session is resumed once after the reset, through the native adapter", async (t) => {
   const f = fixture(t),
     id = f.enrol();
   await f.limits.observe(id);
-  f.clock.now = at("2026-09-24T15:00:00Z");
+  f.clock.now = at("2026-09-24T14:51:00Z");
+  await f.limits.tick();
+  assert.equal(f.sent.length, 0, "not before reset + 2 min");
+  f.clock.now = at("2026-09-24T14:52:01Z");
   await f.limits.tick();
   await f.limits.tick();
-  assert.equal(f.sent.length, 0);
-  assert.equal(row(f, id).state, "notified");
-  assert.match(row(f, id).outcome, /Under human control; nothing was sent; human notified/);
-  assert.deepEqual(f.notices, [
-    {
-      session: id,
-      resetAt: "2026-09-24T14:50:00.000Z",
-      reset: "12:50am (Australia/Brisbane)",
-      heldBack: false,
-    },
-  ]);
+  assert.equal(f.sent.length, 1);
+  assert.match(f.sent[0].text, /Continue exactly where you stopped/);
+  assert.equal(row(f, id).state, "resumed");
+  assert.equal(f.sent[0].messageId, row(f, id).continuation);
+  assert.deepEqual(f.blocked, []);
+});
+test("a pending resume survives a restart: a new UsageLimits on the same journal sends it once", async (t) => {
+  const f = fixture(t),
+    id = f.enrol();
+  await f.delegate(id);
+  await f.limits.observe(id);
+  const restarted = new UsageLimits(f.control, { now: () => f.clock.now });
+  f.clock.now = at("2026-09-25T09:00:00Z"); // the daemon was down across the reset
+  await restarted.tick();
+  await restarted.tick();
+  assert.equal(f.sent.length, 1);
+  assert.equal(row(f, id).state, "resumed");
+});
+test("the continued turn stopping at the limit again sends one BLOCKED to the parent, and is not resumed again", async (t) => {
+  const f = fixture(t),
+    id = f.enrol();
+  await f.delegate(id);
+  await f.limits.observe(id);
+  f.clock.now = at("2026-09-24T14:53:00Z");
+  await f.limits.tick();
+  assert.equal(f.sent.length, 1);
+  f.tails.set(
+    id,
+    limitTail({
+      maxSeq: 5700,
+      entries: [
+        entry(
+          5700,
+          {
+            type: "assistant_message",
+            text: "You've hit your session limit · resets 6am (Australia/Brisbane)",
+            messageId: "00000000-0000-4f94-9fb4-000000002099",
+          },
+          { timestamp: "2026-09-24T14:55:00.000Z" },
+        ),
+      ],
+    }),
+  );
+  f.clock.now = at("2026-09-24T14:56:00Z");
+  await f.limits.observe(id);
+  await f.limits.observe(id);
+  assert.equal(f.blocked.length, 1, "one BLOCKED line");
+  assert.equal(f.blocked[0].session, id);
+  assert.match(f.blocked[0].reason, /stopped at the usage limit again/);
+  f.clock.now = at("2026-09-25T12:00:00Z");
+  await f.limits.tick();
+  assert.equal(f.sent.length, 1, "no second resume");
+});
+test("a limit line whose reset cannot be read sends BLOCKED to the parent", async (t) => {
+  const f = fixture(t),
+    id = f.enrol();
+  f.tails.set(
+    id,
+    limitTail({
+      entries: [
+        entry(5697, {
+          type: "assistant_message",
+          text: "You've hit your session limit · resets 3pm (Mars/Olympus)",
+          messageId: "00000000-0000-4f94-9fb4-000000002022",
+        }),
+      ],
+    }),
+  );
+  await f.limits.observe(id);
+  assert.equal(row(f, id).state, "unresolved");
+  assert.equal(f.blocked.length, 1);
 });
 test("a session that moved on, or whose control changed, is not resumed", async (t) => {
   const f = fixture(t),
@@ -425,23 +509,7 @@ test("a busy session is retried with backoff, and gives up after the bounded att
   assert.equal(f.sent.length, 0);
   assert.equal(r.state, "failed");
   assert.match(r.outcome, new RegExp(`Still busy after ${MAX_ATTEMPTS} attempts`));
-});
-test("resumes are capped per session per day; the rest is left for a human", async (t) => {
-  const f = fixture(t),
-    id = f.enrol();
-  await f.delegate(id);
-  for (let n = 0; n < MAX_RESUMES_PER_DAY; n++)
-    f.store.db
-      .prepare(
-        "INSERT INTO usage_limit_stops VALUES (?,?,1,'delegated','claude',NULL,?,'m','x','t',NULL,NULL,NULL,'resumed',0,NULL,NULL,NULL,?)",
-      )
-      .run(randomUUID(), id, n, "2026-09-24T12:00:00.000Z");
-  await f.limits.observe(id);
-  f.clock.now = at("2026-09-24T15:00:00Z");
-  await f.limits.tick();
-  assert.equal(f.sent.length, 0);
-  assert.equal(row(f, id).state, "held-back");
-  assert.equal(f.notices.at(-1).heldBack, true);
+  assert.equal(f.blocked.length, 1, "a failed resume is reported to the parent");
 });
 test("the continuation is automated traffic: refused at the journal’s automation limit", async (t) => {
   const f = fixture(t),
@@ -493,8 +561,18 @@ test("an unresolvable reset is recorded and never resumed; updates that are not 
   ])
     await f.limits.onAgent(a);
   assert.equal(reads, 0);
-  await f.limits.onAgent({ id, provider: "claude", status: "idle", updatedAt: "v2" });
-  await f.limits.onAgent({ id, provider: "claude", status: "idle", updatedAt: "v2" });
+  await f.limits.onAgent({
+    id,
+    provider: "claude",
+    status: "idle",
+    updatedAt: "v2",
+  });
+  await f.limits.onAgent({
+    id,
+    provider: "claude",
+    status: "idle",
+    updatedAt: "v2",
+  });
   assert.equal(reads, 1, "one read per daemon update");
 });
 test("a Book (remote) session is not read here; the notice carries metadata only", async (t) => {
@@ -557,7 +635,12 @@ test("a limit on a session that is not enrolled marks its pool account limited, 
   const personal = await addAccount(root, { provider: "claude", name: "Personal" }, now + 1);
   assert.equal((await assign(root, id, "claude", now - 60_000)).account.id, work.id);
   f.tails.set(id, limitTail());
-  await f.limits.onAgent({ id, provider: "claude", status: "idle", updatedAt: "u1" });
+  await f.limits.onAgent({
+    id,
+    provider: "claude",
+    status: "idle",
+    updatedAt: "u1",
+  });
   const stored = readAccounts(root).accounts.find((a) => a.id === work.id);
   assert.equal(stored.limitKind, "session");
   assert.equal(stored.limitedUntil, "2026-09-24T14:50:00.000Z");

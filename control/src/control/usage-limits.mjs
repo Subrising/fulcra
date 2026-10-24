@@ -12,13 +12,13 @@
 // time and IANA zone against the message's own timestamp (or the session's updatedAt), never against "now", so a
 // stop observed hours later (a controller restart) still resolves to the right reset.
 //
-// RESUME. At resetAt + jitter the stop is re-verified -- the same limit message is still the newest entry and no
-// human input arrived since -- and then, for a DELEGATED session only, one controller continuation is sent through
-// control.send (every fence: generation, native identity, human-input fence, idleness, task authority, allowance,
-// and the journal's automation limit, since it is automated traffic). Its message id is derived from the stop, so a
-// retry can never send twice. A busy session is retried with backoff, bounded; a session that stops again is a new
-// stop, and at most MAX_RESUMES_PER_DAY are resumed per session per 24 h before it is left to a human.
-// A HUMAN-HELD session is never sent anything: its human is notified once (metadata only), and that is all.
+// RESUME (FU-490). At resetAt + 2 min the stop is re-verified -- the same limit message is still the newest entry and no
+// human input arrived since -- and then ONE continuation is sent to the session on the SAME account: never a move to
+// another account. A delegated session is sent through control.send (every fence); a human-held session through the
+// native adapter, once, after the same re-check. Its message id is derived from the stop, so a retry can never send
+// twice. A busy session is retried with backoff, bounded. If the continued turn stops at a limit again soon after, or
+// the resume fails or cannot be timed, ONE BLOCKED line goes to the session's parent (wakes.limitBlocked), never silent.
+// The stops live in the journal, so a pending resume survives a daemon restart.
 // Everything is visible in recovery-status (usageLimits).
 import { createHash } from "node:crypto";
 import { assertColumns } from "./schema.mjs";
@@ -39,10 +39,10 @@ import {
 } from "../../orca-organization/server/limit-line.mjs";
 export { parseLimitLine, parseRevokedLine, MAX_RESET_AHEAD_MS };
 
-export const RESUME_JITTER_MS = [30000, 120000],
+export const RESUME_DELAY_MS = 120000,
   MAX_ATTEMPTS = 6,
   RETRY_BASE_MS = 60000,
-  MAX_RESUMES_PER_DAY = 3;
+  AGAIN_WINDOW_MS = 3600000; // a stop this soon after a resume is the continued turn stopping again
 const COLUMNS =
   "id,session,generation,mode,provider,turnId,seq,messageId,line,stoppedAt,resetAt,lastUserMessageAt,lastInstruction,state,attempts,nextAt,continuation,outcome,at";
 // Pure. A timeline tail -> the stop it ends with, or null.
@@ -82,11 +82,8 @@ export function continuationText(stop, rotation = null) {
       "Continue exactly where you stopped. First check your working tree, git log and any receipts or artifacts to see how far that turn got, " +
       "and do NOT repeat an external action (push, merge, deploy, message, channel send, session start, or a write outside your directory) unless you have verified it did not happen."
     );
-  const lead = rotation?.to
-    ? `[Orca controller: your previous turn stopped at the Claude usage limit ("${stop.line}", recorded ${stop.stoppedAt}). ${rotationNote(rotation)}]\n`
-    : `[Orca controller: your previous turn stopped at the Claude usage limit ("${stop.line}", recorded ${stop.stoppedAt}); the limit has now reset.]\n`;
   return (
-    lead +
+    `[Orca controller: your previous turn stopped at the Claude usage limit ("${stop.line}", recorded ${stop.stoppedAt}); the limit has now reset.]\n` +
     "Continue exactly where you stopped. First check your working tree, git log and any receipts or artifacts to see how far that turn got, " +
     "and do NOT repeat an external action (push, merge, deploy, message, channel send, session start, or a write outside your directory) unless you have verified it did not happen."
   );
@@ -190,18 +187,29 @@ export class UsageLimits {
       lastUserMessageAt: tail.lastUserMessageAt ?? null,
       lastInstruction: last,
     };
+    // The continued turn stopping at a limit again soon after a resume is reported up, not resumed in a loop.
+    const prior = this.db
+      .prepare(
+        "SELECT at FROM usage_limit_stops WHERE session=? AND state='resumed' AND seq<? ORDER BY seq DESC LIMIT 1",
+      )
+      .get(id, row.seq);
+    const again =
+      Boolean(prior) && Date.parse(row.stoppedAt) - Date.parse(prior.at) <= AGAIN_WINDOW_MS;
     const at = this.iso();
     const inserted = this.db
       .prepare(
-        `INSERT OR IGNORE INTO usage_limit_stops VALUES (@id,@session,@generation,@mode,@provider,@turnId,@seq,@messageId,@line,@stoppedAt,@resetAt,@lastUserMessageAt,@lastInstruction,'waiting',0,@nextAt,NULL,NULL,@at)`,
+        `INSERT OR IGNORE INTO usage_limit_stops VALUES (@id,@session,@generation,@mode,@provider,@turnId,@seq,@messageId,@line,@stoppedAt,@resetAt,@lastUserMessageAt,@lastInstruction,@state,0,@nextAt,NULL,NULL,@at)`,
       )
       .run({
         ...row,
-        nextAt: row.resetAt ? this.iso(Date.parse(row.resetAt) + this.jitter()) : null,
+        state: again ? "blocked" : "waiting",
+        nextAt: row.resetAt && !again ? this.iso(Date.parse(row.resetAt) + RESUME_DELAY_MS) : null,
         at,
       });
     if (!Number(inserted.changes)) return this.row(row.id);
-    // Update-7: with an account pool, the session moves to the next account now instead of waiting for the reset.
+    // A usage limit only marks the account limited, so the pool skips it for new sessions; the session stays on its
+    // account. A revoked token (FU-112) is not a usage window: that session still moves to a working account.
+    const revoked = stop.kind === "revoked";
     const rotation = await rotateOnLimit(this.control, {
       session: id,
       provider: "claude",
@@ -210,12 +218,12 @@ export class UsageLimits {
       note: row.line,
       stopId: row.id,
       now: this.now(),
-      delegated: s.mode === "delegated",
+      delegated: revoked && s.mode === "delegated",
       kind: stop.kind,
     });
-    if (rotation?.to && s.mode === "delegated") {
+    if (revoked && rotation?.to && s.mode === "delegated") {
       this.db
-        .prepare("UPDATE usage_limit_stops SET nextAt=?,outcome=?,at=? WHERE id=?")
+        .prepare("UPDATE usage_limit_stops SET state='waiting',nextAt=?,outcome=?,at=? WHERE id=?")
         .run(
           this.iso(this.now() + rotateDelay(this.random)),
           `moving to account "${rotation.toName}"`,
@@ -224,23 +232,25 @@ export class UsageLimits {
         );
       return this.row(row.id);
     }
-    if (stop.kind === "revoked")
-      this.finish(
-        row.id,
+    if (again)
+      this.block(
+        row,
+        "blocked",
+        "The continued turn stopped at the usage limit again; not resumed a second time",
+      );
+    else if (stop.kind === "revoked")
+      this.block(
+        row,
         "unresolved",
-        "The account token is revoked or invalid and no other account is ready; nothing is resumed automatically",
+        "The account token is revoked or invalid; nothing is resumed automatically",
       );
     else if (!row.resetAt)
-      this.finish(
-        row.id,
+      this.block(
+        row,
         "unresolved",
         "The reset time could not be resolved from the limit line; nothing is resumed automatically",
       );
     return this.row(row.id);
-  }
-  jitter() {
-    const [lo, hi] = RESUME_JITTER_MS;
-    return Math.round(lo + (hi - lo) * this.random());
   }
   row(id) {
     return this.db.prepare("SELECT * FROM usage_limit_stops WHERE id=?").get(id) ?? null;
@@ -251,6 +261,20 @@ export class UsageLimits {
         "UPDATE usage_limit_stops SET state=?,outcome=?,continuation=coalesce(?,continuation),at=? WHERE id=?",
       )
       .run(state, String(outcome).slice(0, 500), extra.continuation ?? null, this.iso(), id);
+  }
+  // A stop that cannot be continued: record why, and send ONE BLOCKED line to the session's parent (once per stop).
+  block(r, state, outcome) {
+    this.finish(r.id, state, outcome);
+    try {
+      this.control.wakes?.limitBlocked?.(r.session, {
+        stopId: r.id,
+        line: r.line,
+        resetAt: r.resetAt ?? null,
+        reason: String(outcome).slice(0, 300),
+      });
+    } catch (e) {
+      this.lastError = { message: e.message, at: this.iso() };
+    }
   }
   // Watchdog: every due stop, one at a time.
   tick() {
@@ -276,9 +300,8 @@ export class UsageLimits {
   async due(r) {
     const s = this.store.get(r.session);
     if (!s) return this.finish(r.id, "superseded", "The session is no longer enrolled");
-    // Human-held: notify only, once. Never a send.
-    if (s.mode !== "delegated") return this.notify(r, s);
-    if (s.generation !== r.generation)
+    const delegated = s.mode === "delegated";
+    if (delegated && s.generation !== r.generation)
       return this.finish(r.id, "superseded", "Session control changed since the stop was recorded");
     // Still exactly at this stop, and nobody has spoken since.
     const tail = await this.control.native.limitTail(r.session),
@@ -294,22 +317,10 @@ export class UsageLimits {
         "superseded",
         "The session moved on since it stopped at the limit; nothing was sent",
       );
-    const recent = this.db
-      .prepare(
-        "SELECT count(*) n FROM usage_limit_stops WHERE session=? AND state='resumed' AND at>?",
-      )
-      .get(r.session, this.iso(this.now() - 86400000)).n;
-    if (recent >= MAX_RESUMES_PER_DAY) {
-      this.finish(
-        r.id,
-        "held-back",
-        `This session was already resumed ${recent} times in 24 h; left for a human`,
-      );
-      return this.notify(this.row(r.id), s, true);
-    }
     const continuation = derived(r.id, "usage-limit-continue");
-    // Update-7: moved to another account -> relaunch in place first, so the continuation runs on the new account.
-    const rotation = rotationOf(r.id, this.control);
+    // A revoked token (FU-112) moved the session to another account: relaunch in place first, so the continuation
+    // runs on it. A usage-limit stop never has a rotation.
+    const rotation = delegated ? rotationOf(r.id, this.control) : null;
     if (rotation?.to && !this.relaunched.has(r.id)) {
       try {
         const res = await fencedRelaunch(
@@ -327,8 +338,8 @@ export class UsageLimits {
           return this.finish(r.id, "held-back", e.message);
         const attempts = r.attempts + 1;
         if (attempts >= MAX_ATTEMPTS)
-          return this.finish(
-            r.id,
+          return this.block(
+            r,
             "failed",
             `Relaunch on account "${rotation.toName}" failed after ${attempts} attempts: ${e.message}`,
           );
@@ -345,30 +356,46 @@ export class UsageLimits {
       }
     }
     try {
-      const d = await this.control.send(
-        { sessionId: r.session, messageId: continuation, text: continuationText(r, rotation) },
-        undefined,
-        r.generation,
-        {
-          automated: "usage-limit-resume",
-          check: () => {
-            const now = this.row(r.id),
-              cur = this.store.get(r.session);
-            if (
-              now?.state !== "waiting" ||
-              cur?.mode !== "delegated" ||
-              cur.generation !== r.generation
-            )
-              throw Error("The stop is no longer waiting");
+      let state;
+      if (delegated) {
+        const d = await this.control.send(
+          {
+            sessionId: r.session,
+            messageId: continuation,
+            text: continuationText(r, rotation),
           },
-        },
-      );
-      this.finish(
-        r.id,
-        d.state === "delivered" ? "resumed" : "uncertain",
-        `Continuation ${d.state}`,
-        { continuation },
-      );
+          undefined,
+          r.generation,
+          {
+            automated: "usage-limit-resume",
+            check: () => {
+              const now = this.row(r.id),
+                cur = this.store.get(r.session);
+              if (
+                now?.state !== "waiting" ||
+                cur?.mode !== "delegated" ||
+                cur.generation !== r.generation
+              )
+                throw Error("The stop is no longer waiting");
+            },
+          },
+        );
+        state = d.state === "delivered" ? "resumed" : "uncertain";
+      } else {
+        // A human-held session has no journal send. Mark the stop first, so a crash cannot send twice.
+        if ((await this.control.native.inspect(r.session))?.status !== "idle")
+          throw new RecipientBusy("Session is not idle");
+        this.finish(r.id, "resumed", "Continuation sent", { continuation });
+        try {
+          await this.control.native.send(r.session, continuationText(r), continuation);
+        } catch (e) {
+          this.block(r, "failed", `Continuation not sent: ${e.message}`);
+        }
+        return;
+      }
+      this.finish(r.id, state, `Continuation ${state === "resumed" ? "delivered" : "uncertain"}`, {
+        continuation,
+      });
     } catch (e) {
       const attempts = r.attempts + 1;
       if (e instanceof RecipientBusy && attempts < MAX_ATTEMPTS) {
@@ -382,39 +409,12 @@ export class UsageLimits {
             r.id,
           );
       } else
-        this.finish(
-          r.id,
+        this.block(
+          r,
           "failed",
           `${e instanceof RecipientBusy ? `Still busy after ${attempts} attempts` : e.message}`,
         );
     }
-  }
-  async notify(r, s, heldBack = false) {
-    const notify = this.control.limitNotifier;
-    let outcome = "no notifier configured";
-    if (typeof notify === "function") {
-      try {
-        await notify({
-          session: r.session,
-          resetAt: r.resetAt,
-          reset: r.line.replace(/^.* resets /, "").slice(0, 60),
-          heldBack,
-        });
-        outcome = "human notified";
-      } catch (e) {
-        outcome = "notification failed: " + String(e?.message ?? e).slice(0, 200);
-      }
-    }
-    if (!heldBack)
-      this.finish(
-        r.id,
-        "notified",
-        `${s.mode === "delegated" ? "Held back" : "Under human control; nothing was sent"}; ${outcome}`,
-      );
-    else
-      this.db
-        .prepare("UPDATE usage_limit_stops SET outcome=outcome||? WHERE id=?")
-        .run(`; ${outcome}`, r.id);
   }
   // For recovery-status: open stops first, then the recent history.
   status() {
@@ -437,7 +437,11 @@ export class UsageLimits {
         attempts: r.attempts,
         continuation: r.continuation,
         outcome: r.outcome,
-        interruptedTurn: { turnId: r.turnId, seq: r.seq, lastInstruction: r.lastInstruction },
+        interruptedTurn: {
+          turnId: r.turnId,
+          seq: r.seq,
+          lastInstruction: r.lastInstruction,
+        },
         at: r.at,
       })),
       error: this.lastError,

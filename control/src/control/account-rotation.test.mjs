@@ -139,7 +139,7 @@ function world(t, provider = "claude") {
   };
 }
 
-test("Claude: a stop at the limit moves the session to the next account now, relaunches it in place and continues it; new sessions avoid the limited account", async (t) => {
+test("Claude: a stop at the limit keeps the session on its account (even with rotateOnLimit on), marks the account limited, and resumes it there after the reset", async (t) => {
   const w = world(t);
   const a = await addAccount(w.root, { provider: "claude", name: "Work" }, w.clock.now),
     b = await addAccount(w.root, { provider: "claude", name: "Personal" }, w.clock.now + 1);
@@ -154,26 +154,24 @@ test("Claude: a stop at the limit moves the session to the next account now, rel
     updatedAt: "u1",
   });
   assert.equal(stop.state, "waiting");
-  assert.match(stop.outcome, /moving to account "Personal"/);
-  assert.ok(Date.parse(stop.nextAt) - w.clock.now < 60000, "due in seconds, not at the reset");
-  assert.deepEqual(w.rotated, [{ session: id, from: "Work", to: "Personal" }]); // the owner is told
-  assert.equal(accountOf(readAccounts(w.root), id).name, "Personal");
+  assert.equal(stop.nextAt, "2026-09-24T14:52:00.000Z", "the reset plus 2 min");
+  assert.deepEqual(w.rotated, [], "nobody is told of a move: there is none");
+  assert.equal(accountOf(readAccounts(w.root), id).name, "Work");
   const s = readAccounts(w.root);
   assert.equal(s.accounts.find((x) => x.id === a.id).limitedUntil, "2026-09-24T14:50:00.000Z"); // limited until the line's reset
-  w.clock.now += 60000;
+  w.clock.now = at("2026-09-24T14:52:01Z");
   await w.control.usageLimits.tick();
-  assert.deepEqual(
-    w.recovers,
-    [id],
-    "relaunched in place once (the new account is taken at launch)",
-  );
+  assert.deepEqual(w.recovers, [], "no relaunch on another account");
   assert.equal(w.sent.length, 1);
-  assert.match(w.sent[0].text, /moved the session to account "Personal" with its history/);
+  assert.doesNotMatch(w.sent[0].text, /moved the session/);
   const done = w.store.db.prepare("SELECT state FROM usage_limit_stops WHERE session=?").get(id);
   assert.equal(done.state, "resumed");
-  assert.equal(readAccounts(w.root).rotations.length, 1);
-  assert.equal(readAccounts(w.root).rotations[0].reason, "limit");
-  assert.equal((await assign(w.root, randomUUID(), "claude", w.clock.now)).account.id, b.id); // a new session avoids Work
+  assert.equal(accountOf(readAccounts(w.root), id).name, "Work", "still the same account");
+  assert.ok(readAccounts(w.root).rotations.every((r) => !r.to), "the event is recorded, no move");
+  assert.equal(
+    (await assign(w.root, randomUUID(), "claude", w.clock.now - 3600000)).account.id,
+    b.id,
+  ); // a new session avoids Work
 });
 test("B4: a human-held session at the limit stays on its account (marked limited), nobody is woken and nothing is relaunched", async (t) => {
   const w = world(t);
@@ -223,11 +221,11 @@ test("Claude: no pool -> exactly the previous behaviour (waits for the reset); e
     Date.parse(stop2.nextAt) >= at("2026-09-24T14:50:00Z"),
     "nobody to move to: wait for the reset",
   );
-  assert.deepEqual(w2.rotated, [{ session: id2, from: "Only", to: null }]);
+  assert.deepEqual(w2.rotated, []);
   assert.equal(readAccounts(w2.root).accounts[0].limitedUntil, "2026-09-24T14:50:00.000Z");
   void only;
 });
-test("Codex: a usage-limit stop moves to the next account and restarts without waiting for a quota read", async (t) => {
+test("Codex: a usage-limit stop stays on its account, marks it limited, and a failed wait is reported to the parent", async (t) => {
   const w = world(t, "codex");
   const a = await addAccount(w.root, { provider: "codex", name: "A" }, w.clock.now),
     b = await addAccount(w.root, { provider: "codex", name: "B" }, w.clock.now + 1);
@@ -253,16 +251,18 @@ test("Codex: a usage-limit stop moves to the next account and restarts without w
     lastError: error,
   });
   assert.equal(row.kind, "quota");
-  assert.match(row.outcome, /moving to account "B"/);
-  w.clock.now += 60000;
-  await w.control.providerRecovery.tick();
-  assert.deepEqual(w.recovers, [id]);
-  assert.equal(accountOf(readAccounts(w.root), id).name, "B");
-  assert.match(w.sent.at(-1)?.text ?? "", /moved the session to account "B"/);
+  assert.doesNotMatch(row.outcome ?? "", /moving to account/);
+  assert.equal(accountOf(readAccounts(w.root), id).name, "A", "not moved");
   assert.equal(
     readAccounts(w.root).accounts.find((x) => x.id === a.id).limitedUntil,
     codexResetAt(error, at("2026-09-24T11:48:00Z")),
   );
+  assert.equal(b.id !== a.id, true);
+  const blocked = [];
+  w.control.wakes.limitBlocked = (session, p) => blocked.push({ session, ...p });
+  w.control.providerRecovery.finish(row.id, "failed", "Usage still not permitted after a day");
+  assert.equal(blocked.length, 1);
+  assert.equal(blocked[0].session, id);
 });
 test("the Codex reset time is read from its message (local time), and only when it is in the future", () => {
   const now = at("2026-09-24T00:00:00Z");
@@ -469,8 +469,7 @@ test("limit reconnect records one canonical switch with reason limit", async (t)
 
 test("limit due refuses when delegation becomes human before entering the exclusive fence", async (t) => {
   const w = await manualWorld(t);
-  await setRotateOnLimit(w.root, true);
-  w.tails.set(w.id, tail());
+  w.tails.set(w.id, revokedTail()); // only a revoked token still relaunches on another account
   await w.control.usageLimits.onAgent({
     id: w.id,
     provider: "claude",
@@ -512,7 +511,7 @@ for (const change of ["provider", "disabled", "expired", "limited"])
     assert.equal(result.state, "refused");
     assert.equal(typeof result.message, "string");
     assert.equal(w.recovers.length, 0);
-    assert.equal(readAccounts(w.root).rotations.length, 0);
+    assert.ok(readAccounts(w.root).rotations.every((r) => !r.to), "the event is recorded, no move");
   });
 
 // FU-112: a revoked or invalid account token is an account-down, not a usage limit.
@@ -576,7 +575,7 @@ test("FU-112: with no other account ready, a revoked token is recorded, nothing 
   await assign(w.root, id, "claude", w.clock.now - 60_000);
   const stop = await w.control.usageLimits.onAgent(agentUpdate(id, 1));
   assert.equal(stop.state, "unresolved");
-  assert.match(stop.outcome, /revoked or invalid and no other account is ready/);
+  assert.match(stop.outcome, /revoked or invalid; nothing is resumed/);
   w.clock.now += 3600000;
   await w.control.usageLimits.tick();
   assert.equal(w.sent.length, 0);

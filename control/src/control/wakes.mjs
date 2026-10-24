@@ -196,19 +196,8 @@ export class Wakes {
   // and recovery-status still show the rotation).
   accountRotated(session, r) {
     if (!uuid(session) || !r) return 0;
-    const holders = this.owned({ session }).map((o) => ({
-      holder: o.holder,
-      seat: o.seat,
-      session,
-      title: o.title,
-    }));
-    if (this.has("manager_workers"))
-      for (const m of this.db
-        .prepare("SELECT DISTINCT supervisor FROM manager_workers WHERE worker=?")
-        .all(session))
-        if (uuid(m.supervisor)) holders.push({ holder: m.supervisor, seat: null, session });
     let n = 0;
-    for (const h of holders)
+    for (const h of this.parents(session))
       n += this.enqueue(h, "account-rotated", ["account", r.at, r.to ?? "none"], {
         from: r.fromName,
         to: r.toName,
@@ -220,6 +209,36 @@ export class Wakes {
         : 0;
     if (n) this.pump();
     return n;
+  }
+  // FU-490: a usage-limit stop that Fulcra could not continue. One BLOCKED line per stop to the parents of the session.
+  limitBlocked(session, p) {
+    if (!uuid(session) || !p?.stopId) return 0;
+    let n = 0;
+    for (const h of this.parents(session))
+      n += this.enqueue(h, "limit-blocked", ["limit", p.stopId], {
+        line: clip(p.line, 200),
+        resetAt: p.resetAt ?? null,
+        reason: clip(p.reason, 300),
+      })
+        ? 1
+        : 0;
+    if (n) this.pump();
+    return n;
+  }
+  // The holders told about a session: the seat that started it and, for a manager worker, its manager.
+  parents(session) {
+    const holders = this.owned({ session }).map((o) => ({
+      holder: o.holder,
+      seat: o.seat,
+      session,
+      title: o.title,
+    }));
+    if (this.has("manager_workers"))
+      for (const m of this.db
+        .prepare("SELECT DISTINCT supervisor FROM manager_workers WHERE worker=?")
+        .all(session))
+        if (uuid(m.supervisor)) holders.push({ holder: m.supervisor, seat: null, session });
+    return holders;
   }
   // Each role gets one durable warning per billing incident. Saved recipients survive role changes.
   apiCreditLow(key, payload, saved = {}) {
@@ -505,6 +524,8 @@ export class Wakes {
         return p.to
           ? `- [account] ${who} reached the usage limit on account "${p.from}" (resets ${p.resetAt}); Fulcra moved it to account "${p.to}" and it continues with its history.`
           : `- [account] ${who} reached the usage limit on account "${p.from}", and every account for its provider is limited; it waits until ${p.earliestReset ?? p.resetAt}.`;
+      if (w.kind === "limit-blocked")
+        return `- [BLOCKED] ${who} stopped at the usage limit ("${p.line}") and Fulcra could not continue it: ${p.reason}. Its account was not changed.`;
       if (w.kind === "heartbeat")
         return `- [heartbeat] You have been idle ${p.idleMinutes} min while ${p.active.length} session(s) you own are working or waiting: ${p.active.map((x) => `${x.sessionId} (${x.waiting ? "waiting on input" : x.status})`).join(", ")}. Check on them (role_inspect_session / manager_inspect_worker) and continue your plan.`;
       return `- [${w.kind}] ${who}`;

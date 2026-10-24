@@ -712,3 +712,35 @@ test("FU-478: an update seen while the session is busy is observed on the next p
   await f.w.pump();
   assert.equal(f.sent.length, 1, "the skipped observation was kept");
 });
+test("FU-490: limitBlocked tells each parent once per stop, and the line says BLOCKED and that the account was not changed", () => {
+  const LEAD = T(70),
+    MGR = T(71),
+    SESSION = T(72);
+  const queued = [];
+  const fake = {
+    has: () => true,
+    owned: () => [{ holder: LEAD, seat: "seat-a" }],
+    db: { prepare: () => ({ all: () => [{ supervisor: MGR }] }) },
+    enqueue(r, kind, identity, payload) {
+      const key = JSON.stringify([r.holder, ...identity]);
+      if (queued.some((q) => q.key === key)) return false;
+      queued.push({ key, holder: r.holder, session: r.session, kind, payload });
+      return true;
+    },
+    pump: () => {},
+  };
+  fake.parents = Wakes.prototype.parents.bind(fake);
+  const p = { stopId: T(73), line: "You've hit your session limit", reason: "Still busy" };
+  assert.equal(Wakes.prototype.limitBlocked.call(fake, SESSION, p), 2, "owner and manager");
+  assert.equal(
+    Wakes.prototype.limitBlocked.call(fake, SESSION, p),
+    0,
+    "the same stop: no second line",
+  );
+  assert.equal(Wakes.prototype.limitBlocked.call(fake, "not-a-session", p), 0);
+  const text = Wakes.prototype.render.call({}, [
+    { kind: "limit-blocked", session: SESSION, payload: JSON.stringify(queued[0].payload) },
+  ]);
+  assert.match(text, /\[BLOCKED\] session .* stopped at the usage limit/);
+  assert.match(text, /Its account was not changed/);
+});
