@@ -396,21 +396,18 @@ test("a delegated session that stopped at the limit is resumed once, after the r
   assert.equal(status.usageLimits.stops[0].state, "resumed");
   assert.equal(status.usageLimits.stops[0].interruptedTurn.turnId, "foreground-turn-18");
 });
-test("a human-held session is resumed once after the reset, through the native adapter", async (t) => {
+test("a human-held session is never sent anything: its human is notified once and its parent gets one BLOCKED line", async (t) => {
   const f = fixture(t),
     id = f.enrol();
   await f.limits.observe(id);
-  f.clock.now = at("2026-09-24T14:51:00Z");
-  await f.limits.tick();
-  assert.equal(f.sent.length, 0, "not before reset + 2 min");
-  f.clock.now = at("2026-09-24T14:52:01Z");
+  f.clock.now = at("2026-09-24T15:00:00Z");
   await f.limits.tick();
   await f.limits.tick();
-  assert.equal(f.sent.length, 1);
-  assert.match(f.sent[0].text, /Continue exactly where you stopped/);
-  assert.equal(row(f, id).state, "resumed");
-  assert.equal(f.sent[0].messageId, row(f, id).continuation);
-  assert.deepEqual(f.blocked, []);
+  assert.equal(f.sent.length, 0);
+  assert.equal(row(f, id).state, "notified");
+  assert.match(row(f, id).outcome, /Under human control; nothing was sent; human notified/);
+  assert.equal(f.notices.length, 1);
+  assert.equal(f.blocked.length, 1);
 });
 test("a pending resume survives a restart: a new UsageLimits on the same journal sends it once", async (t) => {
   const f = fixture(t),

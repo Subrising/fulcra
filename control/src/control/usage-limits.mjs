@@ -13,8 +13,7 @@
 // stop observed hours later (a controller restart) still resolves to the right reset.
 //
 // RESUME (FU-490). At resetAt + 2 min the stop is re-verified -- the same limit message is still the newest entry and no
-// human input arrived since -- and then ONE continuation is sent to the session on the SAME account (it moves only if rotateOnLimit is on or the token is revoked). A delegated session is sent through control.send (every fence); a human-held session through the
-// native adapter, once, after the same re-check. Its message id is derived from the stop, so a retry can never send
+// human input arrived since -- and then ONE continuation is sent to the session on the SAME account (it moves only if rotateOnLimit is on or the token is revoked). A delegated session is sent through control.send (every fence); a human-held session is never sent anything (the native layer refuses it): its human is notified and its parent told. Its message id is derived from the stop, so a retry can never send
 // twice. A busy session is retried with backoff, bounded. If the continued turn stops at a limit again soon after, or
 // the resume fails or cannot be timed, ONE BLOCKED line goes to the session's parent (wakes.limitBlocked), never silent.
 // The stops live in the journal, so a pending resume survives a daemon restart.
@@ -301,6 +300,9 @@ export class UsageLimits {
     const s = this.store.get(r.session);
     if (!s) return this.finish(r.id, "superseded", "The session is no longer enrolled");
     const delegated = s.mode === "delegated";
+    // The native layer refuses automatic input to a session under human control, so it is never sent anything: its
+    // human is notified once and its parent gets one BLOCKED line.
+    if (!delegated) return this.notify(r, s);
     if (delegated && s.generation !== r.generation)
       return this.finish(r.id, "superseded", "Session control changed since the stop was recorded");
     // Still exactly at this stop, and nobody has spoken since.
@@ -381,17 +383,6 @@ export class UsageLimits {
           },
         );
         state = d.state === "delivered" ? "resumed" : "uncertain";
-      } else {
-        // A human-held session has no journal send. Mark the stop first, so a crash cannot send twice.
-        if ((await this.control.native.inspect(r.session))?.status !== "idle")
-          throw new RecipientBusy("Session is not idle");
-        this.finish(r.id, "resumed", "Continuation sent", { continuation });
-        try {
-          await this.control.native.send(r.session, continuationText(r), continuation);
-        } catch (e) {
-          this.block(r, "failed", `Continuation not sent: ${e.message}`);
-        }
-        return;
       }
       this.finish(r.id, state, `Continuation ${state === "resumed" ? "delivered" : "uncertain"}`, {
         continuation,
@@ -415,6 +406,28 @@ export class UsageLimits {
           `${e instanceof RecipientBusy ? `Still busy after ${attempts} attempts` : e.message}`,
         );
     }
+  }
+  async notify(r, s, heldBack = false) {
+    const notify = this.control.limitNotifier;
+    let outcome = "no notifier configured";
+    if (typeof notify === "function") {
+      try {
+        await notify({
+          session: r.session,
+          resetAt: r.resetAt,
+          reset: r.line.replace(/^.* resets /, "").slice(0, 60),
+          heldBack,
+        });
+        outcome = "human notified";
+      } catch (e) {
+        outcome = "notification failed: " + String(e?.message ?? e).slice(0, 200);
+      }
+    }
+    if (!heldBack) this.block(r, "notified", `Under human control; nothing was sent; ${outcome}`);
+    else
+      this.db
+        .prepare("UPDATE usage_limit_stops SET outcome=outcome||? WHERE id=?")
+        .run(`; ${outcome}`, r.id);
   }
   // For recovery-status: open stops first, then the recent history.
   status() {
