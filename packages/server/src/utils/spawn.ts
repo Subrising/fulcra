@@ -1,3 +1,4 @@
+import { limitChildOutput } from "./child-output-limit.js";
 import { trackOwnedDetachedProcess } from "./tree-kill.js";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { spawnProcess as spawnCli, execCommand as execCli } from "@getpaseo/plugin/server";
@@ -48,6 +49,7 @@ export function spawnProcess(
     env: childEnv,
     signal: options?.signal,
   });
+  limitChildOutput(child);
   if (spawnOptions.detached) trackOwnedDetachedProcess(child);
   return child;
 }

@@ -1,3 +1,4 @@
+import { limitChildOutput } from "../../../../utils/child-output-limit.js";
 import { fork } from "node:child_process";
 import { daemonChildExecArgv } from "../../../child-exec-argv.js";
 import { randomUUID } from "node:crypto";
@@ -70,6 +71,7 @@ interface LocalSpeechWorkerProcess {
   send(message: LocalSpeechWorkerRequest, callback: (error: Error | null) => void): boolean;
   disconnect(): void;
   kill(): boolean;
+  on(event: "error", listener: (error: Error) => void): this;
   on(event: "message", listener: (message: LocalSpeechWorkerToParentMessage) => void): this;
   on(event: "close", listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
 }
@@ -106,15 +108,17 @@ export function resolveWorkerExecArgv(moduleUrl: string = import.meta.url): stri
   );
 }
 
-function forkLocalSpeechWorker(): LocalSpeechWorkerProcess {
+export function forkLocalSpeechWorker(): LocalSpeechWorkerProcess {
   const env = { ...process.env };
   applySherpaLoaderEnv(env);
-  return fork(fileURLToPath(resolveWorkerUrl()), [], {
+  const worker = fork(fileURLToPath(resolveWorkerUrl()), [], {
     env,
     execArgv: resolveWorkerExecArgv(),
     serialization: "advanced",
     stdio: ["ignore", "ignore", "pipe", "ipc"],
-  }) as LocalSpeechWorkerProcess;
+  });
+  limitChildOutput(worker);
+  return worker as LocalSpeechWorkerProcess;
 }
 
 function isResponse(
@@ -411,6 +415,9 @@ export class LocalSpeechWorkerClient {
       "Local speech worker spawned",
     );
     worker.stderr?.on("data", (chunk: Buffer | string) => this.handleWorkerStderr(chunk));
+    worker.on("error", (error) => {
+      if (this.worker === worker) this.stderrTail = error.message;
+    });
     worker.on("message", (message) => this.handleWorkerMessage(message));
     worker.on("close", (code, signal) => this.handleWorkerExit(worker, code, signal));
     return worker;
