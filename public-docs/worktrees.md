@@ -112,6 +112,19 @@ Both fields accept a multiline shell script or an array of commands; commands ru
 
 Commands run with the worktree as `cwd`. Use `$PASEO_SOURCE_CHECKOUT_PATH` to reach files in the original checkout (untracked config, local caches, etc).
 
+### Shared dependencies
+
+Worktrees of one project share one installed dependency set per lockfile. The key is a hash of the lockfile (`package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock` or `bun.lock`), the `patches/` folder, the platform, the CPU and the Node ABI.
+
+- The first worktree with a new lockfile runs its install command as normal. After it succeeds, its `node_modules` folders move into `.paseo-deps/<key>` next to the project's worktrees. The move is a rename, so it writes almost nothing.
+- The next worktree with the same lockfile gets a real `node_modules` folder whose entries link to the shared set. Workspace package links point into the new worktree. The plain install command (`npm ci`, `npm install`, `pnpm install`, `yarn`, `bun install`, flags only) is skipped. The other setup commands run as normal.
+- A changed lockfile gives a new key, so that worktree installs once and becomes the set for its lockfile.
+- Installs that run get `npm_config_prefer_offline=true`, so npm reads its warm cache first.
+
+The links are directory symlinks (macOS and Linux, also on exFAT) or junctions (Windows, no admin rights needed). Git for Windows follows junctions when it removes a worktree, so on Windows the shared set has a deny-delete rule: `git worktree remove` stops with an error and the set stays whole. Delete the worktree's `node_modules` with Node (`fs.rmSync`, which does not follow junctions) before you remove it by hand. To delete a shared set on Windows, run `icacls <set> /remove:d *S-1-1-0 /T` first.
+
+Set `PASEO_DEPENDENCY_CACHE_DIR` on the daemon to keep the sets in another folder on the same disk, or to `off` to turn sharing off. Reuse never fails a setup: when a step fails, the normal install runs.
+
 ## Scripts and services
 
 `scripts` are named commands you can run inside a worktree on demand. Mark one as a _service_ and Paseo supervises it as a long-running process, assigns it a port, and routes HTTP traffic to it through the daemon's reverse proxy.
