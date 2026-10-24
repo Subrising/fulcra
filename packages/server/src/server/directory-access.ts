@@ -1,3 +1,4 @@
+import { limitChildOutput } from "../utils/child-output-limit.js";
 import { spawn } from "node:child_process";
 import { statSync } from "node:fs";
 
@@ -77,6 +78,7 @@ export async function inspectOutOfProcess(
     env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
     stdio: ["ignore", "pipe", "ignore"],
   });
+  limitChildOutput(child);
   let buffered = "";
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", (chunk: string) => {
