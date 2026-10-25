@@ -1169,6 +1169,13 @@ type CorrelatedResponsePayloads = {
 type CorrelatedResponsePayload<TType extends CorrelatedResponseType> =
   CorrelatedResponsePayloads[TType];
 
+export class DaemonClientClosedError extends Error {
+  constructor() {
+    super("Daemon client closed");
+    this.name = "DaemonClientClosedError";
+  }
+}
+
 export class DaemonConnectionError extends Error {
   constructor(
     message: string,
@@ -1791,11 +1798,11 @@ export class DaemonClient {
     this.resetConnectTimeout();
     this.disposeTransport(1000, "Client closed");
     this.providerSnapshotUpdates.clear();
-    this.clearWaiters(new Error("Daemon client closed"));
+    this.clearWaiters(new DaemonClientClosedError());
     await this.owned.close();
     this.creations.close();
-    this.rejectPendingSendQueue(new Error("Daemon client closed"));
-    this.rejectPingProbe(new Error("Daemon client closed"));
+    this.rejectPendingSendQueue(new DaemonClientClosedError());
+    this.rejectPingProbe(new DaemonClientClosedError());
     this.terminalStreams.clearSlots();
     this.lastServerInfoMessage = null;
     if (this.runtimeMetricsInterval) {

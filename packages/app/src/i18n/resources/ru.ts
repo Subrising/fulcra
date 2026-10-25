@@ -186,6 +186,8 @@ export const ru: TranslationResources = {
       removeReview: "Удалить вложение проверки",
     },
     errors: {
+      confirmationPending:
+        "Ожидается подтверждение сообщения. Подключитесь снова, чтобы проверить доставку.",
       failedToSend: "Не удалось отправить сообщение",
       failedToCreateAgent: "Не удалось создать агента.",
       noHostSelected: "Хост не выбран",

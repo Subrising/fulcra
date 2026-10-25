@@ -1,3 +1,4 @@
+import { UnconfirmedMessageSendError } from "./submission/model";
 import { describe, expect, it, vi } from "vitest";
 import { submitAgentInput } from "./submit";
 
@@ -139,6 +140,48 @@ describe("submitAgentInput", () => {
     expect(setSendError).not.toHaveBeenCalled();
     expect(setIsProcessing).not.toHaveBeenCalled();
     expect(clearDraft).not.toHaveBeenCalled();
+  });
+
+  it("retains the message identity after restoring an unconfirmed draft", async () => {
+    const calls: string[] = [];
+    const setSendError = vi.fn();
+    const onSubmitError = vi.fn();
+    await expect(
+      submitAgentInput({
+        message: "sent prompt",
+        attachments: [],
+        isAgentRunning: false,
+        canSubmit: true,
+        queueMessage: vi.fn(),
+        submitMessage: async () => {
+          throw new UnconfirmedMessageSendError("send-1");
+        },
+        clearDraft: vi.fn(),
+        setUserInput: (text) => {
+          calls.push(`text:${text}`);
+        },
+        setAttachments: () => {
+          calls.push("attachments");
+        },
+        retainUnconfirmedSend: (id) => {
+          calls.push(`retain:${id}`);
+        },
+        setSendError,
+        setIsProcessing: vi.fn(),
+        onSubmitError,
+      }),
+    ).resolves.toBe("failed");
+    expect(calls).toEqual([
+      "text:",
+      "attachments",
+      "text:sent prompt",
+      "attachments",
+      "retain:send-1",
+    ]);
+    expect(onSubmitError).not.toHaveBeenCalled();
+    expect(setSendError).toHaveBeenLastCalledWith(
+      "Message confirmation is pending. Reconnect to check delivery.",
+    );
   });
 
   it("restores the composer when submit fails", async () => {

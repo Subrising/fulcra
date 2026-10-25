@@ -318,3 +318,16 @@ describe("draft-store migration", () => {
     expect(backing.values.has("paseo-drafts")).toBe(true);
   });
 });
+
+it("retains an unconfirmed message identity during draft migration", async () => {
+  const unconfirmedSend = { serverId: "host", agentId: "agent", clientMessageId: "send-1" };
+  const result = await migratePersistedState(
+    {
+      drafts: {
+        recovery: { ...activeDraft("sent prompt", 1), unconfirmedSend },
+      },
+    },
+    { migrateLegacyImages: passThroughMigrateLegacyImages, nowMs: 2 },
+  );
+  expect(result.drafts.recovery.unconfirmedSend).toEqual(unconfirmedSend);
+});

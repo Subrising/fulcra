@@ -185,6 +185,7 @@ export const ko: TranslationResources = {
       removeReview: "리뷰 첨부 제거",
     },
     errors: {
+      confirmationPending: "메시지 확인을 기다리고 있습니다. 다시 연결하여 전달 여부를 확인하세요.",
       failedToSend: "메시지를 보내지 못했습니다",
       failedToCreateAgent: "에이전트를 생성하지 못했습니다",
       noHostSelected: "선택된 호스트가 없습니다",

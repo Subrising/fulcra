@@ -185,6 +185,7 @@ export const ar: TranslationResources = {
       removeReview: "إزالة مرفق المراجعة",
     },
     errors: {
+      confirmationPending: "تأكيد الرسالة قيد الانتظار. أعد الاتصال للتحقق من التسليم.",
       failedToSend: "فشل في إرسال الرسالة",
       failedToCreateAgent: "فشل في إنشاء الوكيل",
       noHostSelected: "لم يتم تحديد مضيف",

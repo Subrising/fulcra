@@ -1,3 +1,4 @@
+import { UnconfirmedMessageSendError } from "./submission/model";
 import { i18n } from "@/i18n/i18next";
 
 export type AgentInputSubmitResult = "noop" | "queued" | "submitted" | "failed";
@@ -18,6 +19,7 @@ export interface AgentInputSubmitActionInput<TAttachment> {
   setAttachments: (attachments: TAttachment[]) => void;
   setSendError: (message: string | null) => void;
   setIsProcessing: (isProcessing: boolean) => void;
+  retainUnconfirmedSend?: (clientMessageId: string) => void;
   onSubmitError?: (error: unknown) => void;
   failedToSendMessage?: string;
 }
@@ -65,16 +67,24 @@ export async function submitAgentInput<TAttachment>(
     input.setIsProcessing(false);
     return "submitted";
   } catch (error) {
-    input.onSubmitError?.(error);
+    if (!(error instanceof UnconfirmedMessageSendError)) input.onSubmitError?.(error);
     if (shouldClearOnSubmit) {
       input.setUserInput(trimmedMessage);
       input.setAttachments(attachments);
     }
-    input.setSendError(
+    if (error instanceof UnconfirmedMessageSendError) {
+      input.retainUnconfirmedSend?.(error.clientMessageId);
+    }
+    const errorMessage =
       error instanceof Error
         ? error.message
-        : (input.failedToSendMessage ?? i18n.t("composer.errors.failedToSend")),
+        : (input.failedToSendMessage ?? i18n.t("composer.errors.failedToSend"));
+    input.setSendError(
+      error instanceof UnconfirmedMessageSendError
+        ? i18n.t("composer.errors.confirmationPending")
+        : errorMessage,
     );
+
     input.setIsProcessing(false);
     return "failed";
   }
