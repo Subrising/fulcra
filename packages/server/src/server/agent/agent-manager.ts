@@ -3855,7 +3855,10 @@ export class AgentManager {
           existing.pendingPermissions.size > 0 ||
           existing.inFlightPermissionResponses.size > 0 ||
           this.foregroundMutationTails.has(agentId) ||
-          this.providerSubagents.list(agentId).some((child) => child.status === "running");
+          this.providerSubagents.list(agentId).some((child) => child.status === "running") ||
+          // FU-496: an idle turn can still own background work (an async subagent, a background shell). A switch or
+          // reconnect replaces the runtime and would end it, so it waits like a running turn.
+          (existing.backgroundWork?.count ?? 0) > 0;
         if (busy()) return refused("busy");
         const nextConfig = mcpRefreshConfig(existing.config, changes, request.toolPolicy);
         if (!nextConfig) return refused("invalid_changes");
