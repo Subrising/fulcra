@@ -31,6 +31,7 @@ import type {
   AgentSession,
   AgentStreamEvent,
 } from "./agent-sdk-types.js";
+import { noteAgentMessageDelivered, resetAgentMessageLogForTests } from "../agent-message-log.js";
 
 interface CapturedLogger {
   logger: Logger;
@@ -364,6 +365,22 @@ test("finish notifications tell the parent the child's last assistant message", 
     ),
   );
   expect(scenario.steerAttemptCount()).toBe(1);
+});
+
+// FU-495: a child that already sent its result to the caller by direct message does not wake the caller a second time.
+test("a finished child that already messaged the caller sends no second notice", async () => {
+  const scenario = createFinishNotificationScenario({
+    childLastAssistantMessage: "DONE: reported directly.",
+  });
+  try {
+    scenario.startWatchingChild();
+    noteAgentMessageDelivered("child-agent", "caller-agent");
+    scenario.finishChild();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(scenario.parentPrompts()).toHaveLength(0);
+  } finally {
+    resetAgentMessageLogForTests();
+  }
 });
 
 // FIX-8 W3 (gate M): the daemon's finish notice to a lead carries a daemon-only message id, so the controller can tell
