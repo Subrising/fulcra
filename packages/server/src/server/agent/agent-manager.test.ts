@@ -3989,6 +3989,37 @@ test("update-7: a reconnect restarts a session whose provider turn failed; a pla
   }
 });
 
+test("FU-496: a reconnect refuses an idle session that still owns background work", async () => {
+  const f = await quietMcpFixture();
+  try {
+    const agent = f.manager.getAgent(f.created.id)!;
+    expect(agent.lifecycle).toBe("idle");
+    const state = await f.manager.getAgentMcpRefreshState(f.created.id);
+    const expected = {
+      provider: state!.provider,
+      sessionId: state!.sessionId!,
+      configRevision: state!.configRevision,
+    };
+    f.manager.applyBackgroundWork(agent, {
+      count: 1,
+      kinds: ["workflow"],
+      source: "provider",
+      since: "2026-10-25T01:35:46.000Z",
+      observedAt: "2026-10-25T01:36:00.000Z",
+    });
+    expect(
+      await f.manager.refreshAgentMcp({ ...f.input, expected, changes: {}, reconnect: true }),
+    ).toMatchObject({ outcome: "refused", reason: "busy" });
+    expect(f.client.sessions[0].closeCount).toBe(0);
+    f.manager.applyBackgroundWork(agent, null);
+    expect(
+      await f.manager.refreshAgentMcp({ ...f.input, expected, changes: {}, reconnect: true }),
+    ).toMatchObject({ outcome: "refreshed" });
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test("quiet MCP refresh refuses ownership changes during awaited launch preparation before close", async () => {
   const preparing = deferred<void>();
   const release = deferred<void>();
