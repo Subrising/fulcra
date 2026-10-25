@@ -3992,26 +3992,38 @@ test("update-7: a reconnect restarts a session whose provider turn failed; a pla
 test("FU-496: a reconnect refuses an idle session that still owns background work", async () => {
   const f = await quietMcpFixture();
   try {
-    const agent = f.manager.getAgent(f.created.id)!;
-    expect(agent.lifecycle).toBe("idle");
+    expect(f.manager.getAgent(f.created.id)?.lifecycle).toBe("idle");
     const state = await f.manager.getAgentMcpRefreshState(f.created.id);
     const expected = {
       provider: state!.provider,
       sessionId: state!.sessionId!,
       configRevision: state!.configRevision,
     };
-    f.manager.applyBackgroundWork(agent, {
-      count: 1,
-      kinds: ["workflow"],
-      source: "provider",
-      since: "2026-10-25T01:35:46.000Z",
-      observedAt: "2026-10-25T01:36:00.000Z",
-    });
+    const work = (count: number) =>
+      f.client.sessions[0].pushEvent({
+        type: "background_work_changed",
+        provider: "codex",
+        backgroundWork:
+          count === 0
+            ? null
+            : {
+                count,
+                kinds: ["workflow"],
+                source: "provider",
+                since: "2026-10-25T01:35:46.000Z",
+                observedAt: "2026-10-25T01:36:00.000Z",
+              },
+      });
+    work(1);
+    await vi.waitFor(() => expect(f.manager.getAgent(f.created.id)?.backgroundWork?.count).toBe(1));
     expect(
       await f.manager.refreshAgentMcp({ ...f.input, expected, changes: {}, reconnect: true }),
     ).toMatchObject({ outcome: "refused", reason: "busy" });
     expect(f.client.sessions[0].closeCount).toBe(0);
-    f.manager.applyBackgroundWork(agent, null);
+    work(0);
+    await vi.waitFor(() =>
+      expect(f.manager.getAgent(f.created.id)?.backgroundWork ?? null).toBeNull(),
+    );
     expect(
       await f.manager.refreshAgentMcp({ ...f.input, expected, changes: {}, reconnect: true }),
     ).toMatchObject({ outcome: "refreshed" });
