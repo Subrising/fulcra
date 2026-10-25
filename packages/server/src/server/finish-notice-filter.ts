@@ -8,3 +8,12 @@ export function finishNoticeWanted(lastMessage: string | null | undefined): bool
   if (lastMessage === null || lastMessage === undefined) return true;
   return RESULT_LINE.test(lastMessage);
 }
+
+/** FU-492: the notifyOnFinish path uses the same rule. A plain finished turn without a result line (for example
+ * "WAITING q123") does not wake the caller; errors, permission requests and closed chats always do. */
+export function finishNotificationWanted(
+  reason: string,
+  lastMessage: string | null | undefined,
+): boolean {
+  return reason !== "finished" || finishNoticeWanted(lastMessage);
+}

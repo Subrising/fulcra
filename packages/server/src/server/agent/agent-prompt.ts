@@ -1,4 +1,5 @@
 import { sessionCost } from "./session-cost.js";
+import { finishNotificationWanted } from "../finish-notice-filter.js";
 import { loadAgentPolicy } from "../limit-resume/policy.js";
 import { noticePaused, NoticePausedError } from "../notice-pause.js";
 import { leadEventsFor, withLeadEvent } from "../lead-events.js";
@@ -711,6 +712,9 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
     const title = record?.title ?? childAgentId;
     const lastAssistantMessage = await agentManager.getLastAssistantMessage(childAgentId);
     checkCurrent();
+    if (!finishNotificationWanted(reason, lastAssistantMessage)) {
+      return;
+    }
     const body = formatFinishNotificationBody({
       childAgentId,
       title,

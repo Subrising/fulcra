@@ -352,7 +352,7 @@ test("isSystemInjectedEnvelope matches the envelope formatSystemNotificationProm
 
 test("finish notifications tell the parent the child's last assistant message", async () => {
   const scenario = createFinishNotificationScenario({
-    childLastAssistantMessage: "Implemented the cleanup and all checks pass.",
+    childLastAssistantMessage: "DONE: implemented the cleanup and all checks pass.",
   });
 
   scenario.startWatchingChild();
@@ -360,7 +360,7 @@ test("finish notifications tell the parent the child's last assistant message", 
 
   expect(parentPrompt).toEqual(
     formatSystemNotificationPrompt(
-      "Agent child-agent (Child Agent) finished.\n\n<agent-response>\nImplemented the cleanup and all checks pass.\n</agent-response>",
+      "Agent child-agent (Child Agent) finished.\n\n<agent-response>\nDONE: implemented the cleanup and all checks pass.\n</agent-response>",
     ),
   );
   expect(scenario.steerAttemptCount()).toBe(1);
@@ -378,7 +378,8 @@ test("finish notifications are sent with a paseo-notify message id", async () =>
 });
 
 test("finish notifications truncate oversized child responses", async () => {
-  const included = "x".repeat(4000);
+  // FU-492: a plain finished turn notifies only with a result line.
+  const included = "DONE " + "x".repeat(3995);
   const omitted = "TAIL-MARKER".repeat(50);
   const scenario = createFinishNotificationScenario({
     childLastAssistantMessage: included + omitted,
@@ -1076,7 +1077,7 @@ test("idle-only prompts refuse a busy receiver without steering or replacing its
 
 test("legacy native finish notifications include cumulative spend before a long response", async () => {
   const scenario = createFinishNotificationScenario({
-    childLastAssistantMessage: "Fixture result ".repeat(1000),
+    childLastAssistantMessage: "DONE: " + "Fixture result ".repeat(1000),
     childCostRecords: {
       cursors: {},
       turns: {

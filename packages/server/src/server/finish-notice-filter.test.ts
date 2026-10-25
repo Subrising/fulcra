@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { finishNoticeWanted } from "./finish-notice-filter.js";
+import { finishNoticeWanted, finishNotificationWanted } from "./finish-notice-filter.js";
 
 describe("finishNoticeWanted (FU-483)", () => {
   test.each([
@@ -31,5 +31,15 @@ describe("finishNoticeWanted (FU-483)", () => {
   test("wakes the parent when the final message could not be read", () => {
     expect(finishNoticeWanted(undefined)).toBe(true);
     expect(finishNoticeWanted(null)).toBe(true);
+  });
+});
+
+describe("finishNotificationWanted (FU-492)", () => {
+  test("a plain finished turn needs a result line; other reasons always notify", () => {
+    expect(finishNotificationWanted("finished", "WAITING q1205")).toBe(false);
+    expect(finishNotificationWanted("finished", "DONE: PR #9")).toBe(true);
+    expect(finishNotificationWanted("finished", null)).toBe(true);
+    expect(finishNotificationWanted("errored", "WAITING q1205")).toBe(true);
+    expect(finishNotificationWanted("needs permission", "")).toBe(true);
   });
 });
