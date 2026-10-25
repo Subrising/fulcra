@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import pino from "pino";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi as mock } from "vitest";
 import { REPORTS_TO_LABEL, REPORTS_TO_OWNER, SEAT_LABEL } from "@getpaseo/protocol/agent-labels";
 import type { AgentManager, AgentManagerEvent } from "./agent/agent-manager.js";
 import { AgentStorage, type FinishNotice } from "./agent/agent-storage.js";
@@ -31,6 +31,9 @@ import {
   rowsOwnedBy,
   rowsEligibleForNudge,
 } from "./ledger-items.js";
+import { IDLE_TURN_PROMPT } from "./idle-turn-recovery.js";
+import { FINAL_INPUT_CHECK } from "./agent/agent-sdk-types.js";
+import { assertFinalInputCheck, recordFinalInputHandoff } from "./agent/final-input-check.js";
 import { PluginService } from "./plugins/index.js";
 import { DaemonConfigStore } from "./daemon-config-store.js";
 import { MutableDaemonConfigSchema } from "@getpaseo/protocol/messages";
@@ -170,6 +173,7 @@ function fixture(
   };
   return {
     service,
+    manager,
     delivered,
     stream,
     turn,
@@ -246,6 +250,79 @@ const worker = (labels: Record<string, string> = { [REPORTS_TO_LABEL]: LEAD }): 
 });
 
 describe("report-up", () => {
+  test("FU-489: turn-end recovery continues once and reports a repeated unfinished turn to its parent", async () => {
+    const chat = worker();
+    chat.lastMessage = "I will wait for the background job notice.";
+    const f = fixture([lead, chat], { enabled: false });
+    let items = [
+      { type: "user_message", text: "build the change" },
+      { type: "assistant_message", text: chat.lastMessage },
+    ];
+    const run = mock.fn(async (_id, _prompt, options) => {
+      assertFinalInputCheck(options[FINAL_INPUT_CHECK]);
+      recordFinalInputHandoff(options[FINAL_INPUT_CHECK]);
+    });
+    Object.assign(f.manager, {
+      getTimeline: () => items,
+      canRunUnscopedLimitResume: () => true,
+      runAgent: run,
+    });
+    f.turn(WORKER);
+    await f.settle();
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]![1]).toBe(
+      "check your background job output now and finish in the foreground",
+    );
+    expect(f.delivered).toEqual([]);
+    items = [
+      ...items,
+      {
+        type: "user_message",
+        text: "check your background job output now and finish in the foreground",
+      },
+      { type: "assistant_message", text: "I will wait for the background job notice." },
+    ];
+    f.turn(WORKER);
+    await f.settle();
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.leadId).toBe(LEAD);
+    expect(f.delivered[0]!.prompt).toContain("BLOCKED: Builder");
+    f.service.stop();
+  });
+
+  test("FU-489: native tool-only endings report BLOCKED through the remote parent route", async () => {
+    const remote = mock.fn(async () => true);
+    const f = nativeFixture([lead, worker()], { remoteNotice: remote, enabled: false });
+    Object.assign(f.manager, {
+      getTimeline: () => [
+        { type: "user_message", text: IDLE_TURN_PROMPT },
+        {
+          type: "tool_call",
+          callId: "tail",
+          name: "shell",
+          status: "completed",
+          error: null,
+          detail: {},
+        },
+      ],
+    });
+    try {
+      f.begin(WORKER);
+      f.end(WORKER, "I will wait for the background job.");
+      await f.settle();
+      expect(remote).toHaveBeenCalledTimes(1);
+      expect(remote.mock.calls[0]).toEqual([
+        WORKER,
+        expect.stringContaining("BLOCKED: Builder"),
+        "failed",
+      ]);
+      expect(f.delivered).toEqual([]);
+    } finally {
+      f.cleanup();
+    }
+  });
+
   test("a worker that ends a turn sends exactly one notice to its lead", async () => {
     const f = fixture([lead, worker()]);
     f.turn(WORKER);

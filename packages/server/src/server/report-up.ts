@@ -1,3 +1,4 @@
+import { IdleTurnRecovery } from "./idle-turn-recovery.js";
 import { sessionCost } from "./agent/session-cost.js";
 import { LedgerDirectoryWatch } from "./ledger-routing/watch.js";
 import { LedgerRoutingService, parseWorkerResult } from "./ledger-routing/service.js";
@@ -301,6 +302,7 @@ interface NudgeState {
 }
 
 export class ReportUpService {
+  private readonly idleTurns: IdleTurnRecovery;
   private readonly observer: import("../../../../plugins/fulcra-agent-policy/server/report-observer.mjs").ReportUpObserver;
   private stopped = false;
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
@@ -337,6 +339,12 @@ export class ReportUpService {
           },
         }
       : deps;
+    this.idleTurns = new IdleTurnRecovery({
+      agentManager: deps.agentManager,
+      logger: deps.logger,
+      stopped: () => this.stopped,
+      blocked: (id, reason) => this.blockedIdleTurn(id, reason),
+    });
     this.store = lineStoreOf({ agentManager: deps.agentManager, agentStorage: deps.agentStorage });
     this.observer = new (loadAgentPolicy("report-observer").ReportUpObserver)({
       now: () => this.now(),
@@ -656,7 +664,8 @@ export class ReportUpService {
     if (input.failed) this.stopNudge(agentId);
     else this.nudgeStopped.delete(agentId);
     this.checkIdleLeads();
-    void this.handleRoutedFinish(input)
+    void (input.failed ? Promise.resolve(false) : this.idleTurns.handle(agentId))
+      .then((handled) => handled || this.handleRoutedFinish(input))
       .then((handled) => handled || this.handleOwnedFinish(input))
       .then((handled) => {
         if (!handled) this.onUnownedTurnEnd(input);
@@ -665,6 +674,22 @@ export class ReportUpService {
       .catch((err: unknown) =>
         this.deps.logger.warn({ err, agentId }, "Owned finish notice failed"),
       );
+  }
+
+  private async blockedIdleTurn(id: string, reason: string): Promise<void> {
+    const worker = await this.store.get(id);
+    if (!worker || worker.archivedAt) return;
+    const prompt = formatSystemNotificationPrompt(`BLOCKED: ${titleOf(worker)} (${reason})`);
+    if (await this.deps.remoteNotice?.(id, prompt, "failed")) return;
+    const parent = await this.leadOf(worker);
+    if ("skip" in parent) {
+      this.deps.logger.warn(
+        { agentId: id, reason, parent: parent.skip },
+        "Idle turn BLOCKED: no parent route",
+      );
+      return;
+    }
+    await this.toLead(id, parent.id, prompt, "report-up");
   }
 
   async routingNotice(leadId: string, line: string, messageId: string): Promise<void> {

@@ -137,7 +137,7 @@ async function fixture(input: {
       { records, crashInterrupted },
     );
   const status = (id: string) => byId.get(id)?.lastStatus;
-  return { home, run, loads, prompts, wakes, notices, status, reads, byId, storage };
+  return { home, run, loads, prompts, wakes, notices, status, reads, byId, storage, sessions };
 }
 
 describe("revive on restart", () => {
@@ -281,23 +281,55 @@ describe("revive on restart", () => {
 
     expect(f.prompts).toEqual([]);
     expect(result.closed.map((entry) => entry.id).sort()).toEqual(
-      [NO_FOLDER, LIMITED, NO_PROVIDER, RUNNING].sort(),
+      [NO_FOLDER, LIMITED, NO_PROVIDER, POOL, RUNNING].sort(),
     );
     expect(f.notices).toHaveLength(1);
     const notice = f.notices[0]!;
     expect(notice.leadId).toBe(LEAD);
-    expect(notice.prompt).toContain("3 sessions closed");
+    expect(notice.prompt).toContain("4 sessions not continued");
     expect(notice.prompt).toContain("Weather app (folder missing)");
     expect(notice.prompt).toContain("Docs site (account at a limit until");
     // A fixed reason: the provider's error text stays in the log.
     expect(notice.prompt).toContain("Build bot (provider missing)");
     expect(notice.prompt).not.toContain("codex");
-    expect(notice.prompt).not.toContain("Pool chat");
+    expect(notice.prompt).toContain("Pool chat (pool account: limit-resume continues it)");
     expect(notice.prompt).toContain(
       formatRestartNotice({ restartedAt: new Date("2026-10-11T09:40:00Z"), closed: [] }).split(
         ";",
       )[0],
     );
+  });
+
+  test("FU-489: a recovery check failure reports one child and continues the other child", async () => {
+    const f = await fixture({
+      records: [
+        { id: LEAD, lastStatus: "idle" },
+        { id: RUNNING, labels: { [REPORTS_TO_LABEL]: LEAD } },
+        { id: IDLE },
+      ],
+    });
+    vi.spyOn(f.sessions, "changedSince").mockImplementation(async (id) => {
+      if (id === RUNNING) throw new Error("read failed");
+      return null;
+    });
+    const result = await f.run([RUNNING, IDLE]);
+    expect(result.continued).toEqual([IDLE]);
+    expect(f.notices).toHaveLength(1);
+    expect(f.notices[0]!.prompt).toContain("restart recovery check failed");
+  });
+
+  test("FU-489: a final continue refusal produces one parent notice", async () => {
+    const f = await fixture({
+      records: [
+        { id: LEAD, lastStatus: "idle" },
+        { id: RUNNING, labels: { [REPORTS_TO_LABEL]: LEAD } },
+      ],
+    });
+    vi.spyOn(f.sessions, "sendContinue").mockResolvedValue("withdrawn");
+    const result = await f.run([RUNNING]);
+    expect(result.continued).toEqual([]);
+    expect(f.notices).toHaveLength(1);
+    expect(f.notices[0]!.prompt).toContain("continue withdrawn by the final safety check");
   });
 
   test("FU-103: a plugin-owned lead cut off by the restart gets no prompt and is named in one notice to its own lead", async () => {
@@ -358,7 +390,7 @@ describe("revive on restart", () => {
 
     expect(f.prompts).toEqual([IDLE]);
     expect(result.continued).toEqual([IDLE]);
-    expect(result.closed).toEqual([]);
+    expect(result.closed.map((entry) => entry.id).sort()).toEqual([RUNNING, LIMITED].sort());
     // Read before the load: a session that changed during the settle time is not even loaded.
     expect(f.loads).not.toContain(RUNNING);
     // Every read compares with the last user message the restart cut off.
@@ -366,7 +398,7 @@ describe("revive on restart", () => {
     expect(f.reads.filter((read) => read.startsWith(IDLE))).toHaveLength(3);
   });
 
-  test("a session archived or closed by hand during the settle time is not loaded, prompted or named to its lead", async () => {
+  test("a session archived or closed during the settle time is not prompted and its parent gets a reason", async () => {
     const reports = { [REPORTS_TO_LABEL]: LEAD };
     const f = await fixture({
       records: [
@@ -388,8 +420,9 @@ describe("revive on restart", () => {
 
     expect(f.loads).toEqual([]);
     expect(f.prompts).toEqual([]);
-    expect(result.closed).toEqual([]);
-    expect(f.notices).toEqual([]);
+    expect(result.closed.map((entry) => entry.id).sort()).toEqual([RUNNING, CLOSED_BY_HAND].sort());
+    expect(f.notices).toHaveLength(1);
+    expect(f.notices[0]!.prompt).toContain("BLOCKED");
   });
 
   test("the notice has fixed reasons: no path and no chat ID from a load error", async () => {
@@ -473,7 +506,7 @@ describe("revive on restart", () => {
     expect(await readFile(path.join(empty, REVIVE_FILE), "utf8")).toBe("not json");
   });
 
-  test("a lead closed by hand is not woken by the notice; the log names the sessions", async () => {
+  test("FU-489: a closed parent receives one blocked notice for an interrupted child", async () => {
     const reports = { [REPORTS_TO_LABEL]: LEAD };
     const f = await fixture({
       records: [
@@ -489,7 +522,8 @@ describe("revive on restart", () => {
     const result = await f.run();
 
     expect(result.closed.map((entry) => entry.id)).toEqual([NO_FOLDER]);
-    expect(f.notices).toEqual([]);
+    expect(f.notices).toHaveLength(1);
+    expect(f.notices[0]!.prompt).toContain("BLOCKED");
   });
 
   test("turned off: nothing is reopened, loaded or prompted, and the stop record is removed", async () => {
@@ -501,7 +535,12 @@ describe("revive on restart", () => {
 
     const result = await f.run();
 
-    expect(result).toEqual({ reopened: [], continued: [], woken: [], closed: [] });
+    expect(result).toEqual({
+      reopened: [],
+      continued: [],
+      woken: [],
+      closed: [{ id: RUNNING, name: "Chat 3333", reason: "restart recovery is disabled" }],
+    });
     expect(f.loads).toEqual([]);
     expect(f.status(RUNNING)).toBe("closed");
     await expect(stat(path.join(f.home, REVIVE_FILE))).rejects.toThrow();
@@ -513,7 +552,7 @@ describe("revive on restart", () => {
       closed: [{ name: "Weather app", reason: "folder missing" }],
     });
     expect(text).toBe(
-      "Daemon restarted at 11 Oct, 09:49; 1 session closed: Weather app (folder missing)",
+      "Daemon restarted at 11 Oct, 09:49; 1 session not continued:\nBLOCKED: Weather app (folder missing)",
     );
   });
 });
@@ -820,17 +859,27 @@ describe("live record after an unclean stop", () => {
     await recorder.stop();
   });
 
-  test("the live record's own list of running turns is not used", async () => {
+  test("FU-489: an unclean stop reports a live-only interrupted turn to its parent", async () => {
     const f = await fixture({
       records: [
-        { id: IDLE, updatedAt: "2026-10-11T09:20:00Z" },
-        { id: RUNNING, updatedAt: "2026-10-11T09:20:00Z" },
+        { id: LEAD, lastStatus: "idle", title: "Lead" },
+        {
+          id: RUNNING,
+          title: "Worker",
+          updatedAt: "2026-10-11T09:20:00Z",
+          labels: { [REPORTS_TO_LABEL]: LEAD },
+        },
       ],
     });
     await writeLive(f.home, "2026-10-11T09:28:00Z");
     const result = await f.run();
-    expect(result.reopened.sort()).toEqual([IDLE, RUNNING].sort());
     expect(result.continued).toEqual([]);
+    expect(f.loads).toEqual([]);
+    expect(f.notices).toHaveLength(1);
+    expect(f.notices[0]!.leadId).toBe(LEAD);
+    expect(f.notices[0]!.prompt).toContain("BLOCKED");
+    expect(f.notices[0]!.prompt).toContain("Worker");
+    expect(f.notices[0]!.prompt).toContain("turn state could not be confirmed");
   });
 
   test("a session used long after the live record is not reopened", async () => {
