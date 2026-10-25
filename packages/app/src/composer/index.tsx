@@ -1669,6 +1669,14 @@ function ComposerContentImpl({
         clearDraft,
         retainUnconfirmedSend: (clientMessageId) => {
           const draftKey = buildDraftStoreKey({ serverId, agentId });
+          // Web text edits publish after paint. Save the restored input before attaching its receipt.
+          useDraftStore.getState().saveDraftInput({
+            draftKey,
+            draft: {
+              text: outgoingMessage.trim(),
+              attachments: composerWorkspaceAttachment.userAttachmentsOnly(outgoingAttachments),
+            },
+          });
           useDraftStore.setState((state) => {
             const record = state.drafts[draftKey];
             if (!record || record.lifecycle !== "active") return state;
