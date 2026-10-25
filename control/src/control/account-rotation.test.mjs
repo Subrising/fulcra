@@ -175,6 +175,24 @@ test("Claude: a stop at the limit moves the session to the next account now, rel
   assert.equal(readAccounts(w.root).rotations[0].reason, "limit");
   assert.equal((await assign(w.root, randomUUID(), "claude", w.clock.now)).account.id, b.id); // a new session avoids Work
 });
+test("FU-490: with rotateOnLimit off a limited session is continued once after the reset on the SAME account", async (t) => {
+  const w = world(t);
+  const a = await addAccount(w.root, { provider: "claude", name: "Work" }, w.clock.now);
+  await addAccount(w.root, { provider: "claude", name: "Personal" }, w.clock.now + 1);
+  const id = await w.enrol();
+  w.tails.set(id, tail());
+  await assign(w.root, id, "claude", w.clock.now - 60_000);
+  await w.control.usageLimits.onAgent({ id, provider: "claude", status: "idle", updatedAt: "u1" });
+  w.clock.now = at("2026-09-24T14:52:01Z");
+  await w.control.usageLimits.tick();
+  assert.equal(w.sent.length, 1);
+  assert.deepEqual(w.recovers, [], "no relaunch on another account");
+  assert.equal(accountOf(readAccounts(w.root), id).name, "Work");
+  assert.equal(
+    readAccounts(w.root).accounts.find((x) => x.id === a.id).limitedUntil,
+    "2026-09-24T14:50:00.000Z",
+  );
+});
 test("B4: a human-held session at the limit stays on its account (marked limited), nobody is woken and nothing is relaunched", async (t) => {
   const w = world(t);
   const a = await addAccount(w.root, { provider: "claude", name: "Work" }, w.clock.now);
