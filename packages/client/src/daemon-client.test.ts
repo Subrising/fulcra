@@ -5,6 +5,7 @@ import { afterEach, expect, expectTypeOf, test, vi } from "vitest";
 import { z } from "zod";
 import {
   DaemonClient,
+  DaemonClientClosedError,
   NativeQueueUncertainError,
   type NativeQueueReceipt,
   type DaemonClientTrace,
@@ -7988,6 +7989,15 @@ test("native queue client disconnect loses ack without resend", async () => {
   await failed;
   expect(nativeQueueRequests(mock)).toHaveLength(1);
 });
+test("identifies a written send with a lost reply when the client closes", async () => {
+  const { client, mock } = await nativeQueueClient(false);
+  const pending = client.sendAgentMessage("target", "delivered prompt", { messageId: "send-1" });
+  expect(nativeQueueRequests(mock)).toHaveLength(1);
+  const rejected = expect(pending).rejects.toBeInstanceOf(DaemonClientClosedError);
+  await client.close();
+  await rejected;
+});
+
 test("native queue client leaves ordinary send untouched on an unadvertised host", async () => {
   const { client, mock } = await nativeQueueClient(false);
   const pending = client.sendAgentMessage("target", "ordinary draft", { messageId: "ordinary-id" });

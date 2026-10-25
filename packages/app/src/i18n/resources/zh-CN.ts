@@ -185,6 +185,7 @@ export const zhCN: TranslationResources = {
       removeReview: "移除 review 附件",
     },
     errors: {
+      confirmationPending: "正在等待消息确认。请重新连接以检查是否已送达。",
       failedToSend: "发送消息失败",
       failedToCreateAgent: "创建 Agent 失败",
       noHostSelected: "未选择 Host",

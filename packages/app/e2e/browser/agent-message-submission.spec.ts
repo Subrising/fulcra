@@ -1185,6 +1185,69 @@ test.describe("Agent message submission", () => {
     await retryRestoredSubmission(page, prompt);
   });
 
+  test("clears a delivered draft after client close and app reload", async ({ page }, testInfo) => {
+    test.setTimeout(180_000);
+    const gate = await installDaemonWebSocketGate(page);
+    const agent = await seedMockAgentWorkspace({
+      repoPrefix: "closed-client-draft-",
+      title: "Closed client draft recovery",
+      model: "ten-second-stream",
+    });
+    try {
+      await openAgentRoute(page, agent);
+      await expectComposerVisible(page);
+      await expectAgentIdle(page);
+      gate.holdNextServerMessage("send_agent_message_response");
+      gate.setAgentStreamItemSuppressed("user_message", true);
+      const prompt = "Keep delivery confirmed after the app reloads.";
+      await submitMessage(page, prompt);
+      await gate.waitForHeldServerMessage("send_agent_message_response");
+      // Dispose the actual client after the daemon received the send, before its reply arrives.
+      await page.evaluate((serverId) => {
+        const runtime = Reflect.get(globalThis, "__paseoHostRuntimeStore");
+        const client = runtime?.getClient(serverId);
+        if (!client) throw new Error("Browser daemon client is missing");
+        client.close();
+      }, getServerId());
+      await expectComposerDraft(page, prompt);
+      await expect(page.getByText("Daemon client closed", { exact: true })).toHaveCount(0);
+      await page.waitForFunction((draftKey) => {
+        const saved = localStorage.getItem("paseo-drafts");
+        return saved ? Boolean(JSON.parse(saved).state.drafts[draftKey]?.unconfirmedSend) : false;
+      }, `agent:${getServerId()}:${agent.agentId}`);
+      gate.setAgentStreamItemSuppressed("user_message", false);
+      await page.reload();
+      await expectComposerVisible(page);
+      await expectComposerDraft(page, "");
+      await expect(page.getByTestId("user-message").filter({ hasText: prompt })).toHaveCount(1);
+      await expect(page.getByText("Daemon client closed", { exact: true })).toHaveCount(0);
+      await page.reload();
+      await expectComposerVisible(page);
+      await expectComposerDraft(page, "");
+      const requests = gate.getClientRequests("send_agent_message_request");
+      expect(requests.filter((request) => request.text === prompt)).toHaveLength(1);
+      for (const size of [
+        { width: 375, height: 812 },
+        { width: 768, height: 1024 },
+        { width: 1440, height: 1000 },
+        { width: 812, height: 375 },
+      ]) {
+        await page.setViewportSize(size);
+        await expectComposerVisible(page);
+        await expectComposerDraft(page, "");
+        expect(
+          await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+        ).toBe(true);
+        await page.screenshot({
+          path: testInfo.outputPath(`recovered-${size.width}x${size.height}.png`),
+        });
+      }
+    } finally {
+      gate.restore();
+      await agent.cleanup();
+    }
+  });
+
   test("restores an ambiguous Steer failure without retrying or interrupting", async ({
     page,
   }, testInfo) => {

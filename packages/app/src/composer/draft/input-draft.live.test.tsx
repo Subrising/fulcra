@@ -1,4 +1,7 @@
 /** @vitest-environment jsdom */
+import { useSessionStore } from "@/stores/session-store";
+import { flushDraftPersistStorage } from "@/stores/draft-store";
+import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -153,6 +156,99 @@ describe("useAgentInputDraft live contract", () => {
       createModalDraft: null,
       attachmentFocusRequestByDraftKey: {},
     });
+  });
+
+  it("clears a restored unconfirmed draft only after the exact canonical message returns", async () => {
+    const draftKey = "agent:recovery-host:recovery-agent";
+    const pending = {
+      serverId: "recovery-host",
+      agentId: "recovery-agent",
+      clientMessageId: "send-1",
+    };
+    useSessionStore.getState().initializeSession("recovery-host", null as unknown as DaemonClient);
+    useDraftStore
+      .getState()
+      .saveDraftInput({ draftKey, draft: { text: "sent prompt", attachments: [] } });
+    useDraftStore.setState((state) => ({
+      drafts: {
+        ...state.drafts,
+        [draftKey]: {
+          ...state.drafts[draftKey],
+          unconfirmedSend: pending,
+        },
+      },
+    }));
+    await flushDraftPersistStorage();
+    const checkpoint = asyncStorage.get("paseo-drafts")!;
+    useDraftStore.setState({ drafts: {} });
+    asyncStorage.set("paseo-drafts", checkpoint);
+    await useDraftStore.persist.rehydrate();
+    expect(useDraftStore.getState().drafts[draftKey].unconfirmedSend).toEqual(pending);
+    let latest: ReturnType<typeof useAgentInputDraft> | undefined;
+    function Probe() {
+      latest = useAgentInputDraft({ draftKey });
+      return null;
+    }
+    const root = createTestRoot(document.getElementById("root")!);
+    const queryClient = new QueryClient();
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <Probe />
+        </QueryClientProvider>,
+      );
+    });
+    const row = {
+      kind: "user_message" as const,
+      id: "optimistic",
+      clientMessageId: "send-1",
+      text: "sent prompt",
+      timestamp: new Date(),
+    };
+    await act(async () => {
+      useSessionStore
+        .getState()
+        .setAgentStreamState("recovery-host", "recovery-agent", { tail: [row] });
+    });
+    expect(latest!.textSource.getSnapshot()).toBe("sent prompt");
+    await act(async () => {
+      useSessionStore.getState().setAgentStreamState("recovery-host", "recovery-agent", {
+        tail: [{ ...row, clientMessageId: "other-send", messageId: "other" }],
+      });
+    });
+    expect(latest!.textSource.getSnapshot()).toBe("sent prompt");
+    await act(async () => {
+      useSessionStore.getState().setAgentStreamState("recovery-host", "recovery-agent", {
+        tail: [{ ...row, messageId: "canonical-1" }],
+      });
+      await flushDraftPersistStorage();
+    });
+    expect(latest!.textSource.getSnapshot()).toBe("");
+    expect(latest!.textReplacement.text).toBe("");
+    expect(useDraftStore.getState().drafts[draftKey].lifecycle).toBe("sent");
+    const saved = JSON.parse(asyncStorage.get("paseo-drafts")!);
+    expect(saved.state.drafts[draftKey].input).toEqual({ text: "", attachments: [] });
+    await act(async () => {
+      useDraftStore
+        .getState()
+        .saveDraftInput({ draftKey, draft: { text: "sent prompt", attachments: [] } });
+      const drafts = useDraftStore.getState().drafts;
+      useDraftStore.setState({
+        drafts: {
+          ...drafts,
+          [draftKey]: {
+            ...drafts[draftKey],
+            unconfirmedSend: { ...pending, clientMessageId: "send-2" },
+          },
+        },
+      });
+      latest!.replaceText("new unsent prompt");
+      useSessionStore.getState().setAgentStreamState("recovery-host", "recovery-agent", {
+        tail: [{ ...row, clientMessageId: "send-2", messageId: "canonical-2" }],
+      });
+    });
+    expect(latest!.textSource.getSnapshot()).toBe("new unsent prompt");
+    useSessionStore.getState().clearSession("recovery-host");
   });
 
   it("hydrates persisted text and attachments and returns draft-mode composer state for a caller-provided key", async () => {

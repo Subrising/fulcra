@@ -1,3 +1,5 @@
+import { useDraftStore, flushDraftPersistStorage } from "@/stores/draft-store";
+import { buildDraftStoreKey } from "@/stores/draft-keys";
 import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import type { ComposerTextSource } from "./text-source";
 import { createStore, type StoreApi } from "zustand/vanilla";
@@ -1341,6 +1343,15 @@ function ComposerContentImpl({
   const isUploadingFile = pendingFiles.length > 0;
   const [pendingNativeImagePastes, setPendingNativeImagePastes] = useState(0);
   const [sendError, setSendError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (sendError !== t("composer.errors.confirmationPending")) return;
+    const clearConfirmationNotice = () => {
+      if (textSource.getSnapshot() === "") setSendError(null);
+    };
+    clearConfirmationNotice();
+    return textSource.subscribe(clearConfirmationNotice);
+  }, [sendError, textSource, t]);
   const [isMessageInputFocused, setIsMessageInputFocused] = useState(false);
   const [isGithubPickerOpen, setIsGithubPickerOpen] = useState(false);
   const [githubSearchQuery, setGithubSearchQuery] = useState("");
@@ -1656,6 +1667,31 @@ function ComposerContentImpl({
           await submitMessage(submitText, submitAttachments);
         },
         clearDraft,
+        retainUnconfirmedSend: (clientMessageId) => {
+          const draftKey = buildDraftStoreKey({ serverId, agentId });
+          // Web text edits publish after paint. Save the restored input before attaching its receipt.
+          useDraftStore.getState().saveDraftInput({
+            draftKey,
+            draft: {
+              text: outgoingMessage.trim(),
+              attachments: composerWorkspaceAttachment.userAttachmentsOnly(outgoingAttachments),
+            },
+          });
+          useDraftStore.setState((state) => {
+            const record = state.drafts[draftKey];
+            if (!record || record.lifecycle !== "active") return state;
+            return {
+              drafts: {
+                ...state.drafts,
+                [draftKey]: {
+                  ...record,
+                  unconfirmedSend: { serverId, agentId, clientMessageId },
+                },
+              },
+            };
+          });
+          void flushDraftPersistStorage();
+        },
         setUserInput: replaceUserInput,
         setAttachments: (nextAttachments) => {
           setSelectedAttachments(composerWorkspaceAttachment.userAttachmentsOnly(nextAttachments));
@@ -1673,6 +1709,8 @@ function ComposerContentImpl({
       });
     },
     [
+      agentId,
+      serverId,
       allowEmptySubmit,
       beginSubmit,
       clearDraft,

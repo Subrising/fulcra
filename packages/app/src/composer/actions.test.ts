@@ -1,3 +1,4 @@
+import { DaemonClientClosedError } from "@getpaseo/client/internal/daemon-client";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentAttachment, ForgeSearchItem } from "@getpaseo/protocol/messages";
 import type {
@@ -521,6 +522,42 @@ describe("dispatchComposerAgentMessage", () => {
         submission,
       }),
     ).rejects.toBe(transportError);
+  });
+
+  it("retains the exact send identity when client close precedes confirmation", async () => {
+    const stream = createFakeStream();
+    await expect(
+      dispatchComposerAgentMessage({
+        client: createFakeSendClient({ rejection: new DaemonClientClosedError() }),
+        agentId: "agent",
+        text: "unconfirmed prompt",
+        attachments: [],
+        encodeImages: passthroughEncodeImages,
+        submission: stream,
+      }),
+    ).rejects.toMatchObject({
+      name: "UnconfirmedMessageSendError",
+      clientMessageId: expect.any(String),
+    });
+    expect(stream.tail.get("agent") ?? []).toEqual([]);
+  });
+
+  it("accepts a confirmed prompt when the client closes before the RPC reply", async () => {
+    const submission: MessageSubmissionWriter = {
+      begin: () => {},
+      accept: () => {},
+      reject: () => "accepted",
+    };
+    await expect(
+      dispatchComposerAgentMessage({
+        client: createFakeSendClient({ rejection: new DaemonClientClosedError() }),
+        agentId: "agent",
+        text: "delivered prompt",
+        attachments: [],
+        encodeImages: passthroughEncodeImages,
+        submission,
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("surfaces an ambiguous failure even when a concurrent canonical echo was observed", async () => {

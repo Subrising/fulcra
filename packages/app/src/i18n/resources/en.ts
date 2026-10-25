@@ -189,6 +189,7 @@ export const en = {
       removeReview: "Remove review attachment",
     },
     errors: {
+      confirmationPending: "Message confirmation is pending. Reconnect to check delivery.",
       failedToSend: "Failed to send message",
       failedToCreateAgent: "Failed to create agent",
       noHostSelected: "No host selected",

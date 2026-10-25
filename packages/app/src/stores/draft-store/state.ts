@@ -25,7 +25,14 @@ export type DraftLifecycleState = "active" | "abandoned" | "sent";
 
 export type CanonicalDraftInput = DraftInput;
 
+export const UnconfirmedDraftSendSchema = z.strictObject({
+  serverId: z.string(),
+  agentId: z.string(),
+  clientMessageId: z.string(),
+});
+
 export interface DraftRecord {
+  unconfirmedSend?: z.infer<typeof UnconfirmedDraftSendSchema>;
   input: CanonicalDraftInput;
   lifecycle: DraftLifecycleState;
   updatedAt: number;
@@ -127,6 +134,7 @@ export const CanonicalDraftInputSchema = z.strictObject({
 });
 const DraftRecordSchema: z.ZodType<DraftRecord> = z.strictObject({
   input: CanonicalDraftInputSchema,
+  unconfirmedSend: UnconfirmedDraftSendSchema.optional(),
   lifecycle: z.enum(["active", "abandoned", "sent"]),
   updatedAt: z.number(),
   version: z.number().int().positive(),
@@ -261,6 +269,7 @@ export function applyClearDraftRecord(input: {
 
   return {
     ...input.record,
+    unconfirmedSend: undefined,
     input: { text: "", attachments: [] },
     lifecycle: input.lifecycle,
     updatedAt: input.nowMs,

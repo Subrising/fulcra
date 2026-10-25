@@ -187,6 +187,8 @@ export const fr: TranslationResources = {
       removeReview: "Retirer la revue jointe",
     },
     errors: {
+      confirmationPending:
+        "La confirmation du message est en attente. Reconnectez-vous pour vérifier sa réception.",
       failedToSend: "Impossible d’envoyer le message",
       failedToCreateAgent: "Impossible de créer l’agent",
       noHostSelected: "Aucun hôte sélectionné",

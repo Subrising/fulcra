@@ -1,3 +1,11 @@
+// A closed client cannot tell whether the host accepted the request.
+export class UnconfirmedMessageSendError extends Error {
+  constructor(readonly clientMessageId: string) {
+    super("Message confirmation is pending. Reconnect to check delivery.");
+    this.name = "UnconfirmedMessageSendError";
+  }
+}
+
 export interface PendingMessageSubmission {
   clientMessageId: string;
 }
