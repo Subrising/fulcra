@@ -115,11 +115,11 @@ it("renders host counts, waiting jobs and visible overflow at each viewport", as
       ),
     );
     expect(container.textContent).toContain("All sessions (12)");
-    expect(container.textContent).toContain("2 running · 1 waiting on background jobs · 9 idle");
+    expect(container.textContent).toContain("2 running · 1 working in background · 9 idle");
     expect(container.textContent).toContain("Mini (10)");
     expect(container.textContent).toContain("Book (2)");
     expect(container.textContent).toContain("2 more");
-    expect(container.textContent).toContain("Waiting on 2 background jobs");
+    expect(container.textContent).toContain("Working in background (2 jobs)");
     const box = container.getBoundingClientRect();
     expect(container.scrollWidth).toBeLessThanOrEqual(container.clientWidth + 1);
     for (const control of container.querySelectorAll<HTMLElement>("[role=button]")) {

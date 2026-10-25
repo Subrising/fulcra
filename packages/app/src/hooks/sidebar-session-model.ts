@@ -97,6 +97,16 @@ export function reportingLeadLine(
   return title ? `Reports to ${title}` : "Reports to a chat that is not loaded";
 }
 
+/**
+ * FU-497: working chats first, then chats still working in the background (an idle turn with background jobs) or
+ * waiting for input, then idle ones. Background work sorted with idle chats fell under "N more" and read as stopped.
+ */
+function rank(row: SidebarSessionRow): number {
+  if (row.status === "running" || row.status === "initializing") return 0;
+  if (row.backgroundWorkCount > 0 || row.pendingPermissionCount > 0) return 1;
+  return 2;
+}
+
 /** Session identity is independent of workspace aggregation and native parentage. */
 export function selectSidebarSessionRows(
   sessions: Sessions,
@@ -124,15 +134,9 @@ export function selectSidebarSessionRows(
       });
     }
   }
-  return [...rows.values()].sort((a, b) => {
-    const aWorking = a.status === "running",
-      bWorking = b.status === "running";
-    return (
-      Number(bWorking) - Number(aWorking) ||
-      a.title.localeCompare(b.title) ||
-      a.key.localeCompare(b.key)
-    );
-  });
+  return [...rows.values()].sort(
+    (a, b) => rank(a) - rank(b) || a.title.localeCompare(b.title) || a.key.localeCompare(b.key),
+  );
 }
 
 export function equalSidebarSessionRows(
