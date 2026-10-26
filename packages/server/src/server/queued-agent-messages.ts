@@ -9,7 +9,7 @@ import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import type { Logger } from "pino";
 import { SendAgentMessageRequestSchema } from "@getpaseo/protocol/messages";
-import type { AgentManager } from "./agent/agent-manager.js";
+import type { AgentManager, ManagedAgent } from "./agent/agent-manager.js";
 import type { AgentStorage } from "./agent/agent-storage.js";
 import {
   disarmFinishNotification,
@@ -20,7 +20,13 @@ import {
 import { buildAgentPrompt } from "./agent/prompt-attachments.js";
 import { FINAL_INPUT_CHECK } from "./agent/agent-sdk-types.js";
 import { ensureAgentLoaded } from "./agent/agent-loading.js";
-import { createFinalInputCheck, assertFinalInputCheck } from "./agent/final-input-check.js";
+import {
+  createFinalInputCheck,
+  assertFinalInputCheck,
+  hasFinalInputHandoff,
+  finalInputFailure,
+  FinalInputHandoffTimeoutError,
+} from "./agent/final-input-check.js";
 import { writeJsonQueueFile } from "./atomic-file.js";
 import { HeldQueueFullError, MAX_HELD_PER_TARGET } from "./held-sends.js";
 import {
@@ -56,10 +62,16 @@ const RecordSchema = z.object({
   reason: z.string().optional(),
   resumeAt: z.number().finite().positive().optional(),
   batchId: z.string().optional(),
+  /** One absent-message retry per provider instance. A repeated failure stays visible. */
+  recoveryInstanceId: z.string().optional(),
+  nativeReceipt: z.boolean().optional(),
+  runtimeInstanceId: z.string().optional(),
+  uncertaintyReported: z.boolean().optional(),
   /** When the record reached delivered or refused. Settled records leave the file a day later. */
   settledAt: z.number().finite().positive().optional(),
 });
 type Record = z.infer<typeof RecordSchema>;
+type InputReceipt = "present" | "absent" | "unknown";
 const SETTLED_RECORD_MS = 24 * 60 * 60 * 1000;
 
 function settled(record: Record): boolean {
@@ -77,6 +89,7 @@ interface Deps {
   logger: Logger;
   /** Restore queues only after the daemon restores the previously open sessions. */
   deferStart?: boolean;
+  writeQueue?: typeof writeJsonQueueFile;
 }
 
 function closedReceiverReason(target: { archivedAt?: unknown } | null): string {
@@ -101,14 +114,27 @@ export class QueuedAgentMessages {
   private readonly draining = new Set<string>();
   private readonly rekick = new Set<string>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly attempts = new Map<string, object>();
+  private readonly instances = new Map<string, string>();
+  private readonly closedInstances = new Set<string>();
   private readonly unsubscribe: () => void;
 
   constructor(private readonly deps: Deps) {
+    for (const agent of deps.agentManager.listAgents())
+      if (agent.instanceId) this.instances.set(agent.id, agent.instanceId);
     this.unsubscribe = deps.agentManager.subscribe(
       (event) => {
         let id: string | null = null;
-        if (event.type === "agent_state") id = event.agent.id;
-        else if (
+        if (event.type === "agent_state") {
+          id = event.agent.id;
+          const previous = this.instances.get(id);
+          if (previous && previous !== event.agent.instanceId) this.closedInstances.add(previous);
+          if (event.agent.instanceId) {
+            this.instances.set(id, event.agent.instanceId);
+            if (event.agent.lifecycle === "closed")
+              this.closedInstances.add(event.agent.instanceId);
+          }
+        } else if (
           event.type === "agent_stream" &&
           ["turn_completed", "turn_failed", "turn_canceled"].includes(event.event.type)
         )
@@ -142,7 +168,10 @@ export class QueuedAgentMessages {
       );
       const text = JSON.stringify(this.records);
       if (text !== this.saved) {
-        await writeJsonQueueFile(this.deps.agentStorage.heldMessagesPath, this.records);
+        await (this.deps.writeQueue ?? writeJsonQueueFile)(
+          this.deps.agentStorage.heldMessagesPath,
+          this.records,
+        );
         this.saved = text;
       }
       for (const listener of this.deliveryListeners) listener();
@@ -169,7 +198,7 @@ export class QueuedAgentMessages {
       }
       this.saved = JSON.stringify(this.records);
     }
-    // A provider may have accepted an attempted batch before the daemon stopped. Never replay it.
+    // A provider may have accepted an attempted batch before the daemon stopped. Reconcile it first.
     const attempted = this.records.filter((record) => record.state === "dispatching");
     for (const record of attempted) {
       record.state = "uncertain";
@@ -179,7 +208,6 @@ export class QueuedAgentMessages {
     // Also drops settled records past their day, and stamps older ones that carry no settle time.
     await this.save();
     this.initialized = true;
-    this.tellBatch(attempted, attempted[0]?.reason ?? "Delivery is uncertain after restart.");
   }
 
   async prepareArchiveObservation(): Promise<void> {
@@ -200,7 +228,7 @@ export class QueuedAgentMessages {
     });
     this.pauseWatcher.unref();
     for (const record of this.records)
-      if (["queued", "dispatching"].includes(record.state)) this.kick(record.agentId);
+      if (["queued", "dispatching", "uncertain"].includes(record.state)) this.kick(record.agentId);
   }
 
   async enqueue(
@@ -609,6 +637,7 @@ export class QueuedAgentMessages {
   private async drain(agentId: string): Promise<void> {
     await this.load();
     const { agentManager } = this.deps;
+    await this.reconcileUncertain(agentId);
     if (this.stopped || (await this.refuseClosedReceiver(agentId))) return;
     if (agentManager.hasInFlightRun(agentId)) return;
     if (await this.holdPausedDelivery(agentId)) return;
@@ -636,6 +665,7 @@ export class QueuedAgentMessages {
     for (const record of eligible) {
       record.state = "dispatching";
       record.batchId = batchId;
+      record.nativeReceipt = Boolean(agentManager.getAgent(agentId)?.session?.getInputReceipt);
     }
     await this.save();
     for (const record of candidates)
@@ -655,8 +685,22 @@ export class QueuedAgentMessages {
     lineChecks: Map<Record, () => string | null>,
   ): Promise<void> {
     const { agentManager, logger } = this.deps;
+    const attemptId = `${agentId}:${batchId}`;
+    this.attempts.delete(attemptId);
     const prompt = promptForBatch(eligible);
     const armed = new Map<string, string | null>();
+    const markDelivered = () => {
+      for (const record of eligible) {
+        record.state = "delivered";
+        if (record.request.sender)
+          leadEventsFor(agentManager)?.suppress(record.request.sender.agentId, {
+            eventId: record.id,
+            sourceId: agentId,
+            kind: "delivery_receipt",
+          });
+      }
+      this.attempts.delete(attemptId);
+    };
     try {
       const asSource = eligible[0]!.request.sender
         ? <T>(run: () => Promise<T>) => agentManager.trustedPlugins.agentInput(run)
@@ -699,6 +743,13 @@ export class QueuedAgentMessages {
             : undefined,
         );
         const priorNotice = await this.deps.agentStorage.getFinishNotice(agentId);
+        const receiver = agentManager.getAgent(agentId)!;
+        for (const record of eligible) {
+          record.nativeReceipt = Boolean(receiver.session?.getInputReceipt);
+          record.runtimeInstanceId = receiver.instanceId ?? undefined;
+        }
+        await this.save();
+        this.attempts.set(attemptId, check);
         for (const record of eligible) {
           if (record.request.notifyOnFinish && record.request.sender) {
             assertFinalInputCheck(check);
@@ -726,16 +777,15 @@ export class QueuedAgentMessages {
           }),
         );
       });
-      for (const record of eligible) {
-        record.state = "delivered";
-        if (record.request.sender)
-          leadEventsFor(agentManager)?.suppress(record.request.sender.agentId, {
-            eventId: record.id,
-            sourceId: agentId,
-            kind: "delivery_receipt",
-          });
-      }
+      markDelivered();
     } catch (error) {
+      if (
+        hasFinalInputHandoff(this.attempts.get(attemptId)) ||
+        agentManager.hasSubmittedFinishMessageNow(agentId, batchId)
+      ) {
+        markDelivered();
+        return;
+      }
       if (error instanceof NoticePausedError)
         for (const [callerId, messageId] of armed) {
           disarmFinishNotification(agentManager, agentId, callerId);
@@ -765,23 +815,187 @@ export class QueuedAgentMessages {
         return;
       }
       this.batchFailed(agentId, eligible, error);
+      await this.reconcileUncertain(agentId);
+      const uncertain = eligible.filter((record) => record.state === "uncertain");
+      if (!uncertain.length) this.attempts.delete(attemptId);
+      await this.tellUncertain(uncertain);
+    } finally {
+      if (!eligible.some((record) => record.state === "uncertain")) this.attempts.delete(attemptId);
     }
+  }
+
+  private async reconcileUncertain(agentId: string): Promise<void> {
+    const uncertain = this.records.filter(
+      (record) => record.agentId === agentId && record.state === "uncertain",
+    );
+    if (!uncertain.length) return;
+    const manager = this.deps.agentManager;
+    const receiver = await this.uncertainReceiver(agentId, uncertain);
+    if (!receiver) return;
+    let submitted: Set<string>;
+    try {
+      submitted = await manager.getSubmittedMessageIds(agentId);
+    } catch (error) {
+      this.deps.logger.warn({ err: error, agentId }, "Uncertain timeline unavailable");
+      await this.tellUncertain(uncertain);
+      return;
+    }
+    if (!this.sameReceiver(receiver)) return;
+    const receipts = new Map<string, InputReceipt>();
+    for (const record of uncertain) {
+      if ((receiver.persistence?.sessionId ?? null) !== record.sessionId) continue;
+      const outcome = await this.recoveryReceipt(record, receiver, submitted, receipts);
+      if (!this.sameReceiver(receiver)) return;
+      if (outcome === "absent" && manager.hasInFlightRun(agentId)) return;
+      this.applyRecovery(record, receiver, outcome);
+    }
+    await this.save();
+    await this.tellUncertain(uncertain.filter((record) => record.state === "uncertain"));
+  }
+
+  private sameReceiver(receiver: ManagedAgent): boolean {
+    const current = this.deps.agentManager.getAgent(receiver.id);
+    return current?.instanceId === receiver.instanceId && current?.session === receiver.session;
+  }
+
+  private async uncertainReceiver(
+    agentId: string,
+    uncertain: Record[],
+  ): Promise<ManagedAgent | null> {
+    try {
+      const { agentManager, agentStorage } = this.deps;
+      let receiver = agentManager.getAgent(agentId);
+      if (!receiver && !uncertain.some((record) => record.nativeReceipt)) {
+        await this.tellUncertain(uncertain);
+        return null;
+      }
+      const target = receiver ?? (await agentStorage.get(agentId));
+      if (
+        noticePaused(
+          agentStorage.noticePausePath,
+          target,
+          (id) => agentManager.getAgent(id) ?? agentStorage.getCached(id),
+        )
+      )
+        return null;
+      if (!receiver) {
+        await loadQueuedReceiver(this.deps, agentId, uncertain[0]!.sessionId);
+        receiver = agentManager.getAgent(agentId);
+      }
+      if (receiver && !receiver.archivedAt && receiver.lifecycle !== "closed") return receiver;
+    } catch (error) {
+      this.deps.logger.warn({ err: error, agentId }, "Uncertain receiver unavailable");
+    }
+    await this.tellUncertain(uncertain);
+    return null;
+  }
+
+  private async recoveryReceipt(
+    record: Record,
+    receiver: ManagedAgent,
+    submitted: Set<string>,
+    receipts: Map<string, InputReceipt>,
+  ): Promise<InputReceipt> {
+    const messageId = record.batchId ?? record.request.messageId ?? record.id;
+    const check = this.attempts.get(`${receiver.id}:${messageId}`);
+    const manager = this.deps.agentManager;
+    if (
+      hasFinalInputHandoff(check) ||
+      manager.hasSubmittedFinishMessageNow(receiver.id, messageId) ||
+      submitted.has(messageId)
+    )
+      return "present";
+    if (
+      !record.nativeReceipt ||
+      manager.hasInFlightRun(receiver.id) ||
+      receiver.lifecycle !== "idle"
+    )
+      return "unknown";
+    const receipt = await this.readNativeReceipt(receiver, messageId, receipts);
+    if (receipt === "absent" && !this.previousWriterStopped(record, receiver, check))
+      return "unknown";
+    if (receipt !== "unknown") return receipt;
+    if (
+      ["claude", "codex"].includes(receiver.provider) &&
+      finalInputFailure(check) instanceof FinalInputHandoffTimeoutError
+    )
+      return "absent";
+    return "unknown";
+  }
+
+  private previousWriterStopped(
+    record: Record,
+    receiver: ManagedAgent,
+    check: object | undefined,
+  ): boolean {
+    if (!record.runtimeInstanceId) return false;
+    if (this.closedInstances.has(record.runtimeInstanceId)) return true;
+    // A retained native check proves this daemon still owns the attempt. A crash loses that proof.
+    return (
+      record.runtimeInstanceId === receiver.instanceId &&
+      Boolean(check) &&
+      ["claude", "codex"].includes(receiver.provider)
+    );
+  }
+
+  private async readNativeReceipt(
+    receiver: ManagedAgent,
+    messageId: string,
+    receipts: Map<string, InputReceipt>,
+  ): Promise<InputReceipt> {
+    const cached = receipts.get(messageId);
+    if (cached) return cached;
+    let receipt: InputReceipt = "unknown";
+    try {
+      receipt = (await receiver.session?.getInputReceipt?.(messageId)) ?? "unknown";
+    } catch (error) {
+      this.deps.logger.warn(
+        { err: error, agentId: receiver.id },
+        "Native input receipt unavailable",
+      );
+    }
+    receipts.set(messageId, receipt);
+    return receipt;
+  }
+
+  private applyRecovery(record: Record, receiver: ManagedAgent, outcome: InputReceipt): void {
+    if (outcome === "unknown") return;
+    if (outcome === "absent" && record.recoveryInstanceId === receiver.instanceId) return;
+    record.state = outcome === "present" ? "delivered" : "queued";
+    if (outcome === "absent") {
+      record.recoveryInstanceId = receiver.instanceId ?? undefined;
+      this.rekick.add(receiver.id);
+    }
+    record.reason = undefined;
+    const messageId = record.batchId ?? record.request.messageId ?? record.id;
+    this.attempts.delete(`${receiver.id}:${messageId}`);
+  }
+
+  private async tellUncertain(records: Record[]): Promise<void> {
+    const unreported = records.filter((record) => !record.uncertaintyReported);
+    if (!unreported.length) return;
+    for (const record of unreported) record.uncertaintyReported = true;
+    await this.save();
+    if (unreported.length)
+      this.tellBatch(
+        unreported,
+        unreported[0]!.reason ?? "Delivery is uncertain. Check the receiver before sending again.",
+      );
   }
 
   private batchFailed(agentId: string, eligible: Record[], error: unknown): void {
     const { agentManager } = this.deps;
     const limit = recipientLimit(error);
+    const state = failureState(error, limit);
     if (error instanceof NoticePausedError) this.rekick.add(agentId);
     for (const record of eligible) {
-      if (record.request.notifyOnFinish && record.request.sender)
+      if (state !== "uncertain" && record.request.notifyOnFinish && record.request.sender)
         disarmFinishNotification(agentManager, agentId, record.request.sender.agentId);
-      record.state = failureState(error, limit);
+      record.state = state;
       record.reason = error instanceof Error ? error.message : String(error);
       if (limit) record.resumeAt = limit.resumeAt;
     }
     if (limit) this.schedule(agentId, limit.resumeAt);
-    else if (!(error instanceof SteerUnavailableError) && !(error instanceof NoticePausedError))
-      this.tellBatch(eligible, eligible[0]?.reason ?? "Delivery is uncertain.");
   }
 }
 

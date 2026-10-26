@@ -2373,6 +2373,53 @@ describe("Codex app-server provider", () => {
     await session.close();
   });
 
+  test("native input receipts cover accepted input before a daemon timeline commit", async () => {
+    let legacy = false;
+    let paginated = false;
+    const appServer = createFakeCodexAppServer({
+      "thread/read": () => ({
+        thread: {
+          ...(paginated ? { historyMode: "paginated" } : {}),
+          turns: [
+            {
+              id: "turn-receipt",
+              items: [
+                {
+                  type: "userMessage",
+                  id: "provider-user-message",
+                  content: [{ type: "text", text: "accepted input" }],
+                  ...(legacy ? {} : { clientId: "retained-batch" }),
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    });
+    const session = new CodexAppServerAgentSession(
+      createConfig({ cwd: "/workspace/project" }),
+      null,
+      createTestLogger(),
+      async () => appServer.child,
+    );
+    try {
+      await session.startTurn("accepted input", { clientMessageId: "retained-batch" });
+      expect(
+        appServer.requests().find((request) => request.method === "turn/start")?.params,
+      ).toMatchObject({ clientUserMessageId: "retained-batch" });
+      expect(await session.getInputReceipt("retained-batch")).toBe("present");
+      expect(await session.getInputReceipt("absent-batch")).toBe("absent");
+      legacy = true;
+      expect(await session.getInputReceipt("absent-batch")).toBe("unknown");
+      legacy = false;
+      paginated = true;
+      expect(await session.getInputReceipt("absent-batch")).toBe("unknown");
+      expect(await session.getInputReceipt("retained-batch")).toBe("present");
+    } finally {
+      await session.close();
+    }
+  });
+
   test("initializes Codex app-server without making Paseo the request originator", async () => {
     let initializeParams: unknown;
     const appServer = createFakeCodexAppServer({

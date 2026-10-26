@@ -5,6 +5,7 @@ import {
   readHistoryLines,
 } from "../../history-load.js";
 import { readWorkflowLinks } from "./subagents/workflow-replay-source.js";
+import { providerMessageId } from "../../provider-message-id.js";
 import { recordedClaudeUsage } from "../../usage-recording.js";
 import {
   assertFinalInputCheck,
@@ -2600,7 +2601,7 @@ class ClaudeAgentSession implements AgentSession {
       this.completeAutonomousTurn();
     }
 
-    const sdkMessage = this.toSdkUserMessage(prompt);
+    const sdkMessage = this.toSdkUserMessage(prompt, options?.clientMessageId);
     const sdkUserMessageId = sdkMessageUuid(sdkMessage);
     this.rememberRewindUserAnchor(sdkUserMessageId);
     const turnId = this.createTurnId("foreground");
@@ -4062,7 +4063,33 @@ class ClaudeAgentSession implements AgentSession {
     return result;
   }
 
-  private toSdkUserMessage(prompt: AgentPromptInput): SDKUserMessage {
+  async getInputReceipt(messageId: string): Promise<"present" | "absent" | "unknown"> {
+    if (!this.claudeSessionId) return "unknown";
+    const historyPath = this.resolveHistoryPath(this.claudeSessionId);
+    if (!historyPath || !(await pathExists(historyPath))) return "unknown";
+    const uuid = providerMessageId(messageId);
+    const file = await promises.open(historyPath, "r");
+    try {
+      const before = await file.stat();
+      for await (const line of readHistoryLines(file, false, this.historyAbort.signal)) {
+        if (!line.text.trim()) continue;
+        const entry = JSON.parse(line.text) as ClaudeHistoryEntry;
+        if (entry.type === "user" && entry.isSidechain !== true && entry.uuid === uuid)
+          return "present";
+      }
+      const after = await promises.stat(historyPath);
+      return before.dev === after.dev &&
+        before.ino === after.ino &&
+        before.size === after.size &&
+        before.mtimeMs === after.mtimeMs
+        ? "absent"
+        : "unknown";
+    } finally {
+      await file.close();
+    }
+  }
+
+  private toSdkUserMessage(prompt: AgentPromptInput, clientMessageId?: string): SDKUserMessage {
     const content: Array<
       | { type: "text"; text: string }
       | {
@@ -4111,7 +4138,7 @@ class ClaudeAgentSession implements AgentSession {
       content.push(slashCommand);
     }
 
-    const messageId = randomUUID();
+    const messageId = clientMessageId ? providerMessageId(clientMessageId) : randomUUID();
     this.rememberUserMessageId(messageId);
 
     return {

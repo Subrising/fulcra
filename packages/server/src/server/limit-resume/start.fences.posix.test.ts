@@ -175,6 +175,33 @@ async function fixture(nativeHooks = false) {
     },
   };
 }
+test.each([false, true])(
+  "agent reload clears a stale native running mark (hooks: %s)",
+  async (hooks) => {
+    const f = await fixture(hooks);
+    const service = f.start();
+    try {
+      await service.onAgentEvent({
+        type: "agent_stream",
+        agentId: f.agent.id,
+        event: { type: "turn_started" },
+      });
+      const running = async () =>
+        (
+          JSON.parse(await readFile(limitResumeFilePath(f.home), "utf8")) as {
+            running: Record<string, unknown>;
+          }
+        ).running;
+      expect(Object.keys(await running())).toEqual([f.agent.id]);
+      await f.manager.reloadAgentSession(f.agent.id);
+      await vi.waitFor(async () => expect(await running()).toEqual({}));
+    } finally {
+      service.stop();
+      await f.cleanup();
+    }
+  },
+);
+
 async function queueActualLimit(f: Awaited<ReturnType<typeof fixture>>) {
   const marked = deferred();
   const off = f.manager.subscribe(

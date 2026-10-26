@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ClaudeAgentClient } from "./agent.js";
 import { claudeProjectDirSync } from "./project-dir.js";
+import { providerMessageId } from "../../provider-message-id.js";
 
 /**
  * A resumed Claude agent whose transcript is missing or unreadable opens with an empty timeline.
@@ -28,7 +29,7 @@ describe("ClaudeAgentSession persisted history load", () => {
   let configDir: string;
   let records: LogRecord[];
 
-  async function resume(): Promise<void> {
+  async function resume(receiptId?: string) {
     const client = new ClaudeAgentClient({
       logger: pino({ level: "info" }, { write: (line: string) => records.push(JSON.parse(line)) }),
       queryFactory: vi.fn(() => {
@@ -41,13 +42,40 @@ describe("ClaudeAgentSession persisted history load", () => {
       { cwd },
     );
     // FU-77: the transcript is read without blocking the main thread, so history is complete once it is streamed.
-    for await (const event of session.streamHistory()) void event;
-    await session.close();
+    try {
+      for await (const event of session.streamHistory()) void event;
+      return receiptId ? await session.getInputReceipt?.(receiptId) : undefined;
+    } finally {
+      await session.close();
+    }
   }
 
   function transcriptPath(): string {
     return path.join(claudeProjectDirSync(cwd, { configDir }), `${SESSION_ID}.jsonl`);
   }
+
+  test("native receipts survive a missing daemon timeline and consumed replay", async () => {
+    const file = transcriptPath();
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(
+      file,
+      JSON.stringify({
+        type: "user",
+        uuid: providerMessageId("retained-batch"),
+        message: { content: "accepted before journal commit" },
+      }) + "\n",
+    );
+    expect(await resume("retained-batch")).toBe("present");
+    expect(await resume("absent-batch")).toBe("absent");
+  });
+
+  test("a missing or incomplete native transcript never proves absence", async () => {
+    expect(await resume("missing-batch")).toBe("unknown");
+    const file = transcriptPath();
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, '{"type":"user","uuid":');
+    await expect(resume("missing-batch")).rejects.toThrow();
+  });
 
   beforeEach(() => {
     tempRoot = mkdtempSync(path.join(os.tmpdir(), "claude-history-load-"));

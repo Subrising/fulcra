@@ -674,27 +674,30 @@ test.runIf(process.platform === "win32")(
 );
 
 // 0.2.13 review: the held queue was full, the sender was told so, and the same message ID could then never be sent.
-test("a refusal that sent nothing (held queue full) can be retried with the same message ID", async () => {
-  const { requests, directory } = await fixture();
-  let deliveries = 0;
-  let full = true;
-  const input = {
-    agentId: "agent",
-    messageId: "arrival",
-    request: {},
-    send: async () => {
-      if (full) throw Object.assign(new Error("queue is full"), { code: "HELD_QUEUE_FULL" });
-      deliveries++;
-    },
-  };
-  await expect(requests.send(input)).rejects.toThrow("queue is full");
-  full = false;
-  await requests.send(input);
-  expect(deliveries).toBe(1);
-  // Still exactly once for the same ID, also after a restart.
-  await new MessageReceipts(directory).send(input);
-  expect(deliveries).toBe(1);
-});
+test.each(["HELD_QUEUE_FULL", "SEND_REQUEST_EXPIRED"])(
+  "a refusal that sent nothing can retry the same message ID (%s)",
+  async (code) => {
+    const { requests, directory } = await fixture();
+    let deliveries = 0;
+    let full = true;
+    const input = {
+      agentId: "agent",
+      messageId: "arrival",
+      request: {},
+      send: async () => {
+        if (full) throw Object.assign(new Error("input refused before handoff"), { code });
+        deliveries++;
+      },
+    };
+    await expect(requests.send(input)).rejects.toThrow("input refused before handoff");
+    full = false;
+    await requests.send(input);
+    expect(deliveries).toBe(1);
+    // Still exactly once for the same ID, also after a restart.
+    await new MessageReceipts(directory).send(input);
+    expect(deliveries).toBe(1);
+  },
+);
 
 test("a refused plugin message (provenance refused) can be retried with the same message ID", async () => {
   const { requests } = await fixture();

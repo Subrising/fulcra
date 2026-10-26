@@ -338,6 +338,7 @@ class FakeAgentSession implements AgentSession {
   private pendingPermissions: AgentPermissionRequest[] = [];
   private permissionGate: Deferred<AgentPermissionResponse> | null = null;
   private readonly historyPath: string;
+  private readonly acceptedInputs = new Set<string>();
   private readonly subscribers = new Set<(event: AgentStreamEvent) => void>();
   private nextTurnOrdinal = 0;
   private activeForegroundTurnId: string | null = null;
@@ -459,10 +460,11 @@ class FakeAgentSession implements AgentSession {
     commitFinalInputCheck(options?.[FINAL_INPUT_CHECK]);
     const turnId = `fake-turn-${this.nextTurnOrdinal++}`;
     this.activeForegroundTurnId = turnId;
+    if (options?.clientMessageId) this.acceptedInputs.add(options.clientMessageId);
     this.onStartTurn?.(prompt);
     recordFinalInputHandoff(options?.[FINAL_INPUT_CHECK]);
 
-    void this.emitTurnEvents(prompt);
+    void this.emitTurnEvents(prompt, options?.clientMessageId);
 
     return { turnId };
   }
@@ -726,11 +728,17 @@ class FakeAgentSession implements AgentSession {
     return false;
   }
 
-  private async emitTurnEvents(prompt: AgentPromptInput): Promise<void> {
+  private async emitTurnEvents(prompt: AgentPromptInput, clientMessageId?: string): Promise<void> {
     this.interruptSignal = createDeferred<void>();
     const slashCommand = await this.resolveSlashCommandInput(prompt);
     const textPrompt = typeof prompt === "string" ? prompt : JSON.stringify(prompt);
     try {
+      if (clientMessageId)
+        await this.appendHistoryEvent({
+          type: "timeline",
+          provider: this.providerName,
+          item: { type: "user_message", text: textPrompt, clientMessageId },
+        });
       if (slashCommand) {
         await this.emitSlashCommandTurn(slashCommand);
         return;
@@ -829,6 +837,19 @@ class FakeAgentSession implements AgentSession {
     } finally {
       this.activeForegroundTurnId = null;
     }
+  }
+
+  async getInputReceipt(messageId: string): Promise<"present" | "absent"> {
+    if (this.acceptedInputs.has(messageId)) return "present";
+    for await (const event of this.streamHistory()) {
+      if (
+        event.type === "timeline" &&
+        event.item.type === "user_message" &&
+        event.item.clientMessageId === messageId
+      )
+        return "present";
+    }
+    return "absent";
   }
 
   async *streamHistory(): AsyncGenerator<AgentStreamEvent> {

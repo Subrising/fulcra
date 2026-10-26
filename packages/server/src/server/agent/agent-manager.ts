@@ -1573,6 +1573,22 @@ export class AgentManager {
     return this.timelineStore.getSubmittedUserMessage(parentId, messageId) !== null;
   }
 
+  /** Queue recovery reads prompt identities without loading tool payloads or assistant text. */
+  async getSubmittedMessageIds(agentId: string): Promise<Set<string>> {
+    this.requireAgent(agentId);
+    const store = this.durableTimelineStore;
+    const rows = store
+      ? await (store.getCommittedPromptRows?.(agentId) ?? store.getCommittedRows(agentId))
+      : this.timelineStore.getRows(agentId);
+    return new Set(
+      rows.flatMap((row) =>
+        row.item.type === "user_message"
+          ? [row.item.clientMessageId, row.item.messageId].filter((id): id is string => Boolean(id))
+          : [],
+      ),
+    );
+  }
+
   /** Native catalog read/consume domain only. The launch witness is not an action credential. */
   async nativeReportInbox(origin: NativeReportOrigin, eventId?: string) {
     if (!this.reportRegistry || !this.nativeReceipts)
@@ -4308,10 +4324,8 @@ export class AgentManager {
     this.assertAcceptingAgentRegistrations();
     let existing = this.requireSessionAgent(agentId);
     await this.assertAgentUnarchived(agentId);
-    if (this.hasInFlightRun(agentId)) {
-      await this.cancelAgentRunBefore(agentId, "reload", operationHandle);
-      existing = this.requireSessionAgent(agentId);
-    }
+    await this.cancelRunForReload(agentId, operationHandle);
+    existing = this.requireSessionAgent(agentId);
     const rehydrateFromDisk = options?.rehydrateFromDisk ?? false;
     const preservedHistoryPrimed = existing.historyPrimed;
     const preservedLastUsage = existing.lastUsage;
@@ -4416,6 +4430,17 @@ export class AgentManager {
         }
       }
     }
+  }
+
+  private async cancelRunForReload(
+    agentId: string,
+    handle?: TrustedOperationHandle,
+  ): Promise<void> {
+    const agent = this.requireSessionAgent(agentId);
+    // Close the writer before clearing a start whose transport never returned a turn.
+    const pendingStart = this.runs.getPendingRun(agentId)?.start.status === "pending";
+    if (pendingStart && !agent.activeForegroundTurnId) return;
+    if (this.hasInFlightRun(agentId)) await this.cancelAgentRunBefore(agentId, "reload", handle);
   }
 
   private async closeReloadedSession(session: AgentSession, agentId: string): Promise<void> {
@@ -6720,6 +6745,7 @@ export class AgentManager {
               });
             }
           } catch (error) {
+            this.assertCurrentPendingRun(agentId, agent, pendingRun);
             pendingRun.start = {
               status: "failed",
               error: error instanceof Error ? error.message : "Timeline commit failed",
@@ -6730,6 +6756,7 @@ export class AgentManager {
             this.emitState(agent);
             throw error;
           }
+          this.assertCurrentPendingRun(agentId, agent, pendingRun);
           pendingRun.start = { status: "started", turnId };
           for (const stagedEvent of pendingRun.stagedEvents.splice(0)) {
             const isAcceptedTurnStart =
@@ -6783,6 +6810,15 @@ export class AgentManager {
       promptPayload(prompt, options),
       options?.[TRUSTED_OPERATION],
     );
+  }
+
+  private assertCurrentPendingRun(
+    agentId: string,
+    agent: ActiveManagedAgent,
+    pendingRun: PendingForegroundRun,
+  ): void {
+    if (this.agents.get(agentId) !== agent || pendingRun.settled)
+      throw new Error("Agent runtime changed while committing its prompt");
   }
 
   private finalizeForegroundTurn(agent: ActiveManagedAgent, turnId?: string): void {

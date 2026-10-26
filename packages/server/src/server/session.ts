@@ -1,6 +1,13 @@
 import { reviewWork } from "./agent/work-review.js";
 import { randomUUID } from "node:crypto";
 import { hostLinksFor } from "./host-links.js";
+import {
+  assertSendRequestActive,
+  captureSendRequestCheck,
+  sendRequestExpired,
+  SendRequestTimeoutError,
+  withSendRequestDeadline,
+} from "./send-request-deadline.js";
 import { armPromptFinishNotification, disarmFinishNotification } from "./agent/agent-prompt.js";
 import {
   createFinalInputCheck,
@@ -9932,6 +9939,7 @@ export class Session {
     prompt: ReturnType<typeof buildAgentPrompt>,
     deliveryNote: (note: string, state?: "held") => void,
   ): () => Promise<void> {
+    const checkSendActive = captureSendRequestCheck();
     // FULCRA(orchestration): The owner, 10 Oct: "human messages should steer". Nothing changes for an idle target.
     // - Stamped sends combine after the current turn. Explicit steers use the native turn and queue on refusal.
     // - A send from the owner to a busy target steers into the running turn, and is held, not replaced, when the
@@ -9948,6 +9956,8 @@ export class Session {
         (await this.agentStorage.get(agentId))?.provider;
       const check = createFinalInputCheck(
         () => {
+          // Held input has its own queue lifetime. Only a direct send uses the request deadline.
+          if (signal) checkSendActive();
           assertNoticeFinalCheck(finalCheck);
           if (
             noticePaused(
@@ -10119,6 +10129,7 @@ export class Session {
       }
     };
     return async () => {
+      assertSendRequestActive();
       await deliverMessage();
       // FU-427: only a send that did not throw may suppress the sender's finish notice.
       if (sender) noteAgentMessageDelivered(sender.agentId, agentId);
@@ -10209,6 +10220,7 @@ export class Session {
     deliveryNote?: string,
     deliveryState?: "held",
   ): void {
+    if (sendRequestExpired()) return;
     this.emit({
       type: "send_agent_message_response",
       payload: {
@@ -10424,6 +10436,25 @@ export class Session {
   private async handleSendAgentMessageRequest(
     msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
   ): Promise<void> {
+    try {
+      await withSendRequestDeadline(() => this.handleSendAgentMessageWithinDeadline(msg));
+    } catch (error) {
+      if (!(error instanceof SendRequestTimeoutError)) throw error;
+      this.emit({
+        type: "send_agent_message_response",
+        payload: {
+          requestId: msg.requestId,
+          agentId: msg.agentId,
+          accepted: false,
+          error: error.message,
+        },
+      });
+    }
+  }
+
+  private async handleSendAgentMessageWithinDeadline(
+    msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
+  ): Promise<void> {
     const routed = await this.routeAgentMessage(msg);
     if (!routed) return;
     msg = routed;
@@ -10497,12 +10528,13 @@ export class Session {
       });
       await this.sendAgentMessageWithReceipt(msg, agentId, prompt, send, async () => {
         await this.prepareAgentMessage(agentId, msg.text, queuedSessionId);
+        assertSendRequestActive();
       });
 
       this.emitAgentMessageAccepted(msg.requestId, agentId, deliveryNote, deliveryState);
     } catch (error) {
+      if (sendRequestExpired(this.delivery.requestSignal)) return;
       if (admissionOutcome(error)) throw error;
-      if (this.delivery.requestSignal.aborted) return;
       if (!msg.nativeQueue)
         this.handleAgentRunError(resolved.agentId, error, "Failed to send agent message");
       this.emit({
@@ -10732,6 +10764,7 @@ export class Session {
   }
 
   private emit(msg: SessionOutboundMessage): void {
+    if (msg.type === "send_agent_message_response" && sendRequestExpired()) return;
     if (!this.authorization.allowsOutbound(msg)) return;
     if (this.delivery.reply(msg)) return;
     if (this.emitSubscribedEvent(msg)) return;

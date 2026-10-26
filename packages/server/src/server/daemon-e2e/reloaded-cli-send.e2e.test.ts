@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { promisify } from "node:util";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
@@ -35,6 +35,87 @@ const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const close of cleanups.splice(0).toReversed()) await close();
 });
+
+test.each([false, true])(
+  "restart reconciles an uncertain message over WebSocket (present: %s)",
+  async (present) => {
+    const root = realpathSync(await mkdtemp(path.join(tmpdir(), "uncertain-send-recovery-")));
+    const staticDir = path.join(root, "static");
+    await mkdir(staticDir);
+    let daemon: TestPaseoDaemon | undefined;
+    let client: DaemonClient | undefined;
+    cleanups.push(async () => {
+      await client?.close();
+      await daemon?.close();
+      await rm(root, { recursive: true, force: true });
+    });
+    const options = { paseoHomeRoot: root, staticDir, cleanup: false };
+    daemon = await createTestPaseoDaemon({
+      ...options,
+      agentClients: { claude: createTestAgentClient("claude") },
+    });
+    const manager = daemon.daemon.agentManager;
+    const target = await manager.createAgent({ provider: "claude", cwd: root }, undefined, {});
+    const messageId = randomUUID();
+    const queueFile = daemon.daemon.agentStorage.heldMessagesPath;
+    client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws` });
+    await client.connect();
+    await client.fetchAgents({ subscribe: {} });
+    if (present) {
+      await client.sendAgentMessage(target.id, "recovered input", { messageId });
+      await client.waitForAgentUpsert(target.id, (agent) => agent.status === "idle");
+      await manager.flush();
+      await manager.deleteCommittedTimeline(target.id);
+    }
+    await client.close();
+    client = undefined;
+    await daemon.close();
+    daemon = undefined;
+    await writeFile(
+      queueFile,
+      JSON.stringify([
+        {
+          id: randomUUID(),
+          agentId: target.id,
+          sessionId: target.persistence!.sessionId,
+          localServerId: null,
+          request: { text: "recovered input", messageId },
+          batchId: messageId,
+          state: "uncertain",
+          nativeReceipt: true,
+        },
+      ]),
+    );
+    await recordOpenSessions({
+      paseoHome: path.join(root, ".paseo"),
+      agents: [{ id: target.id, lifecycle: "idle" }],
+    });
+    const prompts: AgentPromptInput[] = [];
+    daemon = await createTestPaseoDaemon({
+      ...options,
+      agentClients: {
+        claude: createTestAgentClient("claude", { onStartTurn: (prompt) => prompts.push(prompt) }),
+      },
+    });
+    client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws` });
+    await client.connect();
+    await client.fetchAgents({ subscribe: {} });
+    const queue = queuedAgentMessagesFor({
+      agentManager: daemon.daemon.agentManager,
+      agentStorage: daemon.daemon.agentStorage,
+      logger: createTestLogger(),
+    });
+    await client.waitForAgentUpsert(target.id, (agent) => agent.status === "idle");
+    await queue.start();
+    const delivery = queue.waitForDelivery(target.id, messageId, new AbortController().signal);
+    if (present) await delivery;
+    else await expect(delivery).rejects.toThrow("uncertain");
+    expect(prompts.filter((prompt) => prompt === "recovered input")).toHaveLength(0);
+    expect(JSON.parse(await readFile(queueFile, "utf8"))[0].state).toBe(
+      present ? "delivered" : "uncertain",
+    );
+  },
+);
 
 test.each([false, true])(
   "queued sends refuse an archived child after restart (provider paused: %s)",

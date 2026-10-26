@@ -3171,6 +3171,66 @@ test("setAgentMode persists the selected mode across session reload", async () =
   expect(reloaded.currentModeId).toBe("full-access");
 });
 
+test.each([false, true])(
+  "reload closes a phantom pending start when interrupt has no transport (close fails first: %s)",
+  async (closeFailsFirst) => {
+    const workdir = mkdtempSync(join(tmpdir(), "reload-pending-start-"));
+    const storage = new AgentStorage(join(workdir, "agents"), logger);
+    let closed = 0;
+    let failClose = closeFailsFirst;
+    class PhantomSession extends TestAgentSession {
+      override async interrupt(): Promise<void> {
+        throw new Error("transport unavailable");
+      }
+      override async close(): Promise<void> {
+        closed++;
+        if (failClose) throw new Error("close unavailable");
+      }
+    }
+    class PhantomClient extends TestAgentClient {
+      override async createSession(config: AgentSessionConfig) {
+        return new PhantomSession(config);
+      }
+      override async resumeSession(
+        handle: AgentPersistenceHandle,
+        config?: Partial<AgentSessionConfig>,
+      ) {
+        const session = new TestAgentSession({ provider: "codex", cwd: workdir, ...config });
+        session.describePersistence = () => handle;
+        return session;
+      }
+    }
+    const manager = new AgentManager({
+      clients: { codex: new PhantomClient() },
+      registry: storage,
+      logger,
+      rescueTimeouts: { interruptSessionMs: 1 },
+    });
+    try {
+      const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+      const old = manager.streamAgent(agent.id, "pending start");
+      expect(manager.hasInFlightRun(agent.id)).toBe(true);
+      if (closeFailsFirst) {
+        await expect(manager.reloadAgentSession(agent.id)).rejects.toThrow("close unavailable");
+        expect(manager.getAgent(agent.id)?.instanceId).toBe(agent.instanceId);
+        expect(manager.hasInFlightRun(agent.id)).toBe(true);
+        failClose = false;
+      }
+      const replacement = await manager.reloadAgentSession(agent.id);
+      expect(closed).toBe(closeFailsFirst ? 2 : 1);
+      expect(replacement.lifecycle).toBe("idle");
+      expect(replacement.persistence?.sessionId).toBe(agent.persistence?.sessionId);
+      expect(manager.hasInFlightRun(agent.id)).toBe(false);
+      await expect(old.next()).rejects.toThrow("pending turn changed");
+      expect(manager.hasInFlightRun(agent.id)).toBe(false);
+    } finally {
+      for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
+      await manager.flush();
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  },
+);
+
 async function quietMcpFixture(
   managerOptions: Pick<
     AgentManagerOptions,

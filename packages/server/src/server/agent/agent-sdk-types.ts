@@ -766,6 +766,8 @@ export interface AgentSession {
   steerActiveTurn?(prompt: AgentPromptInput, options: SteerActiveTurnOptions): Promise<SteerResult>;
   subscribe(callback: (event: AgentStreamEvent) => void): () => void;
   streamHistory(): AsyncGenerator<AgentStreamEvent>;
+  /** Native input receipt, independent of the daemon journal. Unreadable history is never absence. */
+  getInputReceipt?(messageId: string): Promise<"present" | "absent" | "unknown">;
   /**
    * The current provider process PID. Background display and session resource capture use it.
    * A PID alone never authorizes a stop; resource cleanup retains and rechecks birth identities.
