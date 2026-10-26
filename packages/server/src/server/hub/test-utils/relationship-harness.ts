@@ -1359,6 +1359,11 @@ export class HubRelationshipHarness {
     return (await this.daemon!.agentStorage.get(agentId))?.lastStatus ?? null;
   }
 
+  async closeAgentAfterTurn(agentId: string): Promise<void> {
+    await this.daemon!.agentManager.waitForAgentEvent(agentId);
+    await this.daemon!.agentManager.closeAgent(agentId);
+  }
+
   private captureRelationship(): RelationshipInvocationSnapshot {
     const record = this.relationshipFile();
     if (!record) throw new Error("Relationship authority was not persisted before invocation");
