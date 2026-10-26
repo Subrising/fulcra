@@ -838,7 +838,7 @@ export class ReportUpService {
       );
       recorded = true;
     }
-    if (recorded && notice && (await this.alreadyReportedThisTurn(input, notice))) return true;
+    if (recorded && notice && (await this.alreadyReportedSinceArming(input, notice))) return true;
     if (notice?.status === "pending")
       await this.deliverOwnedFinish(input.agentId, notice, false, input.lastAssistant);
     return true;
@@ -863,10 +863,10 @@ export class ReportUpService {
   }
 
   /**
-   * FU-427: a finished turn whose worker already delivered a message to this lead needs no second wake for the same
-   * result. The notice is settled as delivered so no retry sends it. Errors and turns without a send are not skipped.
+   * FU-519: a worker that delivered a message to this lead since the notice was armed needs no second wake for
+   * the same result. A held turn does not reset that boundary. The notice is settled as delivered so no retry sends it. Errors and turns without a send are not skipped.
    */
-  private async alreadyReportedThisTurn(
+  private async alreadyReportedSinceArming(
     input: ReportTurnEnd,
     notice: FinishNotice,
   ): Promise<boolean> {
@@ -877,7 +877,8 @@ export class ReportUpService {
     )
       return false;
     const sentAt = lastAgentMessageDeliveredAt(input.agentId, notice.parentId);
-    if (sentAt === null || sentAt < input.startedAt) return false;
+    // Older saved notices have no arming time; retain their turn-based boundary.
+    if (sentAt === null || sentAt < (notice.armedAt ?? input.startedAt)) return false;
     await this.deps.agentStorage.settleFinishNotice(
       input.agentId,
       notice.messageId,
@@ -886,7 +887,7 @@ export class ReportUpService {
     );
     this.deps.logger.info(
       { childId: input.agentId, parentId: notice.parentId },
-      "Finish notice skipped: already reported in this turn",
+      "Finish notice skipped: already reported since arming",
     );
     return true;
   }

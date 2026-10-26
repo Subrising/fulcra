@@ -157,7 +157,10 @@ describe("AgentStorage", () => {
     await expect(storage.armFinishNotice(child, childId, "native")).rejects.toThrow(
       "Finish notice ownership changed",
     );
+    const beforeArm = Date.now();
     const armed = await storage.armFinishNotice(child, parentId, "native");
+    expect(armed.armedAt).toBeGreaterThanOrEqual(beforeArm);
+    expect(armed.armedAt).toBeLessThanOrEqual(Date.now());
     await storage.applySnapshot(child);
     const cost = {
       totalUsd: 17.52,
@@ -167,6 +170,7 @@ describe("AgentStorage", () => {
     };
     expect(await storage.recordFinishNotice(childId, "turn-1", "finished", cost)).toMatchObject({
       sessionCost: cost,
+      armedAt: armed.armedAt,
       owner: "native",
       parentId,
       messageId: armed.messageId,
@@ -176,6 +180,7 @@ describe("AgentStorage", () => {
     const recovered = new AgentStorage(storagePath, logger);
     expect(await recovered.getFinishNotice(childId)).toMatchObject({
       sessionCost: cost,
+      armedAt: armed.armedAt,
       owner: "native",
       status: "pending",
       messageId: armed.messageId,
@@ -278,6 +283,28 @@ describe("AgentStorage", () => {
     });
     expect((await storage.getFinishNotice(child.id))?.messageId).toBe(first?.messageId);
     expect(await storage.rearmFinishNotice(child.id, child.id, true)).toBeNull();
+  });
+
+  test("FU-519 reusing an armed notice keeps its time, while a new notice gets a new time", async () => {
+    const parentId = "11111111-1111-4111-8111-111111111111";
+    const child = createManagedAgent({ id: "22222222-2222-4222-8222-222222222222" });
+    child.labels = { "paseo.parent-agent-id": parentId };
+    await storage.applySnapshot(child);
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      const first = await storage.armFinishNotice(child, parentId, "report-up");
+      expect(first.armedAt).toBe(now);
+      clock.mockReturnValue(now + 100);
+      expect(await storage.rearmFinishNotice(child.id, parentId, true)).toEqual(first);
+      await storage.recordFinishNotice(child.id, "turn-1", "finished");
+      const next = await storage.rearmFinishNotice(child.id, parentId, true);
+      expect(next?.armedAt).toBe(now + 100);
+      expect(next?.messageId).not.toBe(first.messageId);
+      expect(await new AgentStorage(storagePath, logger).getFinishNotice(child.id)).toEqual(next);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   test("FU-334 a finished reviewer retains its report when its parent sends another request", async () => {

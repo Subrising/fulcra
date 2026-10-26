@@ -37,6 +37,7 @@ const FinishNoticeSchema = z
     messageId: z.string().min(1),
     turnId: z.string().min(1).optional(),
     reason: z.enum(["finished", "errored", "closed", "stopped"]).optional(),
+    armedAt: z.number().int().nonnegative().optional(),
     endedAt: z.number().int().nonnegative().optional(),
     sessionCost: SessionCostSchema.optional(),
   })
@@ -328,6 +329,7 @@ export class AgentStorage {
       parentId: z.string().uuid().parse(parentId),
       owner,
       status: "armed",
+      armedAt: Date.now(),
       messageId: `paseo-notify:${randomUUID()}`,
     };
     await this.queueRecordMutation(agent.id, (existing) => {
@@ -375,6 +377,7 @@ export class AgentStorage {
         parentId: z.string().uuid().parse(parentId),
         owner: "report-up",
         status: "armed",
+        armedAt: Date.now(),
         messageId: `paseo-notify:${randomUUID()}`,
       };
       const retainedIds = new Set(previous.map((notice) => notice.messageId));

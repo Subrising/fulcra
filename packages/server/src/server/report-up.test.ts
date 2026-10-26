@@ -3050,6 +3050,7 @@ describe("FU-424 a lost finish notice reaches the lead once", () => {
                 parentId: LEAD,
                 owner: "report-up" as const,
                 messageId: MESSAGE_ID,
+                armedAt: Date.now(),
                 ...(input.notice.status === "armed"
                   ? {}
                   : { turnId: "turn-1", reason: "finished" as const }),
@@ -3099,6 +3100,7 @@ describe("FU-424 a lost finish notice reaches the lead once", () => {
       service,
       delivered,
       attempts: () => attempts,
+      setLastMessage: (text: string) => (chats.get(WORKER)!.lastMessage = text),
       setLeadLifecycle: (lifecycle: string) => (chats.get(LEAD)!.lifecycle = lifecycle),
       finishTurn: (agentId: string) => {
         stream(agentId, { type: "turn_started", provider: "claude" });
@@ -3255,6 +3257,38 @@ describe("FU-424 a lost finish notice reaches the lead once", () => {
       resetAgentMessageLogForTests();
     }
   });
+
+  test.each(["during the held turn", "after the held turn"])(
+    "FU-519 a report delivered %s suppresses the later result notice",
+    async (delivery) => {
+      resetAgentMessageLogForTests();
+      const logLines: string[] = [];
+      const f = await ownedFixture({
+        notice: { status: "armed" },
+        lastMessage: "I sent the result to the lead.",
+        logLines,
+      });
+      const now = Date.now();
+      const clock = mock.spyOn(Date, "now").mockReturnValue(now);
+      try {
+        f.runTurn(WORKER, () => {
+          if (delivery === "during the held turn") noteAgentMessageDelivered(WORKER, LEAD);
+        });
+        await until(() => expect(logLines.join(" ")).toContain("Finish notice held"));
+        if (delivery === "after the held turn") noteAgentMessageDelivered(WORKER, LEAD);
+        expect(await f.notice()).toMatchObject({ status: "armed" });
+        clock.mockReturnValue(now + 100);
+        f.setLastMessage("DONE checked");
+        f.runTurn(WORKER);
+        await until(async () => expect(await f.notice()).toMatchObject({ status: "delivered" }));
+        expect(f.delivered).toEqual([]);
+      } finally {
+        clock.mockRestore();
+        f.service.stop();
+        resetAgentMessageLogForTests();
+      }
+    },
+  );
 
   test("FU-427 a turn that ends without a send still sends one finish notice", async () => {
     resetAgentMessageLogForTests();
