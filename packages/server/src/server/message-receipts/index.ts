@@ -177,6 +177,12 @@ interface SendMessageInput {
 }
 
 /** Owns message delivery receipts; creation is owned by CreationService. */
+// Operating-system I/O failures (EACCES, ENOSPC, EIO...) can clear; a revoked guard or a corrupt record cannot.
+function isIoError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" && /^E[A-Z0-9]+$/.test(code);
+}
+
 function describeError(error: unknown): string {
   const cause =
     error instanceof Error && error.cause ? ` (cause: ${describeError(error.cause)})` : "";
@@ -199,6 +205,8 @@ export class MessageReceipts {
   private unhealthySince: number | null = null;
   private lastError: string | null = null;
   private recoveries = 0;
+  // False once a non-I/O failure (a revoked guard, a corrupt record) latched the ledger: only a restart clears that.
+  private recoverable = true;
   private expiryTimer?: ReturnType<typeof setTimeout>;
   private watermark = 0;
   private readonly evidenceClaims = new Map<string, NativeEvidenceClaim>();
@@ -250,6 +258,7 @@ export class MessageReceipts {
   /** Latch the ledger shut after a failed durable write. The first error is logged with its cause. */
   private markUnhealthy(error: unknown): void {
     this.lastError = describeError(error);
+    if (!isIoError(error)) this.recoverable = false;
     if (this.unhealthy) return;
     this.unhealthy = true;
     this.unhealthySince = this.now();
@@ -258,13 +267,37 @@ export class MessageReceipts {
     );
   }
 
+  private resetFromDisk(): void {
+    if (this.pruneTimer) clearTimeout(this.pruneTimer);
+    if (this.expiryTimer) clearTimeout(this.expiryTimer);
+    this.pruneTimer = undefined;
+    this.expiryTimer = undefined;
+    this.records.clear();
+    this.contentDebits.clear();
+    this.managedClaims.clear();
+    this.managedArtifacts.clear();
+    this.evidenceClaims.clear();
+    this.evidence.clear();
+    this.diskCount = 0;
+    this.initialized = false;
+    this.recovered = false;
+  }
+
   /** A failed write must not outlive the fault: a good durable probe write clears the latch. */
   private async ensureHealthy(): Promise<void> {
     if (!this.unhealthy) return;
+    if (!this.recoverable)
+      throw new Error("agent_receipt_durability_unavailable", {
+        cause: new Error(this.lastError ?? "latched by a non-I/O failure"),
+      });
     const probe = path.join(this.directory, ".health-probe");
     try {
       await writeJsonFileDurable(probe, { probe: this.now() });
       await unlink(probe).catch(() => undefined);
+      // A failed write may have reached disk before memory (a guard failing after the rename), so memory is rebuilt
+      // from disk exactly as after a restart: queued receipts are cancelled, none is replayed.
+      this.resetFromDisk();
+      await this.initialize();
     } catch (error) {
       this.lastError = describeError(error);
       throw new Error("agent_receipt_durability_unavailable", { cause: error });
