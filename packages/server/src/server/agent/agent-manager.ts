@@ -3494,9 +3494,14 @@ export class AgentManager {
       },
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
+    // An agent with no stored rows streams its provider history right after registration.
+    const historyTimeline = !(await this.hasStoredTimelineRows(resolvedAgentId));
     beforeResume?.();
     const session = await nativeDispatch(() =>
-      client.resumeSession(handle, providerLaunchConfig, launchContext, currentResumeOptions),
+      client.resumeSession(handle, providerLaunchConfig, launchContext, {
+        ...currentResumeOptions,
+        historyTimeline,
+      }),
     );
     await this.checkDormantResumeIdentity(session, handle, beforeResume);
     await this.requireExternalMcpSupport(session, storedConfig);
@@ -8407,6 +8412,18 @@ export class AgentManager {
       internal: config.internal ?? false,
       labels: options?.labels ?? {},
     } as ActiveManagedAgent;
+  }
+
+  /** Same rule as registration: rows in memory, or a committed row in the durable store. */
+  private async hasStoredTimelineRows(agentId: string): Promise<boolean> {
+    if (this.timelineStore.has(agentId)) return true;
+    const store = this.durableTimelineStore;
+    if (!store) return false;
+    // Reading must not create an empty journal for an agent whose resume then fails.
+    const page = store.fetchExistingCommitted
+      ? await store.fetchExistingCommitted(agentId, { limit: 1 })
+      : await store.fetchCommitted(agentId, { limit: 1 });
+    return (page?.window.nextSeq ?? 1) > 1;
   }
 
   private async loadCommittedTimelineSeed(

@@ -825,6 +825,50 @@ test("retains native message correlation after a manager restart and invalidates
   }
 });
 
+// FU-530: a provider builds the history in its resume read only when the manager will stream it.
+test("tells the provider to build the history timeline only when no timeline is stored", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-history-timeline-"));
+  const directory = join(workdir, "timeline");
+  const seen: (boolean | undefined)[] = [];
+  const client = new (class extends TestAgentClient {
+    override async resumeSession(
+      _handle: AgentPersistenceHandle,
+      _config?: Partial<AgentSessionConfig>,
+      _launchContext?: AgentLaunchContext,
+      options?: AgentResumeSessionOptions,
+    ): Promise<AgentSession> {
+      seen.push(options?.historyTimeline);
+      return new TestAgentSession({ provider: "codex", cwd: workdir });
+    }
+  })();
+  const first = new AgentManager({
+    clients: { codex: client },
+    durableTimelineStore: new FileAgentTimelineStore(directory),
+    logger,
+  });
+  const second = new AgentManager({
+    clients: { codex: client },
+    durableTimelineStore: new FileAgentTimelineStore(directory),
+    logger,
+  });
+  const stored = await first.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  const fresh = "00000000-0000-4000-8000-000000000530";
+  try {
+    await first.appendTimelineItem(stored.id, { type: "user_message", text: "stored row" });
+    await first.closeAgent(stored.id);
+    const handle = { provider: "codex", sessionId: "provider-session" };
+    await second.resumeAgentFromPersistence(handle, { cwd: workdir }, stored.id);
+    await second.resumeAgentFromPersistence(handle, { cwd: workdir }, fresh);
+    expect(seen).toEqual([false, true]);
+  } finally {
+    await second.closeAgent(stored.id).catch(() => undefined);
+    await second.closeAgent(fresh).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 // FU-471: listing the prompts of a stored session restored its provider (a Claude resume replays the whole
 // transcript, up to 1 GB) and read every payload in its journal.
 test("a stored session lists its prompts from the journal without restoring its provider", async () => {

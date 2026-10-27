@@ -2,7 +2,7 @@ import type { AgentTaskItem, AgentTimelineItem } from "../../agent-sdk-types.js"
 
 type TaskToolName = "TodoWrite" | "TaskCreate" | "TaskUpdate" | "TaskList";
 
-interface PendingTaskTool {
+export interface PendingTaskTool {
   name: TaskToolName;
   input: Record<string, unknown>;
 }
@@ -69,6 +69,13 @@ function structuredResult(message: Record<string, unknown>): Record<string, unkn
   return record(message.toolUseResult) ?? record(message.tool_use_result);
 }
 
+/** Plain JSON copy of the task state, for a saved resume point. */
+export interface ClaudeTaskStateSnapshot {
+  tasks: [string, AgentTaskItem][];
+  calls: [string, PendingTaskTool][];
+  appliedResults: string[];
+}
+
 /** Accumulates Claude's snapshot and ID-based task tools into canonical todo snapshots. */
 export class ClaudeTaskState {
   private readonly tasks = new Map<string, AgentTaskItem>();
@@ -102,6 +109,22 @@ export class ClaudeTaskState {
     this.tasks.clear();
     this.calls.clear();
     this.appliedResults.clear();
+  }
+
+  toSnapshot(): ClaudeTaskStateSnapshot {
+    return {
+      tasks: [...this.tasks],
+      calls: [...this.calls],
+      appliedResults: [...this.appliedResults],
+    };
+  }
+
+  /** Replaces the state with a snapshot taken by toSnapshot. */
+  restore(snapshot: ClaudeTaskStateSnapshot): void {
+    this.reset();
+    for (const [id, task] of snapshot.tasks) this.tasks.set(id, task);
+    for (const [id, call] of snapshot.calls) this.calls.set(id, call);
+    for (const id of snapshot.appliedResults) this.appliedResults.add(id);
   }
 
   private replaceLegacyTodos(value: unknown): Extract<AgentTimelineItem, { type: "todo" }> {

@@ -52,9 +52,13 @@ agent record and turn events.
 The process shares a 128 MiB input allowance across full transcript and journal replays.
 A separate 16 MiB allowance serves commits and page reads up to 16 MiB. Large inputs use one lane alone.
 These allowances bound concurrent parsing work.
-A Claude resume reads its transcript once for session state only (rewind anchors, tasks, tool links) and keeps no timeline.
-It converts the timeline only when the session's history is streamed, from the bytes present at resume.
-A daemon with a stored timeline never streams it, so a 1 GB lead transcript costs one pass and no retained timeline.
+A Claude resume reads its transcript once. It always rebuilds session state (rewind anchors, tasks, tool links).
+The manager passes `historyTimeline` when the agent has no stored rows. That read then also builds the timeline that the manager streams next.
+Without it, the resume keeps no timeline. A later stream converts the bytes present at resume.
+A state-only resume saves a resume point in `$PASEO_HOME/cache/claude-resume` for transcripts of 16 MiB or more.
+The next resume reads only the bytes after it. A point is ignored when the inode changes or the 64 KiB before it differ.
+Bump `RESUME_POINT_VERSION` in `resume-cache.ts` when the saved state or the record filter changes.
+`getInputReceipt` reads the transcript backward and parses only lines that contain the input's uuid.
 Both reads skip Claude Code bookkeeping records (`api-request`, `api-request-blob`, `last-prompt` and others) before parsing.
 `api-request-blob` holds copies of earlier messages; converting it showed duplicate tool calls and text.
 Concurrent identical Claude timeline reads share parsed data. Each caller keeps its own mutable session.
