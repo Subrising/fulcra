@@ -113,7 +113,8 @@ async function fixture() {
         /* Already exited. */
       }
     }
-    await rm(root, { recursive: true, force: true });
+    // A stopped daemon can still be writing while the directory goes (ENOTEMPTY on CI).
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
   return { root, homes, env, run, ok, liveStatus, configure, close };
 }

@@ -1,5 +1,11 @@
 export const ASSISTANT_IMAGE_RETRY_DELAYS_MS = [100, 400, 1_200] as const;
 
+// A rendered image can fail once under load (blob URL not yet readable). Retry the
+// load with a fresh element before the timeline shows "Image unavailable".
+export function getAssistantImageLoadRetryDelayMs(failedAttempts: number): number | null {
+  return ASSISTANT_IMAGE_RETRY_DELAYS_MS[failedAttempts] ?? null;
+}
+
 export async function runAssistantImageOperationWithRetry<T>(input: {
   operation: () => Promise<T>;
   delaysMs?: readonly number[];
