@@ -18,6 +18,17 @@ import { pathToFileURL } from "node:url";
 import { bindGuardHome } from "./native-release-hooks.mjs";
 
 const GUARD = new URL("./admission-guard.mjs", import.meta.url);
+// The guard imports ./automatic-permission.mjs, which imports the plugin's git helper by package name. A copy staged
+// under a temp home cannot resolve that name, so the sibling is staged with the import pinned to its resolved file.
+export function stageGuardSibling(dir) {
+  const git = import.meta.resolve("@getpaseo/plugin/server/git");
+  const source = fs.readFileSync(new URL("./automatic-permission.mjs", import.meta.url), "utf8");
+  fs.writeFileSync(
+    path.join(dir, "automatic-permission.mjs"),
+    source.replace('"@getpaseo/plugin/server/git"', JSON.stringify(git)),
+    { mode: 0o600 },
+  );
+}
 // The bbc624cf9 guard, byte-for-byte (sha256 48b132a3...): what rollback R-2 re-installs. It counts human input
 // and writes a receipt, but keeps no log and never disarms anything -- review F1's skipped boot.
 export const OLD_GUARD = new URL("./admission-guard-bbc624cf9.fixture.mjs", import.meta.url);
@@ -78,9 +89,17 @@ export function runBoot(
   if (!fs.existsSync(active))
     fs.writeFileSync(active, JSON.stringify({ base: "", after: {} }), { mode: 0o600 });
   const file = path.join(dir, "admission-guard.mjs");
-  fs.writeFileSync(file, bindGuardHome(fs.readFileSync(guard, "utf8"), controllerHome), {
-    mode: 0o600,
-  });
+  stageGuardSibling(dir);
+  // The bbc624cf9 fixture carries its original literal home, not the placeholder line bindGuardHome anchors on.
+  const text = fs.readFileSync(guard, "utf8");
+  const bound =
+    guard === OLD_GUARD
+      ? text.replace(
+          /^const HOME = '[^']*';$/m,
+          () => `const HOME = ${JSON.stringify(controllerHome)};`,
+        )
+      : bindGuardHome(text, controllerHome);
+  fs.writeFileSync(file, bound, { mode: 0o600 });
   const result = path.join(dir, "result.json"),
     log = path.join(humanDir(controllerHome), boot + ".log");
   const cfg = {

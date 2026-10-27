@@ -57,7 +57,15 @@ test("session-defaults reports each configured role: configured, effective and w
         : [],
   });
   const d = await f.op("session-defaults", null);
-  assert.deepEqual(Object.keys(d.roles), ["planning", "orchestration", "implementation"]);
+  // The persisted table fills every default role (orchestration first); the three configured here override theirs.
+  assert.deepEqual(Object.keys(d.roles).sort(), [
+    "implementation",
+    "light",
+    "orchestration",
+    "planning",
+    "research",
+    "review",
+  ]);
   assert.equal(d.roles.planning.providers.claude.status, "offered");
   assert.equal(d.roles.implementation.providers.claude.status, "falls-back");
   assert.equal(d.roles.implementation.provider, "claude");
@@ -69,10 +77,18 @@ test("session-defaults reports each configured role: configured, effective and w
   );
 });
 
-test("without roles, session-defaults reports none, and the Inbox has no orchestration item", async (t) => {
+test("without configured roles, session-defaults reports the built-in defaults only, and the Inbox has no orchestration item", async (t) => {
   roles(t, null);
   const f = await fixture(t);
-  assert.deepEqual((await f.op("session-defaults", null)).roles, {});
+  const d = await f.op("session-defaults", null);
+  assert.deepEqual(Object.keys(d.roles).sort(), [
+    "implementation",
+    "light",
+    "orchestration",
+    "planning",
+    "research",
+    "review",
+  ]);
   assert.equal(
     (await f.op("decisions-inbox", null)).items.some((i) =>
       i.key.startsWith("attention-orchestration"),

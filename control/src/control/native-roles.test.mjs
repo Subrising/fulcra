@@ -140,7 +140,7 @@ test("The owner's table: implementation Sonnet 5.5 high, planning Opus 5.5 high,
   }
 });
 
-test("no role, or a Codex session under Claude-only roles, is exactly as before", async (t) => {
+test("no role, or a Codex session under Claude-only owner roles, takes only the built-in role default", async (t) => {
   const native = await setup(t);
   const baseline = { claude: await create(native, "claude"), codex: await create(native, "codex") };
   const calls = listed.length;
@@ -149,15 +149,29 @@ test("no role, or a Codex session under Claude-only roles, is exactly as before"
     claude: await create(native, "claude"),
     codex: await create(native, "codex", "implementation"),
   };
+  // The owner roles name Claude only, so Claude is exactly as before. A Codex session that asks for a role gets the
+  // built-in table's Codex entry for it (thinking "medium" for implementation) and nothing else changes.
+  const expected = {
+    claude: baseline.claude.config,
+    codex: { ...baseline.codex.config, thinkingOptionId: "medium" },
+  };
   for (const p of ["claude", "codex"]) {
     assert.deepEqual(
       { ...again[p].config, mcpServers: null },
-      { ...baseline[p].config, mcpServers: null },
+      { ...expected[p], mcpServers: null },
       p,
     );
-    assert.deepEqual(again[p].result.mode, baseline[p].result.mode, p);
+    assert.deepEqual(
+      again[p].result.mode.modeId ?? again[p].result.mode,
+      baseline[p].result.mode.modeId ?? baseline[p].result.mode,
+      p,
+    );
   }
-  assert.equal(listed.length, 2 * calls, "no extra provider call where no role value applies");
+  assert.equal(
+    listed.length,
+    2 * calls + 1,
+    "only the Codex session that applied a role default made one extra provider call",
+  );
   assert.deepEqual(
     [baseline.claude.config.provider, baseline.claude.config.thinkingOptionId],
     ["claude/claude-opus-5-5", "medium"],

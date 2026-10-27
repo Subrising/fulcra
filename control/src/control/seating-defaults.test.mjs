@@ -70,11 +70,21 @@ function fixture(t) {
       status: "idle",
       pending: 0,
       lastPromptId: null,
+      nativeId: "native-" + id,
+      runtimeInstanceId: "runtime-" + id,
+      model: "fixture-model",
       ...states.get(id),
     }),
     send: async (id, text, messageId) => {
       sent.push({ id, text, messageId });
       states.set(id, { ...states.get(id), lastPromptId: messageId });
+    },
+    // The installed private queue: the native manager owns the queue and the send; the controller records the receipt.
+    // The double reports the settled receipt, as a native manager does once the provider took the turn.
+    // The prompt identity the controller expects moves with the native observer's receipt, not with this call.
+    sendQueued: async (id, text, messageId) => {
+      sent.push({ id, text, messageId });
+      return { state: "delivered", providerTurnId: "turn-" + messageId };
     },
   };
   const control = new Controller({ store, native, authority: async (id) => issue(id) });
@@ -149,8 +159,10 @@ function fixture(t) {
 async function project(t) {
   const f = fixture(t),
     lead = f.enrol(T(1));
-  const seated = await f.assign("project-orchestrator", P(1), lead, 0);
+  // Delegation moves the session to a new generation and a seat does not follow it, so a seat that must send
+  // follow-ups is seated after the session is delegated.
   await f.delegate(lead);
+  const seated = await f.assign("project-orchestrator", P(1), lead, 0);
   return { ...f, lead, seated, capability: f.capabilityFor(lead) };
 }
 const start = (f, extra = {}) =>
@@ -1073,10 +1085,10 @@ test("G8: a follow-up reaches the same session through the ordinary send path, i
   for (let n = 0; n < 40; n++)
     f.store.db
       .prepare("INSERT INTO role_session_followups VALUES (?,?,?,?)")
-      .run(randomUUID(), f.out.sessionId, f.lead, "x");
+      .run(randomUUID(), f.out.sessionId, f.lead, new Date().toISOString());
   f.store.db.exec("COMMIT");
   await f.delegate(f.out.sessionId);
-  await assert.rejects(f.follow("Beyond the bound"), /received its 32 follow-ups/);
+  await assert.rejects(f.follow("Beyond the bound"), /Intercom followup rolling rate reached/);
 });
 
 // ---------------------------------------------------------------- REVIEW-G (G-1..G-4), folded into H5
@@ -1551,27 +1563,30 @@ test("R-2: every control.send call site is automated or a named operator route (
     sites = [];
   for (const file of fs
     .readdirSync(dir)
-    .filter((n) => n.endsWith(".mjs") && !/\.(test|mutations|integration)\.mjs$/.test(n))) {
+    .filter((n) => n.endsWith(".mjs") && !/\.(test|cases|mutations|integration)\.mjs$/.test(n))) {
     const text = fs.readFileSync(path.join(dir, file), "utf8");
     for (const m of text.matchAll(/control\.send\(/g)) {
-      const line = text.slice(0, m.index).split("\n").length,
-        call = text
-          .slice(m.index, m.index + 700)
-          .split("\n")
-          .slice(0, 3)
-          .join("\n");
+      const line = text.slice(0, m.index).split("\n").length;
+      // The call's own text, to its closing parenthesis: formatted source spreads the arguments over several lines.
+      let depth = 0,
+        end = m.index + "control.send".length;
+      for (; end < text.length; end++) {
+        if (text[end] === "(") depth++;
+        if (text[end] === ")" && --depth === 0) break;
+      }
+      const call = text.slice(m.index, end + 1);
       // `source: binding` names a binding declared a few lines above the call; follow it to its kind.
       const declared = /source: binding\b/.test(call)
         ? [
             ...text
               .slice(Math.max(0, m.index - 1500), m.index)
-              .matchAll(/const binding = \{ kind: '([a-z-]+)'/g),
+              .matchAll(/const binding = \{\s*kind: ["']([a-z-]+)["']/g),
           ].at(-1)?.[1]
         : null;
       const kind =
-        call.match(/kind: '([a-z-]+)'/)?.[1] ??
+        call.match(/kind: ["']([a-z-]+)["']/)?.[1] ??
         declared ??
-        (/automated: '/.test(call) ? "automated" : /source: s\b/.test(call) ? "resumed" : null);
+        (/automated: ["']/.test(call) ? "automated" : /source: s\b/.test(call) ? "resumed" : null);
       sites.push({ site: `${file}:${line}`, kind });
     }
   }

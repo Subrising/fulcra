@@ -335,7 +335,8 @@ test("Radius R19 recovers after a real source process restart and prunes oldest 
   const fixture = radiusRetentionFixture(t, 17);
   radiusFill(fixture.scratchRoot);
   const input = fixture.next();
-  const module = path.resolve("control/orca-organization/server/radius-scratch.mjs");
+  const module = new URL("../../orca-organization/server/radius-scratch.mjs", import.meta.url)
+    .pathname;
   const script = `import {createRadiusScratch} from ${JSON.stringify(new URL("file://" + module).href)}; const [root,input]=process.argv.slice(1); const adapter=createRadiusScratch({root,assertCurrentOwner:()=>{},assertCurrentPruneOwner:()=>{}}); console.log(JSON.stringify(adapter.simulate(JSON.parse(input))));`;
   const output = JSON.parse(
     execFileSync(
