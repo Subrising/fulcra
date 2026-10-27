@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import pino from "pino";
@@ -20,6 +20,7 @@ interface LogRecord {
   msg: string;
   sessionId?: string;
   historyPath?: string;
+  source?: string;
   err?: { message?: string };
 }
 
@@ -140,14 +141,18 @@ describe("ClaudeAgentSession persisted history load", () => {
       client.resumeSession(handle, { cwd }),
     ]);
     expect(first).not.toBe(second);
-    const events = [];
-    for await (const event of first.streamHistory()) events.push(event);
+    const collect = async (session: typeof first) => {
+      const collected = [];
+      for await (const event of session.streamHistory()) collected.push(event);
+      return collected;
+    };
+    const [events, other] = await Promise.all([collect(first), collect(second)]);
     expect(events).toHaveLength(1);
-    const other = [];
-    for await (const event of second.streamHistory()) other.push(event);
     expect(other).toEqual(events);
     await second.close();
-    expect(records.filter((record) => record.msg === "history.load")).toEqual([
+    expect(
+      records.filter((record) => record.msg === "history.load" && record.source === "claude"),
+    ).toEqual([
       expect.objectContaining({
         boundary: "start",
         source: "claude",
@@ -170,6 +175,116 @@ describe("ClaudeAgentSession persisted history load", () => {
     expect(later).not.toBe(first);
     for await (const event of later.streamHistory()) void event;
     await later.close();
+  });
+
+  function historyClient() {
+    return new ClaudeAgentClient({
+      logger: pino({ level: "info" }, { write: (line: string) => records.push(JSON.parse(line)) }),
+      queryFactory: () => {
+        throw new Error("History must not start a query");
+      },
+      resolveVersion: async () => "2.1.220",
+    });
+  }
+
+  async function streamed(session: Awaited<ReturnType<ClaudeAgentClient["resumeSession"]>>) {
+    const events = [];
+    for await (const event of session.streamHistory()) events.push(event);
+    return events;
+  }
+
+  test("resume builds no timeline until history is streamed, then replays only resumed bytes", async () => {
+    mkdirSync(path.dirname(transcriptPath()), { recursive: true });
+    writeFileSync(
+      transcriptPath(),
+      JSON.stringify({ type: "user", uuid: "u1", message: { content: "before resume" } }) + "\n",
+    );
+    const session = await historyClient().resumeSession(
+      { provider: "claude", sessionId: SESSION_ID },
+      { cwd },
+    );
+    await (session as unknown as { historyLoad: Promise<void> }).historyLoad;
+    expect(
+      records.some((record) => record.msg === "history.load" && record.source === "claude"),
+    ).toBe(false);
+    // A live turn appends after resume. The session streamed it live, so replay must not repeat it.
+    appendFileSync(
+      transcriptPath(),
+      JSON.stringify({ type: "user", uuid: "u2", message: { content: "after resume" } }) + "\n",
+    );
+    const text = JSON.stringify(await streamed(session));
+    expect(text).toContain("before resume");
+    expect(text).not.toContain("after resume");
+    await session.close();
+  });
+
+  test("replay skips Claude Code request copies of earlier messages", async () => {
+    mkdirSync(path.dirname(transcriptPath()), { recursive: true });
+    const toolUse = {
+      type: "tool_use",
+      id: "read-one",
+      name: "Read",
+      input: { file_path: "a.ts" },
+    };
+    writeFileSync(
+      transcriptPath(),
+      [
+        { type: "assistant", uuid: "a1", message: { content: [toolUse] } },
+        {
+          type: "user",
+          uuid: "r1",
+          message: { content: [{ type: "tool_result", tool_use_id: "read-one", content: "ok" }] },
+        },
+        {
+          type: "api-request-blob",
+          sessionId: SESSION_ID,
+          hash: "h1",
+          message: { role: "user", content: [toolUse, { type: "text", text: "Tool loaded." }] },
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n"),
+    );
+    const session = await historyClient().resumeSession(
+      { provider: "claude", sessionId: SESSION_ID },
+      { cwd },
+    );
+    const events = await streamed(session);
+    const toolCalls = events.filter(
+      (event) => event.type === "timeline" && event.item.type === "tool_call",
+    );
+    // One running and one completed row. The request copy would add a second running row.
+    expect(toolCalls).toHaveLength(2);
+    expect(JSON.stringify(events)).not.toContain("Tool loaded.");
+    await session.close();
+  });
+
+  test("an unfinished tool call still replays after the resume pass", async () => {
+    mkdirSync(path.dirname(transcriptPath()), { recursive: true });
+    writeFileSync(
+      transcriptPath(),
+      JSON.stringify({
+        type: "assistant",
+        uuid: "a1",
+        message: {
+          content: [
+            { type: "tool_use", id: "pending-one", name: "Bash", input: { command: "ls" } },
+          ],
+        },
+      }),
+    );
+    const session = await historyClient().resumeSession(
+      { provider: "claude", sessionId: SESSION_ID },
+      { cwd },
+    );
+    const events = await streamed(session);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "timeline",
+        item: expect.objectContaining({ type: "tool_call", callId: "pending-one" }),
+      }),
+    );
+    await session.close();
   });
 
   test("closing a queued history load allows a fresh resume", async () => {
