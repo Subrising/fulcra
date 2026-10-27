@@ -42,10 +42,12 @@ import {
   type AssistantImageRenderedDimensionsReader,
   resolveAssistantImageLoadDimensions,
 } from "./load-dimensions";
-import { runAssistantImageOperationWithRetry } from "./retry";
+import { getAssistantImageLoadRetryDelayMs, runAssistantImageOperationWithRetry } from "./retry";
 
 interface AssistantImageRenderBinding {
   uri: string;
+  // Changes after a failed load so the renderer mounts a fresh image element.
+  attempt: number;
   onRef: (instance: unknown) => void;
   onLoad: (event: ImageLoadEvent) => void;
   onError: () => void;
@@ -458,15 +460,41 @@ export function useAssistantImage({
     });
   }, [cachedAspectRatio, dispatch, uri]);
 
+  const [loadAttempt, setLoadAttempt] = useState<{ uri: string | null; count: number }>({
+    uri: null,
+    count: 0,
+  });
+  const currentLoadAttempt = loadAttempt.uri === uri ? loadAttempt.count : 0;
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (retryTimerRef.current) {
+        clearTimeout(retryTimerRef.current);
+      }
+    },
+    [],
+  );
+
   const handleImageError = useCallback(() => {
     if (uri) {
+      const retryDelayMs = getAssistantImageLoadRetryDelayMs(currentLoadAttempt);
+      if (retryDelayMs !== null) {
+        if (retryTimerRef.current) {
+          clearTimeout(retryTimerRef.current);
+        }
+        retryTimerRef.current = setTimeout(() => {
+          retryTimerRef.current = null;
+          setLoadAttempt({ uri, count: currentLoadAttempt + 1 });
+        }, retryDelayMs);
+        return;
+      }
       dispatch({
         type: "failed",
         uri,
         message: t("message.attachments.imageUnavailable"),
       });
     }
-  }, [dispatch, t, uri]);
+  }, [currentLoadAttempt, dispatch, t, uri]);
   const handleImageLoad = useCallback(
     (event: ImageLoadEvent) => {
       if (!uri) {
@@ -516,6 +544,7 @@ export function useAssistantImage({
   if (hasCurrentLifecycleUri && lifecycle.uri) {
     binding = {
       uri: lifecycle.uri,
+      attempt: currentLoadAttempt,
       onRef: handleImageRef,
       onLoad: handleImageLoad,
       onError: handleImageError,
@@ -526,6 +555,7 @@ export function useAssistantImage({
       status: "loaded",
       binding: {
         uri: lifecycle.uri,
+        attempt: currentLoadAttempt,
         onRef: handleImageRef,
         onLoad: handleImageLoad,
         onError: handleImageError,

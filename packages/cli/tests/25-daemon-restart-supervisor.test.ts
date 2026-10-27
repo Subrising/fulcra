@@ -192,6 +192,14 @@ import('node:fs').then(({appendFileSync}) => {
         return true;
       } catch (error) {
         if (error instanceof DaemonConnectionError) return false;
+        // The client still reports "connected" for a moment after the old worker closes its
+        // socket, so a send in that window fails with a plain Error, not a connection error.
+        if (
+          error instanceof Error &&
+          /^(WebSocket not open|Transport not connected)/.test(error.message)
+        ) {
+          return false;
+        }
         throw error;
       }
     },
