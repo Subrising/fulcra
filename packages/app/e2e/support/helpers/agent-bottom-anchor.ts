@@ -177,11 +177,19 @@ export async function scrollChatAwayFromBottom(
   await page.mouse.wheel(0, input.deltaY);
   await wheelSettled;
 
+  // A wheel sent while the chat is still laying out can be dropped, leaving the chat at the
+  // bottom with nothing to measure. Send it again until the scroll takes effect.
   await expect
-    .poll(async () => {
-      const metrics = await readScrollMetrics(page);
-      return metrics.distanceFromBottom;
-    })
+    .poll(
+      async () => {
+        const metrics = await readScrollMetrics(page);
+        if (metrics.distanceFromBottom <= input.minDistanceFromBottom) {
+          await page.mouse.wheel(0, input.deltaY);
+        }
+        return metrics.distanceFromBottom;
+      },
+      { intervals: [250, 500, 1_000] },
+    )
     .toBeGreaterThan(input.minDistanceFromBottom);
 
   return readScrollMetrics(page);
