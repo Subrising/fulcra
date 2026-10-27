@@ -35,6 +35,9 @@ import { readFile, rm } from "node:fs/promises";
 export default function contribute(server) {
   return server.before("agent.session_open", async ({ request }) => {
     if (request.reason !== "create") return request;
+    // Branch-name generation opens a short-lived session first, with no workspace. It must not
+    // use up the failure meant for the agent the workspace creates.
+    if (!request.workspaceId) return request;
     const gate = ${JSON.stringify(gate)};
     let command = await readFile(gate, "utf8").catch(() => "release");
     while (command === "hold") {
