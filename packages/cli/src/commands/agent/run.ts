@@ -627,7 +627,7 @@ async function resolveRunWorkspace(
   const source = buildRunWorkspaceSource(options, cwd);
   const result = await client.createWorkspace({ source });
 
-  if (!result.workspace) {
+  if (result.error || !result.workspace) {
     throw {
       code: "WORKSPACE_CREATE_FAILED",
       message: result.error ?? "Failed to create workspace for this run",

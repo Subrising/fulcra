@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildWorkspaceSource } from "./create.js";
+import { Command } from "commander";
+import { buildWorkspaceSource, runCreateCommand } from "./create.js";
 
 describe("workspace create source", () => {
   it("maps local isolation to a directory workspace", () => {
@@ -122,4 +123,48 @@ describe("workspace create source", () => {
       "Unsupported workspace isolation",
     );
   });
+});
+
+it("reports a creation failure even when the daemon already registered its workspace", async () => {
+  let closed = false;
+  await expect(
+    runCreateCommand(
+      {
+        isolation: "local",
+        path: "/project",
+        daemonTarget: { kind: "endpoint", host: "example.test:12345" },
+      },
+      new Command(),
+      async () => ({
+        createWorkspace: async () => ({
+          requestId: "request",
+          error: "Creation timed out. Check its receipt before retrying.",
+          errorCode: "creation_timeout",
+          setupTerminalId: null,
+          workspace: {
+            id: "wks_0123456789abcdef",
+            projectId: "project",
+            projectDisplayName: "Project",
+            projectRootPath: "/project",
+            workspaceDirectory: "/project",
+            projectKind: "non_git",
+            workspaceKind: "directory",
+            name: "Project",
+            status: "running",
+            statusEnteredAt: null,
+            activityAt: null,
+            archivingAt: null,
+            scripts: [],
+          },
+        }),
+        close: async () => {
+          closed = true;
+        },
+      }),
+    ),
+  ).rejects.toMatchObject({
+    code: "WORKSPACE_CREATE_FAILED",
+    message: "Creation timed out. Check its receipt before retrying.",
+  });
+  expect(closed).toBe(true);
 });
