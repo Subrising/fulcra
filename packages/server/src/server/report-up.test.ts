@@ -421,6 +421,7 @@ describe("report-up", () => {
     f.turn(WORKER);
     await f.settle();
     expect(f.delivered[0]!.prompt).toContain("…");
+    expect(f.delivered[0]!.prompt).toContain(`read the rest with: fulcra logs ${WORKER}`);
     expect(f.delivered[0]!.prompt).not.toContain("x".repeat(REPORT_UP_SNIPPET_CHARS + 1));
   });
 
