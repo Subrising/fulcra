@@ -933,6 +933,7 @@ function AssistantMarkdownImage({
           accessibilityLabel={alt}
         >
           <Image
+            key={binding.attempt}
             ref={binding.onRef}
             source={imageSource}
             style={assistantMessageStylesheet.image}

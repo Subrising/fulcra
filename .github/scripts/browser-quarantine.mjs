@@ -35,36 +35,6 @@ export const QUARANTINED_BROWSER_TESTS = new Map([
     "FU-300",
   ],
   [
-    // FU-251: 2/10. One failed image load leaves "Image unavailable" with no retry.
-    "agent-tab-image-stability.spec.ts › switching between settled agent tabs keeps a real assistant PNG rendered",
-    "FU-251",
-  ],
-  [
-    // FU-250: 2/10. Same image cause as FU-251.
-    "agent-tab-image-stability.spec.ts › reloading a timeline anchors near-tail assistant image growth",
-    "FU-250",
-  ],
-  [
-    // FU-248: 1/10. Same image cause as FU-251.
-    "agent-tab-image-stability.spec.ts › a real assistant PNG remains reachable through pagination and remount",
-    "FU-248",
-  ],
-  [
-    // FU-257: 1/10. Same image cause as FU-251.
-    "assistant-selection-copy.spec.ts › copying a selection across an assistant image keeps its Markdown source and alt text",
-    "FU-257",
-  ],
-  [
-    // FU-249: 0/10 in repeats, but 6 CI failures 17-19 Oct. Same image cause as FU-251.
-    "agent-tab-image-stability.spec.ts › opens a timeline image in a zoomable lightbox",
-    "FU-249",
-  ],
-  [
-    // FU-237: 0/10 in repeats, but 6 CI failures 17-19 Oct. Same image cause as FU-251.
-    "agent-message-submission.spec.ts › Agent message submission › keeps layout stable when submitting to an agent with existing history",
-    "FU-237",
-  ],
-  [
     // FU-245: 1/10 in a second 10 repeats. Same viewport offset check as FU-246.
     "agent-stream-ui.spec.ts › Agent stream UI › keeps the viewport fixed after the user scrolls away during a stream",
     "FU-245",

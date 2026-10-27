@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runAssistantImageOperationWithRetry } from "./retry";
+import { getAssistantImageLoadRetryDelayMs, runAssistantImageOperationWithRetry } from "./retry";
 
 describe("assistant image retry", () => {
   it("recovers from transient failures while the image remains mounted", async () => {
@@ -45,5 +45,11 @@ describe("assistant image retry", () => {
       }),
     ).rejects.toThrow("transient");
     expect(attempts).toBe(1);
+  });
+});
+
+describe("assistant image load retry delay", () => {
+  it("returns a delay for each allowed retry and null after the last", () => {
+    expect([0, 1, 2, 3].map(getAssistantImageLoadRetryDelayMs)).toEqual([100, 400, 1_200, null]);
   });
 });
