@@ -180,19 +180,27 @@ export interface HistoryLine {
 }
 
 /** Keeps one record, rather than the whole file. Offsets count UTF-8 bytes, including LF. */
-/** `endOffset` stops at that byte offset, so a reader sees the file as it was when it was measured. */
+/** Byte range of a read. `end` lets a reader see the file as it was when it was measured. */
+export interface HistoryByteRange {
+  /** A line start. Line offsets count from here. */
+  start?: number;
+  end?: number;
+}
+
 export async function* readHistoryLines(
   file: FileHandle,
   allowPartialLastLine = false,
   signal?: AbortSignal,
-  endOffset?: number,
+  range: HistoryByteRange = {},
 ): AsyncGenerator<HistoryLine> {
-  if (endOffset === 0) return;
+  const startOffset = range.start ?? 0;
+  if (range.end !== undefined && range.end <= startOffset) return;
   const stream = file.createReadStream({
     autoClose: false,
     highWaterMark: 64 * 1024,
     signal,
-    ...(endOffset === undefined ? {} : { end: endOffset - 1 }),
+    start: startOffset,
+    ...(range.end === undefined ? {} : { end: range.end - 1 }),
   });
   let pieces: Buffer[] = [];
   let bytes = 0;
