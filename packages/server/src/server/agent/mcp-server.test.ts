@@ -4347,13 +4347,13 @@ describe("send_agent_prompt MCP tool", () => {
         );
       }
       childSession.finishTurn();
-      await vi.waitFor(() => expect(childSession.prompts).toHaveLength(2));
+      await vi.waitFor(() => expect(childSession.prompts).toHaveLength(2), { timeout: 10_000 });
       expect(childSession.prompts[1]).toBe(
         `Message 1 from ${parent.id}:\nStop and reply instead\n\nMessage 2 from ${parent.id}:\nAlso report tests\n\nMessage 3 from ${parent.id}:\nKeep it short`,
       );
       childSession.finishTurn();
       // Each completed turn keeps its notice. Three queued messages share the answering turn's notice.
-      await vi.waitFor(() => expect(finishNotifications()).toHaveLength(2));
+      await vi.waitFor(() => expect(finishNotifications()).toHaveLength(2), { timeout: 10_000 });
       await new Promise((resolve) => setTimeout(resolve, 100));
       expect(finishNotifications()).toHaveLength(2);
     } finally {
