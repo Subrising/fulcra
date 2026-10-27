@@ -3,7 +3,7 @@ import { checkSessionArchive } from "../../../cli/src/commands/check/checks.js";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, realpath, readdir, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
-import { promises as fsPromises, readdirSync, readFileSync } from "node:fs";
+import { existsSync, promises as fsPromises, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { parseControllerCommand } from "../../../../control/orca-organization/shared/command-parser.mjs";
 import { NativeReportRegistry } from "./report-registry.js";
@@ -305,6 +305,93 @@ test("a guard failing after a collection merge rename rolls the merge back and a
       false,
     );
     expect(onDisk()).toBe(true);
+  } finally {
+    vi.useRealTimers();
+    await f.cleanup();
+  }
+});
+
+test("a guard failing after the collection seal rename does not latch the ledger for good", async () => {
+  const f = await fixture();
+  vi.useFakeTimers();
+  const receiptsDirectory = path.join(f.directory, "receipts");
+  const sealed = () =>
+    existsSync(receiptsDirectory) &&
+    readdirSync(receiptsDirectory)
+      .filter((name) => /^[a-f0-9]{64}\.json$/.test(name))
+      .map((name) => readFileSync(path.join(receiptsDirectory, name), "utf8"))
+      .some((text) => text.includes(f.events[0]!.id) && !text.includes("collectingUntil"));
+  const factory = (batch: NativeReportBatch, messageId: string): NativeQueuedMessage => ({
+    agentId: f.prime.agentId,
+    messageId,
+    request: "Native report metadata is available in supervisor_inbox.",
+    principal: { parent: f.prime, parentEpoch: f.primeReceipt.epoch },
+    boot: f.prime.boot,
+    attachmentBytes: 0,
+    reportBatch: batch,
+    authorize: () => {
+      requireNativeReportBatch(batch);
+      if (sealed()) throw new Error("ownership revoked");
+    },
+    canDispatch: () => true,
+  });
+  try {
+    await f.receipts.collectReport(f.batch, factory, vi.fn());
+    await vi.advanceTimersByTimeAsync(2000);
+    await vi.waitFor(() => expect(f.receipts.health().healthy).toBe(false));
+    await f.receipts.prepareArchiveObservation();
+    expect(f.receipts.health().healthy).toBe(true);
+  } finally {
+    vi.useRealTimers();
+    await f.cleanup();
+  }
+});
+
+test("after a seal guard failure the recovered collection is sealed and wakes once", async () => {
+  const f = await fixture();
+  vi.useFakeTimers();
+  const receiptsDirectory = path.join(f.directory, "receipts");
+  const sealed = () =>
+    existsSync(receiptsDirectory) &&
+    readdirSync(receiptsDirectory)
+      .filter((name) => /^[a-f0-9]{64}\.json$/.test(name))
+      .map((name) => readFileSync(path.join(receiptsDirectory, name), "utf8"))
+      .some((text) => text.includes(f.events[0]!.id) && !text.includes("collectingUntil"));
+  let revoke = true;
+  const ready = vi.fn();
+  const factory = (batch: NativeReportBatch, messageId: string): NativeQueuedMessage => ({
+    agentId: f.prime.agentId,
+    messageId,
+    request: "Native report metadata is available in supervisor_inbox.",
+    principal: { parent: f.prime, parentEpoch: f.primeReceipt.epoch },
+    boot: f.prime.boot,
+    attachmentBytes: 0,
+    reportBatch: batch,
+    authorize: () => {
+      requireNativeReportBatch(batch);
+      if (revoke && sealed()) {
+        revoke = false; // One ownership race; the retry is clean.
+        throw new Error("ownership revoked");
+      }
+    },
+    canDispatch: () => true,
+  });
+  try {
+    await f.receipts.collectReport(f.batch, factory, ready);
+    await vi.advanceTimersByTimeAsync(2000);
+    await vi.waitFor(() => expect(f.receipts.health().healthy).toBe(false));
+    expect(ready).not.toHaveBeenCalled();
+    await f.receipts.prepareArchiveObservation();
+    await vi.advanceTimersByTimeAsync(2000);
+    await vi.waitFor(() => expect(ready).toHaveBeenCalledTimes(1));
+    expect(sealed()).toBe(true);
+    const dispatch = vi.fn(async (_input: NativeQueuedMessage, finalCheck: () => void) => {
+      finalCheck();
+      return "native-correlated-turn";
+    });
+    expect(await f.receipts.dispatchNext(f.prime.agentId, () => true, dispatch)).toMatchObject({
+      state: "delivered",
+    });
   } finally {
     vi.useRealTimers();
     await f.cleanup();

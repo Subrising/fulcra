@@ -223,6 +223,7 @@ export class MessageReceipts {
   private unhealthySince: number | null = null;
   private lastError: string | null = null;
   private recoveries = 0;
+  private readonly marked = new WeakSet<object>();
   // False once a non-I/O failure (a revoked guard, a corrupt record) latched the ledger: only a restart clears that.
   private recoverable = true;
   private expiryTimer?: ReturnType<typeof setTimeout>;
@@ -240,6 +241,8 @@ export class MessageReceipts {
   private capacityWarningLogged = false;
   private readonly retentionMs: number;
   private readonly collectionTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // The wake callback of each collecting receipt, kept so a rebuild can re-arm its seal.
+  private readonly collectionReady = new Map<string, (agentId: string) => void>();
   constructor(
     private readonly directory: string,
     private readonly now = Date.now,
@@ -277,6 +280,11 @@ export class MessageReceipts {
   /** Latch the ledger shut after a failed durable write. The first error is logged with its cause. */
   private markUnhealthy(error: unknown, diskAhead = false): void {
     if (error instanceof DurabilityUnavailableError) return;
+    // One failure is marked once: a caller re-marking the error it rethrew must not change the verdict.
+    if (typeof error === "object" && error !== null) {
+      if (this.marked.has(error)) return;
+      this.marked.add(error);
+    }
     this.lastError = describeError(error);
     // A guard failing after the rename leaves disk ahead of memory; the disk rebuild repairs exactly that.
     if (!diskAhead && !isIoError(error)) this.recoverable = false;
@@ -367,8 +375,11 @@ export class MessageReceipts {
       if (!memory) continue;
       // Disk says dispatching but memory still says queued: the guard failed after the rename and dispatch() never
       // ran, so no effect can have happened. Refuse it; a stuck dispatching receipt would block the agent.
-      if (memory.state === "queued" && disk.state === "dispatching") refuse.push([key, disk]);
-      else if (memory.state !== disk.state) changed.push([key, disk]);
+      if (memory.state === "queued" && disk.state === "dispatching") {
+        refuse.push([key, disk]);
+        // Memory stays queued until the refusal is durable: if that write fails, the next rebuild settles it again.
+        records.set(key, memory);
+      } else if (memory.state !== disk.state) changed.push([key, disk]);
       // Same state, different content (a refused collection merge): memory is what was admitted. Put it back.
       else if (canonicalJson(memory) !== canonicalJson(disk)) rollback.push([key, memory, disk]);
     }
@@ -399,7 +410,19 @@ export class MessageReceipts {
       await writeJsonFileDurable(path.join(this.directory, `${key}.json`), memory);
     for (const [key, disk] of refuse) await this.commit(key, { ...disk, state: "refused" });
     await this.settleOrphans();
+    this.rearmCollections();
     this.armExpiry();
+  }
+
+  // A rolled-back record is collecting again in memory, and its seal timer already fired. Arm it afresh; one whose
+  // collectingUntil has passed seals at once.
+  private rearmCollections(): void {
+    for (const [key, ready] of this.collectionReady) {
+      const receipt = this.records.get(key);
+      if (!receipt || receipt.state !== "queued" || !receipt.collectingUntil)
+        this.collectionReady.delete(key); // Sealed, settled or gone: nothing to re-arm.
+      else if (!this.collectionTimers.has(key)) this.armCollection(key, ready);
+    }
   }
 
   // A queued receipt with no live admission cannot be dispatched (a guard failed after its rename). Settle it the way
@@ -1078,6 +1101,7 @@ export class MessageReceipts {
     if (!receipt?.collectingUntil || receipt.state !== "queued") return;
     const oldTimer = this.collectionTimers.get(key);
     if (oldTimer) clearTimeout(oldTimer);
+    this.collectionReady.set(key, onReady);
     const delay = Math.max(0, receipt.collectingUntil - this.now());
     const timer = setTimeout(() => {
       this.collectionTimers.delete(key);
