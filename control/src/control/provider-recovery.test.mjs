@@ -290,6 +290,25 @@ test("a Codex usage limit waits for a FRESH reading that permits usage, then res
   assert.match(f.sent[0].text, /its usage limit, which has now lifted/);
   assert.equal(f.rows(id)[0].attempts, 0, "the polls were waiting, not failed restarts");
 });
+test("FU-490: a failed quota recovery reports its stop to the parent", async (t) => {
+  const f = fixture(t),
+    { id } = await f.failing("You've hit your usage limit. Try again at 4:32 PM.");
+  const blocked = [];
+  f.control.wakes = { limitBlocked: (session, payload) => blocked.push({ session, ...payload }) };
+  await f.pr.observe(id);
+  const stop = f.rows(id)[0];
+  f.pr.finish(stop.id, "failed", "Usage remains unavailable");
+  assert.equal(f.rows(id)[0].state, "failed");
+  assert.deepEqual(blocked, [
+    {
+      session: id,
+      stopId: stop.id,
+      line: stop.error,
+      resetAt: null,
+      reason: "Usage remains unavailable",
+    },
+  ]);
+});
 test("never a human’s session; human input before the restart revokes; a moved-on or re-delegated session is left alone", async (t) => {
   const f = fixture(t),
     a = await f.failing(LIVE_401);

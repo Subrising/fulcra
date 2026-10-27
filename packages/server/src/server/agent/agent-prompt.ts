@@ -1,4 +1,6 @@
 import { sessionCost } from "./session-cost.js";
+import { finishNotificationWanted } from "../finish-notice-filter.js";
+import { lastAgentMessageDeliveredAt } from "../agent-message-log.js";
 import { loadAgentPolicy } from "../limit-resume/policy.js";
 import { noticePaused, NoticePausedError } from "../notice-pause.js";
 import { leadEventsFor, withLeadEvent } from "../lead-events.js";
@@ -657,6 +659,7 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
     logger,
   } = params;
   const finishEventId = `${childAgentId}:${randomUUID()}`;
+  const armedAt = Date.now();
   let hasSeenRunning = agentManager.getAgent(childAgentId)?.lifecycle === "running";
   let waitingForTurn = params.forNextTurn === true;
   let stopped = false;
@@ -711,6 +714,15 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
     const title = record?.title ?? childAgentId;
     const lastAssistantMessage = await agentManager.getLastAssistantMessage(childAgentId);
     checkCurrent();
+    if (!finishNotificationWanted(reason, lastAssistantMessage)) {
+      return;
+    }
+    // FU-495: the child already reported to the caller by a direct message since this notice was armed, so a plain
+    // finished notice would repeat it and wake the caller twice. Errors, permission requests and closed chats still go.
+    const repliedAt = lastAgentMessageDeliveredAt(childAgentId, callerAgentId);
+    if (reason === "finished" && repliedAt !== null && repliedAt >= armedAt) {
+      return;
+    }
     const body = formatFinishNotificationBody({
       childAgentId,
       title,

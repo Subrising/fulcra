@@ -89,6 +89,10 @@ export class HostNative {
         : local.permissionResult(id, callId, cursor);
     this.subscribe = (fn) => local.subscribe(fn);
     this.watch = () => local.watch();
+    // FU-423: a remote (Book) session is never in this host's directory, so it stays live here.
+    this.isLive = (id) => Boolean(this.route(id)) || (local.isLive?.(id) ?? true);
+    this.liveState = (id) => (this.route(id) ? null : (local.liveState?.(id) ?? null));
+    this.liveSnapshot = (id) => (this.route(id) ? null : (local.liveSnapshot?.(id) ?? null));
     this.close = () => local.close();
   }
   attach(control) {

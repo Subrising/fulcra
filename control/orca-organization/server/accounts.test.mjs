@@ -30,6 +30,10 @@ import {
   readUsage,
   readAccountsAsync,
   readUsageAsync,
+  markAccountLimited,
+  paidWhileFree,
+  pendingRiskNotices,
+  markRiskNoticeSent,
 } from "./accounts.mjs";
 import { markAccountRevoked, accountStatus } from "./accounts.mjs";
 
@@ -164,21 +168,23 @@ test("a usage limit marks the account limited until its reset, moves the session
 test("by default a usage limit holds the session on its account until the reset; old stores read as off", async () => {
   const root = scratch();
   const a = await addAccount(root, { provider: "claude", name: "A" }, T0);
-  await addAccount(root, { provider: "claude", name: "B" }, T0 + 1);
+  const b0 = await addAccount(root, { provider: "claude", name: "B" }, T0 + 1);
+  await subscriptions(root, a, b0);
   assert.equal(readAccounts(root).rotateOnLimit, false);
   assert.equal((await assign(root, S(1), "claude", T0)).account.id, a.id);
   const reset = new Date(T0 + 3600000).toISOString();
+  // FU-430: the limit marks A and moves nobody; the session moves at the start of its own next turn, to the free B.
   const r = await rotate(root, S(1), "claude", { resetAt: reset }, T0 + 10);
   assert.equal(r.to, null);
-  assert.equal(r.held, true);
   assert.equal(accountOf(readAccounts(root), S(1)).id, a.id);
-  // Its relaunch before the reset stays on A and waits, instead of quietly spending B.
-  const relaunch = await assign(root, S(1), "claude", T0 + 20);
-  assert.equal(relaunch.account.id, a.id);
+  const turn = await assign(root, S(1), "claude", T0 + 20);
+  assert.equal(turn.account.name, "B");
+  // With every account limited the session is held on its account and waits for the reset.
+  await markAccountLimited(root, b0.id, { resetAt: reset }, T0 + 25);
+  const relaunch = await assign(root, S(1), "claude", T0 + 30);
+  assert.equal(relaunch.account.name, "B");
   assert.equal(relaunch.allLimited, true);
   assert.equal(relaunch.earliestReset, reset);
-  // A new session still avoids the limited account.
-  assert.equal((await assign(root, S(2), "claude", T0 + 30)).account.name, "B");
   // A store written before the setting existed reads as off.
   const file = path.join(root, "accounts", "accounts.json");
   const stored = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -661,8 +667,9 @@ async function admissionFixture(t, provider, count, good = []) {
   });
   return { root, accounts, reads, request, hook, keychain };
 }
-test("with moving off, a limited account whose credential is missing refuses the launch instead of moving", async (t) => {
+test("with moving off, a limited account gives way to a free subscription account at launch (FU-430)", async (t) => {
   const f = await admissionFixture(t, "claude", 2, [1]);
+  await subscriptions(f.root, ...f.accounts);
   await assign(f.root, f.request.agentId, "claude", T0);
   await rotate(
     f.root,
@@ -671,8 +678,9 @@ test("with moving off, a limited account whose credential is missing refuses the
     { resetAt: new Date(T0 + 3600000).toISOString() },
     T0 + 1,
   );
-  await assert.rejects(f.hook({ request: f.request }), admissionFailure);
-  assert.equal(accountOf(readAccounts(f.root), f.request.agentId).id, f.accounts[0].id);
+  const out = await f.hook({ request: f.request });
+  assert.equal(out.env.FULCRA_ACCOUNT_ID, f.accounts[1].id);
+  assert.equal(accountOf(readAccounts(f.root), f.request.agentId).id, f.accounts[1].id);
 });
 for (const provider of ["claude", "codex"]) {
   test(`admission ${provider}: eight unavailable credentials do not hide the ninth usable account`, async (t) => {
@@ -1002,6 +1010,7 @@ test("a launch that names an account is pinned to it; a limited or unknown name 
   const root = scratch();
   const work = await addAccount(root, { provider: "claude", name: "Work" }, T0),
     personal = await addAccount(root, { provider: "claude", name: "Personal" }, T0 + 1);
+  await subscriptions(root, work, personal);
   const keychain = { get: async (id) => "sk-ant-oat01-" + id.replaceAll("-", "") };
   const hook = sessionOpenHook({ root: () => root, keychain, now: () => T0 });
   const launch = (agentId, request) =>
@@ -1245,6 +1254,16 @@ test("helper fixes the Keychain reader and uses a shell-neutral Windows entry", 
   const source = Buffer.from(encoded, "base64").toString();
   assert.equal(source.includes('"security":"/usr/bin/security"'), true);
   assert.equal(source.includes("/tmp/untrusted-reader"), false);
+  // FU-467: the flag comes before -e, on both platforms; an empty list (gate flavour) leaves it out.
+  assert.match(mac, /^ELECTRON_RUN_AS_NODE=1 '[^']+' '--disable-sigusr1' -e '/);
+  assert.match(
+    apiKeyHelperCommand({
+      ...base,
+      platform: "darwin",
+      env: { ...base.env, ORCA_NODE_FLAGS: "[]" },
+    }),
+    /^ELECTRON_RUN_AS_NODE=1 '[^']+' -e '/,
+  );
   const windows = apiKeyHelperCommand({ ...base, platform: "win32" });
   assert.match(
     windows,
@@ -1253,6 +1272,7 @@ test("helper fixes the Keychain reader and uses a shell-neutral Windows entry", 
   const script = Buffer.from(windows.split(" ").at(-1), "base64").toString("utf16le");
   assert.ok(script.startsWith("$env:ELECTRON_RUN_AS_NODE='1'; & '"));
   assert.ok(script.endsWith("; exit $LASTEXITCODE"));
+  assert.match(script, /^\$env:ELECTRON_RUN_AS_NODE='1'; & '[^']+' '--disable-sigusr1' '-e' /);
   assert.equal(windows.includes('set "'), false);
   assert.ok(windows.length < 7500);
   const { inflateRawSync } = await import("node:zlib");
@@ -1296,5 +1316,241 @@ test(
     await assert.rejects(waitForApiRuntimes(root, id), /identity changed/);
     assert.ok(processIdentity(child.pid));
     assert.equal(fs.existsSync(file), true);
+  },
+);
+
+// A pooled account records its credential kind at its first launch; tests that need a known kind set it here.
+const subscriptions = (root, ...accounts) =>
+  Promise.all(accounts.map((a) => setAccount(root, a.id, { credentialKind: "subscription" })));
+// FU-430: paid API credit is only for when every subscription account of the provider is capped.
+const poolState = (accounts) => ({
+  policy: "fill",
+  defaults: {},
+  assignments: {},
+  accounts: accounts.map((a, i) => ({
+    provider: "claude",
+    enabled: true,
+    createdAt: i,
+    ...a,
+  })),
+});
+test("choose never picks an API account while a free subscription account exists, whatever the priority", () => {
+  const s = poolState([
+    { id: "api", name: "work-workspace-api", credentialKind: "api-key", priority: 3 },
+    { id: "sub", name: "Personal", credentialKind: "subscription", priority: 4 },
+  ]);
+  assert.equal(choose(s, "claude", T0).id, "sub");
+  s.defaults.claude = "api";
+  assert.equal(choose(s, "claude", T0).id, "sub", "not even as the default account");
+});
+test("choose returns the API account only when every enabled subscription account is limited", () => {
+  const s = poolState([
+    { id: "api", name: "work-workspace-api", credentialKind: "api-key", priority: 3 },
+    {
+      id: "sub",
+      name: "Personal",
+      credentialKind: "subscription",
+      priority: 4,
+      limitedUntil: new Date(T0 + 3600000).toISOString(),
+    },
+  ]);
+  assert.equal(choose(s, "claude", T0).id, "api");
+  assert.equal(
+    choose(s, "claude", T0 + 7200000).id,
+    "sub",
+    "the subscription is back after its reset",
+  );
+});
+
+test("a session bound to a limited account starts its next turn on the next free subscription (FU-430)", async () => {
+  const root = scratch();
+  const a = await addAccount(root, { provider: "claude", name: "Work" }, T0);
+  const b = await addAccount(root, { provider: "claude", name: "Personal" }, T0 + 1);
+  await subscriptions(root, a, b);
+  assert.equal((await assign(root, S(1), "claude", T0)).account.id, a.id);
+  await markAccountLimited(root, a.id, { resetAt: new Date(T0 + 86400000).toISOString() }, T0 + 5);
+  const next = await assign(root, S(1), "claude", T0 + 10);
+  assert.equal(next.account.id, b.id);
+  assert.equal(next.allLimited, false);
+  const log = readAccounts(root).rotations.at(-1);
+  assert.deepEqual([log.from, log.to, log.reason], [a.id, b.id, "launch"]);
+});
+test("a limit failure mid-turn marks the account and leaves the move to the session's own next turn (FU-430)", async () => {
+  const root = scratch();
+  const a = await addAccount(root, { provider: "claude", name: "Work" }, T0);
+  const b = await addAccount(root, { provider: "claude", name: "Personal" }, T0 + 1);
+  await subscriptions(root, a, b);
+  await assign(root, S(1), "claude", T0);
+  const reset = new Date(T0 + 86400000).toISOString();
+  const r = await rotate(root, S(1), "claude", { resetAt: reset, stopId: "stop-1" }, T0 + 10);
+  assert.equal(r.to, null);
+  assert.equal(readAccounts(root).accounts.find((x) => x.id === a.id).limitedUntil, reset);
+  assert.equal(accountOf(readAccounts(root), S(1)).id, a.id, "the limit alone moves nobody");
+  assert.equal((await assign(root, S(1), "claude", T0 + 20)).account.id, b.id);
+});
+test("20 sessions on a limited account and no turns: 0 switches; one turn switches only that session (FU-430)", async () => {
+  const root = scratch();
+  const a = await addAccount(root, { provider: "claude", name: "Work" }, T0);
+  const b = await addAccount(root, { provider: "claude", name: "Personal" }, T0 + 1);
+  await subscriptions(root, a, b);
+  for (let i = 1; i <= 20; i++) await assign(root, S(i), "claude", T0);
+  const reset = new Date(T0 + 86400000).toISOString();
+  await markAccountLimited(root, a.id, { resetAt: reset }, T0 + 5);
+  for (let i = 1; i <= 20; i++) await rotate(root, S(i), "claude", { resetAt: reset }, T0 + 6);
+  const bound = () => Object.values(readAccounts(root).assignments).map((x) => x.accountId);
+  assert.equal(bound().filter((id) => id === b.id).length, 0);
+  assert.equal((await assign(root, S(7), "claude", T0 + 10)).account.id, b.id);
+  assert.equal(bound().filter((id) => id === b.id).length, 1);
+  assert.equal(accountOf(readAccounts(root), S(8)).id, a.id);
+});
+test("a session on an API account switches to a free subscription at its next turn (FU-430)", async () => {
+  const root = scratch();
+  const sub = await addAccount(root, { provider: "claude", name: "Personal" }, T0 + 1);
+  const api = await addAccount(root, { provider: "claude", name: "Billing" }, T0);
+  await subscriptions(root, sub);
+  await setAccount(root, api.id, { credentialKind: "api-key" });
+  await markAccountLimited(root, sub.id, { resetAt: new Date(T0 + 3600000).toISOString() }, T0);
+  assert.equal((await assign(root, S(1), "claude", T0 + 1)).account.id, api.id);
+  assert.equal(
+    (await assign(root, S(1), "claude", T0 + 2)).account.id,
+    api.id,
+    "no subscription is free yet",
+  );
+  assert.equal(
+    (await assign(root, S(1), "claude", T0 + 7200000)).account.id,
+    sub.id,
+    "after the reset it leaves the API account",
+  );
+});
+test("an expired sign-in is skipped, and an unnamed old key is not a subscription (FU-430)", () => {
+  const s = poolState([
+    { id: "api", name: "Billing", credentialKind: "api-key", priority: 1 },
+    { id: "old", name: "legacy key", priority: 2 },
+    { id: "exp", name: "Personal", credentialKind: "subscription", priority: 3, auth: "expired" },
+  ]);
+  assert.equal(
+    choose(s, "claude", T0).id,
+    "old",
+    "the expired one is skipped; unknown kind beats API",
+  );
+  s.accounts.push({
+    id: "sub",
+    name: "Work",
+    provider: "claude",
+    enabled: true,
+    createdAt: 9,
+    priority: 9,
+    credentialKind: "subscription",
+  });
+  assert.equal(choose(s, "claude", T0).id, "sub");
+});
+
+// FU-443: a paid API account serves a turn while a subscription account is free -> one RISK notice per account and window.
+async function riskPool() {
+  const root = scratch();
+  const sub = await addAccount(root, { provider: "claude", name: "Personal" }, T0 + 1);
+  const api = await addAccount(root, { provider: "claude", name: "Billing" }, T0);
+  await subscriptions(root, sub);
+  await setAccount(root, api.id, { credentialKind: "api-key" });
+  return { root, sub, api };
+}
+test("paidWhileFree: notice when an API account serves while a subscription is free; none when none is free; none for a subscription (FU-443)", async () => {
+  const { root, sub, api } = await riskPool();
+  const s = readAccounts(root);
+  assert.equal(
+    paidWhileFree(
+      s,
+      "claude",
+      s.accounts.find((a) => a.id === sub.id),
+      T0,
+    ),
+    null,
+  );
+  const n = paidWhileFree(
+    s,
+    "claude",
+    s.accounts.find((a) => a.id === api.id),
+    T0,
+  );
+  assert.equal(n.accountId, api.id);
+  assert.equal(n.sent, false);
+  await markAccountLimited(root, sub.id, { resetAt: new Date(T0 + 3600000).toISOString() }, T0);
+  const capped = readAccounts(root);
+  assert.equal(
+    paidWhileFree(
+      capped,
+      "claude",
+      capped.accounts.find((a) => a.id === api.id),
+      T0 + 1,
+    ),
+    null,
+    "every subscription is capped: paid is the plan, not a risk",
+  );
+});
+test("paidWhileFree: no second notice for the same account and window, a new window raises one again (FU-443)", async () => {
+  const { root, api } = await riskPool();
+  const s = readAccounts(root);
+  const acc = s.accounts.find((a) => a.id === api.id);
+  assert.ok(paidWhileFree(s, "claude", acc, T0));
+  assert.equal(paidWhileFree(s, "claude", acc, T0 + 60000), null);
+  assert.ok(paidWhileFree(s, "claude", acc, T0 + 6 * 3600000));
+  assert.equal(s.riskNotices.length, 2);
+});
+test("pendingRiskNotices and markRiskNoticeSent: a notice stays pending until it is sent (FU-443)", async () => {
+  const { root, api } = await riskPool();
+  const n = await update(root, (s) =>
+    paidWhileFree(
+      s,
+      "claude",
+      s.accounts.find((a) => a.id === api.id),
+      T0,
+    ),
+  );
+  assert.deepEqual(
+    pendingRiskNotices(root).map((x) => x.key),
+    [n.key],
+  );
+  await markRiskNoticeSent(root, n.key);
+  assert.deepEqual(pendingRiskNotices(root), []);
+});
+// An API-key launch needs a helper command, which exists only on macOS and Windows.
+test(
+  "the launch hook raises one RISK notice for a pinned API launch while a subscription is free, and none for the next launch in the window (FU-443)",
+  { skip: !["darwin", "win32"].includes(process.platform) },
+  async () => {
+    const { root, sub, api } = await riskPool();
+    const key = "sk-ant-api03-" + "k".repeat(40);
+    const tokens = new Map([
+      [api.id, key],
+      [sub.id, "sk-ant-oat01-" + "x".repeat(40)],
+    ]);
+    const risks = [];
+    const hook = sessionOpenHook({
+      root: () => root,
+      keychain: { get: async (id) => tokens.get(id) ?? null },
+      now: () => T0,
+      onRisk: (r) => risks.push(r),
+    });
+    const req = (id, account) => ({
+      request: {
+        agentId: id,
+        provider: "claude",
+        cwd: "/x",
+        workspaceId: null,
+        reason: "create",
+        purpose: "interactive",
+        env: account ? { FULCRA_ACCOUNT_REQUEST: account } : {},
+      },
+    });
+    assert.equal((await hook(req(S(1)))).env.FULCRA_ACCOUNT_ID, sub.id);
+    assert.equal(risks.length, 0, "a subscription launch is no risk");
+    assert.equal((await hook(req(S(2), "Billing"))).env.FULCRA_ACCOUNT_ID, api.id);
+    assert.equal(risks.length, 1);
+    assert.equal(risks[0].accountId, api.id);
+    assert.equal(pendingRiskNotices(root).length, 1);
+    await hook(req(S(3), "Billing"));
+    assert.equal(risks.length, 1, "same account and window: no repeat");
+    assert.equal(pendingRiskNotices(root).length, 1);
+    assert.equal(JSON.stringify(readAccounts(root)).includes(key), false);
   },
 );

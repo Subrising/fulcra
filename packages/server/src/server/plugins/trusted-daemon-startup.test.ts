@@ -35,9 +35,9 @@ test.runIf(process.platform !== "win32")(
     vi.spyOn(AgentStorage.prototype, "initialize").mockImplementation(async () => {
       order.push("index-initialize");
     });
-    vi.spyOn(AgentStorage.prototype, "list").mockImplementation(async () => {
+    vi.spyOn(AgentStorage.prototype, "knownIds").mockImplementation(async () => {
       order.push("index-list");
-      return [{ id } as never];
+      return [id];
     });
     const register = TrustedPlugins.prototype.registerV11;
     vi.spyOn(TrustedPlugins.prototype, "registerV11").mockImplementation(function (

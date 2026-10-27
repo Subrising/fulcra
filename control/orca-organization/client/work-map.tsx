@@ -10,7 +10,7 @@ import { liveMapRows, EMPTY_NATIVE, type ActivityFilter } from "./live-map-model
 import type { Fleet } from "../shared/fleet";
 import type { RemitsView } from "../shared/cc/remit";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "./read-on-open";
 import { useContract } from "./use-contract";
 import { WorkButton } from "./work-button";
 import { Details } from "./details";
@@ -39,9 +39,6 @@ const nativeApi = pluginClient as Partial<
 >;
 const useNativeCache = nativeApi.useObservedAgents ?? (() => EMPTY_NATIVE);
 const useNativeHosts = nativeApi.useHosts ?? (() => []);
-
-export const OVERVIEW_POLL_MS = 15000,
-  PROJECT_POLL_MS = 30000;
 
 type Props = Pick<PluginSurfaceProps, "theme" | "layout" | "host" | "navigation"> & {
   fleet?: Fleet;
@@ -88,8 +85,6 @@ export function WorkMapSurface({ theme, layout, host, navigation, fleet, remits 
   const overview = useQuery({
     queryKey: overviewKey,
     queryFn: () => readOverview({}),
-    refetchInterval: frozen ? false : OVERVIEW_POLL_MS,
-    refetchIntervalInBackground: false,
     refetchOnWindowFocus: !frozen,
     retry: false,
   });
@@ -101,8 +96,6 @@ export function WorkMapSurface({ theme, layout, host, navigation, fleet, remits 
     queries: open.map((projectId) => ({
       queryKey: ["orca-work-map-project", hostId, projectId],
       queryFn: () => readProject({ projectId }),
-      refetchInterval: frozen ? false : PROJECT_POLL_MS,
-      refetchIntervalInBackground: false,
       refetchOnWindowFocus: !frozen,
       retry: false,
     })),

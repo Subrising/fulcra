@@ -1540,6 +1540,8 @@ export const SendAgentMessageRequestSchema = z.object({
       inboundOnly: z.literal(true).optional(),
       outboundMainOnly: z.literal(true).optional(),
       outboundServerOnly: z.string().min(1).max(200).optional(),
+      // The source host names this sender's own reporting-line lead as "<lead id>@<server id>" (FU-402).
+      outboundParent: z.string().min(1).max(200).optional(),
       refusal: z.string().max(2000).optional(),
     })
     .optional(),
@@ -1573,6 +1575,7 @@ export const AgentMessageRouteCheckResponseSchema = z.object({
         inboundOnly: z.boolean(),
         outboundMainOnly: z.literal(true).optional(),
         outboundServerOnly: z.string().optional(),
+        outboundParent: z.string().optional(),
         refusal: z.string().optional(),
       }),
       z.object({ kind: z.literal("inbound"), allowed: z.boolean(), reason: z.string().optional() }),

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "./read-on-open";
 import { type PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
 import { Pressable, Text, TextInput, View } from "react-native";
@@ -23,8 +23,6 @@ export function TaskControls({
   const health = useQuery({
     queryKey: ["orca-controller-health"],
     queryFn: () => controller({ action: "health" }),
-    refetchInterval: 30000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const controllerUnavailable = health.isError || health.data?.status === "error";
@@ -64,8 +62,6 @@ export function TaskControls({
   const query = useQuery({
     queryKey: ["orca-tasks", cursor],
     queryFn: () => read({ cursor }),
-    refetchInterval: 30000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const button = { padding: 12, borderWidth: 1, borderColor: c.border, borderRadius: 8 };
@@ -184,8 +180,6 @@ export function UsagePanel({ theme }: Theme) {
   const query = useQuery({
     queryKey: ["orca-provider-usage"],
     queryFn: () => read({}),
-    refetchInterval: 60000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   return (

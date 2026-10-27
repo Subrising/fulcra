@@ -186,6 +186,7 @@ export const ja: TranslationResources = {
       removeReview: "レビュー添付ファイルを削除",
     },
     errors: {
+      confirmationPending: "メッセージの確認待ちです。再接続して配信を確認してください。",
       failedToSend: "メッセージの送信に失敗しました",
       failedToCreateAgent: "エージェントの作成に失敗しました",
       noHostSelected: "ホストが選択されていません",

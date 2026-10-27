@@ -16,6 +16,7 @@ import {
 import { parseControllerCommand, READ_METHODS } from "./command-parser.mjs";
 import { initializeRoleDefaults } from "../../orca-organization/server/role-defaults-store.mjs";
 import { firstRun } from "../config.mjs";
+import { NODE_FLAGS_ENV } from "./mcp-node-flags.mjs";
 import { recordBootStart, sealBoot } from "./boot-chain.mjs";
 export const hostContract = "1.1";
 export default function setup() {
@@ -88,8 +89,10 @@ export function createDistribution({ home, bundleDirectory }) {
       supervisor = createChildSupervisor({
         boot: host.boot,
         spawn() {
+          // FU-466: the daemon passes its inspector flags. Without them the child fails closed (no SIGUSR1 inspector).
+          const nodeFlags = host.nodeFlags ?? ["--disable-sigusr1"];
           // Explicit allowlist: no daemon password, NODE_PATH, preload or caller startup options.
-          const child = spawn(process.execPath, [controllerEntry(bundleDirectory)], {
+          const child = spawn(process.execPath, [...nodeFlags, controllerEntry(bundleDirectory)], {
             cwd: bundleDirectory,
             env: {
               PATH: process.env.PATH,
@@ -100,6 +103,8 @@ export function createDistribution({ home, bundleDirectory }) {
                 ? { PASEO_INTERCOM_RATE_FILE: host.intercomRateSettingsFile }
                 : {}),
               ELECTRON_RUN_AS_NODE: process.env.ELECTRON_RUN_AS_NODE,
+              // FU-467: the controller gives the same flags to the MCP servers that agents start.
+              [NODE_FLAGS_ENV]: JSON.stringify(nodeFlags),
             },
             stdio: ["ignore", "inherit", "inherit", "pipe", "pipe"],
           });

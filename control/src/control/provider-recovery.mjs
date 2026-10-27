@@ -111,6 +111,17 @@ export class ProviderRecovery {
         "UPDATE provider_recoveries SET state=?,outcome=?,continuation=coalesce(?,continuation),at=? WHERE id=?",
       )
       .run(state, String(outcome).slice(0, 500), extra.continuation ?? null, this.iso(), id);
+    // FU-490: a usage-limit wait that ends in failure is reported up once, never silent.
+    const r = state === "failed" && this.row(id);
+    if (r?.kind === "quota")
+      try {
+        this.control.wakes?.limitBlocked?.(r.session, {
+          stopId: id,
+          line: r.error ?? "Codex usage limit",
+          resetAt: null,
+          reason: String(outcome).slice(0, 300),
+        });
+      } catch {}
   }
   // A native update of one of our sessions: in a recoverable error it is observed; out of one, every finished episode of
   // it is marked cleared, so the next occurrence of the same failure is a new episode.

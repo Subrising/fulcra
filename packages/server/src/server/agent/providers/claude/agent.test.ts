@@ -29,6 +29,7 @@ import { buildAgentPrompt, renderPromptAttachmentAsText } from "../../prompt-att
 import { createNativeQueuedDispatch } from "../../native-queued-dispatch.js";
 import { NATIVE_QUEUED_FINAL, FINAL_INPUT_CHECK } from "../../agent-sdk-types.js";
 import { createFinalInputCheck } from "../../final-input-check.js";
+import { providerMessageId } from "../../provider-message-id.js";
 
 interface TestClaudeSession {
   translateMessageToEvents(message: SDKMessage): AgentStreamEvent[];
@@ -1332,7 +1333,10 @@ describe("ClaudeAgentSession features", () => {
     await session.close();
   });
 
-  async function captureSdkUserMessage(prompt: AgentPromptInput): Promise<SDKUserMessage> {
+  async function captureSdkUserMessage(
+    prompt: AgentPromptInput,
+    clientMessageId?: string,
+  ): Promise<SDKUserMessage> {
     const { queryFactory, queryMock } = createQueryMock();
     let resolveSent: ((message: SDKUserMessage) => void) | null = null;
     const sent = new Promise<SDKUserMessage>((resolve) => {
@@ -1353,12 +1357,20 @@ describe("ClaudeAgentSession features", () => {
       resolveBinary: async () => "/test/claude/bin",
     }).createSession({ provider: "claude", cwd: process.cwd() });
     try {
-      await session.startTurn(prompt);
+      await session.startTurn(prompt, clientMessageId ? { clientMessageId } : undefined);
       return await sent;
     } finally {
       await session.close();
     }
   }
+
+  test("queued input carries its stable native receipt ID into the SDK", async () => {
+    const first = await captureSdkUserMessage("queued input", "queued-batch:retained-id");
+    const retry = await captureSdkUserMessage("queued input", "queued-batch:retained-id");
+    expect(first.uuid).toBe(providerMessageId("queued-batch:retained-id"));
+    expect(retry.uuid).toBe(first.uuid);
+    expect(first.uuid).toMatch(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-8[a-f0-9]{3}-[a-f0-9]{12}$/);
+  });
 
   const issueAttachment: AgentAttachment = {
     type: "forge_issue",

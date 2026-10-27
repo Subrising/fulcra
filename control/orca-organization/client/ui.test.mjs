@@ -727,7 +727,7 @@ test("freshness and connection failures disable new work even when retained rows
   await waitFor(() => assert.equal(create().disabled, true));
   await act(async () => {
     client.setQueryData(key, freshList);
-    client.setQueryData(["orca-management-health"], health, { updatedAt: clock - 8000 });
+    client.setQueryData(["orca-management-health"], health, { updatedAt: clock - 60000 });
   });
   await waitFor(() => assert.equal(create().disabled, true));
   await act(async () =>
@@ -4910,7 +4910,9 @@ test("Sessions keeps the last good list through a stall, even after its cache is
   first.client.clear();
   stalled = true;
   mount(h(FleetSurface, { theme, layout: { compact: false, platform: "web" }, onTask() {} }));
-  await screen.findByText(/^Last updated just now · Fulcra is slow to answer; retrying/);
+  await screen.findByText(
+    /^Last updated just now · Fulcra is slow to answer; refresh to try again/,
+  );
   assert(
     screen.getByRole("button", { name: "Inspect Steady author" }),
     "the last good list, not an empty tab",

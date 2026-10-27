@@ -577,6 +577,19 @@ describe("LimitResumeService", () => {
       expect(running()).toEqual({});
     });
 
+    it("reload clears a stale running mark and fences a delayed timeline snapshot", async () => {
+      agents.set("a", idle());
+      const svc = make();
+      svc.start();
+      await svc.onAgentEvent(started("a"));
+      const late = svc.onAgentEvent(userMessage("a"));
+      await svc.onAgentEvent({ type: "agent_reloaded", agentId: "a" });
+      await vi.advanceTimersByTimeAsync(1);
+      await late;
+      expect(running()).toEqual({});
+      svc.stop();
+    });
+
     it("resumes an interrupted session once, after the settle delay, with the restart prompt", async () => {
       agents.set("a", idle());
       const svc = await interruptedRestart();

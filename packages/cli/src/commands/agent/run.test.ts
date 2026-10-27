@@ -346,6 +346,23 @@ describe("explicit run cwd workspace precedence", () => {
       }),
     );
   });
+  it("fails after workspace registration when creation reports a timeout", async () => {
+    const client = fakeClient();
+    client.createWorkspace.mockResolvedValue({
+      workspace: {
+        id: "requested-workspace",
+        name: "Requested",
+        workspaceDirectory: "/fixtures/requested",
+      },
+      error: "Creation timed out. Check its receipt before retrying.",
+    });
+    await expect(parsedRun(["--cwd", "/fixtures/requested"])).rejects.toMatchObject({
+      code: "WORKSPACE_CREATE_FAILED",
+      message: "Creation timed out. Check its receipt before retrying.",
+    });
+    expect(client.createAgent).not.toHaveBeenCalled();
+    expect(client.close).toHaveBeenCalledOnce();
+  });
   it("fails without a caller-workspace fallback when explicit cwd creation fails", async () => {
     const client = fakeClient();
     client.createWorkspace.mockResolvedValue({

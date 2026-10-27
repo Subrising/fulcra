@@ -130,12 +130,26 @@ export function buildWorkspaceSource(options: WorkspaceCreateOptions) {
   throw new Error(`Unsupported workspace isolation: ${String(options.isolation)}`);
 }
 
+type ConnectWorkspaceClient = (
+  options: Parameters<typeof connectToDaemon>[0],
+) => Promise<Pick<Awaited<ReturnType<typeof connectToDaemon>>, "createWorkspace" | "close">>;
+
+export function runCreateCommand(
+  options: WorkspaceCreateOptions,
+  command: Command,
+  connect: ConnectWorkspaceClient,
+): Promise<SingleResult<WorkspaceRow>>;
+export function runCreateCommand(
+  options: WorkspaceCreateOptions,
+  command: Command,
+): Promise<SingleResult<WorkspaceRow>>;
 export async function runCreateCommand(
   options: WorkspaceCreateOptions,
   _command: Command,
+  connect: ConnectWorkspaceClient = connectToDaemon,
 ): Promise<SingleResult<WorkspaceRow>> {
   const host = getDaemonHost({ target: options.daemonTarget });
-  const client = await connectToDaemon({ target: options.daemonTarget }).catch((error: unknown) => {
+  const client = await connect({ target: options.daemonTarget }).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     throw {
       code: "DAEMON_NOT_RUNNING",
@@ -148,7 +162,7 @@ export async function runCreateCommand(
       source: buildWorkspaceSource(options),
       ...(options.title ? { title: options.title } : {}),
     });
-    if (!payload.workspace) {
+    if (payload.error || !payload.workspace) {
       throw new Error(payload.error ?? "Workspace creation failed");
     }
     return { type: "single", data: toWorkspaceRow(payload.workspace), schema: workspaceSchema };

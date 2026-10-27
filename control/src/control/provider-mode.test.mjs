@@ -324,16 +324,37 @@ test("a polluted prototype cannot supply a value that validation never saw", (t)
 // Exercises the post-resolution refusal for its own reason. A getter is not reachable from a JSON file --
 // JSON.parse only makes data properties -- so this demonstrates the class the guard exists for: any source
 // that is validated once and read again can disagree with itself between the two.
-test("a mode that changes between validation and use is still refused", () => {
+test("a mode that changes between validation and use is still checked", () => {
   let reads = 0;
   const modes = {
     get claude() {
-      return reads++ === 0 ? "auto" : "bypassPermissions";
+      return reads++ === 0 ? "auto" : "autoo";
     },
   };
   assert.throws(
     () => sessionDefaults("claude", {}, { defaults: { modes } }),
-    /Refused mode for claude: bypassPermissions broadens access/,
+    /Unsupported mode for claude: autoo/,
+  );
+});
+
+// FU-477: bypassPermissions is a valid saved default for Claude (read path), and unknown modes stay refused.
+test("a saved bypassPermissions default is read for Claude; an unknown mode is still refused", () => {
+  const chosen = sessionDefaults(
+    "claude",
+    {},
+    { defaults: { modes: { claude: "bypassPermissions" } } },
+  );
+  assert.equal(chosen.modeId, "bypassPermissions");
+  assert.equal(chosen.source.modeId, "installation");
+  assert.deepEqual(
+    configuredDefaults({ defaults: { modes: { claude: "bypassPermissions" } } }).modes,
+    {
+      claude: "bypassPermissions",
+    },
+  );
+  assert.throws(
+    () => sessionDefaults("claude", {}, { defaults: { modes: { claude: "autoo" } } }),
+    /Unsupported mode for claude: autoo/,
   );
 });
 

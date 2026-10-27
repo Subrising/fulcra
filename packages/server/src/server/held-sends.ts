@@ -37,6 +37,7 @@ export const SENT_NOTHING_CODES: ReadonlySet<string> = new Set([
   "HELD_QUEUE_FULL",
   "PROVENANCE_REFUSED",
   "QUEUED_RECEIVER_CLOSED",
+  "SEND_REQUEST_EXPIRED",
 ]);
 
 const isRequeue = (error: unknown) =>

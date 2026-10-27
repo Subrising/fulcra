@@ -1,7 +1,7 @@
 // J0 (CC-PLAN §6, CONTRACTS §1 "Observation"): a stalled read never blanks a tab. The last good result of each
 // read is kept here, in memory only, for as long as the app is open. Nothing is written to storage, so a
 // restart starts empty. When a read fails or misses its deadline, the surface shows that result with one
-// plain notice, and its own polling keeps retrying.
+// plain notice. The user can refresh to try again.
 interface Saved {
   data: unknown;
   at: number;
@@ -37,7 +37,7 @@ export const isDeadline = (error: unknown) =>
     String((error as { message?: unknown } | null)?.message ?? error ?? ""),
   );
 export function stallNotice(at: number, now: number, error: unknown): string {
-  return `Last updated ${agoText(now - at)} · ${isDeadline(error) ? "Fulcra is slow to answer" : "Fulcra did not answer"}; retrying`;
+  return `Last updated ${agoText(now - at)} · ${isDeadline(error) ? "Fulcra is slow to answer" : "Fulcra did not answer"}; refresh to try again`;
 }
 
 interface QueryLike<T> {

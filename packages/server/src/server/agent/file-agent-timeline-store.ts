@@ -11,9 +11,17 @@ import {
   JournalHistoryCache,
   logHistoryLoad,
   readHistoryLines,
+  timelineRowCache,
+  TimelineRowCache,
   type HistoryLine,
 } from "./history-load.js";
 import { TimelineProjection } from "./timeline-projection.js";
+import {
+  containsJournalSeq,
+  JournalTailWindow,
+  mergeSeqRanges,
+  readLinesBackward,
+} from "./journal-tail.js";
 import { AgentTimelineItemPayloadSchema } from "@getpaseo/protocol/messages";
 import { InMemoryAgentTimelineStore } from "./agent-timeline-store.js";
 import type { AgentTimelineItem } from "./agent-sdk-types.js";
@@ -126,6 +134,11 @@ const INDEX_DIRECTORY = "index";
 const RETAINED_DIRECTORY = "retained";
 const RETAINED_METADATA = "retained.json";
 const INDEX_WRITE_DELAY_MS = 500;
+const TAIL_READ_MIN_BYTES = 1024 * 1024;
+const TAIL_READ_MAX_BYTES = 8 * 1024 * 1024;
+const TAIL_READ_MAX_LIMIT = 1000;
+const TAIL_READ_CHUNK_BYTES = 64 * 1024;
+const MAX_CACHED_PAGES_PER_JOURNAL = 32;
 
 /**
  * Named points in the rollover and retention sequences. Tests stop a store at each one to model a
@@ -151,8 +164,11 @@ export interface FileAgentTimelineStoreOptions {
   segmentMaxBytes?: number;
   logger?: Logger;
   historyCache?: JournalHistoryCache;
+  rowCache?: TimelineRowCache;
   /** Retained history is read, never created. */
   createIfMissing?: boolean;
+  /** Journals at least this large serve an unloaded tail fetch from the end of the file. */
+  tailReadMinBytes?: number;
   /** Test seam: called after each step; throwing models a crash at that point. */
   onStep?: (step: FileAgentTimelineStep) => void | Promise<void>;
 }
@@ -216,16 +232,22 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
   private readonly segmentMaxBytes: number;
   private readonly logger: Logger;
   private readonly historyCache: JournalHistoryCache;
+  private readonly rowCache: TimelineRowCache;
   private readonly createIfMissing: boolean;
+  private readonly tailReadMinBytes: number;
+  /** Read results by agent and request; each lives in the row cache under `key`. */
+  private readonly pages = new Map<string, Map<string, { signature: string; key: object }>>();
   private readonly onStep?: FileAgentTimelineStoreOptions["onStep"];
   constructor(
     private readonly directory: string,
     options?: FileAgentTimelineStoreOptions,
   ) {
     this.historyCache = options?.historyCache ?? journalHistoryCache;
+    this.rowCache = options?.rowCache ?? timelineRowCache;
     this.logger = options?.logger ?? pino({ level: "silent" });
     this.segmentMaxBytes = options?.segmentMaxBytes ?? DEFAULT_SEGMENT_MAX_BYTES;
     this.createIfMissing = options?.createIfMissing ?? true;
+    this.tailReadMinBytes = options?.tailReadMinBytes ?? TAIL_READ_MIN_BYTES;
     this.onStep = options?.onStep;
   }
   private async step(name: FileAgentTimelineStep): Promise<void> {
@@ -380,13 +402,21 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
       busy: () => this.pending.has(id) || this.indexTimers.has(id) || this.pins.has(id),
       evict: () => {
         if (this.journals.get(id) === journal) this.journals.delete(id);
+        this.dropRows(journal);
       },
     });
   }
   private forget(id: string): void {
     const journal = this.journals.get(id);
-    if (journal) this.historyCache.delete(journal);
+    if (journal) {
+      this.historyCache.delete(journal);
+      this.dropRows(journal);
+    }
     this.journals.delete(id);
+    this.dropPages(id);
+  }
+  private dropRows(journal: Journal): void {
+    for (const entry of journal.rows.values()) this.rowCache.delete(entry);
   }
   private async load(id: string, interactive = false): Promise<Journal> {
     if (this.faults.has(id)) throw this.faults.get(id);
@@ -534,6 +564,7 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
       // Calibrated against retained heap for 50,000 small rows, including projection and turn indexes.
       const cacheBytes = 6 * Buffer.byteLength(JSON.stringify({ row, location, order })) + 256;
       journal.cacheBytes += cacheBytes - (previous?.cacheBytes ?? 0);
+      if (previous) this.rowCache.delete(previous);
       journal.rows.set(row.seq, { row, location, order, cacheBytes });
       if (record.op === "append") {
         if (!rebuildProjection && !("seqStart" in row) && row.seq === journal.memory.getNextSeq(id))
@@ -571,6 +602,27 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
     purpose: "page" | "full" = "page",
   ): Promise<AgentTimelineRow[]> {
     if (selected.length === 0) return [];
+    const output = new Map<number, AgentTimelineRow>();
+    const missing = selected.filter((entry) => {
+      const row = this.rowCache.get(entry) as AgentTimelineRow | undefined;
+      if (row) output.set(entry.row.seq, row);
+      return !row;
+    });
+    if (missing.length) await this.readRows(id, journal, missing, output, purpose);
+    return selected.map((entry) => {
+      const row = output.get(entry.row.seq);
+      if (!row) throw new TimelineJournalIntegrityError("Timeline journal changed");
+      // Callers own what they get; the cached copy stays as read.
+      return structuredClone(row);
+    });
+  }
+  private async readRows(
+    id: string,
+    journal: Journal,
+    selected: JournalRow[],
+    output: Map<number, AgentTimelineRow>,
+    purpose: "page" | "full",
+  ): Promise<void> {
     const groups = new Map<string, JournalRow[]>();
     for (const entry of selected) {
       const key = `${entry.location.segment}:${entry.location.offset}`;
@@ -591,18 +643,16 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
     const handles = new Map<number, fsp.FileHandle>();
     try {
       logHistoryLoad(this.logger, "start", "journal", replayBytes, level);
-      const output = new Map<number, AgentTimelineRow>();
       if (selected.length === journal.rows.size) {
         await this.streamRows(id, journal, groups, output);
       } else {
         await this.readPageRecords(id, journal, records, handles, output);
       }
       logHistoryLoad(this.logger, "end", "journal", replayBytes, level);
-      return selected.map((entry) => {
+      for (const entry of selected) {
         const row = output.get(entry.row.seq);
-        if (!row) throw new TimelineJournalIntegrityError("Timeline journal changed");
-        return row;
-      });
+        if (row) this.rowCache.set(entry, row, 2 * Buffer.byteLength(JSON.stringify(row)) + 256);
+      }
     } catch (error) {
       if (isJournalIntegrityError(error)) journal.owner.faults.set(id, error);
       logHistoryLoad(this.logger, "error", "journal", replayBytes, level);
@@ -704,13 +754,7 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
     journal: Journal,
     ranges: Array<{ startSeq: number; endSeq: number }>,
   ): JournalRow[] {
-    const merged: Array<{ startSeq: number; endSeq: number }> = [];
-    for (const range of [...ranges].sort((a, b) => a.startSeq - b.startSeq)) {
-      const last = merged.at(-1);
-      if (last && range.startSeq <= last.endSeq + 1)
-        last.endSeq = Math.max(last.endSeq, range.endSeq);
-      else merged.push({ ...range });
-    }
+    const merged = mergeSeqRanges(ranges);
     const span = merged.reduce((sum, range) => sum + range.endSeq - range.startSeq + 1, 0);
     if (span > journal.rows.size * 2)
       return [...journal.rows.values()].filter(({ row }) => containsJournalSeq(merged, row.seq));
@@ -733,6 +777,175 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
     const projection = new TimelineProjection();
     for (const row of await this.materialize(id, journal, selected)) projection.append(row);
     return { ...page, rows: projection.getRows() };
+  }
+  /**
+   * Repeat reads of an unchanged journal are served from the row cache. The key is the request
+   * and the size, inode and mtime of every segment, so an append, rollover or replacement misses.
+   */
+  private async cachedRead<T>(id: string, request: string, read: () => Promise<T>): Promise<T> {
+    await this.reconcileRetention(id);
+    if (this.faults.has(id) || (await this.pendingDelete(id))) return read();
+    const signature = await this.journalSignature(id);
+    const known = signature === null ? undefined : this.pages.get(id)?.get(request);
+    const cached = known?.signature === signature ? this.rowCache.get(known!.key) : undefined;
+    if (cached) return structuredClone(cached as T);
+    const result = await read();
+    // A fetch that created the journal or faulted leaves nothing to key on.
+    if (
+      signature === null ||
+      this.faults.has(id) ||
+      signature !== (await this.journalSignature(id))
+    )
+      return result;
+    this.rememberPage(id, request, signature, result);
+    return structuredClone(result);
+  }
+  private rememberPage(id: string, request: string, signature: string, result: unknown): void {
+    const key = {};
+    const pages = this.pages.get(id) ?? new Map<string, { signature: string; key: object }>();
+    pages.delete(request);
+    pages.set(request, { signature, key });
+    for (const [oldest, entry] of pages) {
+      if (pages.size <= MAX_CACHED_PAGES_PER_JOURNAL) break;
+      pages.delete(oldest);
+      this.rowCache.delete(entry.key);
+    }
+    this.pages.set(id, pages);
+    this.rowCache.set(key, result, 2 * Buffer.byteLength(JSON.stringify(result)) + 256);
+  }
+  private async journalSignature(id: string): Promise<string | null> {
+    const numbers = await this.segmentNumbers(id);
+    if (numbers.length === 0) return null;
+    const stats = await Promise.all(numbers.map((number) => fsp.lstat(this.file(id, number))));
+    return JSON.stringify(stats.map((stat) => [stat.ino, stat.size, stat.mtimeMs]));
+  }
+  private dropPages(id: string): void {
+    for (const entry of this.pages.get(id)?.values() ?? []) this.rowCache.delete(entry.key);
+    this.pages.delete(id);
+  }
+  /**
+   * Serves a tail page, or a page before a cursor, of an unloaded journal from the end of its
+   * files, so "limit 20" never replays a large journal. Returns null, and the caller loads the
+   * journal, whenever the read cannot prove the page equals the one a full replay gives.
+   */
+  private async fetchTail(
+    id: string,
+    options?: AgentTimelineFetchOptions,
+  ): Promise<AgentTimelineFetchResult | null> {
+    const limit = tailLimit(options);
+    if (limit === null || this.journals.has(id) || this.faults.has(id)) return null;
+    const numbers = await this.tailSegmentNumbers(id);
+    if (!numbers) return null;
+    const segments: Array<{ handle: fsp.FileHandle; stat: fs.Stats }> = [];
+    let bytesRead = 0;
+    try {
+      for (const number of numbers) segments.push(await this.openSegment(id, number));
+      const reader = (handle: fsp.FileHandle) => (offset: number, bytes: number) => {
+        bytesRead += bytes;
+        if (bytesRead > TAIL_READ_MAX_BYTES) throw new Error("Tail read too large");
+        return readJournalRange(handle, offset, bytes);
+      };
+      const head = await this.readTailHead(id, segments, reader);
+      if (!head) return null;
+      // A stale cursor resets to the tail; the full fetch reports that.
+      if (options?.cursor && options.cursor.epoch !== head.epoch) return null;
+      const window = new JournalTailWindow({
+        epoch: head.epoch,
+        minSeq: head.minSeq,
+        limit,
+        direction: options?.direction === "before" ? "before" : "tail",
+        beforeSeq: options?.cursor?.seq,
+      });
+      let result: AgentTimelineFetchResult | null = null;
+      for (let number = segments.length - 1; number >= 0 && !result; number--) {
+        const { handle, stat } = segments[number]!;
+        result = await this.scanTail(id, head.epoch, reader(handle), stat.size, window);
+      }
+      result ??= window.page(true)!;
+      logHistoryLoad(
+        this.logger,
+        "end",
+        "journal",
+        bytesRead,
+        bytesRead <= 1024 * 1024 ? "debug" : "info",
+      );
+      return result;
+    } catch {
+      // The full load reports any fault in the journal.
+      return null;
+    } finally {
+      await Promise.all(segments.map(({ handle }) => handle.close()));
+    }
+  }
+  /** Segments of a journal large enough for a tail read, or null. */
+  private async tailSegmentNumbers(id: string): Promise<number[] | null> {
+    await this.reconcileRetention(id);
+    if (await this.pendingDelete(id)) return null;
+    const numbers = await this.segmentNumbers(id);
+    if (numbers.length === 0 || numbers.some((number, position) => number !== position))
+      return null;
+    let size = 0;
+    for (const number of numbers) size += (await fsp.lstat(this.file(id, number))).size;
+    return size < this.tailReadMinBytes ? null : numbers;
+  }
+  /** The epoch and the first row's seq, which a full replay reports as minSeq. Null when unsure. */
+  private async readTailHead(
+    id: string,
+    segments: Array<{ handle: fsp.FileHandle; stat: fs.Stats }>,
+    reader: (handle: fsp.FileHandle) => (offset: number, bytes: number) => Promise<Buffer>,
+  ): Promise<{ epoch: string; minSeq: number } | null> {
+    const first = segments[0]!;
+    const read = reader(first.handle);
+    let head = Buffer.alloc(0);
+    let headerEnd = -1;
+    let recordEnd = -1;
+    while (recordEnd === -1 && head.length < Math.min(first.stat.size, 1024 * 1024)) {
+      const bytes = Math.min(Math.max(4096, head.length), first.stat.size - head.length);
+      head = Buffer.concat([head, await read(head.length, bytes)]);
+      headerEnd = head.indexOf(10);
+      recordEnd = headerEnd === -1 ? -1 : head.indexOf(10, headerEnd + 1);
+    }
+    if (recordEnd === -1) return null;
+    const header = Header.parse(JSON.parse(head.toString("utf8", 0, headerEnd)));
+    // A version-1 first segment beside later ones is a reseed that only a full load repairs.
+    if (header.agentId !== id || (segments.length > 1 && header.version !== ROLLED_HEADER_VERSION))
+      return null;
+    const record = Record.parse(JSON.parse(head.toString("utf8", headerEnd + 1, recordEnd)));
+    if (record.op !== "append") return null;
+    if (segments.length > 1) {
+      const last = segments.at(-1)!;
+      const lastHead = await reader(last.handle)(0, Math.min(last.stat.size, 4096));
+      const lastHeader = Header.parse(
+        JSON.parse(lastHead.toString("utf8", 0, Math.max(0, lastHead.indexOf(10)))),
+      );
+      if (lastHeader.agentId !== id || lastHeader.epoch !== header.epoch) return null;
+    }
+    const projection = new TimelineProjection();
+    for (const row of record.rows) projection.append(row);
+    return { epoch: header.epoch, minSeq: projection.getRows()[0]?.seqStart ?? 0 };
+  }
+  /** Feeds one segment's records, newest first, until the window proves its page. */
+  private async scanTail(
+    id: string,
+    epoch: string,
+    read: (offset: number, bytes: number) => Promise<Buffer>,
+    size: number,
+    window: JournalTailWindow,
+  ): Promise<AgentTimelineFetchResult | null> {
+    for await (const line of readLinesBackward(read, size, TAIL_READ_CHUNK_BYTES)) {
+      if (!line.text.trim()) throw new TimelineJournalIntegrityError("Invalid timeline journal");
+      if (line.header) {
+        const header = Header.parse(JSON.parse(line.text));
+        if (header.agentId !== id || header.epoch !== epoch)
+          throw new TimelineJournalIntegrityError("Timeline journal identity changed");
+        return null;
+      }
+      if (!window.add(Record.parse(JSON.parse(line.text))))
+        throw new TimelineJournalIntegrityError("Timeline sequence must advance");
+      const page = window.provenPage();
+      if (page) return page;
+    }
+    return null;
   }
   private validate(id: string, journal: Journal, record: z.infer<typeof Record>): void {
     const maximum = journal.memory.getNextSeq(id) - 1;
@@ -817,6 +1030,7 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
       segment.size += bytes.length;
       this.apply(id, journal, record, segment.number, { offset, bytes: bytes.length });
       this.remember(id, journal);
+      this.dropPages(id);
       this.scheduleIndexWrite(id);
     } catch (error) {
       this.faults.set(id, error);
@@ -1040,7 +1254,15 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
     });
   }
   fetchCommitted(id: string, options?: AgentTimelineFetchOptions) {
-    return this.serialize(id, async () => this.fetchPage(id, await this.readable(id), options));
+    return this.serialize(id, () =>
+      this.cachedRead(
+        id,
+        pageRequestKey(options),
+        async () =>
+          (await this.fetchTail(id, options)) ??
+          this.fetchPage(id, await this.readable(id), options),
+      ),
+    );
   }
   fetchExistingCommitted(id: string, options?: AgentTimelineFetchOptions) {
     return this.serialize(id, async () => {
@@ -1048,7 +1270,13 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
       // A failed delete keeps the registry record while its history is retained.
       // Read that copy without creating a new live journal or releasing the write fence.
       if (!(await this.pendingDelete(id)) && !(await this.hasJournal(id))) return null;
-      return this.fetchPage(id, await this.readable(id), options);
+      return this.cachedRead(
+        id,
+        pageRequestKey(options),
+        async () =>
+          (await this.fetchTail(id, options)) ??
+          this.fetchPage(id, await this.readable(id), options),
+      );
     });
   }
   getLatestCommittedSeq(id: string) {
@@ -1059,6 +1287,17 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
       this.readable(id).then((journal) =>
         this.materialize(id, journal, [...journal.rows.values()], "full"),
       ),
+    );
+  }
+  getCommittedPromptRows(id: string) {
+    return this.serialize(id, () =>
+      this.cachedRead(id, "prompts", async () => {
+        const journal = await this.readable(id);
+        const prompts = [...journal.rows.values()].filter(
+          (entry) => entry.row.item.type === "user_message",
+        );
+        return this.materialize(id, journal, prompts);
+      }),
     );
   }
   getLastItem(id: string) {
@@ -1354,6 +1593,22 @@ function compactJournalRow(row: AgentTimelineRow): AgentTimelineRow {
   return { ...row, item: compact };
 }
 
+function pageRequestKey(options?: AgentTimelineFetchOptions): string {
+  return JSON.stringify([
+    options?.direction ?? "tail",
+    options?.cursor ?? null,
+    options?.limit ?? null,
+    options?.turn ?? null,
+  ]);
+}
+/** The page size of a tail fetch or a fetch before a cursor, or null for any other fetch. */
+function tailLimit(options?: AgentTimelineFetchOptions): number | null {
+  const limit = options?.limit ?? 0;
+  const direction = options?.direction ?? "tail";
+  if (options?.turn || direction === "after" || (direction === "tail" && options?.cursor))
+    return null;
+  return limit >= 1 && limit <= TAIL_READ_MAX_LIMIT ? limit : null;
+}
 async function readJournalRange(
   handle: fsp.FileHandle,
   offset: number,
@@ -1368,22 +1623,6 @@ async function readJournalRange(
   }
   return buffer;
 }
-function containsJournalSeq(
-  ranges: Array<{ startSeq: number; endSeq: number }>,
-  seq: number,
-): boolean {
-  let low = 0,
-    high = ranges.length - 1;
-  while (low <= high) {
-    const middle = (low + high) >>> 1;
-    const range = ranges[middle]!;
-    if (seq < range.startSeq) high = middle - 1;
-    else if (seq > range.endSeq) low = middle + 1;
-    else return true;
-  }
-  return false;
-}
-
 function isJournalIntegrityError(error: unknown): boolean {
   return (
     error instanceof TimelineJournalIntegrityError ||

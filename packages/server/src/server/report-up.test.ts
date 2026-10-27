@@ -2,14 +2,16 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { beforeEach, describe, expect, test } from "vitest";
+import pino from "pino";
+import { afterEach, beforeEach, describe, expect, test, vi as mock } from "vitest";
 import { REPORTS_TO_LABEL, REPORTS_TO_OWNER, SEAT_LABEL } from "@getpaseo/protocol/agent-labels";
 import type { AgentManager, AgentManagerEvent } from "./agent/agent-manager.js";
-import type { AgentStorage } from "./agent/agent-storage.js";
+import { AgentStorage, type FinishNotice } from "./agent/agent-storage.js";
 import { createTestLogger } from "../test-utils/test-logger.js";
 import {
   COALESCE_WINDOW_MS,
   COMBINED_LIST_LIMIT,
+  FINISH_RETRY_BASE_MS,
   NUDGE_MESSAGE_PREFIX,
   PERMISSION_COMMAND_CHARS,
   PERMISSION_NOTICE_GRACE_MS,
@@ -18,13 +20,20 @@ import {
   type ReportUpDeps,
   reportUpSwitches,
 } from "./report-up.js";
-import { noteAgentMessage, resetAgentMessageLogForTests } from "./agent-message-log.js";
+import {
+  noteAgentMessage,
+  noteAgentMessageDelivered,
+  resetAgentMessageLogForTests,
+} from "./agent-message-log.js";
 import {
   parseOpenRows,
   readOpenLedgerRows,
   rowsOwnedBy,
   rowsEligibleForNudge,
 } from "./ledger-items.js";
+import { IDLE_TURN_PROMPT } from "./idle-turn-recovery.js";
+import { FINAL_INPUT_CHECK } from "./agent/agent-sdk-types.js";
+import { assertFinalInputCheck, recordFinalInputHandoff } from "./agent/final-input-check.js";
 import { PluginService } from "./plugins/index.js";
 import { DaemonConfigStore } from "./daemon-config-store.js";
 import { MutableDaemonConfigSchema } from "@getpaseo/protocol/messages";
@@ -57,6 +66,7 @@ function fixture(
     skipOwners?: string[];
     minIntervalMinutes?: number;
     now?: number;
+    logger?: ReportUpDeps["logger"];
     statePath?: string;
     ledgerDir?: string;
     readLedger?: ReportUpDeps["readLedger"];
@@ -66,6 +76,8 @@ function fixture(
       prompt: string,
       kind: "explicit" | "finished" | "failed" | "permission" | "limit",
     ) => Promise<boolean>;
+    leadMoves?: ReportUpDeps["leadMoves"];
+    relay?: ReportUpDeps["relay"];
   } = {},
 ) {
   const clock = { now: options.now ?? Date.now() };
@@ -95,6 +107,8 @@ function fixture(
   manager.nativeReportOwnsFinish = () => nativeOwnsFinish;
   const service = new ReportUpService({
     remoteNotice: options.remoteNotice,
+    ...(options.leadMoves ? { leadMoves: options.leadMoves } : {}),
+    ...(options.relay ? { relay: options.relay } : {}),
     routing: options.routing,
     agentManager: manager,
     agentStorage: storage,
@@ -106,7 +120,7 @@ function fixture(
       ? {}
       : { getNudgeMinIntervalMinutes: () => options.minIntervalMinutes! }),
     localServerId: "srv_local",
-    logger: createTestLogger(),
+    logger: options.logger ?? createTestLogger(),
     now: () => clock.now,
     ...(options.statePath ? { statePath: options.statePath } : {}),
     ...(options.ledgerDir ? { ledgerDir: options.ledgerDir } : {}),
@@ -159,6 +173,7 @@ function fixture(
   };
   return {
     service,
+    manager,
     delivered,
     stream,
     turn,
@@ -205,7 +220,7 @@ function nativeFixture(chats: FakeChat[], options: Parameters<typeof fixture>[1]
     hooks.emit("agent.turn_started", { agent: agent(id), turnId: "native-turn" });
     f.stream(id, { type: "timeline", item: { type: "user_message", ...message } });
   };
-  const end = (id: string, text = "native result") =>
+  const end = (id: string, text = "DONE native result") =>
     hooks.emit("agent.turn_ended", {
       agent: agent(id),
       turnId: "native-turn",
@@ -231,10 +246,83 @@ const worker = (labels: Record<string, string> = { [REPORTS_TO_LABEL]: LEAD }): 
   id: WORKER,
   title: "Builder",
   labels,
-  lastMessage: "Done: tests pass. Question: merge now?",
+  lastMessage: "DONE tests pass.\nQUESTION merge now?",
 });
 
 describe("report-up", () => {
+  test("FU-489: turn-end recovery continues once and reports a repeated unfinished turn to its parent", async () => {
+    const chat = worker();
+    chat.lastMessage = "I will wait for the background job notice.";
+    const f = fixture([lead, chat], { enabled: false });
+    let items = [
+      { type: "user_message", text: "build the change" },
+      { type: "assistant_message", text: chat.lastMessage },
+    ];
+    const run = mock.fn(async (_id, _prompt, options) => {
+      assertFinalInputCheck(options[FINAL_INPUT_CHECK]);
+      recordFinalInputHandoff(options[FINAL_INPUT_CHECK]);
+    });
+    Object.assign(f.manager, {
+      getTimeline: () => items,
+      canRunUnscopedLimitResume: () => true,
+      runAgent: run,
+    });
+    f.turn(WORKER);
+    await f.settle();
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]![1]).toBe(
+      "check your background job output now and finish in the foreground",
+    );
+    expect(f.delivered).toEqual([]);
+    items = [
+      ...items,
+      {
+        type: "user_message",
+        text: "check your background job output now and finish in the foreground",
+      },
+      { type: "assistant_message", text: "I will wait for the background job notice." },
+    ];
+    f.turn(WORKER);
+    await f.settle();
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.leadId).toBe(LEAD);
+    expect(f.delivered[0]!.prompt).toContain("BLOCKED: Builder");
+    f.service.stop();
+  });
+
+  test("FU-489: native tool-only endings report BLOCKED through the remote parent route", async () => {
+    const remote = mock.fn(async () => true);
+    const f = nativeFixture([lead, worker()], { remoteNotice: remote, enabled: false });
+    Object.assign(f.manager, {
+      getTimeline: () => [
+        { type: "user_message", text: IDLE_TURN_PROMPT },
+        {
+          type: "tool_call",
+          callId: "tail",
+          name: "shell",
+          status: "completed",
+          error: null,
+          detail: {},
+        },
+      ],
+    });
+    try {
+      f.begin(WORKER);
+      f.end(WORKER, "I will wait for the background job.");
+      await f.settle();
+      expect(remote).toHaveBeenCalledTimes(1);
+      expect(remote.mock.calls[0]).toEqual([
+        WORKER,
+        expect.stringContaining("BLOCKED: Builder"),
+        "failed",
+      ]);
+      expect(f.delivered).toEqual([]);
+    } finally {
+      f.cleanup();
+    }
+  });
+
   test("a worker that ends a turn sends exactly one notice to its lead", async () => {
     const f = fixture([lead, worker()]);
     f.turn(WORKER);
@@ -243,7 +331,7 @@ describe("report-up", () => {
     expect(f.delivered).toHaveLength(1);
     expect(f.delivered[0]!.leadId).toBe(LEAD);
     expect(f.delivered[0]!.prompt).toContain(
-      `Worker Builder (${WORKER}) finished a turn: Done: tests pass. Question: merge now?`,
+      `Worker Builder (${WORKER}) finished a turn: DONE tests pass.\nQUESTION merge now?`,
     );
   });
 
@@ -283,18 +371,48 @@ describe("report-up", () => {
     const busy = fixture([lead, worker()]);
     busy.turn(WORKER);
     busy.stream(WORKER, { type: "turn_started", provider: "claude" });
-    const remote = fixture([lead, worker({ [REPORTS_TO_LABEL]: `${LEAD}@srv_other` })]);
+    const remote = fixture([
+      lead,
+      { ...worker({ [REPORTS_TO_LABEL]: `${LEAD}@srv_other` }), lastMessage: "Tests pass." },
+    ]);
     remote.turn(WORKER);
     await Promise.all([off.settle(), busy.settle(), remote.settle()]);
     expect([...off.delivered, ...busy.delivered, ...remote.delivered]).toEqual([]);
   });
 
+  test("FU-444: a notice for a lead that moved goes to the new lead here, or through the relay to its computer", async () => {
+    const NEW_LEAD = "33333333-3333-4333-8333-333333333333";
+    const here = fixture([lead, worker(), { id: NEW_LEAD, title: "New lead", labels: {} }], {
+      leadMoves: () => [{ from: LEAD, to: NEW_LEAD }],
+    });
+    here.turn(WORKER);
+    await here.settle();
+    expect(here.delivered.map((notice) => notice.leadId)).toEqual([NEW_LEAD]);
+
+    const relayed: Array<{ file: string; args: string[]; text: string }> = [];
+    const away = fixture([lead, worker()], {
+      leadMoves: () => [
+        { from: LEAD, to: NEW_LEAD, server: "srv_pc", relay: ["pcsend", "{id}", "{file}"] },
+      ],
+      relay: async (file, args) => {
+        relayed.push({ file, args, text: readFileSync(args[1]!, "utf8") });
+      },
+    });
+    away.turn(WORKER);
+    await away.settle();
+    expect(away.delivered).toEqual([]);
+    expect(relayed).toHaveLength(1);
+    expect(relayed[0]!.file).toBe("pcsend");
+    expect(relayed[0]!.args[0]).toBe(NEW_LEAD);
+    expect(relayed[0]!.text).toContain(`Worker Builder (${WORKER}) finished a turn`);
+  });
+
   test("a long last message is cut to the snippet length", async () => {
-    const long = "x".repeat(REPORT_UP_SNIPPET_CHARS + 50);
+    const long = `DONE ${"x".repeat(REPORT_UP_SNIPPET_CHARS + 50)}`;
     const f = fixture([lead, { ...worker(), lastMessage: long }]);
     f.turn(WORKER);
     await f.settle();
-    expect(f.delivered[0]!.prompt).toContain(`${"x".repeat(REPORT_UP_SNIPPET_CHARS)}…`);
+    expect(f.delivered[0]!.prompt).toContain("…");
     expect(f.delivered[0]!.prompt).not.toContain("x".repeat(REPORT_UP_SNIPPET_CHARS + 1));
   });
 
@@ -330,6 +448,106 @@ describe("report-up", () => {
 });
 
 // Fulcra 0.2.17 (FU-63): a limit text is limit state, never "finished a turn".
+describe("a result or question in the final text is never silent (FU-402)", () => {
+  test("with finished-turn notices off, a DECISION line still reaches the lead once", async () => {
+    const f = fixture([lead, { ...worker(), lastMessage: "Checked.\nDECISION merge PR #9 now?" }], {
+      enabled: false,
+    });
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered.map((notice) => notice.leadId)).toEqual([LEAD]);
+    expect(f.delivered[0]!.prompt).toContain("DECISION merge PR #9 now?");
+  });
+
+  test("with finished-turn notices off, a question in plain text reaches the lead", async () => {
+    const f = fixture(
+      [lead, { ...worker(), lastMessage: "DONE tests pass.\nQUESTION merge now?" }],
+      {
+        enabled: false,
+      },
+    );
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered.map((notice) => notice.leadId)).toEqual([LEAD]);
+    expect(f.delivered[0]!.prompt).toContain("QUESTION merge now?");
+  });
+
+  test("with finished-turn notices off, plain progress text stays quiet", async () => {
+    const f = fixture([lead, { ...worker(), lastMessage: "Tests pass." }], { enabled: false });
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+  });
+
+  test("a lead on another computer: the worker is told once that its result did not arrive", async () => {
+    for (const enabled of [true, false]) {
+      const f = fixture(
+        [
+          lead,
+          {
+            ...worker({ [REPORTS_TO_LABEL]: `${LEAD}@srv_other` }),
+            lastMessage: "BLOCKED no route",
+          },
+        ],
+        { enabled },
+      );
+      f.turn(WORKER);
+      await f.settle();
+      expect(f.delivered.map((notice) => notice.leadId)).toEqual([WORKER]);
+      expect(f.delivered[0]!.prompt).toContain(`${LEAD}@srv_other`);
+      expect(f.delivered[0]!.prompt).toContain("another computer");
+      // The worker's answer turn was started by that notice, so it sends nothing more.
+      f.turn(WORKER, { text: f.delivered[0]!.prompt });
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+    }
+  });
+
+  test("a result the worker already sent to its lead in this turn is not sent again", async () => {
+    resetAgentMessageLogForTests();
+    for (const [line, enabled, note] of [
+      [LEAD, false, noteAgentMessageDelivered],
+      [`${LEAD}@srv_other`, true, noteAgentMessage],
+    ] as const) {
+      const f = fixture(
+        [lead, { ...worker({ [REPORTS_TO_LABEL]: line }), lastMessage: "DONE merged" }],
+        { enabled },
+      );
+      f.stream(WORKER, { type: "turn_started", provider: "claude" });
+      note(WORKER, LEAD, f.clock.now + 1000);
+      f.clock.now += 2000;
+      f.stream(WORKER, { type: "turn_completed", provider: "claude" });
+      await f.settle();
+      expect(f.delivered).toEqual([]);
+    }
+    resetAgentMessageLogForTests();
+  });
+
+  test("a chat that has its own workers is not treated as a worker", async () => {
+    const sub = {
+      id: "66666666-6666-4666-8666-666666666666",
+      title: "Sub",
+      labels: { [REPORTS_TO_LABEL]: WORKER },
+    };
+    const f = fixture([lead, { ...worker(), lastMessage: "DECISION merge?" }, sub], {
+      enabled: false,
+    });
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+  });
+
+  test("every report-up notice turned off keeps the result quiet", async () => {
+    const f = fixture([lead, { ...worker(), lastMessage: "DECISION merge?" }], {
+      enabled: false,
+      otherEnabled: false,
+    });
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+  });
+});
+
 describe("report-up and usage limits", () => {
   const NOW = Date.parse("2026-10-11T00:00:00Z");
   const SESSION = "You've hit your session limit · resets 3pm (Australia/Brisbane)";
@@ -365,12 +583,12 @@ describe("report-up and usage limits", () => {
     const f = fixture([lead, chat], { now: NOW });
     f.turn(WORKER);
     await f.settle();
-    chat.lastMessage = "Done: tests pass.";
+    chat.lastMessage = "DONE tests pass.";
     f.clock.now = NOW + 6 * 3600_000;
     f.turn(WORKER);
     await f.settle();
     expect(f.delivered).toHaveLength(2);
-    expect(f.delivered[1]!.prompt).toContain("finished a turn: Done: tests pass.");
+    expect(f.delivered[1]!.prompt).toContain("finished a turn: DONE tests pass.");
     chat.lastMessage = SESSION;
     f.turn(WORKER);
     await f.settle();
@@ -531,6 +749,17 @@ describe("report-up and permission prompts", () => {
     expect(f.delivered).toHaveLength(0);
   });
 
+  test("it logs turned off once per agent, not at every turn end", async () => {
+    const lines: string[] = [];
+    const logger = pino({ level: "info" }, { write: (line: string) => lines.push(line) });
+    const f = fixture([lead, worker()], { enabled: false, otherEnabled: false, logger });
+    f.turn(WORKER);
+    await f.settle();
+    f.turn(WORKER);
+    await f.settle();
+    expect(lines.filter((line) => line.includes("Report-up skipped"))).toHaveLength(1);
+  });
+
   test("it stays quiet when report-up is turned off", async () => {
     const f = fixture([lead, worker()], { enabled: false, otherEnabled: false });
     f.stream(WORKER, ask("req-1", "ls"));
@@ -671,7 +900,7 @@ describe("report-up limit state across a restart", () => {
     const before = fixture([lead, chat], { now: NOW, statePath });
     before.turn(WORKER);
     await before.settle();
-    const later = fixture([lead, { ...chat, lastMessage: "Done." }], {
+    const later = fixture([lead, { ...chat, lastMessage: "DONE." }], {
       now: NOW + 8 * 3600_000,
       statePath,
     });
@@ -691,7 +920,12 @@ describe("idle-lead nudge", () => {
   const owned = [
     { project: "fulcra", id: "FU-12", owner: "Lead (11111111)", status: "IN PROGRESS" },
   ];
-  const idleWorker = (): FakeChat => ({ ...worker(), lifecycle: "idle" });
+  // Plain progress text: a result or question would be relayed with finished-turn notices off (FU-402).
+  const idleWorker = (): FakeChat => ({
+    ...worker(),
+    lastMessage: "Tests pass.",
+    lifecycle: "idle",
+  });
 
   test("the lead gets one short message that lists its open items and idle workers", async () => {
     const f = fixture([lead, idleWorker()], { ledger: owned });
@@ -1816,7 +2050,7 @@ describe("report-up coalescing", () => {
     id,
     title,
     labels: { [REPORTS_TO_LABEL]: LEAD },
-    lastMessage,
+    lastMessage: lastMessage.startsWith("You've hit") ? lastMessage : `DONE ${lastMessage}`,
   });
 
   test("while the lead was told in the last 5 minutes, finished workers wait and go out as ONE message", async () => {
@@ -1840,8 +2074,8 @@ describe("report-up coalescing", () => {
     expect(f.delivered).toHaveLength(2);
     const combined = f.delivered[1]!.prompt;
     expect(combined).toContain("2 workers finished a turn since your last update");
-    expect(combined).toContain(`Worker Beta (${WORKER_B}): beta done`);
-    expect(combined).toContain(`Worker Gamma (${WORKER_C}): gamma done`);
+    expect(combined).toContain(`Worker Beta (${WORKER_B}): DONE beta done`);
+    expect(combined).toContain(`Worker Gamma (${WORKER_C}): DONE gamma done`);
     expect(combined).not.toContain("Alpha");
   });
 
@@ -1906,7 +2140,8 @@ describe("report-up coalescing", () => {
     f.timers[0]?.run();
     await f.settle();
     expect(f.delivered).toHaveLength(1);
-    const off = fixture([lead, worker()], { enabled: false });
+    // Plain progress text: a result or question is relayed even when off (FU-402).
+    const off = fixture([lead, { ...worker(), lastMessage: "Tests pass." }], { enabled: false });
     off.turn(WORKER);
     await off.settle();
     expect(off.delivered).toEqual([]);
@@ -1955,7 +2190,8 @@ describe("report-up default", () => {
 
   test("by default no 'finished a turn' or error notice is sent, but a usage-limit notice still is", async () => {
     const byDefault = reportUpSwitches(undefined);
-    const f = fixture([lead, worker()], {
+    // Plain progress text: a result or question is relayed by default (FU-402).
+    const f = fixture([lead, { ...worker(), lastMessage: "Tests pass." }], {
       enabled: byDefault.finishedTurns,
       otherEnabled: byDefault.otherNotices,
     });
@@ -2002,7 +2238,7 @@ describe("combined reports and a limit that starts later", () => {
     id,
     title,
     labels: { [REPORTS_TO_LABEL]: LEAD },
-    lastMessage,
+    lastMessage: lastMessage.startsWith("You've hit") ? lastMessage : `DONE ${lastMessage}`,
   });
 
   test("the lead reaches a limit after the report was queued: nothing is sent, and the report is held until the reset", async () => {
@@ -2086,7 +2322,7 @@ test("a finish notice uses the host link when the main assistant has no local ch
         id: WORKER,
         title: "Remote reporter",
         labels: { [REPORTS_TO_LABEL]: "role:main-assistant" },
-        lastMessage: "Done.",
+        lastMessage: "DONE.",
       },
     ],
     {
@@ -2100,7 +2336,31 @@ test("a finish notice uses the host link when the main assistant has no local ch
   await f.settle();
   expect(notices).toHaveLength(1);
   expect(notices[0]).toContain(`${WORKER}:finished:`);
-  expect(notices[0]).toContain("Done.");
+  expect(notices[0]).toContain("DONE.");
+  expect(f.delivered).toEqual([]);
+});
+
+test("a remote lead's turn with no DONE, BLOCKED or question is not sent to the main assistant (FU-454)", async () => {
+  const notices: string[] = [];
+  const f = fixture(
+    [
+      {
+        id: WORKER,
+        title: "Remote lead",
+        labels: { [REPORTS_TO_LABEL]: "role:main-assistant" },
+        lastMessage: "Noted. No action needed.",
+      },
+    ],
+    {
+      remoteNotice: async (id, prompt, kind) => {
+        notices.push(`${id}:${kind}:${prompt}`);
+        return true;
+      },
+    },
+  );
+  f.turn(WORKER);
+  await f.settle();
+  expect(notices).toEqual([]);
   expect(f.delivered).toEqual([]);
 });
 
@@ -2110,11 +2370,11 @@ describe("report-up native policy", () => {
     const f = nativeFixture([lead, worker()]);
     try {
       f.begin(WORKER);
-      f.end(WORKER, "snapshot result");
-      f.end(WORKER, "duplicate result");
+      f.end(WORKER, "DONE snapshot result");
+      f.end(WORKER, "DONE duplicate result");
       await f.settle();
       expect(f.delivered).toHaveLength(1);
-      expect(f.delivered[0]!.prompt).toContain("snapshot result");
+      expect(f.delivered[0]!.prompt).toContain("DONE snapshot result");
       expect(f.delivered[0]!.prompt).not.toContain("Done: tests pass");
     } finally {
       f.cleanup();
@@ -2250,7 +2510,11 @@ test("WebSocket configuration and native report-up preserve armed finish ownersh
   vi.stubEnv("FULCRA_LEDGER_DIR", ledgerDir);
   const daemon = await createTestPaseoDaemon({
     agentClients: {
-      codex: createTestAgentClient("codex", { onStartTurn: (prompt) => prompts.push(prompt) }),
+      codex: createTestAgentClient("codex", {
+        onStartTurn: (prompt) => prompts.push(prompt),
+        // FU-483: only a result line goes up as a finish notice.
+        response: (prompt) => `DONE ${prompt}`,
+      }),
     },
   });
   const client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws` });
@@ -2382,7 +2646,7 @@ test("native host-link notices use the end snapshot and respect disabled finish 
   });
   try {
     f.begin(WORKER);
-    f.end(WORKER, "native remote result");
+    f.end(WORKER, "DONE native remote result");
     await f.settle();
     expect(notices).toHaveLength(1);
     expect(notices[0]).toContain("native remote result");
@@ -2654,7 +2918,7 @@ test("worker finish notices include total session spend across turns and account
       id: WORKER,
       title: "Worker",
       labels: { [REPORTS_TO_LABEL]: LEAD },
-      lastMessage: "Done",
+      lastMessage: "DONE",
       costRecords: {
         cursors: {},
         turns: {
@@ -2735,3 +2999,474 @@ test.each(["DONE", "BLOCKED"])(
     }
   },
 );
+
+describe("FU-424 a lost finish notice reaches the lead once", () => {
+  const MESSAGE_ID = "paseo-notify:fu424-notice";
+  const roots: string[] = [];
+
+  afterEach(() => {
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  async function ownedFixture(input: {
+    notice: Pick<FinishNotice, "status">;
+    leadLifecycle?: string;
+    leadHasMessage?: boolean;
+    deliver?: (attempt: number) => void;
+    /** FU-439: the worker's final message; default is a DONE line. */
+    lastMessage?: string;
+    logLines?: string[];
+  }) {
+    const root = mkdtempSync(join(tmpdir(), "fu424-"));
+    roots.push(root);
+    const storage = new AgentStorage(join(root, "agents"), createTestLogger());
+    const chats = new Map<string, FakeChat>([
+      [LEAD, { id: LEAD, title: "Lead", labels: {}, lifecycle: input.leadLifecycle ?? "idle" }],
+      [
+        WORKER,
+        {
+          id: WORKER,
+          title: "Worker",
+          labels: { [REPORTS_TO_LABEL]: LEAD },
+          lifecycle: "idle",
+          lastMessage: input.lastMessage ?? "DONE checked",
+        },
+      ],
+    ]);
+    const at = new Date().toISOString();
+    for (const chat of chats.values())
+      await storage.upsert({
+        id: chat.id,
+        provider: "claude",
+        cwd: root,
+        createdAt: at,
+        updatedAt: at,
+        title: chat.title,
+        labels: chat.labels,
+        lastStatus: "idle",
+        ...(chat.id === WORKER
+          ? {
+              finishNotice: {
+                parentId: LEAD,
+                owner: "report-up" as const,
+                messageId: MESSAGE_ID,
+                armedAt: Date.now(),
+                ...(input.notice.status === "armed"
+                  ? {}
+                  : { turnId: "turn-1", reason: "finished" as const }),
+                ...input.notice,
+              },
+            }
+          : {}),
+      });
+    const delivered: Array<{ leadId: string; messageId?: string }> = [];
+    let attempts = 0;
+    const manager = {
+      getAgent: (id: string) => chats.get(id) ?? null,
+      listAgents: () => [...chats.values()],
+      hasInFlightRun: (id: string) => chats.get(id)?.lifecycle === "running",
+      getPendingPermissions: () => [],
+      getLastAssistantMessage: async (id: string) => chats.get(id)?.lastMessage ?? null,
+      nativeReportOwnsFinish: () => false,
+      archiveLedgerTransferOffer: async () => "",
+      nativeFinishReceiptStatus: async () => "missing",
+      // The lead's timeline holds every notice that reached it.
+      hasSubmittedFinishMessageNow: (leadId: string, messageId: string) =>
+        input.leadHasMessage === true ||
+        delivered.some((item) => item.leadId === leadId && item.messageId === messageId),
+    } as unknown as AgentManager;
+    const timers: Array<{ run: () => void; ms: number }> = [];
+    const service = new ReportUpService({
+      agentManager: manager,
+      agentStorage: storage,
+      isEnabled: () => false,
+      isOtherEnabled: () => true,
+      isNudgeEnabled: () => false,
+      localServerId: "srv_local",
+      logger: input.logLines
+        ? pino({ level: "info" }, { write: (line: string) => void input.logLines!.push(line) })
+        : createTestLogger(),
+      readLedger: () => [],
+      setTimer: (run, ms) => timers.push({ run, ms }),
+      deliver: async (leadId, _prompt, messageId) => {
+        attempts += 1;
+        input.deliver?.(attempts);
+        delivered.push({ leadId, messageId });
+      },
+    });
+    const stream = (agentId: string, event: object) =>
+      service.onEvent({ type: "agent_stream", agentId, event } as AgentManagerEvent);
+    return {
+      service,
+      delivered,
+      attempts: () => attempts,
+      setLastMessage: (text: string) => (chats.get(WORKER)!.lastMessage = text),
+      setLeadLifecycle: (lifecycle: string) => (chats.get(LEAD)!.lifecycle = lifecycle),
+      finishTurn: (agentId: string) => {
+        stream(agentId, { type: "turn_started", provider: "claude" });
+        stream(agentId, {
+          type: "timeline",
+          provider: "claude",
+          item: { type: "user_message", text: "do the task" },
+        });
+        stream(agentId, { type: "turn_completed", provider: "claude" });
+      },
+      // FU-427: a turn that may send to the lead before it ends, and may end in an error.
+      runTurn: (agentId: string, during?: () => void, error?: string) => {
+        stream(agentId, { type: "turn_started", provider: "claude" });
+        stream(agentId, {
+          type: "timeline",
+          provider: "claude",
+          item: { type: "user_message", text: "do the task" },
+        });
+        during?.();
+        stream(
+          agentId,
+          error
+            ? { type: "turn_failed", provider: "claude", error }
+            : { type: "turn_completed", provider: "claude" },
+        );
+      },
+      idle: (agentId: string) =>
+        service.onEvent({
+          type: "agent_state",
+          agent: { ...chats.get(agentId)!, lifecycle: "idle" },
+        } as unknown as AgentManagerEvent),
+      retryDelays: () =>
+        timers.filter((timer) => timer.ms >= FINISH_RETRY_BASE_MS).map((timer) => timer.ms),
+      runRetries: () => {
+        for (const timer of timers.splice(0)) timer.run();
+      },
+      notice: () => storage.getFinishNotice(WORKER, MESSAGE_ID),
+    };
+  }
+
+  const refuseFirst = (attempt: number) => {
+    if (attempt === 1) throw new Error("Active turn changed before steering could be delivered");
+  };
+  // File syncs can be slow on a loaded Windows host.
+  const until = async (check: () => unknown) => {
+    const { vi } = await import("vitest");
+    return vi.waitFor(check, { timeout: 5000 });
+  };
+  const quiet = () => new Promise((resolve) => setTimeout(resolve, 50));
+
+  test("a refusal while the lead is already idle is retried, and the lead gets the notice once", async () => {
+    const f = await ownedFixture({ notice: { status: "armed" }, deliver: refuseFirst });
+    try {
+      f.finishTurn(WORKER);
+      await until(async () =>
+        expect(await f.notice()).toMatchObject({ status: "pending", retryAfterRefusal: true }),
+      );
+      expect(f.delivered).toEqual([]);
+      // The lead was idle before the refusal, so no new idle event comes. The retry must not wait for one.
+      await until(() => expect(f.retryDelays()).toEqual([FINISH_RETRY_BASE_MS]));
+      f.runRetries();
+      await until(async () => expect(await f.notice()).toMatchObject({ status: "delivered" }));
+      f.idle(LEAD);
+      f.runRetries();
+      await f.service.recoverOwnedFinishes();
+      await quiet();
+      expect(f.delivered).toEqual([{ leadId: LEAD, messageId: MESSAGE_ID }]);
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  test("a retry that is refused again is retried again after a longer wait", async () => {
+    const f = await ownedFixture({
+      notice: { status: "armed" },
+      deliver: (attempt) => {
+        if (attempt <= 2) throw new Error("Active turn changed before steering could be delivered");
+      },
+    });
+    try {
+      f.finishTurn(WORKER);
+      await until(() => expect(f.retryDelays()).toEqual([FINISH_RETRY_BASE_MS]));
+      f.runRetries();
+      await until(() => expect(f.retryDelays()).toEqual([FINISH_RETRY_BASE_MS * 2]));
+      f.runRetries();
+      await until(async () => expect(await f.notice()).toMatchObject({ status: "delivered" }));
+      expect(f.attempts()).toBe(3);
+      expect(f.delivered).toEqual([{ leadId: LEAD, messageId: MESSAGE_ID }]);
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  test("a refusal while the lead is busy is sent from storage on the next lead idle event", async () => {
+    const f = await ownedFixture({
+      notice: { status: "armed" },
+      leadLifecycle: "running",
+      deliver: refuseFirst,
+    });
+    try {
+      f.finishTurn(WORKER);
+      await until(async () =>
+        expect(await f.notice()).toMatchObject({ status: "pending", retryAfterRefusal: true }),
+      );
+      expect(f.retryDelays()).toEqual([]);
+      f.setLeadLifecycle("idle");
+      f.idle(LEAD);
+      await until(async () => expect(await f.notice()).toMatchObject({ status: "delivered" }));
+      f.idle(LEAD);
+      await quiet();
+      expect(f.delivered).toEqual([{ leadId: LEAD, messageId: MESSAGE_ID }]);
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  test("a notice left sending at restart is sent once with the same id when the lead has no copy", async () => {
+    const f = await ownedFixture({ notice: { status: "sending" } });
+    try {
+      await f.service.recoverOwnedFinishes();
+      await f.service.recoverOwnedFinishes();
+      expect(await f.notice()).toMatchObject({ status: "delivered", deliveredBy: "report-up" });
+      expect(f.delivered).toEqual([{ leadId: LEAD, messageId: MESSAGE_ID }]);
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  test("an unknown notice that the lead already has is closed without a second send", async () => {
+    const f = await ownedFixture({ notice: { status: "unknown" }, leadHasMessage: true });
+    try {
+      f.idle(LEAD);
+      await until(async () =>
+        expect(await f.notice()).toMatchObject({ status: "delivered", deliveredBy: "report-up" }),
+      );
+      expect(f.delivered).toEqual([]);
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  test("FU-427 a turn that already sent to its lead sends no finish notice", async () => {
+    resetAgentMessageLogForTests();
+    const f = await ownedFixture({ notice: { status: "armed" } });
+    try {
+      f.runTurn(WORKER, () => noteAgentMessageDelivered(WORKER, LEAD));
+      await until(async () =>
+        expect(await f.notice()).toMatchObject({ status: "delivered", deliveredBy: "report-up" }),
+      );
+      await quiet();
+      expect(f.delivered).toEqual([]);
+    } finally {
+      f.service.stop();
+      resetAgentMessageLogForTests();
+    }
+  });
+
+  test.each(["during the held turn", "after the held turn"])(
+    "FU-519 a report delivered %s suppresses the later result notice",
+    async (delivery) => {
+      resetAgentMessageLogForTests();
+      const logLines: string[] = [];
+      const f = await ownedFixture({
+        notice: { status: "armed" },
+        lastMessage: "I sent the result to the lead.",
+        logLines,
+      });
+      const now = Date.now();
+      const clock = mock.spyOn(Date, "now").mockReturnValue(now);
+      try {
+        f.runTurn(WORKER, () => {
+          if (delivery === "during the held turn") noteAgentMessageDelivered(WORKER, LEAD);
+        });
+        await until(() => expect(logLines.join(" ")).toContain("Finish notice held"));
+        if (delivery === "after the held turn") noteAgentMessageDelivered(WORKER, LEAD);
+        expect(await f.notice()).toMatchObject({ status: "armed" });
+        clock.mockReturnValue(now + 100);
+        f.setLastMessage("DONE checked");
+        f.runTurn(WORKER);
+        await until(async () => expect(await f.notice()).toMatchObject({ status: "delivered" }));
+        expect(f.delivered).toEqual([]);
+      } finally {
+        clock.mockRestore();
+        f.service.stop();
+        resetAgentMessageLogForTests();
+      }
+    },
+  );
+
+  test("FU-427 a turn that ends without a send still sends one finish notice", async () => {
+    resetAgentMessageLogForTests();
+    const f = await ownedFixture({ notice: { status: "armed" } });
+    try {
+      f.runTurn(WORKER);
+      await until(async () => expect(await f.notice()).toMatchObject({ status: "delivered" }));
+      expect(f.delivered).toEqual([{ leadId: LEAD, messageId: MESSAGE_ID }]);
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  test("FU-427 an error end still sends one notice, even after a send", async () => {
+    resetAgentMessageLogForTests();
+    const f = await ownedFixture({ notice: { status: "armed" } });
+    try {
+      f.runTurn(WORKER, () => noteAgentMessageDelivered(WORKER, LEAD), "Provider crashed");
+      await until(async () => expect(await f.notice()).toMatchObject({ status: "delivered" }));
+      expect(f.delivered).toEqual([{ leadId: LEAD, messageId: MESSAGE_ID }]);
+    } finally {
+      f.service.stop();
+      resetAgentMessageLogForTests();
+    }
+  });
+
+  test("FU-427 a send from an earlier turn does not hide this turn's notice", async () => {
+    resetAgentMessageLogForTests();
+    noteAgentMessageDelivered(WORKER, LEAD, 1);
+    const f = await ownedFixture({ notice: { status: "armed" } });
+    try {
+      f.runTurn(WORKER);
+      await until(async () => expect(await f.notice()).toMatchObject({ status: "delivered" }));
+      expect(f.delivered).toEqual([{ leadId: LEAD, messageId: MESSAGE_ID }]);
+    } finally {
+      f.service.stop();
+      resetAgentMessageLogForTests();
+    }
+  });
+
+  const sentOnce = async (lastMessage: string) => {
+    resetAgentMessageLogForTests();
+    const f = await ownedFixture({ notice: { status: "armed" }, lastMessage });
+    try {
+      f.runTurn(WORKER);
+      await until(async () => expect(await f.notice()).toMatchObject({ status: "delivered" }));
+      return f.delivered;
+    } finally {
+      f.service.stop();
+    }
+  };
+
+  test.each([
+    "DONE tests pass",
+    "BLOCKED needs a key",
+    "DECISION ship now or wait",
+    "QUESTION which option",
+    "RISK the key may leak",
+  ])("FU-483 (a) a final message that starts with %s delivers one notice", async (message) => {
+    expect(
+      await sentOnce(`${message}
+more detail`),
+    ).toEqual([{ leadId: LEAD, messageId: MESSAGE_ID }]);
+  });
+
+  test("FU-483 (b) a final message that ends with a question mark but has no result line delivers nothing", async () => {
+    const logLines: string[] = [];
+    const f = await ownedFixture({
+      notice: { status: "armed" },
+      lastMessage: "I found two options. Which one should I use?",
+      logLines,
+    });
+    try {
+      f.runTurn(WORKER);
+      await until(() => expect(logLines.join(" ")).toContain("Finish notice held"));
+      await quiet();
+      expect(f.delivered).toEqual([]);
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  test("FU-483 (b2) a result line after other text wakes the lead", async () => {
+    expect(await sentOnce("I found two options.\nQUESTION which one should I use?")).toHaveLength(
+      1,
+    );
+  });
+
+  test("FU-439 (c) an error end delivers one notice, whatever the last message", async () => {
+    const f = await ownedFixture({
+      notice: { status: "armed" },
+      lastMessage: "Started the build, will continue.",
+    });
+    try {
+      f.runTurn(WORKER, undefined, "Provider crashed");
+      await until(async () => expect(await f.notice()).toMatchObject({ status: "delivered" }));
+      expect(f.delivered).toHaveLength(1);
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  test("FU-439 (d) a permission request delivers one notice, whatever the last message", async () => {
+    const f = fixture([lead, { ...worker(), lastMessage: "Started the build, will continue." }]);
+    f.stream(WORKER, {
+      type: "permission_requested",
+      provider: "claude",
+      request: { id: "p1", name: "Bash", input: { command: "make" } },
+    });
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.prompt).toContain("Tool: Bash");
+    f.service.stop();
+  });
+
+  test("FU-483 a started X, will continue turn delivers nothing, logs the held line and stays armed", async () => {
+    const logLines: string[] = [];
+    const f = await ownedFixture({
+      notice: { status: "armed" },
+      lastMessage: "I started the render. I will continue when it finishes.",
+      logLines,
+    });
+    try {
+      f.runTurn(WORKER);
+      await until(() => expect(logLines.join(" ")).toContain("Finish notice held: no result line"));
+      await quiet();
+      expect(f.delivered).toEqual([]);
+      expect((await f.notice())?.status).toBe("armed");
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  // Replay: 50 worker turns. The mix is an assumption from the FU-439 ticket (80% of finish notices woke the lead
+  // for nothing): 40 progress turns, 6 DONE, 2 BLOCKED or DECISION, 1 question, 1 error.
+  test("FU-483 a replay of 50 worker turns sends only the 10 that carry a result line or an error", async () => {
+    const progress = [
+      "I started the build. I will continue when it finishes.",
+      "Tests are running in the background, waiting for them.",
+      "Pushed the branch and opened the PR. Next I check the hooks.",
+      "Read the code. Starting the change now.",
+    ];
+    const turns: Array<{ message: string; error?: string; sends: boolean }> = [
+      ...Array.from({ length: 40 }, (_, i) => ({
+        message: progress[i % progress.length]!,
+        sends: false,
+      })),
+      ...Array.from({ length: 6 }, (_, i) => ({
+        message: `DONE item ${i} PR checked`,
+        sends: true,
+      })),
+      { message: "BLOCKED the key is missing", sends: true },
+      { message: "DECISION ship the patch or wait", sends: true },
+      { message: "Two options exist.\nQUESTION which one do you want?", sends: true },
+      { message: "Started the render.", error: "Provider crashed", sends: true },
+    ];
+    const held = (lines: string[]) => lines.some((line) => line.includes("Finish notice held"));
+    let sent = 0;
+    for (const turn of turns) {
+      const logLines: string[] = [];
+      const f = await ownedFixture({
+        notice: { status: "armed" },
+        lastMessage: turn.message,
+        logLines,
+      });
+      try {
+        f.runTurn(WORKER, undefined, turn.error);
+        // Wait for the turn's real outcome, not a fixed time: a send shows in delivered, a held turn logs it.
+        await until(() =>
+          turn.sends ? expect(f.delivered).toHaveLength(1) : expect(held(logLines)).toBe(true),
+        );
+        await quiet();
+        sent += f.delivered.length;
+      } finally {
+        f.service.stop();
+      }
+    }
+    expect(turns).toHaveLength(50);
+    expect(sent).toBe(10);
+  }, 60_000);
+});

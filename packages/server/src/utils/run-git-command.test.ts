@@ -1,3 +1,5 @@
+import pino from "pino";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -752,5 +754,56 @@ describe("runGitCommand", () => {
       expect.objectContaining({ exitCode: 0, stdout: "third", truncated: false }),
       expect.objectContaining({ exitCode: 0, stdout: "fourth", truncated: false }),
     ]);
+  });
+});
+
+describe("Git queue wait warnings", () => {
+  afterEach(() => {
+    fakeSpawnController.reset();
+    vi.useRealTimers();
+    vi.resetModules();
+    vi.unstubAllEnvs();
+  });
+
+  it("logs once at 60 seconds while queued and clears the warning when spawning starts", async () => {
+    const { runGitCommand, configureGitProcessPolicy } = await loadRunGitCommand(1);
+    const rows: Array<{
+      msg: string;
+      waitMs: number;
+      operation: string;
+      active: number;
+      pending: number;
+    }> = [];
+    const logger = pino({ level: "warn" }, { write: (line) => rows.push(JSON.parse(line)) });
+    configureGitProcessPolicy({ maxProcessesPerSecond: 1000, maxProcessConcurrency: 1 }, logger);
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    enqueueSpawnBehaviors({ delayMs: 180_000 });
+    const blocker = runGitCommand(["status"], { cwd: process.cwd(), timeout: 180_000 });
+    const queued = runGitCommand(["rev-parse", "--show-toplevel"], { cwd: process.cwd() });
+    try {
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(rows).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(rows).toEqual([
+        expect.objectContaining({
+          msg: "Git command has waited 60 seconds for a process slot",
+          operation: "rev-parse",
+          waitMs: 60_000,
+          active: 1,
+          pending: 1,
+        }),
+      ]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(rows).toHaveLength(1);
+    } finally {
+      fakeSpawnController.processes[0]!.complete();
+      await blocker;
+      await nextTurn();
+      await vi.advanceTimersByTimeAsync(0);
+      await queued;
+      await vi.advanceTimersByTimeAsync(60_000);
+      vi.useRealTimers();
+    }
+    expect(rows).toHaveLength(1);
   });
 });

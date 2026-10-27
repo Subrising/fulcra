@@ -1,3 +1,5 @@
+import { DaemonClientClosedError } from "@getpaseo/client/internal/daemon-client";
+import { UnconfirmedMessageSendError } from "@/composer/submission/model";
 import type { SelectedFile } from "@/attachments/selected-file";
 import type { ForgeSearchItem } from "@getpaseo/protocol/messages";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
@@ -226,7 +228,11 @@ export async function dispatchComposerAgentMessage(
     });
     input.submission.accept(input.agentId, clientMessageId);
   } catch (error) {
-    input.submission.reject(input.agentId, clientMessageId);
+    const outcome = input.submission.reject(input.agentId, clientMessageId);
+    if (error instanceof DaemonClientClosedError) {
+      if (outcome === "accepted") return;
+      throw new UnconfirmedMessageSendError(clientMessageId);
+    }
     throw error;
   }
 }

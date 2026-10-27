@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { ScrollView, Text, TextInput, View } from "react-native";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "./read-on-open";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
 import { WorkButton } from "./work-button";
@@ -39,10 +39,11 @@ const ROLE_LABEL: Record<DefaultRole, string> = {
   light: "Light work: summaries, searches, test runs and monitors",
 };
 const PROVIDER_LABEL = { claude: "Claude", codex: "Codex" } as const;
-// Update-7 W3: plain names for the permission modes Settings offers (bypassPermissions is never offered).
+// Plain names for the permission modes in Settings.
 const MODE_LABEL: Record<string, string> = {
   auto: "Auto",
   acceptEdits: "Accept edits",
+  bypassPermissions: "Bypass",
   default: "Always ask",
   plan: "Plan only",
   "full-access": "Full access",
@@ -51,6 +52,7 @@ const MODE_LABEL: Record<string, string> = {
 const MODE_HELP: Record<string, string> = {
   auto: "Claude reviews risky actions itself; no routine prompts.",
   acceptEdits: "File edits go ahead; other actions ask.",
+  bypassPermissions: "Runs actions without permission prompts.",
   default: "Asks before every action.",
   plan: "Plans only; changes nothing.",
   "full-access":
@@ -150,8 +152,6 @@ export function AccountsSurface({ theme, layout, host }: Props) {
   const query = useQuery({
     queryKey: ["orca-organization", "accounts"],
     queryFn: () => read({}),
-    refetchInterval: 15000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const [notice, setNotice] = useState<string | null>(null),

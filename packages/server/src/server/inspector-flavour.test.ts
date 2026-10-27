@@ -25,8 +25,19 @@ describe("packaged inspector (FU-79)", () => {
     expect(read("packages/server/scripts/supervisor-entrypoint.ts")).toContain(
       "...packagedInspectorFlags()",
     );
+    // FU-413: the packaged worker starts through the entry point runner; that path needs the flags too.
+    expect(read("packages/server/scripts/supervisor-entrypoint.ts")).toContain(
+      "packagedWorkerSpawnSpec(",
+    );
     expect(read("packages/desktop/src/daemon/node-entrypoint-launcher.ts")).toContain(
       "...packagedInspectorFlags()",
+    );
+  });
+
+  it("bootstrap passes the inspector flags to the controller host (FU-466)", () => {
+    // bootstrap has no unit seam for distribution.start, so this checks the one call site in the source.
+    expect(read("packages/server/src/server/bootstrap.ts")).toContain(
+      "nodeFlags: packagedInspectorFlags(),",
     );
   });
 

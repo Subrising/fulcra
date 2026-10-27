@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "./read-on-open";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
 import {
@@ -84,8 +84,6 @@ export function ChannelsSurface({ theme, layout }: Pick<PluginSurfaceProps, "the
   const query = useQuery({
     queryKey: ["orca-organization", "channels"],
     queryFn: () => read({}),
-    refetchInterval: 30000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const [code, setCode] = useState<{

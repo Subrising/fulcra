@@ -107,7 +107,7 @@ test("reconnect disposes the old API scope while restoring only opted-in view st
   expect(first.queryClient.getQueryCache().getAll()).toEqual([]);
   h.plugins.installCatalog("host", [entry], { client: h.client });
   const current = h.plugins.getSnapshot()[0]!;
-  expect(current.queryClient).not.toBe(first.queryClient);
+  expect(current.queryClient).toBe(first.queryClient);
   expect(current.queryClient.getQueryData(["view"])).toEqual({ selected: "book", zoom: 1.25 });
   expect(current.queryClient.getQueryData(["authority"])).toBeUndefined();
   h.plugins.removeHost("host");

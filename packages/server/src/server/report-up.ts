@@ -1,3 +1,4 @@
+import { IdleTurnRecovery } from "./idle-turn-recovery.js";
 import { sessionCost } from "./agent/session-cost.js";
 import { LedgerDirectoryWatch } from "./ledger-routing/watch.js";
 import { LedgerRoutingService, parseWorkerResult } from "./ledger-routing/service.js";
@@ -57,6 +58,7 @@ import {
 import { CodexAppServerRpcError } from "./agent/providers/codex/app-server-transport.js";
 import type { DaemonConfigStore } from "./daemon-config-store.js";
 import { heldSendsFor } from "./held-sends.js";
+import { leadMoveTarget, readLeadMoves, relayLeadNotice, type LeadMove } from "./lead-moves.js";
 import { isArchiveLead } from "./agent/archive-policy.js";
 import { respondToAgentPermission } from "./agent/permission-response.js";
 import {
@@ -66,6 +68,8 @@ import {
   isNudgeOwnerSkipped,
   type LedgerRow,
 } from "./ledger-items.js";
+import { finishNoticeWanted } from "./finish-notice-filter.js";
+import { lastAgentMessageAt, lastAgentMessageDeliveredAt } from "./agent-message-log.js";
 import type { HostLinkNoticeKind } from "./host-link-contracts.js";
 import { classifyEndingAssistantMessage, classifyFailedTurn } from "./limit-resume/detect.js";
 import {
@@ -146,8 +150,12 @@ export interface ReportUpDeps {
   getNudgeMinIntervalMinutes?: () => number;
   localServerId: string | null;
   logger: Logger;
+  /** FU-444: the leads that moved (lead-moves.ts). A notice for an old lead goes to its new lead. */
+  leadMoves?: () => readonly LeadMove[];
+  /** Runs a relay command for a lead on another computer; tests replace it. */
+  relay?: (file: string, args: string[]) => Promise<void>;
   /** The delivery step; tests replace it. */
-  deliver?: (leadId: string, prompt: string) => Promise<void>;
+  deliver?: (leadId: string, prompt: string, messageId?: string) => Promise<void>;
   /** The clock and the timer; tests replace them. */
   now?: () => number;
   setTimer?: (run: () => void, ms: number) => void;
@@ -213,6 +221,33 @@ function looksLikeWorker(worker: LineAgent): boolean {
   );
 }
 
+const LEAD_ON_ANOTHER_COMPUTER = "lead on another computer";
+
+interface UnseenTurn {
+  worker: LineAgent;
+  failed: boolean;
+  observedLast: string | null | undefined;
+  startedAt: number | undefined;
+}
+
+/**
+ * The worker sent to its lead since the turn began: a delivered local send (FU-427), or for a lead on another computer
+ * the source check of an SSH relay. A failed relay is shown to the worker by the CLI itself.
+ */
+function sentToLeadDuring(
+  worker: LineAgent,
+  startedAt: number | undefined,
+  localServerId: string | null,
+): boolean {
+  const [leadId, server] = reportsTo(worker)?.split("@", 2) ?? [];
+  if (!leadId || startedAt === undefined) return false;
+  const remote = server !== undefined && server !== localServerId;
+  const at = remote
+    ? lastAgentMessageAt(worker.id, leadId)
+    : lastAgentMessageDeliveredAt(worker.id, leadId);
+  return at !== null && at >= startedAt;
+}
+
 /** A chat's lead chat on this computer (fulcra.reports-to, else its parent), or the reason there is none. */
 export async function leadChatOf(
   store: LineStore,
@@ -228,13 +263,25 @@ export async function leadChatOf(
     leadId = role.agentId;
   }
   const [id, server] = leadId.split("@", 2);
-  if (server !== undefined && server !== localServerId) return { skip: "lead on another computer" };
+  if (server !== undefined && server !== localServerId) return { skip: LEAD_ON_ANOTHER_COMPUTER };
   if (!id || id === worker.id) return { skip: "no lead chat" };
   return { id };
 }
 
 export { PERMISSION_NOTICE_GRACE_MS } from "./permission-notice.js";
 const NUDGE_DELIVERY_TIMEOUT_MS = 60_000;
+/**
+ * FU-424: a refused or unknown finish notice to an idle lead is tried again after 2 s, then 4 s, up to 60 s apart.
+ * After the timed attempts, the lead's next idle event or the next boot tries it again from the stored notice.
+ */
+export const FINISH_RETRY_BASE_MS = 2_000;
+export const FINISH_RETRY_MAX_MS = 60_000;
+export const FINISH_RETRY_TIMED_ATTEMPTS = 8;
+
+/** The notices that report-up stores as "sending" before the provider call, so storage holds their outcome. */
+function durableFinish(notice: FinishNotice): boolean {
+  return notice.owner === "report-up" || notice.reason === "stopped";
+}
 interface PendingNudge {
   handoff?: object;
   deliveryRecorded?: boolean;
@@ -255,12 +302,15 @@ interface NudgeState {
 }
 
 export class ReportUpService {
+  private readonly idleTurns: IdleTurnRecovery;
   private readonly observer: import("../../../../plugins/fulcra-agent-policy/server/report-observer.mjs").ReportUpObserver;
   private stopped = false;
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
   private readonly finishOwners = new Map<string, boolean>();
   private readonly processingOwned = new Set<string>();
-  private readonly finishRetriesOnIdle = new Set<string>();
+  private readonly skippedTurnedOff = new Set<string>();
+  private readonly finishRetryAttempts = new Map<string, number>();
+  private readonly finishRetryTimers = new Set<string>();
   private readonly store: LineStore;
   private readonly limited = new Map<string, LimitedChat>();
   private archiveStateKnown = true;
@@ -275,7 +325,26 @@ export class ReportUpService {
   private ledgerDebounce?: ReturnType<typeof setTimeout>;
   private readonly nudgeDeliveredAt = new Map<string, number>();
 
-  constructor(private readonly deps: ReportUpDeps) {
+  private readonly deps: ReportUpDeps;
+
+  constructor(deps: ReportUpDeps) {
+    const deliver = deps.deliver;
+    // FU-444: the test delivery step follows lead moves as send() does.
+    this.deps = deliver
+      ? {
+          ...deps,
+          deliver: async (leadId, prompt, messageId) => {
+            const to = await this.routeMovedLead(leadId, prompt);
+            if (to) await deliver(to, prompt, messageId);
+          },
+        }
+      : deps;
+    this.idleTurns = new IdleTurnRecovery({
+      agentManager: deps.agentManager,
+      logger: deps.logger,
+      stopped: () => this.stopped,
+      blocked: (id, reason) => this.blockedIdleTurn(id, reason),
+    });
     this.store = lineStoreOf({ agentManager: deps.agentManager, agentStorage: deps.agentStorage });
     this.observer = new (loadAgentPolicy("report-observer").ReportUpObserver)({
       now: () => this.now(),
@@ -434,7 +503,7 @@ export class ReportUpService {
     if (event.type === "agent_state" && event.agent.lifecycle === "closed")
       this.observer.close(event.agent.id);
     if (event.type === "agent_state" && event.agent.lifecycle === "idle") {
-      this.retryRefusedFinishesOnIdle(event.agent.id);
+      this.sweepFinishNotices(event.agent.id);
       void this.deps.routing
         ?.wake()
         .catch((err: unknown) =>
@@ -451,35 +520,93 @@ export class ReportUpService {
     }
   }
 
-  private retryRefusedFinishesOnIdle(parentId: string): void {
+  /**
+   * FU-424: the stored notices are the record of a retry, not a memory set. When a lead becomes idle, every pending or
+   * unknown notice from its current children is delivered or resolved.
+   */
+  private sweepFinishNotices(parentId: string): void {
     if (this.stopped) return;
-    for (const childId of this.finishRetriesOnIdle) {
-      // Adoption can change the parent while a refused notice waits for an idle event.
-      const child =
-        this.deps.agentManager.getAgent(childId) ?? this.deps.agentStorage.getCached(childId);
-      const currentParentId = finishNoticeParentId(child?.labels);
-      if (!currentParentId || child?.archivedAt) {
-        this.finishRetriesOnIdle.delete(childId);
-        continue;
-      }
-      if (currentParentId !== parentId) continue;
-      this.finishRetriesOnIdle.delete(childId);
-      void this.deps.agentStorage
-        .get(childId)
-        .then((record) => {
-          if (!record) return undefined;
-          return Promise.all(
-            storedFinishNotices(record).map((notice) => {
-              if (notice.status === "pending" && notice.retryAfterRefusal)
-                return this.deliverOwnedFinish(childId, notice, false);
-              return undefined;
-            }),
+    void this.deps.agentStorage
+      .list()
+      .then((records) =>
+        Promise.all(
+          records.flatMap((record) => {
+            // Adoption can change the parent while a notice waits; the current parent receives it.
+            if (record.archivedAt || finishNoticeParentId(record.labels) !== parentId) return [];
+            return storedFinishNotices(record).map((notice) =>
+              this.retryStoredFinish(record.id, notice),
+            );
+          }),
+        ),
+      )
+      .catch((err: unknown) =>
+        this.deps.logger.warn({ err, parentId }, "Finish notice sweep failed"),
+      );
+  }
+
+  private async retryStoredFinish(childId: string, notice: FinishNotice): Promise<void> {
+    if (!durableFinish(notice)) return;
+    if (notice.status === "unknown") await this.resolveUnknownFinish(childId, notice);
+    else if (notice.status === "pending") await this.deliverOwnedFinish(childId, notice, false);
+  }
+
+  /** A busy lead gets the retry from its next idle sweep. */
+  private leadBusy(parentId: string): boolean {
+    const lifecycle = this.deps.agentManager.getAgent(parentId)?.lifecycle;
+    return lifecycle === "running" || lifecycle === "initializing";
+  }
+
+  /**
+   * FU-424: a refused notice used to wait for the lead's next idle event, but a lead whose turn ended during the send
+   * is already idle and sends no new event. An idle lead now gets a timed retry with a bounded backoff.
+   */
+  private scheduleFinishRetry(childId: string, notice: FinishNotice): void {
+    const { messageId, parentId } = notice;
+    if (this.stopped || this.finishRetryTimers.has(messageId) || this.leadBusy(parentId)) return;
+    const attempt = this.finishRetryAttempts.get(messageId) ?? 0;
+    if (attempt >= FINISH_RETRY_TIMED_ATTEMPTS) return;
+    this.finishRetryAttempts.set(messageId, attempt + 1);
+    this.finishRetryTimers.add(messageId);
+    this.schedule(
+      () => {
+        this.finishRetryTimers.delete(messageId);
+        if (this.leadBusy(parentId)) return;
+        void this.deps.agentStorage
+          .getFinishNotice(childId, messageId)
+          .then((stored) => (stored ? this.retryStoredFinish(childId, stored) : undefined))
+          .catch((err: unknown) =>
+            this.deps.logger.warn({ err, childId }, "Finish notice retry failed"),
           );
-        })
-        .catch((err: unknown) =>
-          this.deps.logger.warn({ err, childId }, "Refused finish retry failed"),
-        );
+      },
+      Math.min(FINISH_RETRY_BASE_MS * 2 ** attempt, FINISH_RETRY_MAX_MS),
+    );
+  }
+
+  /**
+   * FU-424: an unknown outcome is checked on the lead first. When the lead has no copy, the notice goes again with the
+   * same message id, and the send's final check still refuses a copy that arrived in the meantime.
+   */
+  private async resolveUnknownFinish(childId: string, notice: FinishNotice): Promise<void> {
+    if (this.stopped || this.processingOwned.has(notice.messageId)) return;
+    const { agentManager, agentStorage } = this.deps;
+    const receipt = await agentManager
+      .nativeFinishReceiptStatus(notice.messageId)
+      .catch(() => "missing" as const);
+    if (
+      receipt === "delivered" ||
+      agentManager.hasSubmittedFinishMessageNow(notice.parentId, notice.messageId)
+    ) {
+      await agentStorage.resolveUnknownFinishNotice(childId, notice.messageId, {
+        status: "delivered",
+        deliveredBy: receipt === "delivered" ? "native" : "report-up",
+      });
+      this.finishRetryAttempts.delete(notice.messageId);
+      return;
     }
+    const pending = await agentStorage.resolveUnknownFinishNotice(childId, notice.messageId, {
+      status: "pending",
+    });
+    if (pending) await this.deliverOwnedFinish(childId, pending, false);
   }
 
   observeNative(hooks: PolicyHooks): () => void {
@@ -508,7 +635,8 @@ export class ReportUpService {
     for (const pending of this.nudging.values())
       pending.abort.abort(new Error("Idle nudge service stopped"));
     this.nudging.clear();
-    this.finishRetriesOnIdle.clear();
+    this.finishRetryAttempts.clear();
+    this.finishRetryTimers.clear();
     for (const timer of this.timers) clearTimeout(timer);
     this.timers.clear();
     this.finishOwners.clear();
@@ -536,7 +664,8 @@ export class ReportUpService {
     if (input.failed) this.stopNudge(agentId);
     else this.nudgeStopped.delete(agentId);
     this.checkIdleLeads();
-    void this.handleRoutedFinish(input)
+    void (input.failed ? Promise.resolve(false) : this.idleTurns.handle(agentId))
+      .then((handled) => handled || this.handleRoutedFinish(input))
       .then((handled) => handled || this.handleOwnedFinish(input))
       .then((handled) => {
         if (!handled) this.onUnownedTurnEnd(input);
@@ -545,6 +674,22 @@ export class ReportUpService {
       .catch((err: unknown) =>
         this.deps.logger.warn({ err, agentId }, "Owned finish notice failed"),
       );
+  }
+
+  private async blockedIdleTurn(id: string, reason: string): Promise<void> {
+    const worker = await this.store.get(id);
+    if (!worker || worker.archivedAt) return;
+    const prompt = formatSystemNotificationPrompt(`BLOCKED: ${titleOf(worker)} (${reason})`);
+    if (await this.deps.remoteNotice?.(id, prompt, "failed")) return;
+    const parent = await this.leadOf(worker);
+    if ("skip" in parent) {
+      this.deps.logger.warn(
+        { agentId: id, reason, parent: parent.skip },
+        "Idle turn BLOCKED: no parent route",
+      );
+      return;
+    }
+    await this.toLead(id, parent.id, prompt, "report-up");
   }
 
   async routingNotice(leadId: string, line: string, messageId: string): Promise<void> {
@@ -675,21 +820,82 @@ export class ReportUpService {
     let notice = await storage.getFinishNotice(input.agentId);
     if (!notice) return false;
     this.finishOwners.delete(input.agentId);
-    if (notice.status === "armed" && input.startedAt !== undefined && !input.fromNotice)
+    let recorded = false;
+    if (
+      notice.status === "armed" &&
+      input.startedAt !== undefined &&
+      !input.fromNotice &&
+      !input.failed &&
+      (await this.finishHeld(input.agentId, input.lastAssistant, notice.parentId))
+    )
+      // The notice stays armed, so the turn that ends with the result still reaches the lead.
+      return true;
+    if (notice.status === "armed" && input.startedAt !== undefined && !input.fromNotice) {
       notice = await storage.recordFinishNotice(
         input.agentId,
         `${input.agentId}:${input.startedAt}`,
         input.failed ? "errored" : "finished",
       );
+      recorded = true;
+    }
+    if (recorded && notice && (await this.alreadyReportedSinceArming(input, notice))) return true;
     if (notice?.status === "pending")
       await this.deliverOwnedFinish(input.agentId, notice, false, input.lastAssistant);
+    return true;
+  }
+
+  /** FU-483: true (and logged) when a finished turn has no result line for the lead. */
+  private async finishHeld(
+    workerId: string,
+    observed: string | null | undefined,
+    leadId: string | null,
+  ): Promise<boolean> {
+    const text =
+      observed === undefined
+        ? await this.deps.agentManager.getLastAssistantMessage(workerId).catch(() => null)
+        : observed;
+    if (finishNoticeWanted(text)) return false;
+    this.deps.logger.info(
+      { childId: workerId, parentId: leadId },
+      "Finish notice held: no result line",
+    );
+    return true;
+  }
+
+  /**
+   * FU-519: a worker that delivered a message to this lead since the notice was armed needs no second wake for
+   * the same result. A held turn does not reset that boundary. The notice is settled as delivered so no retry sends it. Errors and turns without a send are not skipped.
+   */
+  private async alreadyReportedSinceArming(
+    input: ReportTurnEnd,
+    notice: FinishNotice,
+  ): Promise<boolean> {
+    if (
+      notice.status !== "pending" ||
+      notice.reason !== "finished" ||
+      input.startedAt === undefined
+    )
+      return false;
+    const sentAt = lastAgentMessageDeliveredAt(input.agentId, notice.parentId);
+    // Older saved notices have no arming time; retain their turn-based boundary.
+    if (sentAt === null || sentAt < (notice.armedAt ?? input.startedAt)) return false;
+    await this.deps.agentStorage.settleFinishNotice(
+      input.agentId,
+      notice.messageId,
+      "delivered",
+      "report-up",
+    );
+    this.deps.logger.info(
+      { childId: input.agentId, parentId: notice.parentId },
+      "Finish notice skipped: already reported since arming",
+    );
     return true;
   }
 
   /** Reconcile a saved finish after native queue recovery has settled its old boot. */
   async recoverOwnedFinishes(): Promise<void> {
     await Promise.all(
-      (await this.deps.agentStorage.list()).flatMap((record) =>
+      (await this.deps.agentStorage.listLoaded()).flatMap((record) =>
         storedFinishNotices(record).map(async (notice) => {
           if (notice.status === "sending") {
             await this.deps.agentStorage.markFinishNoticeUnknown(record.id, notice.messageId);
@@ -698,6 +904,8 @@ export class ReportUpService {
               "Finish notice outcome unknown after restart",
             );
           }
+          if (notice.status === "sending" || notice.status === "unknown")
+            await this.retryStoredFinish(record.id, { ...notice, status: "unknown" });
           if (notice.status === "pending") await this.deliverOwnedFinish(record.id, notice, true);
         }),
       ),
@@ -734,7 +942,7 @@ export class ReportUpService {
         throw new OwnedFinishLineChanged(currentParentId, "reporting line changed");
       if (expectedLine === `${ROLE_REF_PREFIX}${MAIN_ASSISTANT_ROLE}`) {
         const agents = new Map<string, LineAgent>(
-          agentStorage.listCached().map((record) => [record.id, record]),
+          agentStorage.listLoadedSync().map((record) => [record.id, record]),
         );
         for (const live of agentManager.listAgents()) agents.set(live.id, live);
         const holder = findRoleHolder([...agents.values()], MAIN_ASSISTANT_ROLE);
@@ -821,16 +1029,23 @@ export class ReportUpService {
       if (sending) await this.deps.agentStorage.markFinishNoticeRefused(childId, notice.messageId);
       return this.recoverOwnedLineChange(childId, notice, error, reroutes);
     }
-    if (!sending) throw error;
+    if (!sending) {
+      // A steer refusal is stored as a pending retry before it is thrown.
+      if (error instanceof SteerUnavailableError) this.scheduleFinishRetry(childId, notice);
+      throw error;
+    }
     const refusal = finalInputFailure(handoff) ?? error;
     if (!hasFinalInputHandoff(handoff) || refusal instanceof CodexAppServerRpcError) {
       await this.deps.agentStorage.markFinishNoticeRefused(childId, notice.messageId);
-      this.finishRetriesOnIdle.add(childId);
-      this.deps.logger.warn({ err: error, childId }, "Finish notice refused; next idle will retry");
+      this.deps.logger.warn({ err: error, childId }, "Finish notice refused; it will retry");
     } else {
       await this.deps.agentStorage.markFinishNoticeUnknown(childId, notice.messageId);
-      this.deps.logger.warn({ err: error, childId }, "Finish notice outcome unknown");
+      this.deps.logger.warn(
+        { err: error, childId },
+        "Finish notice outcome unknown; it will be checked",
+      );
     }
+    this.scheduleFinishRetry(childId, notice);
     return null;
   }
 
@@ -922,7 +1137,7 @@ export class ReportUpService {
           sending = true;
         }
         if (this.deps.deliver) {
-          await this.deps.deliver(notice.parentId, prompt);
+          await this.deps.deliver(notice.parentId, prompt, notice.messageId);
         } else {
           try {
             await this.send(
@@ -962,6 +1177,7 @@ export class ReportUpService {
         "delivered",
         "report-up",
       );
+      this.finishRetryAttempts.delete(notice.messageId);
     } catch (error) {
       retry = await this.resolveOwnedFinishFailure({
         childId,
@@ -1665,6 +1881,15 @@ export class ReportUpService {
     }
   }
 
+  // "turned off" is logged once per agent, not at every turn end.
+  private logSkip(workerId: string, reason: string): void {
+    if (reason === "turned off") {
+      if (this.skippedTurnedOff.has(workerId)) return;
+      this.skippedTurnedOff.add(workerId);
+    }
+    this.deps.logger.info({ agentId: workerId, reason }, "Report-up skipped");
+  }
+
   private async report(
     workerId: string,
     failed: boolean,
@@ -1672,10 +1897,9 @@ export class ReportUpService {
     startedAt?: number,
     observedLast?: string | null,
   ): Promise<void> {
-    const skip = (reason: string) => {
-      this.deps.logger.info({ agentId: workerId, reason }, "Report-up skipped");
-    };
+    const skip = (reason: string) => this.logSkip(workerId, reason);
     if (!this.anyEnabled()) return skip("turned off");
+    this.skippedTurnedOff.delete(workerId);
     // Idle: a follow-up turn that starts at once reports when it ends.
     await new Promise((resolve) => setImmediate(resolve));
     if (this.observer.isOpen(workerId)) return skip("a new turn started");
@@ -1686,10 +1910,12 @@ export class ReportUpService {
     if (await this.noteLimit(workerId, failed, failure, observedLast))
       return skip("ended on a usage limit");
     // OFF BY DEFAULT: the limit notice above stays on; "finished a turn" and "ended with an error" notices need the fallback.
-    if (!this.deps.isEnabled()) return skip("turned off");
+    if (!this.deps.isEnabled())
+      return skip(await this.unreported({ worker, failed, observedLast, startedAt }, "turned off"));
     if (await this.remoteFinished(worker, failed, observedLast)) return;
     const lead = await this.leadOf(worker);
-    if ("skip" in lead) return skip(lead.skip);
+    if ("skip" in lead)
+      return skip(await this.unreported({ worker, failed, observedLast, startedAt }, lead.skip));
     const leadAgent = await this.store.get(lead.id);
     if (!leadAgent || leadAgent.archivedAt) return skip("lead not here or archived");
     if (!(await this.reportingLineAllows(workerId, lead.id))) return;
@@ -1707,12 +1933,63 @@ export class ReportUpService {
       await this.toLead(workerId, lead.id, prompt, "finished-turn");
       return;
     }
+    if (await this.finishHeld(workerId, lastMessage, lead.id)) return;
     await this.queueFinished(lead.id, {
       workerId,
       worker: this.workerWithSpend(worker),
       lastMessage,
       eventId: startedAt === undefined ? undefined : `${workerId}:${startedAt}`,
     });
+  }
+
+  /**
+   * FU-402: a worker's DONE, BLOCKED or DECISION line, or a question, in its final text must not stay unseen. With the
+   * "finished a turn" notices off and no finish notice armed, it goes once to a lead on this computer. A lead on another
+   * computer cannot get it from here, so the worker is told once to send it through a route that reaches that computer.
+   * Either notice starts no further notice: the answer turn was started by a notice.
+   */
+  private async unreported(turn: UnseenTurn, reason: string): Promise<string> {
+    if (!turn.failed && (reason === "turned off" || reason === LEAD_ON_ANOTHER_COMPUTER))
+      await this.relayUnseenResult(turn);
+    return reason;
+  }
+
+  private async relayUnseenResult({ worker, observedLast, startedAt }: UnseenTurn): Promise<void> {
+    if (!looksLikeWorker(worker) || (await this.hasWorkers(worker.id))) return;
+    const lastMessage =
+      observedLast === undefined
+        ? await this.deps.agentManager.getLastAssistantMessage(worker.id).catch(() => null)
+        : observedLast;
+    if (!lastMessage || !finishNoticeWanted(lastMessage)) return;
+    // The worker already messaged its lead during this turn, so its result is not unseen.
+    if (sentToLeadDuring(worker, startedAt, this.deps.localServerId)) return;
+    const lead = await this.leadOf(worker);
+    if ("id" in lead) {
+      const leadAgent = await this.store.get(lead.id);
+      if (!leadAgent || leadAgent.archivedAt) return;
+      if (!(await this.reportingLineAllows(worker.id, lead.id))) return;
+      const prompt = formatSystemNotificationPrompt(
+        formatReportUpNotice({ worker: this.workerWithSpend(worker), failed: false, lastMessage }),
+      );
+      await this.toLead(worker.id, lead.id, prompt, "report-up");
+      return;
+    }
+    if (lead.skip !== LEAD_ON_ANOTHER_COMPUTER) return;
+    const line = reportsTo(worker)!;
+    this.deps.logger.warn(
+      { agentId: worker.id, lead: line },
+      "Worker result has no route to its lead on another computer",
+    );
+    await this.toLead(
+      worker.id,
+      worker.id,
+      formatSystemNotificationPrompt(
+        `Your lead ${line} is on another computer. Fulcra did not deliver your last message to it. ` +
+          "Send your DONE, BLOCKED or DECISION line to that lead now, through a route that reaches that computer " +
+          "(the notify command on Windows, or fulcra send over SSH).",
+      ),
+      "report-up",
+    );
   }
 
   private async remoteFinished(
@@ -1726,6 +2003,8 @@ export class ReportUpService {
       observedLast === undefined
         ? await this.deps.agentManager.getLastAssistantMessage(worker.id).catch(() => null)
         : observedLast;
+    // FU-454: a lead on another computer that reports to the main assistant gets the same FU-439 filter.
+    if (!failed && (await this.finishHeld(worker.id, lastMessage, line))) return true;
     const prompt = formatSystemNotificationPrompt(
       formatReportUpNotice({ worker: this.workerWithSpend(worker), failed, lastMessage }) +
         (!failed && parseWorkerResult(lastMessage)?.state === "DONE"
@@ -1895,6 +2174,59 @@ export class ReportUpService {
     ownedFinalCheck?: () => void,
     waitForProviderStart = false,
   ): Promise<void> {
+    const dispatch = (to: string) =>
+      this.dispatchTo(
+        to,
+        prompt,
+        kind,
+        currentNotice,
+        captureHandoff,
+        ownedMessageId,
+        ownedFinalCheck,
+        waitForProviderStart,
+      );
+    if (!this.deps.leadMoves?.().length) return dispatch(leadId);
+    // A relayed notice passes the same checks first: it cannot be taken back once the other computer has it.
+    return (async () => {
+      if (!this.noticeEnabled(kind)) throw new ReportUpDisabledError();
+      ownedFinalCheck?.();
+      if (currentNotice && !currentNotice()) throw new Error("Notice is no longer current");
+      const to = await this.routeMovedLead(leadId, prompt);
+      if (to) await dispatch(to);
+    })();
+  }
+
+  /**
+   * FU-444: where a notice for `leadId` goes when that lead moved (lead-moves.ts). Returns the chat to send to here, or
+   * null when the notice went to another computer through its relay command.
+   */
+  private async routeMovedLead(leadId: string, prompt: string): Promise<string | null> {
+    const moved = this.deps.leadMoves
+      ? leadMoveTarget(this.deps.leadMoves(), leadId, this.deps.localServerId)
+      : null;
+    if (!moved) return leadId;
+    if (moved.kind === "local") {
+      this.deps.logger.info(
+        { lead: leadId, to: moved.id },
+        "Lead moved: notice sent to the new lead",
+      );
+      return moved.id;
+    }
+    await relayLeadNotice(moved, prompt, this.deps.relay);
+    this.deps.logger.info({ lead: leadId, to: moved.id }, "Lead moved: notice relayed");
+    return null;
+  }
+
+  private dispatchTo(
+    leadId: string,
+    prompt: string,
+    kind: NoticeKind,
+    currentNotice?: () => boolean,
+    captureHandoff?: (handle: object) => void,
+    ownedMessageId?: string,
+    ownedFinalCheck?: () => void,
+    waitForProviderStart = false,
+  ): Promise<void> {
     const { agentManager, agentStorage, logger } = this.deps;
     const checkCurrent = () => {
       if (!this.noticeEnabled(kind)) throw new ReportUpDisabledError();
@@ -2017,6 +2349,14 @@ export function startReportUp(input: {
         (config) => config.enabled && config.leadId === id,
       ),
     remoteNotice: input.remoteNotice,
+    ...(input.paseoHome
+      ? {
+          leadMoves: () =>
+            readLeadMoves(input.paseoHome!, (err) =>
+              input.logger.warn({ err }, "lead-moves.json not read"),
+            ),
+        }
+      : {}),
     ledgerDir: defaultLedgerDir(),
     agentManager: input.agentManager,
     agentStorage: input.agentStorage,

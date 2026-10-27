@@ -17,7 +17,11 @@ import {
 } from "./agent/agent-prompt.js";
 import { FINAL_INPUT_CHECK } from "./agent/agent-sdk-types.js";
 import type { AgentStorage, StoredAgentRecord } from "./agent/agent-storage.js";
-import { createFinalInputCheck, waitForFinalInputHandoff } from "./agent/final-input-check.js";
+import {
+  createFinalInputCheck,
+  FinalInputWithdrawnError,
+  waitForFinalInputHandoff,
+} from "./agent/final-input-check.js";
 import { writeJsonFileAtomic } from "./atomic-file.js";
 import { withTimeout } from "../utils/promise-timeout.js";
 import { heldSendsFor } from "./held-sends.js";
@@ -34,8 +38,8 @@ import { lineStoreOf } from "./reporting-lines.js";
 //   after limit-resume's settle time. Pool-account sessions stay with limit-resume, which continues them by binding.
 // - Not continued: a session whose account is at a limit, or that does not load (folder or provider missing). Its
 //   lead chat gets one notice per restart that lists them: "daemon restarted at <time>; N sessions closed: <names>".
-// - A session closed by hand, archived or internal is left alone, also when that happens during the settle time.
-//   Subagents follow the same rules. A lead closed by hand is not woken by the notice; the log says why.
+// - A session closed by hand, archived or internal receives no continue prompt.
+//   Every interrupted turn that is not continued gets one BLOCKED notice to its parent.
 // - The notice has fixed reasons ("folder missing", "provider missing", "could not load"), never an error text: load
 //   errors can name a path or a chat ID. The full error goes to the log.
 // - A stop record is used only for sessions not written after the stop (`updatedAt <= stoppedAt`). The stop seals
@@ -49,6 +53,11 @@ import { lineStoreOf } from "./reporting-lines.js";
 //
 // A clean stop saves every open session as "closed", so the stop first records them in $PASEO_HOME/revive-at-boot.json.
 // After a crash the records still say "idle"/"running". daemon.reviveOnRestart = false turns it off.
+//
+// A reopened session is not loaded, so the agent manager does not list it. The stop and live records therefore also
+// take the boot's own ReviveCarry: the sessions the boot reopened that are still open, and, until revive has finished,
+// the cut-off turns and background wakes it has not handled yet. A second restart during or after revive keeps them
+// (FU-460).
 //
 // A crash (a watchdog SIGKILL) writes no stop record. While the daemon runs, startLiveRecorder() therefore keeps a
 // crash-safe copy of the same record in $PASEO_HOME/revive-live.json. Boot uses it only when revive-at-boot.json is
@@ -127,6 +136,59 @@ export async function backgroundIdsForStop(input: {
       input.logger,
     );
     return new Set(previous?.backgroundIds);
+  }
+}
+
+/**
+ * What this boot reopened and still owes, for the next stop and live records. Reads storage only: it loads nothing.
+ * A session closed by hand, archived or internal since the boot is not carried.
+ */
+export class ReviveCarry {
+  private candidates: string[] = [];
+  private pendingInterrupted = new Set<string>();
+  private pendingBackground = new Set<string>();
+
+  /** The boot's whole reopen list and the turns and wakes revive has still to handle. */
+  set(input: {
+    openIds: readonly string[];
+    interrupted: readonly string[];
+    background: readonly string[];
+  }) {
+    this.candidates = [...new Set([...input.openIds, ...input.interrupted, ...input.background])];
+    this.pendingInterrupted = new Set(input.interrupted);
+    this.pendingBackground = new Set(input.background);
+  }
+
+  /** The item is handled: a later record no longer carries it as pending. */
+  done(id: string): void {
+    this.pendingInterrupted.delete(id);
+    this.pendingBackground.delete(id);
+  }
+
+  /** The loaded sessions plus the carried sessions that are open but not loaded. */
+  async withUnloaded(
+    loaded: readonly LiveAgent[],
+    agentStorage: Pick<AgentStorage, "get">,
+  ): Promise<LiveAgent[]> {
+    const loadedIds = new Set(loaded.map((agent) => agent.id));
+    const extra: LiveAgent[] = [];
+    for (const id of this.candidates) {
+      if (loadedIds.has(id)) continue;
+      const stored = await agentStorage.get(id);
+      if (!stored || stored.archivedAt || stored.internal || stored.lastStatus === "closed")
+        continue;
+      extra.push({
+        id,
+        lifecycle: this.pendingInterrupted.has(id) ? "running" : "idle",
+        hasBackgroundWork: this.pendingBackground.has(id),
+      });
+    }
+    return [...loaded, ...extra];
+  }
+
+  /** Background wakes not yet sent. A loaded session's own flag does not cover them. */
+  pendingBackgroundIds(): string[] {
+    return [...this.pendingBackground];
   }
 }
 
@@ -242,11 +304,17 @@ export interface ReviveSessions {
   changedSince(agentId: string, cutAt: string | null): Promise<string | null>;
   /** The session's account is at a limit: the reset time when known, null when not. Undefined when it is ready. */
   limitedUntil(agentId: string): Promise<Date | null | undefined>;
-  /** Sends the continue prompt; refuses at the provider handoff if the session got a message after `cutAt`. */
-  sendContinue(agentId: string, cutAt: string | null): Promise<void>;
+  /**
+   * Sends the continue prompt. The final input check withdraws it (FU-422) if the session got a message after `cutAt`,
+   * changed instance, or is now refused: the session stays idle and the result is "withdrawn".
+   */
+  sendContinue(agentId: string, cutAt: string | null): Promise<SendOutcome>;
   /** Sends the background-wake prompt (FU-362) under the same refusal rules as sendContinue. */
-  sendBackgroundWake(agentId: string, prompt: string, cutAt: string | null): Promise<void>;
+  sendBackgroundWake(agentId: string, prompt: string, cutAt: string | null): Promise<SendOutcome>;
 }
+
+/** A prompt that went out gives nothing; one the final input check withdrew gives "withdrawn". */
+export type SendOutcome = void | "withdrawn";
 
 /** "continue": the restart cut a turn off. "wake": the session was idle, waiting for background work that is gone. */
 export type ReviveMode = "continue" | "wake";
@@ -258,6 +326,8 @@ export interface ReviveDeps {
   localServerId: string | null;
   logger: Logger;
   isEnabled: () => boolean;
+  /** Filled by the boot for the stop and live records (FU-460). */
+  carry?: ReviveCarry;
   now?: () => Date;
   settleMs?: number;
   gapMs?: number;
@@ -282,6 +352,12 @@ export interface ReviveResult {
   closed: ClosedSession[];
 }
 
+/** The refusal for a session a trusted plugin owns: the daemon does not continue it (the owner's fence). */
+export const OWNED_BY_PLUGIN = "owned by a trusted plugin";
+/** FU-103: the notice reason, so a plugin-owned lead cut off by the restart does not sit idle unseen. */
+export const PLUGIN_OWNED_NOT_CONTINUED =
+  "owned by Fulcra, not continued: if it is idle, send it a message";
+
 export function formatBackgroundWakePrompt(restartedAt: Date): string {
   const time = restartedAt.toLocaleString("en-GB", {
     day: "numeric",
@@ -302,9 +378,9 @@ export function formatRestartNotice(input: {
     hour: "2-digit",
     minute: "2-digit",
   });
-  const names = input.closed.map((entry) => `${entry.name} (${entry.reason})`).join(", ");
+  const names = input.closed.map((entry) => `BLOCKED: ${entry.name} (${entry.reason})`).join("\n");
   const count = input.closed.length;
-  return `Daemon restarted at ${time}; ${count} session${count === 1 ? "" : "s"} closed: ${names}`;
+  return `Daemon restarted at ${time}; ${count} session${count === 1 ? "" : "s"} not continued:\n${names}`;
 }
 
 async function readReviveFile(file: string, logger: Logger) {
@@ -400,23 +476,28 @@ export async function reviveAfterRestart(
   const cleanRecord = await readReviveFile(file, logger);
   // No clean-stop record means an unclean stop: use the crash-safe copy of the running daemon.
   const liveRecord = cleanRecord ? null : await readReviveFile(liveFile, logger);
-  const stopRecord = cleanRecord ?? liveRecord;
+  const stopRecord = cleanRecord ??
+    liveRecord ?? { stoppedAt: "", openIds: [], interruptedIds: [], backgroundIds: [] };
   if (liveRecord) logger.info("Revive on restart: unclean stop, using the live record");
   const result: ReviveResult = { reopened: [], continued: [], woken: [], closed: [] };
-  if (!deps.isEnabled()) {
-    await fs.rm(file, { force: true });
-    await fs.rm(liveFile, { force: true });
-    deps.onSessionsReady?.();
-    return result;
-  }
-  const restartedAt = cleanRecord ? new Date(cleanRecord.stoppedAt) : now();
   const byId = new Map(input.records.map((record) => [record.id, record]));
   const eligible = (id: string) => {
     const record = byId.get(id);
     return Boolean(record && !record.archivedAt && !record.internal);
   };
+  if (!deps.isEnabled()) {
+    await fs.rm(file, { force: true });
+    await fs.rm(liveFile, { force: true });
+    result.closed = [...new Set([...stopRecord.interruptedIds, ...input.crashInterrupted])]
+      .filter(eligible)
+      .map((id) => ({ id, name: titleOf(byId.get(id)!), reason: "restart recovery is disabled" }));
+    deps.onSessionsReady?.();
+    await tellLeads(deps, now(), result.closed, byId);
+    return result;
+  }
+  const restartedAt = cleanRecord ? new Date(cleanRecord.stoppedAt) : now();
   // A session written after the stop was used by a later run (a rollback): the stop record no longer describes it.
-  const stoppedAtMs = stopRecord ? Date.parse(stopRecord.stoppedAt) : NaN;
+  const stoppedAtMs = Date.parse(stopRecord.stoppedAt);
   const notLaterThanStop = (id: string) => {
     const updatedMs = Date.parse(byId.get(id)?.updatedAt ?? "");
     // The live record is up to LIVE_TOLERANCE_MS older than the crash, and the sessions it lists kept running until
@@ -427,18 +508,26 @@ export async function reviveAfterRestart(
   };
   const isLoaded = (id: string) => agentManager.getAgent(id) !== null;
 
-  result.reopened = await agentStorage.reopenAfterRestart(
-    (stopRecord?.openIds ?? []).filter(eligible).filter(notLaterThanStop),
-    isLoaded,
-  );
+  const openIds = stopRecord.openIds.filter(eligible).filter(notLaterThanStop);
+  result.reopened = await agentStorage.reopenAfterRestart(openIds, isLoaded);
   await fs.rm(file, { force: true });
   await fs.rm(liveFile, { force: true });
-  deps.onSessionsReady?.();
+  const liveOnlyInterrupted = (liveRecord ? liveRecord.interruptedIds : [])
+    .filter(eligible)
+    .filter(notLaterThanStop)
+    .filter((id) => !input.crashInterrupted.includes(id));
+  // The registry can lack a running snapshot. A live-only entry is uncertain,
+  // so report it instead of silently dropping it or repeating completed work.
+  result.closed = [...new Set(liveOnlyInterrupted)].map((id) => ({
+    id,
+    name: titleOf(byId.get(id)!),
+    reason: "turn state could not be confirmed after an unclean stop",
+  }));
   const interrupted = [
     ...new Set([
       // The live record can be older than the crash: a turn it lists may have ended since. Only the boot's own
       // reading of turns still running (crashInterrupted) is current.
-      ...(liveRecord ? [] : (stopRecord?.interruptedIds ?? [])).filter(notLaterThanStop),
+      ...(liveRecord ? [] : stopRecord.interruptedIds).filter(notLaterThanStop),
       ...input.crashInterrupted,
     ]),
   ].filter(eligible);
@@ -448,11 +537,17 @@ export async function reviveAfterRestart(
     (id) => eligible(id) && notLaterThanStop(id),
     logger,
   );
+  // Before the live recorder starts, so that no record is written without the set.
+  signalReady(deps, { openIds, interrupted: [...interrupted, ...liveOnlyInterrupted], background });
   logger.info(
     { reopened: result.reopened, interrupted },
     `Revive on restart: ${result.reopened.length} reopened, ${interrupted.length} cut-off turn(s) to continue`,
   );
-  if (interrupted.length === 0 && background.length === 0) return result;
+  if (interrupted.length === 0 && background.length === 0) {
+    await tellLeads(deps, restartedAt, result.closed, byId);
+    result.closed.forEach((entry) => deps.carry?.done(entry.id));
+    return result;
+  }
 
   await wait(deps.settleMs ?? INTERRUPTED_SETTLE_MS);
   const sessions = deps.sessions ?? defaultSessions(deps);
@@ -461,8 +556,28 @@ export async function reviveAfterRestart(
     background,
     wakePrompt: formatBackgroundWakePrompt(restartedAt),
     gapMs: deps.gapMs ?? STAGGER_MS,
-    run: (item, wakePrompt) =>
-      continueOne(item.id, byId.get(item.id)!, sessions, result, logger, item.mode, wakePrompt),
+    run: async (item, wakePrompt) => {
+      try {
+        await continueOne(
+          item.id,
+          byId.get(item.id)!,
+          sessions,
+          result,
+          logger,
+          item.mode,
+          wakePrompt,
+        );
+      } catch (error) {
+        logger.warn({ err: error, agentId: item.id }, "Revive on restart: recovery check failed");
+        if (item.mode === "continue")
+          result.closed.push({
+            id: item.id,
+            name: titleOf(byId.get(item.id)!),
+            reason: "restart recovery check failed",
+          });
+      }
+      if (!result.closed.some((entry) => entry.id === item.id)) deps.carry?.done(item.id);
+    },
   });
   logger.info(
     {
@@ -473,7 +588,17 @@ export async function reviveAfterRestart(
     `Revive on restart: ${result.continued.length} continued, ${result.woken.length} woken, ${result.closed.length} not continued`,
   );
   await tellLeads(deps, restartedAt, result.closed, byId);
+  result.closed.forEach((entry) => deps.carry?.done(entry.id));
   return result;
+}
+
+/** The boot's set goes to the carry first, so no live record is written without it. */
+function signalReady(
+  deps: ReviveDeps,
+  pending: { openIds: string[]; interrupted: string[]; background: string[] },
+): void {
+  deps.carry?.set(pending);
+  deps.onSessionsReady?.();
 }
 
 async function continueOne(
@@ -497,6 +622,7 @@ async function continueOne(
   const changed = await sessions.changedSince(id, cutAt);
   if (changed) {
     logger.info({ agentId: id, reason: changed }, "Revive on restart: not loaded");
+    fail(changed);
     return;
   }
   const problem = await folderProblem(record.cwd);
@@ -515,6 +641,7 @@ async function continueOne(
   const before = await skip();
   if (before) {
     logger.info({ agentId: id, reason: before }, "Revive on restart: no continue prompt");
+    fail(before === OWNED_BY_PLUGIN ? PLUGIN_OWNED_NOT_CONTINUED : before);
     return;
   }
   // FU-25: a session with no pool account has no account record to ask, so its limit is read from its own last
@@ -537,14 +664,18 @@ async function continueOne(
   const last = await skip();
   if (last) {
     logger.info({ agentId: id, reason: last }, "Revive on restart: no continue prompt");
+    fail(last === OWNED_BY_PLUGIN ? PLUGIN_OWNED_NOT_CONTINUED : last);
     return;
   }
   try {
     if (mode === "wake") {
-      await sessions.sendBackgroundWake(id, wakePrompt, cutAt);
+      if ((await sessions.sendBackgroundWake(id, wakePrompt, cutAt)) === "withdrawn") return;
       result.woken.push(id);
     } else {
-      await sessions.sendContinue(id, cutAt);
+      if ((await sessions.sendContinue(id, cutAt)) === "withdrawn") {
+        fail("continue withdrawn by the final safety check");
+        return;
+      }
       result.continued.push(id);
     }
   } catch (error) {
@@ -557,15 +688,17 @@ async function continueOne(
 export function defaultSessions(deps: ReviveDeps): ReviveSessions {
   const { agentManager, agentStorage, logger } = deps;
   const now = deps.now ?? (() => new Date());
-  const refusal = (id: string, mode: ReviveMode = "continue"): string | null => {
+  // `ownRun`: the final check runs inside the manager's own runAgent, where this prompt's run is already registered, so
+  // an in-flight run is not a reason there (FU-422). Another turn is caught by the new-message check.
+  const refusal = (id: string, mode: ReviveMode = "continue", ownRun = false): string | null => {
     const live = agentManager.getAgent(id);
     if (!live || live.archivedAt) return "not loaded";
-    if (agentManager.hasInFlightRun(id)) return "a turn is already running";
+    if (!ownRun && agentManager.hasInFlightRun(id)) return "a turn is already running";
     // A pool-account session has a binding: limit-resume continues it.
     if (mode === "continue" && agentManager.getLimitResumeBinding(id) !== null)
       return "pool account: limit-resume continues it";
-    // The owner continues its sessions through the controller restart queue and its journal checks.
-    if (!agentManager.canRunUnscopedLimitResume(id)) return "owned by a trusted plugin";
+    // The owner's fence: the daemon does not continue it. A cut-off turn is named to its lead instead (FU-103).
+    if (!agentManager.canRunUnscopedLimitResume(id)) return OWNED_BY_PLUGIN;
     if (live.labels[LIMIT_RESUME_OPT_OUT_LABEL] === "off") return "opted out";
     return null;
   };
@@ -612,22 +745,42 @@ export function defaultSessions(deps: ReviveDeps): ReviveSessions {
     if (!live) throw new Error("session not loaded");
     const checkCurrent = () => {
       const current = agentManager.getAgent(id);
-      if (
-        !current ||
-        current.instanceId !== live.instanceId ||
-        refusal(id, mode) ||
-        liveMessageAt(id) !== cutAt
-      )
-        throw new Error("Continue after restart refused");
+      let reason: string | null = null;
+      if (!current) reason = "not loaded";
+      else if (current.instanceId !== live.instanceId) reason = "the session instance changed";
+      else reason = refusal(id, mode, true);
+      if (!reason && liveMessageAt(id) !== cutAt)
+        reason = "a new message arrived since the restart";
+      if (reason) throw new FinalInputWithdrawnError("Continue after restart refused", reason);
     };
-    checkCurrent();
+    // A refused prompt is withdrawn: the session stays idle, with no failed turn. A pool-account refusal after the
+    // load stays with limit-resume, as at the boot check ("pool account: limit-resume continues it"); a new
+    // message drives the session itself.
+    const withdraw = (error: unknown): "withdrawn" => {
+      if (!(error instanceof FinalInputWithdrawnError)) throw error;
+      logger.info(
+        { agentId: id, mode, reason: error.reason },
+        "Revive on restart: prompt withdrawn",
+      );
+      return "withdrawn";
+    };
+    try {
+      checkCurrent();
+    } catch (error) {
+      return withdraw(error);
+    }
     const finalCheck = createFinalInputCheck(checkCurrent);
     void agentManager
       .runAgent(id, prompt, { [FINAL_INPUT_CHECK]: finalCheck })
-      .catch((error: unknown) =>
-        logger.warn({ err: error, agentId: id }, "Continue after restart failed"),
-      );
-    await waitForFinalInputHandoff(finalCheck);
+      .catch((error: unknown) => {
+        if (error instanceof FinalInputWithdrawnError) return;
+        logger.warn({ err: error, agentId: id }, "Continue after restart failed");
+      });
+    try {
+      await waitForFinalInputHandoff(finalCheck);
+    } catch (error) {
+      return withdraw(error);
+    }
   }
 }
 
@@ -649,15 +802,6 @@ async function tellLeads(
     }
     const leadRecord = await store.get(lead.id);
     if (!leadRecord || leadRecord.archivedAt) continue;
-    // Agent decision (FU-67, the owner can change it): a lead closed by hand stays closed. The notice would load it and
-    // start a turn, so only the log names the closed sessions.
-    if ((await deps.agentStorage.get(lead.id))?.lastStatus === "closed") {
-      deps.logger.info(
-        { agentId: entry.id, leadId: lead.id, reason: entry.reason },
-        "Revive on restart: the lead is closed, not woken",
-      );
-      continue;
-    }
     perLead.set(lead.id, [...(perLead.get(lead.id) ?? []), entry]);
   }
   const deliver = deps.deliver ?? ((leadId, prompt) => holdNotice(deps, leadId, prompt));
@@ -665,16 +809,17 @@ async function tellLeads(
     const prompt = formatSystemNotificationPrompt(
       formatRestartNotice({ restartedAt, closed: entries }),
     );
-    await deliver(leadId, prompt).catch((error: unknown) =>
-      deps.logger.warn({ err: error, leadId }, "Revive on restart: the lead notice failed"),
-    );
+    await deliver(leadId, prompt).catch((error: unknown) => {
+      deps.logger.warn({ err: error, leadId }, "Revive on restart: the lead notice failed");
+      throw error;
+    });
   }
 }
 
 /** Held until the lead's turn ends (held-sends.ts), as a daemon notice; a notice never starts a report-up. */
-async function holdNotice(deps: ReviveDeps, leadId: string, prompt: string): Promise<void> {
+export async function holdNotice(deps: ReviveDeps, leadId: string, prompt: string): Promise<void> {
   const { agentManager, agentStorage, logger } = deps;
-  heldSendsFor(agentManager, logger).hold(leadId, () =>
+  await heldSendsFor(agentManager, logger).holdAndWait(leadId, () =>
     agentManager.trustedPlugins.daemon(async () => {
       await sendPromptToAgent({
         agentManager,

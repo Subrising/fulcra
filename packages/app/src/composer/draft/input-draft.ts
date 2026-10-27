@@ -21,7 +21,8 @@ import {
   resolveEffectiveComposerThinkingOptionId,
   type ProviderSelectionState,
 } from "@/provider-selection/provider-selection";
-import { useDraftStore } from "@/stores/draft-store";
+import { useSessionStore } from "@/stores/session-store";
+import { flushDraftPersistStorage, useDraftStore } from "@/stores/draft-store";
 import { AfterPaintPublication } from "@/composer/after-paint-publication";
 import { useShallow } from "zustand/shallow";
 import type { ComposerTextSource } from "@/composer/text-source";
@@ -191,9 +192,42 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
     (lifecycle: "sent" | "abandoned") => {
       textPublication.cancel();
       useDraftStore.getState().clearDraftInput({ draftKey, lifecycle });
+      if (lifecycle === "sent") void flushDraftPersistStorage();
     },
     [draftKey, textPublication],
   );
+
+  useEffect(() => {
+    const reconcile = () => {
+      const record = useDraftStore.getState().drafts[draftKey];
+      const pending = record?.lifecycle === "active" ? record.unconfirmedSend : undefined;
+      if (!pending) return;
+      const session = useSessionStore.getState().sessions[pending.serverId];
+      if (!session) return;
+      const streams = [
+        ...(session.agentStreamTail.get(pending.agentId) ?? []),
+        ...(session.agentStreamHead.get(pending.agentId) ?? []),
+      ];
+      // Optimistic rows have no host message ID or timeline cursor.
+      const confirmed = streams.some(
+        (item) =>
+          item.kind === "user_message" &&
+          (item.clientMessageId === pending.clientMessageId ||
+            item.messageId === pending.clientMessageId) &&
+          (item.messageId !== undefined || item.timelineCursor !== undefined),
+      );
+      if (!confirmed) return;
+      clear("sent");
+      publishTextReplacement("");
+    };
+    const unsubscribeSession = useSessionStore.subscribe(reconcile);
+    const unsubscribeDraft = useDraftStore.subscribe(reconcile);
+    reconcile();
+    return () => {
+      unsubscribeSession();
+      unsubscribeDraft();
+    };
+  }, [clear, draftKey, publishTextReplacement]);
 
   useEffect(() => {
     const flushWhenHidden = () => {

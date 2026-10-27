@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "../read-on-open";
 import { useContract } from "../use-contract";
 import {
   organizationDirectoryRpc,

@@ -273,6 +273,7 @@ export const PersistedConfigSchema = z
             enabled: z.boolean().optional(),
             swapUsedPercent: z.number().min(1).max(100).optional(),
             freeMemoryPercent: z.number().min(1).max(100).optional(),
+            swapDiskFreeGB: z.number().min(0).max(1000).optional(),
           })
           .strict()
           .optional(),
@@ -294,6 +295,8 @@ export const PersistedConfigSchema = z
         idleSleepMinutes: z.number().int().min(0).max(10_080).optional(),
         // FU-362: providers whose idle sessions may sleep. Read-only default ["claude"]; Codex is off (background terminals).
         idleSleepProviders: z.array(z.string()).optional(),
+        // FU-462: hours a closed session (no lead, no hold, no open ledger row) waits before the daemon archives it; 0 turns it off. Default 24.
+        autoArchiveClosedAfterHours: z.number().min(0).max(8_760).optional(),
         // Transitional input only: migrate this introduced key to a sidecar before saving.
         autoResumeOnLimit: z.boolean().optional(),
         appendSystemPrompt: z.string().optional(),

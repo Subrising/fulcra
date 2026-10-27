@@ -2,6 +2,7 @@ import type { AttachmentMetadata, UserComposerAttachment } from "@/attachments/t
 import { isLegacyNewWorkspaceDraftKey, NEW_WORKSPACE_DRAFT_KEY } from "@/stores/draft-keys";
 import { z } from "zod";
 import {
+  UnconfirmedDraftSendSchema,
   AttachmentMetadataSchema,
   LegacyDraftImageSchema,
   normalizeAttachmentMetadata,
@@ -87,12 +88,14 @@ const RawDraftInputSchema = z.strictObject({
 });
 const DraftLifecycleSchema = z.enum(["active", "abandoned", "sent"]);
 const NestedDraftRecordSchema = z.strictObject({
+  unconfirmedSend: UnconfirmedDraftSendSchema.optional(),
   input: RawDraftInputSchema,
   lifecycle: DraftLifecycleSchema.optional(),
   updatedAt: z.number().optional(),
   version: z.number().int().positive().optional(),
 });
 const FlatDraftRecordSchema = RawDraftInputSchema.extend({
+  unconfirmedSend: UnconfirmedDraftSendSchema.optional(),
   lifecycle: DraftLifecycleSchema.optional(),
   updatedAt: z.number().optional(),
   version: z.number().int().positive().optional(),
@@ -184,6 +187,7 @@ async function buildMigratedDraftRecord(
   nowMs: number,
 ): Promise<DraftRecord> {
   return {
+    ...(parsed.unconfirmedSend ? { unconfirmedSend: parsed.unconfirmedSend } : {}),
     input: await migrateDraftInput({ rawInput: extractRawInput(parsed) }, ports),
     lifecycle: resolvePersistedLifecycle(parsed.lifecycle),
     updatedAt: parsed.updatedAt ?? nowMs,

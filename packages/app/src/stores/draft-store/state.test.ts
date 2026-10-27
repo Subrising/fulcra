@@ -28,6 +28,19 @@ describe("draft-store lifecycle", () => {
     expect(editDraftRecordText(edited, "", 3).lifecycle).toBe("active");
     expect(editDraftRecordText(undefined, "", 3).lifecycle).toBe("abandoned");
   });
+  it("removes the confirmation identity when a draft is edited or finalized", () => {
+    const draft: DraftRecord = {
+      input: { text: "sent prompt", attachments: [] },
+      lifecycle: "active",
+      updatedAt: 1,
+      version: 1,
+      unconfirmedSend: { serverId: "host", agentId: "agent", clientMessageId: "send-1" },
+    };
+    expect(editDraftRecordText(draft, "new prompt", 2).unconfirmedSend).toBeUndefined();
+    const cleared = applyClearDraftRecord({ record: draft, lifecycle: "sent", nowMs: 3 });
+    expect(cleared?.unconfirmedSend).toBeUndefined();
+    expect(cleared?.input).toEqual({ text: "", attachments: [] });
+  });
   it("prunes finalized tombstones after TTL", () => {
     const nowMs = 1_000_000;
     const drafts = {

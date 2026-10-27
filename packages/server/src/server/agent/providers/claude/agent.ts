@@ -5,6 +5,7 @@ import {
   readHistoryLines,
 } from "../../history-load.js";
 import { readWorkflowLinks } from "./subagents/workflow-replay-source.js";
+import { providerMessageId } from "../../provider-message-id.js";
 import { recordedClaudeUsage } from "../../usage-recording.js";
 import {
   assertFinalInputCheck,
@@ -476,6 +477,22 @@ interface ClaudeAgentClientOptions {
 
 // How long a resolved Claude Code version is reused for the catalogue cache key before `--version` reruns.
 const CLAUDE_VERSION_KEY_TTL_MS = 60_000;
+
+// Claude Code writes subagent caches (Agent-tool helpers, workflows, background requests) with the
+// 5-minute TTL unless this is set. Helpers that wait 5-60 minutes on a long job then rewrite their whole
+// context on every wake (FU-484: 49% of cold-write cost). With it, every Claude Code cache write uses the
+// 1-hour TTL. Claude Code's own precedence still applies: FORCE_PROMPT_CACHING_5M, the
+// CLAUDE_CODE_(SUBAGENT_)PROMPT_CACHE_TTL env vars, the promptCacheTtl / subagentPromptCacheTtl settings
+// and agent frontmatter all win over it.
+const CLAUDE_PROMPT_CACHE_1H_ENV = "ENABLE_PROMPT_CACHING_1H";
+
+/** Adds ENABLE_PROMPT_CACHING_1H=1 unless the daemon env, runtime settings or launch env already set it. */
+function claudePromptCacheTtlDefault(
+  sources: Array<Record<string, string | undefined> | undefined>,
+): Record<string, string> | undefined {
+  const alreadySet = sources.some((source) => source?.[CLAUDE_PROMPT_CACHE_1H_ENV] !== undefined);
+  return alreadySet ? undefined : { [CLAUDE_PROMPT_CACHE_1H_ENV]: "1" };
+}
 
 interface ClaudeAgentSessionOptions {
   defaults?: { agents?: Record<string, AgentDefinition> };
@@ -2584,7 +2601,7 @@ class ClaudeAgentSession implements AgentSession {
       this.completeAutonomousTurn();
     }
 
-    const sdkMessage = this.toSdkUserMessage(prompt);
+    const sdkMessage = this.toSdkUserMessage(prompt, options?.clientMessageId);
     const sdkUserMessageId = sdkMessageUuid(sdkMessage);
     this.rememberRewindUserAnchor(sdkUserMessageId);
     const turnId = this.createTurnId("foreground");
@@ -3892,6 +3909,7 @@ class ClaudeAgentSession implements AgentSession {
       baseEnv: process.env,
       runtimeSettings: this.runtimeSettings,
       overlays: [
+        claudePromptCacheTtlDefault([process.env, this.runtimeSettings?.env, this.launchEnv]),
         this.launchEnv,
         // Makes the CLI announce session_state_changed, whose "idle" is the safety net that closes
         // an autonomous turn (see consumeSessionStateChange).
@@ -4045,7 +4063,33 @@ class ClaudeAgentSession implements AgentSession {
     return result;
   }
 
-  private toSdkUserMessage(prompt: AgentPromptInput): SDKUserMessage {
+  async getInputReceipt(messageId: string): Promise<"present" | "absent" | "unknown"> {
+    if (!this.claudeSessionId) return "unknown";
+    const historyPath = this.resolveHistoryPath(this.claudeSessionId);
+    if (!historyPath || !(await pathExists(historyPath))) return "unknown";
+    const uuid = providerMessageId(messageId);
+    const file = await promises.open(historyPath, "r");
+    try {
+      const before = await file.stat();
+      for await (const line of readHistoryLines(file, false, this.historyAbort.signal)) {
+        if (!line.text.trim()) continue;
+        const entry = JSON.parse(line.text) as ClaudeHistoryEntry;
+        if (entry.type === "user" && entry.isSidechain !== true && entry.uuid === uuid)
+          return "present";
+      }
+      const after = await promises.stat(historyPath);
+      return before.dev === after.dev &&
+        before.ino === after.ino &&
+        before.size === after.size &&
+        before.mtimeMs === after.mtimeMs
+        ? "absent"
+        : "unknown";
+    } finally {
+      await file.close();
+    }
+  }
+
+  private toSdkUserMessage(prompt: AgentPromptInput, clientMessageId?: string): SDKUserMessage {
     const content: Array<
       | { type: "text"; text: string }
       | {
@@ -4094,7 +4138,7 @@ class ClaudeAgentSession implements AgentSession {
       content.push(slashCommand);
     }
 
-    const messageId = randomUUID();
+    const messageId = clientMessageId ? providerMessageId(clientMessageId) : randomUUID();
     this.rememberUserMessageId(messageId);
 
     return {

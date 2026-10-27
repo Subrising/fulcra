@@ -186,6 +186,8 @@ export const es: TranslationResources = {
       removeReview: "Eliminar archivo adjunto de reseña",
     },
     errors: {
+      confirmationPending:
+        "La confirmación del mensaje está pendiente. Vuelve a conectarte para comprobar la entrega.",
       failedToSend: "No se pudo enviar el mensaje",
       failedToCreateAgent: "No se pudo crear el agente",
       noHostSelected: "Ningún anfitrión seleccionado",

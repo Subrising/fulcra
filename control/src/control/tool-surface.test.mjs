@@ -45,7 +45,7 @@ const noVerify = () => {};
 test("the creation surface is exactly the pre-H6 one, and it carries the G7/G8 tools", () => {
   const m = randomUUID(),
     s = supervisorServer(m);
-  assert.deepEqual(s.args, [INBOX]);
+  assert.deepEqual(s.args, ["--disable-sigusr1", INBOX]);
   assert.equal(path.basename(INBOX), "inbox.mjs");
   assert.equal(s.type, "stdio");
   assert.deepEqual(
@@ -523,6 +523,42 @@ test("runtime reconciliation records refusals and bounds retries", async (t) => 
   assert.equal(attempts, 1);
   assert.equal(f.control.tools.describe(old.id).state, "unrecorded");
   assert.match(f.control.tools.describe(old.id).lastAttempt.reason, /runtime: .*idle/);
+});
+// FU-423: a session whose runtime refresh keeps failing is not retried every 30 s forever: the gap doubles per
+// consecutive failure up to ten minutes, and a success resets it.
+test("a failing runtime refresh backs off from 30 s to ten minutes and resets after a success", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-10-20T12:00:00Z") });
+  let attempts = 0,
+    succeed = false;
+  const f = fixture(t, {
+    refresh: async () => {
+      attempts++;
+      if (succeed) return { outcome: "refreshed", surface: "fixture-old-surface" };
+      throw Error("This session cannot refresh its MCP servers in place (lifecycle closed)");
+    },
+  });
+  const old = f.enrol(T(1));
+  await f.delegate(old.id);
+  const pass = async (ms) => {
+    t.mock.timers.tick(ms);
+    await f.control.tools.reconcile();
+    return attempts;
+  };
+  assert.equal(await pass(0), 1);
+  assert.equal(await pass(31_000), 2, "first retry after 30 s");
+  assert.equal(await pass(31_000), 2, "then 60 s");
+  assert.equal(await pass(30_000), 3);
+  assert.equal(await pass(119_000), 3, "then 120 s");
+  assert.equal(await pass(2_000), 4);
+  for (let i = 0; i < 4; i++) await pass(10 * 60_000);
+  const capped = attempts;
+  assert.equal(await pass(9 * 60_000), capped, "capped at ten minutes, not more often");
+  assert.equal(await pass(60_000), capped + 1);
+  succeed = true;
+  await pass(10 * 60_000);
+  succeed = false;
+  const afterSuccess = attempts;
+  assert.equal(await pass(31_000), afterSuccess + 1, "a success resets the gap to 30 s");
 });
 test("runtime reconciliation revalidates a captured generation and rotates bounded failed batches", async (t) => {
   const refreshed = [];

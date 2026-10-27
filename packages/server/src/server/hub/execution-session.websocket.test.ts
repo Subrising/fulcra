@@ -206,6 +206,9 @@ test("ordinary Hub workspace recovery preserves its worker archive after daemon 
   expect(await hub.requestOrdinary({ ...message, requestId: "before-restart-send" })).toMatchObject(
     { payload: { accepted: true } },
   );
+  // Wait for the turn and close before shutdown, so restart recovery keeps this worker closed.
+  await hub.closeAgentAfterTurn(agentId);
+  expect(await hub.storedOwnedStatus(agentId)).toBe("closed");
   await hub.restartDaemon();
   await hub.socketDialed();
   hub.connectLatestSocket();

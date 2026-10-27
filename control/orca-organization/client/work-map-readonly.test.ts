@@ -24,7 +24,7 @@ const ALLOWED_IMPORTS = new Set([
   "react-native",
   "@getpaseo/plugin/client",
   "@getpaseo/plugin/client/react-native",
-  "@tanstack/react-query",
+  "./read-on-open",
   "./use-contract",
   "./work-button",
   "./work-map-model",

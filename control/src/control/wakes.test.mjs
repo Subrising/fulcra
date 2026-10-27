@@ -15,7 +15,14 @@ import { RoleSessions } from "./role-sessions.mjs";
 import { rpc } from "./rpc.mjs";
 import { COMPANY, PROGRAMME } from "./authority.mjs";
 import { AUTOMATION_LIMIT } from "./journal-capacity.mjs";
-import { Wakes, MAX_BATCH, MAX_WAKE_ATTEMPTS, MAX_NUDGES_PER_DAY, questionText } from "./wakes.mjs";
+import {
+  Wakes,
+  MAX_BATCH,
+  MAX_WAKE_ATTEMPTS,
+  MAX_NUDGES_PER_DAY,
+  questionText,
+  WAKES_SAFETY_MS,
+} from "./wakes.mjs";
 
 const T = (n) => `33333333-3333-4333-8333-${String(n).padStart(12, "0")}`;
 const issue = (id) => ({
@@ -545,6 +552,34 @@ test("accountDown tells each holder once per account, and the notice names the a
   assert.match(text, /must sign the account in again/);
 });
 
+test("a paid account serving while a subscription is free wakes Main once (FU-443)", async (t) => {
+  const f = fixture(t);
+  assert.equal(
+    f.w.accountPaidWhileFree("k1", { account: "Billing" }),
+    false,
+    "no Main bound: nothing queued",
+  );
+  f.db
+    .prepare(
+      "INSERT INTO role_bindings VALUES ('prime','main',NULL,?,?,1,1,'assigned','Risk test',NULL,?)",
+    )
+    .run(T(1), T(90), new Date().toISOString());
+  assert.equal(f.w.accountPaidWhileFree("k1", { account: "Billing" }), true);
+  assert.equal(f.w.accountPaidWhileFree("k1", { account: "Billing" }), true);
+  assert.equal(
+    f.db.prepare("SELECT count(*) n FROM role_wakes WHERE kind='api-while-free'").get().n,
+    1,
+    "the same key never queues twice",
+  );
+  const text = Wakes.prototype.render.call({}, [
+    { kind: "api-while-free", session: null, payload: JSON.stringify({ account: "Billing" }) },
+  ]);
+  assert.match(
+    text,
+    /\[RISK\] Paid API account "Billing" served a turn while a subscription account was free/,
+  );
+});
+
 test("billing warnings retain Main-first and lead-first receipts across restart", async (t) => {
   for (const mainFirst of [true, false]) {
     const f = fixture(t),
@@ -645,4 +680,67 @@ test("a lead's own billing event sends one wake when the lead is also Main", asy
     new Wakes(f.control).apiCreditLow("shared-holder", { sessions: [f.holder] }),
     receipts,
   );
+});
+
+test("FU-457: without a heartbeat the watchdog runs the wakes tick only every 5 minutes", async (t) => {
+  const f = fixture(t);
+  let ran = 0;
+  for (let i = 0; i < 20; i++) {
+    f.clock.now += 30_000;
+    if (f.w.safetyTickDue()) ran++;
+  }
+  assert.equal(ran, 2, "20 watchdog passes over 10 minutes: before FU-457 the tick ran 20 times");
+  f.clock.now += WAKES_SAFETY_MS;
+  assert.equal(f.w.safetyTickDue(), true);
+  f.db
+    .prepare("INSERT OR REPLACE INTO wake_settings VALUES ('heartbeatMinutes','10','test','x')")
+    .run();
+  f.clock.now += 30_000;
+  assert.equal(f.w.safetyTickDue(), true, "a heartbeat keeps the 30 s cadence");
+});
+test("FU-478: an update seen while the session is busy is observed on the next pump, not the 5 min tick", async (t) => {
+  const f = fixture(t);
+  await f.delegate(f.holder);
+  const r = f.started();
+  await f.delegate(r);
+  f.completions.set(f.instructed(r), { ended: true, progress: { outputPreview: "done" } });
+  f.control.busy.add(r);
+  f.w.dirty.add(r);
+  await f.w.pump();
+  assert.equal(f.sent.length, 0);
+  f.control.busy.delete(r);
+  await f.w.pump();
+  assert.equal(f.sent.length, 1, "the skipped observation was kept");
+});
+test("FU-490: limitBlocked tells each parent once per stop, and the line says BLOCKED and that the account was not changed", () => {
+  const LEAD = T(70),
+    MGR = T(71),
+    SESSION = T(72);
+  const queued = [];
+  const fake = {
+    has: () => true,
+    owned: () => [{ holder: LEAD, seat: "seat-a" }],
+    db: { prepare: () => ({ all: () => [{ supervisor: MGR }] }) },
+    enqueue(r, kind, identity, payload) {
+      const key = JSON.stringify([r.holder, ...identity]);
+      if (queued.some((q) => q.key === key)) return false;
+      queued.push({ key, holder: r.holder, session: r.session, kind, payload });
+      return true;
+    },
+    pump: () => {},
+  };
+  fake.parents = Wakes.prototype.parents.bind(fake);
+  const p = { stopId: T(73), line: "You've hit your session limit", reason: "Still busy" };
+  assert.equal(Wakes.prototype.limitBlocked.call(fake, SESSION, p), 2, "owner and manager");
+  assert.equal(
+    Wakes.prototype.limitBlocked.call(fake, SESSION, p),
+    0,
+    "the same stop: no second line",
+  );
+  assert.equal(Wakes.prototype.limitBlocked.call(fake, "not-a-session", p), 0);
+  const text = Wakes.prototype.render.call({}, [
+    { kind: "limit-blocked", session: SESSION, payload: JSON.stringify(queued[0].payload) },
+  ]);
+  assert.match(text, /\[BLOCKED\] session .* stopped at the usage limit/);
+  assert.match(text, /Its account was not changed/);
 });

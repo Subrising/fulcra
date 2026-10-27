@@ -4,7 +4,7 @@ import { describe, expect, test, vi } from "vitest";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { type Dirent, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
+import fs, { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -2373,6 +2373,53 @@ describe("Codex app-server provider", () => {
     await session.close();
   });
 
+  test("native input receipts cover accepted input before a daemon timeline commit", async () => {
+    let legacy = false;
+    let paginated = false;
+    const appServer = createFakeCodexAppServer({
+      "thread/read": () => ({
+        thread: {
+          ...(paginated ? { historyMode: "paginated" } : {}),
+          turns: [
+            {
+              id: "turn-receipt",
+              items: [
+                {
+                  type: "userMessage",
+                  id: "provider-user-message",
+                  content: [{ type: "text", text: "accepted input" }],
+                  ...(legacy ? {} : { clientId: "retained-batch" }),
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    });
+    const session = new CodexAppServerAgentSession(
+      createConfig({ cwd: "/workspace/project" }),
+      null,
+      createTestLogger(),
+      async () => appServer.child,
+    );
+    try {
+      await session.startTurn("accepted input", { clientMessageId: "retained-batch" });
+      expect(
+        appServer.requests().find((request) => request.method === "turn/start")?.params,
+      ).toMatchObject({ clientUserMessageId: "retained-batch" });
+      expect(await session.getInputReceipt("retained-batch")).toBe("present");
+      expect(await session.getInputReceipt("absent-batch")).toBe("absent");
+      legacy = true;
+      expect(await session.getInputReceipt("absent-batch")).toBe("unknown");
+      legacy = false;
+      paginated = true;
+      expect(await session.getInputReceipt("absent-batch")).toBe("unknown");
+      expect(await session.getInputReceipt("retained-batch")).toBe("present");
+    } finally {
+      await session.close();
+    }
+  });
+
   test("initializes Codex app-server without making Paseo the request originator", async () => {
     let initializeParams: unknown;
     const appServer = createFakeCodexAppServer({
@@ -2523,6 +2570,29 @@ describe("Codex app-server provider", () => {
 
     expect(killSpy).toHaveBeenCalledWith("SIGTERM");
     appServer.assertNoErrors();
+  });
+
+  test("FU-488: resume refuses a large rollout before sending thread/resume", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "codex-large-rollout-"));
+    try {
+      const directory = path.join(home, "sessions", "2026", "10", "24");
+      await fs.mkdir(directory, { recursive: true });
+      const file = path.join(directory, "rollout-2026-10-24-archived-thread-id.jsonl");
+      await fs.writeFile(file, "");
+      await fs.truncate(file, 2_480_000_000);
+      const resume = vi.fn(() => ({ thread: { id: "archived-thread-id" } }));
+      const appServer = createFakeCodexAppServer({ "thread/resume": resume });
+      const provider = createProviderWithFakeAppServer(appServer, {
+        runtimeSettings: { env: { CODEX_HOME: home } },
+      });
+      await expect(provider.resumeSession(archivedThreadHandle())).rejects.toThrow(
+        "history too large to resume",
+      );
+      expect(resume).not.toHaveBeenCalled();
+      expect((await fs.stat(file)).size).toBe(2_480_000_000);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
   });
 
   test("explains a missing rollout when a live Codex thread cannot be resumed", async () => {

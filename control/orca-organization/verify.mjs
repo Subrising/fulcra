@@ -96,6 +96,7 @@ files.push(
   "client/readable-update.ts",
 );
 files.push("shared/host-binding.ts", "server/host-binding.ts");
+files.push("shared/refresh-gate.ts");
 files.push("server/remote-observation.ts", "server/remote-observation.test.ts");
 files.push("client/inbox-model.ts", "client/inbox-model.test.ts");
 // Update-7: the account pool, rotation, role defaults, orchestration, Accounts & models.
@@ -573,6 +574,13 @@ try {
     { cwd: root, stdio: ["ignore", output, output], timeout: 300000 },
   );
 } catch {
+  // Show the failing tests in the log: the TAP file is not kept after a CI run.
+  const failed = fs
+    .readFileSync(tapFile, "utf8")
+    .split("\n")
+    .filter((l) => /^\s*(not ok|error:|expected:|actual:|message:)/.test(l))
+    .slice(0, 80);
+  console.error(failed.join("\n"));
   throw new Error("Plugin source tests failed; see " + tapFile);
 } finally {
   fs.closeSync(output);

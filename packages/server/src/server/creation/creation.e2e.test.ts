@@ -2,8 +2,8 @@ import { execFileSync } from "node:child_process";
 import type { z } from "zod";
 import { WebSocket } from "ws";
 import { SessionInboundMessageSchema, WSOutboundMessageSchema } from "@getpaseo/protocol/messages";
-import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test, vi } from "vitest";
@@ -284,3 +284,51 @@ test("legacy keyed creation preserves checkout error codes", async () => {
     await rm(directory, { recursive: true, force: true });
   }
 }, 60000);
+
+test("daemon boot fails interrupted workspace receipts and permits a new directory workspace", async () => {
+  const root = await mkdtemp(join(tmpdir(), "creation-boot-wire-"));
+  const receipts = join(root, ".paseo", "creations");
+  await mkdir(receipts, { recursive: true });
+  const identity = createHash("sha256")
+    .update(JSON.stringify(["workspace", "old-boot"]))
+    .digest("hex");
+  const receipt = join(receipts, `${identity}.json`);
+  const claim = join(receipts, "retained.claim");
+  await writeFile(claim, identity);
+  await writeFile(
+    receipt,
+    JSON.stringify({
+      fingerprint: "old-request",
+      inFlight: "workspace",
+      snapshot: {
+        kind: "workspace",
+        idempotencyKey: "old-boot",
+        phase: "accepted",
+        revision: 0,
+        error: null,
+        workspaceId: "wks_0123456789abcdef",
+        agentId: null,
+      },
+    }),
+  );
+  const daemon = await createTestPaseoDaemon({ paseoHomeRoot: root, cleanup: false });
+  const client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws`, appVersion: "0.8.0" });
+  try {
+    await client.connect();
+    const result = await client.createWorkspace({ source: { kind: "directory", path: root } });
+    expect(result.error).toBeNull();
+    expect(result.workspace?.workspaceDirectory).toBe(root);
+    expect(JSON.parse(await readFile(receipt, "utf8"))).toMatchObject({
+      inFlight: "workspace",
+      snapshot: { phase: "failed", outcomeUnknown: true, errorCode: "creation_interrupted" },
+    });
+    expect(await readFile(claim, "utf8")).toBe(identity);
+    expect(
+      (await client.fetchWorkspaces({})).entries.some((entry) => entry.id === result.workspace?.id),
+    ).toBe(true);
+  } finally {
+    await client.close();
+    await daemon.close();
+    await rm(root, { recursive: true, force: true });
+  }
+}, 30000);

@@ -96,8 +96,19 @@ export function startLimitResume(input: {
   const offHooks = input.hooks
     ? loadAgentPolicy("hooks").registerRecoveryHooks(input.hooks, service)
     : undefined;
+  const instances = new Map(agentManager.listAgents().map((agent) => [agent.id, agent.instanceId]));
   const offStream = agentManager.subscribe(
     (event) => {
+      if (event.type === "agent_state") {
+        const agent = event.agent;
+        const changed = instances.has(agent.id) && instances.get(agent.id) !== agent.instanceId;
+        instances.set(agent.id, agent.instanceId);
+        if (changed || agent.lifecycle === "closed")
+          void service
+            .onAgentEvent({ type: "agent_reloaded", agentId: agent.id })
+            .catch((error) => logger.warn({ err: error }, "Auto-resume reload recovery failed"));
+        return;
+      }
       // Native hooks own turn endings. Timeline-only binding snapshots retain restart protection.
       if (input.hooks && (event.type !== "agent_stream" || event.event.type !== "timeline")) return;
       void service

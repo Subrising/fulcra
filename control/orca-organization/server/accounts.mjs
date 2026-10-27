@@ -51,6 +51,7 @@ const empty = () => ({
   accounts: [],
   assignments: {},
   rotations: [],
+  riskNotices: [],
   defaults: { claude: null, codex: null },
   // The owner's choice: a session waits for its own account's reset unless he turns moving on (it spends another account).
   rotateOnLimit: false,
@@ -66,6 +67,7 @@ function parseAccounts(raw) {
     policy: POLICIES.includes(s.policy) ? s.policy : "priority",
     assignments: s.assignments ?? {},
     rotations: Array.isArray(s.rotations) ? s.rotations : [],
+    riskNotices: Array.isArray(s.riskNotices) ? s.riskNotices : [],
     rotateOnLimit: s.rotateOnLimit === true,
     defaults: Object.fromEntries(
       PROVIDERS.map((p) => [p, typeof s.defaults?.[p] === "string" ? s.defaults[p] : null]),
@@ -306,15 +308,27 @@ export async function readUsageAsync(root, now = Date.now()) {
 // the pool's policy. `except` excludes accounts (the one that just hit its limit). `usage` (weekly percent by account)
 // holds back accounts at or above WEEKLY_LAUNCH_CAP_PCT while another is below it; when all are, the one with the most
 // left is used. Returns null when none is available.
+// 0 = a subscription account, 2 = an API account, 1 = a Claude account whose credential kind is not known yet.
+function tierOf(a) {
+  if (a.provider !== "claude") return 0;
+  if (isApiAccount(a) || a.credentialKind === "api-key") return 2;
+  return a.credentialKind === "subscription" ? 0 : 1;
+}
 export function choose(s, provider, now = Date.now(), except = [], usage = {}) {
   const ready = s.accounts.filter(
     (a) =>
       a.provider === provider && !except.includes(a.id) && accountStatus(a, now).state === "ok",
   );
-  if (!ready.length) return null;
+  // FU-430 (the owner's rule, 11 Oct 2026): paid API credit only when every usable subscription account is capped.
+  // A free subscription account always wins, whatever the priority numbers or the default say.
+  // Tiers by credential kind, never by name: subscription, then kind not yet known, then API. An account that is signed
+  // out, expired or revoked is not "ready", so it is skipped and never counts as capped for this rule.
+  const tiers = [0, 1, 2].map((n) => ready.filter((a) => tierOf(a) === n));
+  const eligible = tiers.find((x) => x.length) ?? [];
+  if (!eligible.length) return null;
   const used = (a) => (isApiAccount(a) ? 0 : (usage[a.id] ?? 0));
-  const room = ready.filter((a) => used(a) < WEEKLY_LAUNCH_CAP_PCT);
-  const ok = room.length ? room : [...ready].sort((x, y) => used(x) - used(y)).slice(0, 1);
+  const room = eligible.filter((a) => used(a) < WEEKLY_LAUNCH_CAP_PCT);
+  const ok = room.length ? room : [...eligible].sort((x, y) => used(x) - used(y)).slice(0, 1);
   const preferred = ok.find((a) => a.id === s.defaults?.[provider]);
   if (preferred) return preferred;
   const key = (a) =>
@@ -327,6 +341,46 @@ export function choose(s, provider, now = Date.now(), except = [], usage = {}) {
     for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1;
     return 0;
   })[0];
+}
+// FU-430: a free subscription account (not limited, not signed out), or null. A session moves only to this account
+// without the owner's rotate-on-limit setting, and only at the start of its own next turn.
+function freeSubscription(s, provider, now, except = [], usage = {}) {
+  const to = choose(s, provider, now, except, usage);
+  return to && tierOf(to) === 0 ? to : null;
+}
+// FU-443: a turn served by a paid API account while a subscription account of the pool is free. One notice per account
+// and window (the subscription limit window), kept in the store so a restart or a second launch never repeats it.
+const MAX_RISK_NOTICES = 50;
+export function paidWhileFree(s, provider, account, now = Date.now(), usage = {}) {
+  if (!account || !isApiAccount(account) || !freeSubscription(s, provider, now, [], usage))
+    return null;
+  const window = Math.floor(now / DEFAULT_LIMIT_MS);
+  const key = `${account.id}:${window}`;
+  s.riskNotices ??= [];
+  if (s.riskNotices.some((n) => n.key === key)) return null;
+  const notice = {
+    key,
+    accountId: account.id,
+    account: account.name,
+    provider,
+    window,
+    at: iso(now),
+    sent: false,
+  };
+  s.riskNotices.push(notice);
+  s.riskNotices = s.riskNotices.slice(-MAX_RISK_NOTICES);
+  return notice;
+}
+// Notices not yet delivered to the Main assistant.
+export function pendingRiskNotices(root) {
+  return (readAccounts(root).riskNotices ?? []).filter((n) => !n.sent);
+}
+export async function markRiskNoticeSent(root, key) {
+  return update(root, (s) => {
+    const n = (s.riskNotices ?? []).find((x) => x.key === key);
+    if (n) n.sent = true;
+    return null;
+  });
 }
 // When every account of a provider is limited: the earliest reset (null if none is only limited).
 export function earliestReset(s, provider, now = Date.now()) {
@@ -521,7 +575,7 @@ export async function assign(root, sessionId, provider, now = Date.now()) {
   const usage = await readUsageAsync(root, now);
   return update(root, (s) => assignInStore(s, sessionId, provider, now, [], usage));
 }
-// `usage` applies only when the session needs an account: a session keeps its own account (no automatic switch).
+// `usage` applies only when the session needs an account: a session keeps its own account while it works. It moves only here, at the start of its own next turn: off a limited account or off an API account when a free subscription account exists (FU-430). Nothing moves idle sessions.
 function assignInStore(s, sessionId, provider, now, except = [], usage = {}) {
   const cur = s.assignments[sessionId],
     held = cur && s.accounts.find((a) => a.id === cur.accountId && a.provider === provider);
@@ -532,9 +586,15 @@ function assignInStore(s, sessionId, provider, now, except = [], usage = {}) {
   }
   if (!poolFor(s, provider)) return null;
   const heldState = held && !except.includes(held.id) ? accountStatus(held, now).state : null;
-  // Waiting is the default: a limited account keeps its session (the launch waits for that reset) unless moving is on.
+  // With no free subscription account, a limited account keeps its session (the launch waits for that reset) unless moving is on.
   // This holds even when the launch hook has already tried that account (`except`): it then refuses, rather than move.
-  if (held && accountStatus(held, now).state === "limited" && !s.rotateOnLimit) {
+  // FU-430: with the setting off, a limited account still gives way to a free subscription account (never to an API one).
+  if (
+    held &&
+    accountStatus(held, now).state === "limited" &&
+    !s.rotateOnLimit &&
+    !freeSubscription(s, provider, now, [held.id, ...except], usage)
+  ) {
     held.lastUsedAt = iso(now);
     s.assignments[sessionId] = { accountId: held.id, provider, at: iso(now), ended: false };
     return {
@@ -543,7 +603,10 @@ function assignInStore(s, sessionId, provider, now, except = [], usage = {}) {
       earliestReset: accountStatus(held, now).until,
     };
   }
-  let a = heldState === "ok" ? held : choose(s, provider, now, except, usage);
+  // A session on an API account leaves it as soon as a subscription account is free (FU-430), so it stops paying.
+  const leaveApi =
+    heldState === "ok" && isApiAccount(held) && freeSubscription(s, provider, now, except, usage);
+  let a = heldState === "ok" && !leaveApi ? held : choose(s, provider, now, except, usage);
   let allLimited = false;
   if (!a) {
     a =
@@ -768,6 +831,8 @@ export async function rotate(
     if (!revoked) from.limitObservedAt = iso(now);
     // Moving spends another account's usage, so it needs both the caller's ask and the owner's setting.
     // A revoked token cannot work again by waiting, so it moves the session whatever the owner's limit setting is.
+    // FU-430: a limit alone never moves a session (the owner's rule, 21 Oct 2026: no bulk moves). The account is marked;
+    // the session moves to a free subscription account at the start of its own next turn (assign).
     const move = reassign && cur?.accountId === from.id && (revoked || s.rotateOnLimit === true);
     const to = move ? choose(s, provider, now, [from.id]) : null;
     if (to) {
@@ -1304,6 +1369,7 @@ export function sessionOpenHook({
   now = Date.now,
   env = process.env,
   onAllLimited = () => {},
+  onRisk = () => {},
 }) {
   return async ({ request }) => {
     if (request.purpose === "history" || !PROVIDERS.includes(request.provider)) return request;
@@ -1388,7 +1454,9 @@ export function sessionOpenHook({
             onAllLimited({ provider, session: sessionId, earliestReset: r.earliestReset });
           } catch {}
         }
+        let risk = null;
         const out = await update(storeRoot, (s) => {
+          risk = null;
           if (JSON.stringify(s.assignments[sessionId]) !== expected) throw refused();
           const account = s.accounts.find((a) => a.id === r.account.id && a.provider === provider);
           const state = account && accountStatus(account, now()).state;
@@ -1403,6 +1471,7 @@ export function sessionOpenHook({
             return null;
           }
           if (provider === "claude") account.credentialKind = credentialKind(token);
+          risk = paidWhileFree(s, provider, account, now(), usage);
           // The current assignment/one-use intent and account eligibility are checked together,
           // immediately before publishing this launch's environment. Labels are never admission evidence.
           return {
@@ -1422,7 +1491,13 @@ export function sessionOpenHook({
             },
           };
         });
-        if (out) return out;
+        if (out) {
+          if (risk)
+            try {
+              onRisk({ ...risk, session: sessionId });
+            } catch {}
+          return out;
+        }
       }
       throw refused();
     } catch {

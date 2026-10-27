@@ -229,20 +229,13 @@ export function allHostsLabel(hostCount: number): string {
   return hostCount === 2 ? "Both Macs" : "All hosts";
 }
 
-export const FLEET_AUTO_RETRY_LIMIT = 3;
-
 export interface FleetReadState {
-  kind: "ok" | "loading" | "retrying" | "failed";
-  /** Whether the page keeps refetching on its own. False once retries are exhausted: "Try again" restarts them. */
+  kind: "ok" | "loading" | "failed";
   autoRetry: boolean;
   message: string | null;
 }
 
-/**
- * What the page says about its own read. J15 found "Fulcra is not answering yet; retrying" shown forever for a
- * Mac the Command Centre could not read. Retries are bounded: after FLEET_AUTO_RETRY_LIMIT failures in a row the
- * page stops, says so in plain words with the reason, and waits for "Try again".
- */
+/** A failed read waits for the user to try again. */
 export function fleetReadState(input: {
   hasData: boolean;
   isError: boolean;
@@ -250,21 +243,14 @@ export function fleetReadState(input: {
   hostName: string | null;
   reason: string | null;
 }): FleetReadState {
-  if (input.hasData) return { kind: "ok", autoRetry: true, message: null };
+  if (input.hasData) return { kind: "ok", autoRetry: false, message: null };
   const target = input.hostName ? `sessions on ${input.hostName}` : "your sessions";
-  if (!input.isError) return { kind: "loading", autoRetry: true, message: `Reading ${target}…` };
+  if (!input.isError) return { kind: "loading", autoRetry: false, message: `Reading ${target}…` };
   const reason = input.reason ? ` Reason: ${input.reason.slice(0, 160)}.` : "";
-  if (input.failures < FLEET_AUTO_RETRY_LIMIT) {
-    return {
-      kind: "retrying",
-      autoRetry: true,
-      message: `The Command Centre can't read ${target} right now (attempt ${Math.max(1, input.failures)} of ${FLEET_AUTO_RETRY_LIMIT}); trying again.${reason}`,
-    };
-  }
   return {
     kind: "failed",
     autoRetry: false,
-    message: `The Command Centre can't read ${target} right now. It stopped retrying after ${FLEET_AUTO_RETRY_LIMIT} attempts.${reason}`,
+    message: `The Command Centre can't read ${target} right now. Select Try again to refresh.${reason}`,
   };
 }
 

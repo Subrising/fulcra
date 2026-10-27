@@ -102,7 +102,7 @@ test("board text removes synthetic tokens and private paths before publication",
     workspaces: { list: async () => ({ entries: [workspace], pageInfo: { hasMore: false } }) },
   } as unknown as PaseoApi;
   try {
-    const project = (await board.read(api)).projects[0]!;
+    const project = (await board.snapshot(api)).projects[0]!;
     check(project.items[0]!.evidence);
     check(project.jobs[0]!.result);
   } finally {
@@ -207,14 +207,15 @@ test("snapshot reads the ledger, updates on a file event, and cleans up", async 
     workspaces: { list: async () => ({ entries: [workspace], pageInfo: { hasMore: false } }) },
   } as unknown as PaseoApi;
   try {
-    assert.equal((await board.read(api)).projects[0]!.items.length, 1);
+    assert.equal((await board.snapshot(api)).projects[0]!.items.length, 1);
     fs.writeFileSync(file, header);
-    assert.equal((await board.read(api)).projects[0]!.ledgerState, "Empty ledger");
+    assert.equal((await board.snapshot(api)).projects[0]!.ledgerState, "Empty ledger");
   } finally {
     board.close();
     fs.rmSync(root, { recursive: true, force: true });
   }
-  assert.equal(removed, 1);
+  // Every status hook is removed.
+  assert.equal(removed, 9);
 });
 test("board includes ledger projects without a lead and groups workers across folders", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "board-groups-"));
@@ -267,7 +268,7 @@ test("board includes ledger projects without a lead and groups workers across fo
     },
   } as unknown as PaseoApi;
   try {
-    const snapshot = await board.read(api);
+    const snapshot = await board.snapshot(api);
     assert.deepEqual(
       snapshot.projects.map((project) => project.name),
       ["fixture", "unrelated"],
@@ -311,7 +312,7 @@ test("an unlabelled session in a shared workspace has one owner at most", async 
       workspaces: { list: async () => ({ entries: [workspace], pageInfo: { hasMore: false } }) },
     }) as unknown as PaseoApi;
   try {
-    const shared = await board.read(api([alpha, beta, unlabelled]));
+    const shared = await board.snapshot(api([alpha, beta, unlabelled]));
     assert.deepEqual(
       shared.projects.map((project) => project.name),
       ["alpha", "beta", "fixture"],
@@ -320,7 +321,7 @@ test("an unlabelled session in a shared workspace has one owner at most", async 
       shared.projects.flatMap((project) => project.jobs.map((job) => job.id)).sort(),
       ["alpha", "beta", "unlabelled"],
     );
-    const unique = await board.read(api([alpha, unlabelled]));
+    const unique = await board.snapshot(api([alpha, unlabelled]));
     assert.deepEqual(unique.projects.flatMap((p) => p.jobs.map((job) => job.id)).sort(), [
       "alpha",
       "unlabelled",
@@ -340,9 +341,9 @@ test("missing ledger root and SDK errors remain visible", async () => {
     workspaces: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
   } as unknown as PaseoApi;
   try {
-    assert.equal((await board.read(api)).warnings.length, 1);
+    assert.equal((await board.snapshot(api)).warnings.length, 1);
     await assert.rejects(
-      board.read({
+      board.snapshot({
         ...api,
         agents: {
           list: async () => {
@@ -397,7 +398,7 @@ test("snapshot matches current configured owners before redaction and invalidate
     },
     workspaces: { list: async () => ({ entries: [workspace], pageInfo: { hasMore: false } }) },
   } as unknown as PaseoApi;
-  const read = async () => (await board.read(api)).projects[0]!.items;
+  const read = async () => (await board.snapshot(api)).projects[0]!.items;
   assert.deepEqual(
     (await read()).map((item) => item.needsHuman),
     [false, false],
@@ -412,7 +413,10 @@ test("snapshot matches current configured owners before redaction and invalidate
     items.map((item) => item.needsHuman),
     [true, false],
   );
-  assert.equal(JSON.stringify(await board.read(api)).includes("OWNER-A@FIXTURE.EXAMPLE"), false);
+  assert.equal(
+    JSON.stringify(await board.snapshot(api)).includes("OWNER-A@FIXTURE.EXAMPLE"),
+    false,
+  );
   fs.writeFileSync(
     file,
     JSON.stringify({ ...config, board: { humanOwners: ["owner-b@fixture.example"] } }),
@@ -422,7 +426,7 @@ test("snapshot matches current configured owners before redaction and invalidate
     [false, true],
   );
   fs.writeFileSync(file, JSON.stringify({ ...config, board: { humanOwners: "Owner A" } }));
-  await assert.rejects(board.read(api), /board.humanOwners/);
+  await assert.rejects(board.snapshot(api), /board.humanOwners/);
 });
 
 for (const hold of ["done", "paused", "blocked"]) {
@@ -460,24 +464,15 @@ test("configured mirror includes ledger-only projects and every running session"
   const api = {
     agents: {
       list: async () => ({ entries: [{ agent }], pageInfo: { hasMore: false } }),
-      ref: () => ({
-        timeline: {
-          refetch: async () => ({
-            entries: [
-              { item: { type: "assistant_message", text: "Checking the layout.\nDetails" } },
-            ],
-          }),
-        },
-      }),
     },
     workspaces: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
   } as unknown as PaseoApi;
-  const result = await board.read(api);
+  const result = await board.snapshot(api);
   assert.deepEqual(
     result.projects.map((p) => p.name),
     ["Other sessions", "ledger-only"],
   );
-  assert.equal(result.projects[0]!.jobs[0]!.result, "Checking the layout.");
+  assert.equal(result.projects[0]!.jobs[0]!.result, "Working on the task");
   assert.equal(result.projects[0]!.jobs[0]!.model, "gpt-test");
   assert.equal(result.projects[0]!.jobs[0]!.startedAt, "2026-10-16T00:00:00Z");
   assert.equal(result.projects[1]!.items.length, 1);
@@ -502,17 +497,17 @@ test("blocked observations survive a restart; undated completions remain unknown
   write("OPEN");
   const board = createProgressBoard({ on: () => () => {} }, { root, historyFile });
   t.after(() => board.close());
-  assert.equal((await board.read(api)).projects[0]!.items[1]!.completedAt, undefined);
+  assert.equal((await board.snapshot(api)).projects[0]!.items[1]!.completedAt, undefined);
   write("BLOCKED: waiting for review");
-  const blockedAt = (await board.read(api)).projects[0]!.items[0]!.blockedAt;
+  const blockedAt = (await board.snapshot(api)).projects[0]!.items[0]!.blockedAt;
   assert.ok(blockedAt);
   write("DONE");
-  const completedAt = (await board.read(api)).projects[0]!.items[0]!.completedAt;
+  const completedAt = (await board.snapshot(api)).projects[0]!.items[0]!.completedAt;
   assert.equal(completedAt, undefined);
   board.close();
   const restarted = createProgressBoard({ on: () => () => {} }, { root, historyFile });
   t.after(() => restarted.close());
-  assert.equal((await restarted.read(api)).projects[0]!.items[0]!.completedAt, completedAt);
+  assert.equal((await restarted.snapshot(api)).projects[0]!.items[0]!.completedAt, completedAt);
 });
 
 test("explicit close records are retained while no screen is mounted", async (t) => {
@@ -546,109 +541,108 @@ test("explicit close records are retained while no screen is mounted", async (t)
       if (check()) return;
       watcher.close();
       reject(Error("No saved close record after the file event"));
-    }, 2000);
+    }, 10000);
     const watcher = fs.watch(root, (_event, name) => {
       // Directory events can coalesce. Read after the project's observer saves its result.
       if (name === "history.json") setImmediate(check);
     });
   });
-  // Give the native watch registration one event-loop turn before the write.
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  fs.writeFileSync(
-    file + ".next",
-    `${header}\n| FU-1 | Task | FIX | Worker | DONE | Closed at 2026-10-16T02:00:00Z; PR 12 | brief |`,
-  );
-  fs.renameSync(file + ".next", file);
+  // A native watch can start delivering events some time after fs.watch returns (inotify and
+  // FSEvents under load), so write the close record again until one write is observed.
+  const close = `${header}\n| FU-1 | Task | FIX | Worker | DONE | Closed at 2026-10-16T02:00:00Z; PR 12 | brief |`;
+  let seen = false;
+  const stop = () => (seen = true);
+  observed.then(stop, stop);
+  for (let attempt = 0; attempt < 100 && !seen; attempt++) {
+    fs.writeFileSync(file + ".next", close);
+    fs.renameSync(file + ".next", file);
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+  }
   await observed;
   const saved = JSON.parse(fs.readFileSync(historyFile, "utf8"));
   assert.equal(saved.rows["fixture:FU-1"].status, "DONE");
   assert.ok(Number.isFinite(Date.parse(saved.rows["fixture:FU-1"].completedAt)));
 });
 
-function activityFixture(t: { after: (fn: () => void) => void }) {
+// FU-412: the board read each running session's timeline every minute, and each read replayed
+// that session's whole journal on the host. Activity now comes from the session record and turn events.
+function activityFixture(t: { after: (fn: () => void) => void }, count = 1) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "board-activity-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const clock = { at: 1_000_000 };
-  const board = createProgressBoard({ on: () => () => {} }, { root, now: () => clock.at });
-  t.after(() => board.close());
-  const tool = {
-    item: {
-      type: "tool_call",
-      name: "shell",
-      detail: { type: "shell", command: "npm run test -- --long-private-option" },
+  const handlers = new Map<string, (event: unknown) => void>();
+  const server = {
+    on: (name: string, handler: (event: unknown) => void) => {
+      handlers.set(name, handler);
+      return () => handlers.delete(name);
     },
-  };
+  } as unknown as Parameters<typeof createProgressBoard>[0];
+  const board = createProgressBoard(server, { root });
+  t.after(() => board.close());
   const state = {
-    timeline: [tool] as unknown[],
-    agent: boardLead as PaseoAgent,
-    refetches: 0,
+    agents: Array.from(
+      { length: count },
+      (_, n) => ({ ...boardLead, id: `lead-${n}` }) as PaseoAgent,
+    ),
+    timelineReads: 0,
   };
   const api = {
     agents: {
-      list: async () => ({ entries: [{ agent: state.agent }], pageInfo: { hasMore: false } }),
-      ref: () => ({
-        timeline: {
-          refetch: async () => {
-            state.refetches += 1;
-            return { entries: state.timeline };
-          },
-        },
+      list: async () => ({
+        entries: state.agents.map((agent) => ({ agent })),
+        pageInfo: { hasMore: false },
       }),
+      ref: () => {
+        state.timelineReads += 1;
+        return { timeline: { refetch: async () => ({ entries: [] }) } };
+      },
     },
     workspaces: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
   } as unknown as PaseoApi;
-  const touch = () => {
-    state.agent = { ...state.agent, updatedAt: `${state.agent.updatedAt}+` } as PaseoAgent;
-  };
-  const result = async () => (await board.read(api)).projects[0]!.jobs[0]!.result;
-  return { clock, tool, state, touch, result, board, api };
+  const emit = (name: string, event: unknown) => handlers.get(name)!(event);
+  const result = async () => (await board.snapshot(api)).projects[0]!.jobs[0]!.result;
+  return { state, emit, result, board, api };
 }
 
-test("running activity uses readable updates instead of raw commands", async (t) => {
+test("board refresh makes no timeline fetch for running sessions over 5 minutes", async (t) => {
+  const f = activityFixture(t, 8);
+  // One refresh every 10 s for 5 minutes; every session changes between refreshes.
+  for (let tick = 0; tick < 30; tick++) {
+    f.state.agents = f.state.agents.map(
+      (agent) =>
+        ({
+          ...agent,
+          updatedAt: new Date(Date.parse("2026-10-20T00:00:00Z") + tick * 10_000).toISOString(),
+          activeTurn: { turnId: `turn-${tick}`, startedAt: "2026-10-20T00:00:00Z" },
+        }) as PaseoAgent,
+    );
+    const board = await f.board.snapshot(f.api);
+    assert.equal(board.projects[0]!.jobs.length, 8);
+  }
+  assert.equal(f.state.timelineReads, 0);
+});
+
+test("a running session shows live activity from its record", async (t) => {
   const f = activityFixture(t);
-  assert.equal(await f.result(), "Running checks");
-  f.state.timeline = [
-    { item: { type: "assistant_message", text: "Checking the phone layout." } },
-    f.tool,
-  ];
-  f.touch();
-  f.clock.at += 61_000;
+  assert.equal(await f.result(), "Working on the task");
+  f.state.agents = [{ ...boardLead, pendingPermissions: [{ id: "p" }] } as unknown as PaseoAgent];
+  assert.equal(await f.result(), "Waiting for permission");
+  f.state.agents = [{ ...boardLead, status: "initializing" } as PaseoAgent];
+  assert.equal(await f.result(), "Starting the session");
+  assert.equal(f.state.timelineReads, 0);
+});
+
+test("a session shows its last reply until its next turn starts", async (t) => {
+  const f = activityFixture(t);
+  f.state.agents = [{ ...boardLead, id: "lead" } as PaseoAgent];
+  f.emit("agent.turn_ended", {
+    agent: { id: "lead" },
+    outcome: { kind: "completed" },
+    timeline: [{ type: "assistant_message", text: "Checking the phone layout.\nDetails" }],
+  });
   assert.equal(await f.result(), "Checking the phone layout.");
-});
-
-test("activity is not read again while the session is unchanged", async (t) => {
-  const f = activityFixture(t);
-  assert.equal(await f.result(), "Running checks");
-  f.clock.at += 10 * 60_000;
-  f.state.timeline = [{ item: { type: "assistant_message", text: "Hidden change." } }];
-  assert.equal(await f.result(), "Running checks");
-  assert.equal(f.state.refetches, 1);
-});
-
-test("activity is read at most once a minute for a changed session", async (t) => {
-  const f = activityFixture(t);
-  await f.result();
-  f.touch();
-  f.clock.at += 30_000;
-  f.state.timeline = [{ item: { type: "assistant_message", text: "New update." } }];
-  assert.equal(await f.result(), "Running checks");
-  assert.equal(f.state.refetches, 1);
-  f.clock.at += 31_000;
-  assert.equal(await f.result(), "New update.");
-  assert.equal(f.state.refetches, 2);
-});
-
-test("activity cache entries are dropped when a session stops running", async (t) => {
-  const f = activityFixture(t);
-  await f.result();
-  const running = f.state.agent;
-  f.state.agent = { ...boardLead, status: "idle" } as PaseoAgent;
-  await f.board.read(f.api);
-  // Same snapshot marker as the first read. Only a dropped entry makes this read the timeline again.
-  f.state.agent = running;
-  f.clock.at += 1000;
-  await f.result();
-  assert.equal(f.state.refetches, 2);
+  f.emit("agent.turn_started", { agent: { id: "lead" }, turnId: "next" });
+  assert.equal(await f.result(), "Working on the task");
+  assert.equal(f.state.timelineReads, 0);
 });
 
 test("ledger close proxy loads only the selected canonical source", async (t) => {
@@ -771,13 +765,9 @@ test("each host reads native running sessions even without a board plugin", asyn
             ? { entries: agents.slice(1).map((agent) => ({ agent })), pageInfo: { hasMore: false } }
             : { entries: [{ agent: agents[0] }], pageInfo: { hasMore: true, nextCursor: "next" } };
         },
-        ref: () => ({
-          timeline: {
-            refetch: async () => ({
-              entries: [{ item: { type: "assistant_message", text: "---\nChecking the task." } }],
-            }),
-          },
-        }),
+        ref: () => {
+          throw Error("The board must not read a session timeline");
+        },
       },
       workspaces: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
     } as unknown as PaseoApi;
@@ -786,7 +776,7 @@ test("each host reads native running sessions even without a board plugin", asyn
     });
     assert.equal(board.projects.flatMap((p) => p.jobs).length, agents.length);
     assert.equal(board.projects[0]!.jobs[0]!.model, "claude-opus-5-5");
-    assert.equal(board.projects[0]!.jobs[0]!.result, "Checking the task.");
+    assert.equal(board.projects[0]!.jobs[0]!.result, "Working on the task");
     assert.deepEqual(calls, [undefined, "next"]);
     assert.match(board.warnings[0]!, /Project lists are unavailable/);
   }
@@ -870,6 +860,91 @@ test("old observed completion cache cannot turn an undated close into recent wor
     agents: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
     workspaces: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
   } as unknown as PaseoApi;
-  const item = (await board.read(api)).projects[0]!.items[0]!;
+  const item = (await board.snapshot(api)).projects[0]!.items[0]!;
   assert.equal(item.completedAt, undefined);
+});
+
+// FU-412 (owner design, 20 Oct): the board is rebuilt only after a status or ledger change, once a
+// window, and never on a timer with nothing changed.
+function eventFixture(t: { after: (fn: () => void) => void }) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "board-events-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const queue = new Map<number, { at: number; run: () => void }>();
+  let now = 0,
+    nextTimer = 0;
+  const timers = {
+    setTimer: (run: () => void, ms: number) => {
+      queue.set(++nextTimer, { at: now + ms, run });
+      return nextTimer;
+    },
+    clearTimer: (timer: unknown) => void queue.delete(timer as number),
+  };
+  const handlers = new Map<string, (event: unknown, context: unknown) => void>();
+  const server = {
+    on: (name: string, handler: (event: unknown, context: unknown) => void) => {
+      handlers.set(name, handler);
+      return () => handlers.delete(name);
+    },
+  } as unknown as Parameters<typeof createProgressBoard>[0];
+  const board = createProgressBoard(server, { root, timers });
+  t.after(() => board.close());
+  const state = { agent: { ...boardLead } as PaseoAgent, builds: 0, timelineReads: 0 };
+  const api = {
+    agents: {
+      list: async () => {
+        state.builds += 1;
+        return { entries: [{ agent: state.agent }], pageInfo: { hasMore: false } };
+      },
+      ref: () => {
+        state.timelineReads += 1;
+        throw Error("The board must not read a session timeline");
+      },
+    },
+    workspaces: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
+  } as unknown as PaseoApi;
+  const emit = (name: string, event: unknown) => handlers.get(name)!(event, { paseo: api });
+  const advance = (ms: number) => {
+    now += ms;
+    for (const [key, timer] of [...queue])
+      if (timer.at <= now) {
+        queue.delete(key);
+        timer.run();
+      }
+  };
+  return { board, api, state, emit, advance, timers: () => queue.size };
+}
+
+test("status events within 30 s give one board rebuild", async (t) => {
+  const f = eventFixture(t);
+  await f.board.read(f.api);
+  assert.equal(f.state.builds, 1);
+  const lead = { id: "lead" };
+  for (let n = 0; n < 10; n++) {
+    f.state.agent = { ...boardLead, status: n % 2 ? "running" : "initializing" } as PaseoAgent;
+    f.emit(n % 2 ? "agent.turn_started" : "agent.permission_requested", { agent: lead });
+    f.advance(2_900);
+    // Reads inside the window serve the last board.
+    await f.board.read(f.api);
+  }
+  assert.equal(f.state.builds, 1);
+  assert.equal(f.timers(), 1);
+  f.state.agent = { ...boardLead, status: "initializing" } as PaseoAgent;
+  f.advance(1_000);
+  const board = await f.board.read(f.api);
+  assert.equal(f.state.builds, 2);
+  assert.equal(board.projects[0]!.jobs[0]!.result, "Starting the session");
+  assert.equal(f.timers(), 0);
+  assert.equal(f.state.timelineReads, 0);
+});
+
+test("no events give no board work over 10 minutes", async (t) => {
+  const f = eventFixture(t);
+  await f.board.read(f.api);
+  for (let tick = 0; tick < 60; tick++) {
+    f.advance(10_000);
+    await f.board.read(f.api);
+  }
+  assert.equal(f.state.builds, 1);
+  assert.equal(f.timers(), 0);
+  assert.equal(f.state.timelineReads, 0);
 });

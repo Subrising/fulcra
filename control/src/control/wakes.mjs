@@ -24,8 +24,11 @@
 // automation limit. NEVER to a holder under human control: its changes wait (a day at most) until it is handed back.
 import { createHash } from "node:crypto";
 import { assertColumns } from "./schema.mjs";
+import { tickDue } from "./agent-watch.mjs";
 import { uuid, RecipientBusy } from "./authority.mjs";
 
+// FU-457: agent updates drive wakes (onAgent); the watchdog tick is only a safety net, run this often when no heartbeat is set.
+export const WAKES_SAFETY_MS = 5 * 60_000;
 export const OWNED_CACHE_MS = 5000,
   WAKE_TTL_MS = 86400000,
   HEARTBEAT_MINUTES = 0,
@@ -193,19 +196,8 @@ export class Wakes {
   // and recovery-status still show the rotation).
   accountRotated(session, r) {
     if (!uuid(session) || !r) return 0;
-    const holders = this.owned({ session }).map((o) => ({
-      holder: o.holder,
-      seat: o.seat,
-      session,
-      title: o.title,
-    }));
-    if (this.has("manager_workers"))
-      for (const m of this.db
-        .prepare("SELECT DISTINCT supervisor FROM manager_workers WHERE worker=?")
-        .all(session))
-        if (uuid(m.supervisor)) holders.push({ holder: m.supervisor, seat: null, session });
     let n = 0;
-    for (const h of holders)
+    for (const h of this.parents(session))
       n += this.enqueue(h, "account-rotated", ["account", r.at, r.to ?? "none"], {
         from: r.fromName,
         to: r.toName,
@@ -217,6 +209,36 @@ export class Wakes {
         : 0;
     if (n) this.pump();
     return n;
+  }
+  // FU-490: a usage-limit stop that Fulcra could not continue. One BLOCKED line per stop to the parents of the session.
+  limitBlocked(session, p) {
+    if (!uuid(session) || !p?.stopId) return 0;
+    let n = 0;
+    for (const h of this.parents(session))
+      n += this.enqueue(h, "limit-blocked", ["limit", p.stopId], {
+        line: clip(p.line, 200),
+        resetAt: p.resetAt ?? null,
+        reason: clip(p.reason, 300),
+      })
+        ? 1
+        : 0;
+    if (n) this.pump();
+    return n;
+  }
+  // The holders told about a session: the seat that started it and, for a manager worker, its manager.
+  parents(session) {
+    const holders = this.owned({ session }).map((o) => ({
+      holder: o.holder,
+      seat: o.seat,
+      session,
+      title: o.title,
+    }));
+    if (this.has("manager_workers"))
+      for (const m of this.db
+        .prepare("SELECT DISTINCT supervisor FROM manager_workers WHERE worker=?")
+        .all(session))
+        if (uuid(m.supervisor)) holders.push({ holder: m.supervisor, seat: null, session });
+    return holders;
   }
   // Each role gets one durable warning per billing incident. Saved recipients survive role changes.
   apiCreditLow(key, payload, saved = {}) {
@@ -296,6 +318,27 @@ export class Wakes {
     if (inserted) this.pump();
     return receipts;
   }
+  // FU-443: a paid API account served a turn while a subscription was free. Only the Main assistant hears it; the
+  // pool keeps one notice per account and window, and the identity makes a repeat a no-op.
+  accountPaidWhileFree(key, payload) {
+    const main = this.has("role_bindings")
+      ? this.db
+          .prepare(
+            "SELECT session FROM role_bindings WHERE role='prime' AND seat='main' AND state='assigned' AND session IS NOT NULL LIMIT 1",
+          )
+          .get()?.session
+      : null;
+    if (!uuid(main)) return false;
+    this.enqueue(
+      { holder: main, seat: null, session: null },
+      "api-while-free",
+      ["api-while-free", key],
+      payload,
+      { pendingOnCapacity: true },
+    );
+    this.pump();
+    return true;
+  }
   accountDown(session, r) {
     if (!r?.from) return 0;
     const holders = [];
@@ -331,7 +374,11 @@ export class Wakes {
   // ---- item 1: observe one owned session ----
   async observe(r) {
     const s = this.store.get(r.session);
-    if (!s || s.mode !== "delegated" || this.control.busy.has(r.session)) return; // a human-held session is its human's
+    if (!s || s.mode !== "delegated") return; // a human-held session is its human's
+    if (this.control.busy.has(r.session)) {
+      this.dirty.add(r.session); // FU-478: keep it for the next pump, not the 5 min tick
+      return;
+    }
     const a = await this.control.native.snapshot(r.session);
     const pending = Array.isArray(a.pendingPermissions) ? a.pendingPermissions : [];
     for (const p of pending) {
@@ -413,13 +460,18 @@ export class Wakes {
         const active = [];
         for (const id of this.work(holder)) {
           const s = this.store.get(id);
-          if (!s || s.mode !== "delegated") continue;
-          const a = await this.control.native.snapshot(id);
-          if (a.status === "running" || (a.pendingPermissions?.length ?? 0) > 0)
+          if (!s || s.mode !== "delegated" || this.control.native.isLive?.(id) === false) continue;
+          // FU-423: the live directory already carries status and pending permissions; fetch only when it cannot.
+          const known = this.control.native.liveState?.(id);
+          const a = known ?? (await this.control.native.snapshot(id));
+          const waiting = known
+            ? known.pendingPermissions > 0
+            : (a.pendingPermissions?.length ?? 0) > 0;
+          if (a.status === "running" || waiting)
             active.push({
               sessionId: id,
               status: a.status,
-              waiting: (a.pendingPermissions?.length ?? 0) > 0,
+              waiting,
             });
         }
         if (!active.length) continue;
@@ -460,6 +512,8 @@ export class Wakes {
         return `- [error] ${who} stopped with an error: "${p.error}". The controller recovers provider auth and usage-limit stops itself where it can; inspect it with role_inspect_session.`;
       if (w.kind === "api-credit-low")
         return `- [API credit] Account "${p.account}" reported a billing error. Credit may be low. Fulcra has not blocked API turns.`;
+      if (w.kind === "api-while-free")
+        return `- [RISK] Paid API account "${p.account}" served a turn while a subscription account was free. Check the account pool: it should use the subscription first.`;
       if (w.kind === "account-down")
         return `- [account down] The token of account "${p.account}" was revoked or is invalid, so its sessions cannot run. ${p.moved ? `Fulcra moved the first stopped session to "${p.moved}"; others move as they stop.` : "No other account was ready."} The owner must sign the account in again (account screen); until then the pool does not use it.`;
       if (w.kind === "account-rotated" && p.revoked)
@@ -470,6 +524,8 @@ export class Wakes {
         return p.to
           ? `- [account] ${who} reached the usage limit on account "${p.from}" (resets ${p.resetAt}); Fulcra moved it to account "${p.to}" and it continues with its history.`
           : `- [account] ${who} reached the usage limit on account "${p.from}", and every account for its provider is limited; it waits until ${p.earliestReset ?? p.resetAt}.`;
+      if (w.kind === "limit-blocked")
+        return `- [BLOCKED] ${who} stopped at the usage limit ("${p.line}") and Fulcra could not continue it: ${p.reason}. Its account was not changed.`;
       if (w.kind === "heartbeat")
         return `- [heartbeat] You have been idle ${p.idleMinutes} min while ${p.active.length} session(s) you own are working or waiting: ${p.active.map((x) => `${x.sessionId} (${x.waiting ? "waiting on input" : x.status})`).join(", ")}. Check on them (role_inspect_session / manager_inspect_worker) and continue your plan.`;
       return `- [${w.kind}] ${who}`;
@@ -590,6 +646,7 @@ export class Wakes {
             try {
               await this.observe(r);
             } catch (e) {
+              this.dirty.add(id); // FU-478: a failed observation is tried again
               this.lastError = { session: id, message: e.message, at: this.iso() };
             }
           }
@@ -605,13 +662,31 @@ export class Wakes {
         });
     return this.pumping;
   }
-  // Watchdog (30 s): every owned session is re-observed (a lost update is caught here), then the heartbeat, then delivery.
+  // The 30 s watchdog calls this: a heartbeat needs the full cadence, otherwise only the 5 min safety tick runs.
+  safetyTickDue() {
+    const now = this.now();
+    if (
+      this.heartbeatMinutes() === 0 &&
+      this.lastSafetyTick &&
+      now - this.lastSafetyTick < WAKES_SAFETY_MS
+    )
+      return false;
+    this.lastSafetyTick = now;
+    return true;
+  }
+  // Watchdog (30 s, or 5 min without a heartbeat): every owned session is re-observed (a lost update is caught here), then the heartbeat, then delivery.
   tick() {
     if (this.control.closing) return Promise.resolve();
     if (!this.ticking)
       this.ticking = (async () => {
         this.cache = null;
-        for (const r of this.owned()) this.dirty.add(r.session);
+        // FU-423: archived sessions are not re-observed.
+        for (const r of this.owned())
+          if (
+            this.control.native?.isLive?.(r.session) !== false &&
+            tickDue(this.control.native, r.session, (this.tickMemo ??= new Map()), this.now())
+          )
+            this.dirty.add(r.session);
         await this.heartbeat();
         await this.pump();
       })()

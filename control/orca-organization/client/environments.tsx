@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "./read-on-open";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
 import { WorkButton } from "./work-button";
@@ -98,8 +98,6 @@ export function EnvironmentsSurface({
   const projects = useQuery({
     queryKey: ["orca-projects", host?.id],
     queryFn: () => readProjects({}),
-    refetchInterval: 30000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const [chosen, choose] = useState<string | null>(null),
@@ -114,9 +112,6 @@ export function EnvironmentsSurface({
     enabled: !!projectId,
     queryFn: () => read({ projectId: projectId! }),
     retry: false,
-    refetchInterval: (q) =>
-      (q.state.data?.promotions ?? []).some((p) => ACTIVE.has(p.promotion.state)) ? 4000 : 30000,
-    refetchIntervalInBackground: false,
   });
   const d = query.data,
     envs = d?.environments ?? [];
@@ -217,13 +212,13 @@ export function EnvironmentsSurface({
         ))}
       </View>
       {projects.isError && (
-        <Text style={text}>Fulcra could not read your projects yet; retrying.</Text>
+        <Text style={text}>Fulcra could not read your projects yet; refresh to try again.</Text>
       )}
       {d?.stale && (
         <Text
           accessibilityLiveRegion="polite"
           style={text}
-        >{`This view may be out of date. Fulcra is slow to answer; retrying.`}</Text>
+        >{`This view may be out of date. Fulcra is slow to answer; refresh to try again.`}</Text>
       )}
       {projectId && !d && query.isPending && <Text style={muted}>Reading environments…</Text>}
       {d && !envs.length && (

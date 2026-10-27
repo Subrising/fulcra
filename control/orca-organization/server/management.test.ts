@@ -876,3 +876,33 @@ test("W3: the launcher create passes an explicit model and effort as the per-spa
     } as any),
   );
 });
+test("a failed task authority read is not repeated on every list refresh (FU-457)", async () => {
+  let checks = 0,
+    time = 0;
+  const manage = createTaskManagement(
+    async () => [],
+    async () => {
+      checks++;
+      throw new Error("Task authority unavailable");
+    },
+    () => new Date(0).toISOString(),
+    () => time,
+  );
+  const list = () => manage({ taskId: task, command: { action: "list" } });
+  for (let i = 0; i < 6; i++) {
+    time = i * 5000;
+    assert.equal((await list()).taskAuthority?.allowed, false);
+  }
+  assert.equal(checks, 1);
+  time = 31_000;
+  await list();
+  assert.equal(checks, 2);
+  time = 31_000 + 59_000;
+  await list();
+  assert.equal(checks, 2);
+  await manage({
+    taskId: task,
+    command: { action: "create", provider: "codex", title: "Must be refused", messageId: id },
+  });
+  assert.equal(checks, 3);
+});

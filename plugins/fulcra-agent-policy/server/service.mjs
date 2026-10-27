@@ -170,6 +170,13 @@ export class LimitResumeService {
   }
   async onAgentEvent(input) {
     if (this.stopped) return;
+    if (input.type === "agent_reloaded" && input.agentId) {
+      const agentId = input.agentId;
+      this.epochs.set(agentId, this.epochOf(agentId) + 1);
+      await this.cancel(agentId);
+      await this.clearRunning(agentId);
+      return;
+    }
     if (input.type !== "agent_stream" || !input.agentId || !input.event) return;
     const agentId = input.agentId;
     const kind = input.event.type;

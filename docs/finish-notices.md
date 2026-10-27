@@ -9,9 +9,24 @@ The native report inbox requires separate enrollment. Ordinary parent sends do n
 When cost is available, each finish notice includes cumulative session spend, including earlier turns.
 
 After a restart, queued delivery starts when saved open sessions are available.
+An uncertain held batch is checked against the receiver's timeline and retained handoff receipt.
+A present message is marked delivered. Proven absent input retries once per provider instance after the old run ends.
+Claude and Codex retain the queue's input ID in native history, before the daemon journal commit.
+Unreadable native history, unsupported providers, and older records without receipt support remain uncertain. The sender is told.
+Absence also requires proof that the previous writer stopped. A crash that loses that proof keeps the input uncertain.
+Reload within the same daemon retains the close proof. Uncertainty notices are saved and sent once.
+Reload closes a pending provider start before queue recovery can retry it.
 An idle, unpaused receiver can start its queued turn while other sessions recover their providers.
 The parent notice is armed before the receiver starts.
+A refused notice to an idle parent retries after 2 s, doubling to 60 s, for 8 attempts.
+A busy parent gets it when it becomes idle. The saved notice is the retry record, so a restart keeps it.
+An `unknown` outcome is checked against the parent's session. If the parent has no copy, the notice goes again with the same message ID.
 Paused input stays held. Its finish notice stays unarmed until resume. See [provider pauses](notice-pause.md).
+
+A finished child turn wakes its parent only when the final message has DONE, BLOCKED, DECISION, QUESTION or RISK at the start of a line.
+Any other end of turn is held: the notice stays armed and no parent turn starts. An error, a permission request or a usage limit always wakes the parent.
+A delivery notice (queued, delivered, accepted) never starts a parent turn.
+The rule is in `packages/server/src/server/finish-notice-filter.ts`.
 
 Use `fulcra send <child> --prompt-file task.txt --no-wait` on the parent host.
 Use `--steer` to join the current turn when the provider supports steering.
@@ -30,6 +45,10 @@ The daemon does not infer credentials from a host name or an SSH connection.
 
 There is no separate live command to re-arm a current turn without sending a prompt.
 Do not edit saved session records to create a notice.
+
+App sends have a 15 second reply limit. A timeout reports that delivery is unknown.
+Retain the message ID and check the chat before sending again. A delayed queue commit can still finish.
+Queue files sync before admission. Removing that sync can lose an acknowledged message after a crash.
 
 ## Verification
 

@@ -6,6 +6,7 @@ import { isElectronRuntime } from "@/desktop/host";
 import type {
   DictationAudioSource,
   DictationAudioSourceConfig,
+  DictationAudioStopOptions,
 } from "./use-dictation-audio-source.types";
 
 const getAudioContextCtor = (): typeof AudioContext | null => {
@@ -369,57 +370,66 @@ export function useDictationAudioSource(config: DictationAudioSourceConfig): Dic
     };
   }, []);
 
-  const stop = useCallback(async () => {
-    refs.current.started = false;
-    setVolume(0);
-
-    const { processor, source, gain, context, stream, pending, mode, recorder } = refs.current;
-
-    disconnectDictationAudioGraph({ processor, source, gain, stream });
-
-    if (mode === "recorder") {
-      stopMediaRecorderIfActive(recorder.recorder);
-      if (recorder.stoppedPromise) {
-        await finalizeRecorderStoppedPromise({
-          stoppedPromise: recorder.stoppedPromise,
-          context,
-          decodeAudioData,
-          emitPcmSegments,
-          onError: onErrorRef.current,
-        });
+  const stop = useCallback(
+    async (options?: DictationAudioStopOptions) => {
+      const tailMs = options?.tailMs ?? 0;
+      if (tailMs > 0 && refs.current.started && refs.current.mode === "pcm") {
+        // The last word can still be in the mic and ScriptProcessor buffers
+        // (longer on Bluetooth headsets). Keep the graph running to receive it.
+        await new Promise((resolve) => setTimeout(resolve, tailMs));
       }
-    }
+      refs.current.started = false;
+      setVolume(0);
 
-    if (context) {
-      try {
-        await context.close();
-      } catch {
-        // no-op
+      const { processor, source, gain, context, stream, pending, mode, recorder } = refs.current;
+
+      disconnectDictationAudioGraph({ processor, source, gain, stream });
+
+      if (mode === "recorder") {
+        stopMediaRecorderIfActive(recorder.recorder);
+        if (recorder.stoppedPromise) {
+          await finalizeRecorderStoppedPromise({
+            stoppedPromise: recorder.stoppedPromise,
+            context,
+            decodeAudioData,
+            emitPcmSegments,
+            onError: onErrorRef.current,
+          });
+        }
       }
-    }
 
-    if (pending.length > 0) {
-      onPcmSegmentRef.current(int16ToBase64(pending));
-    }
+      if (context) {
+        try {
+          await context.close();
+        } catch {
+          // no-op
+        }
+      }
 
-    refs.current = {
-      stream: null,
-      context: null,
-      source: null,
-      processor: null,
-      gain: null,
-      pending: new Int16Array(0),
-      started: false,
-      mode: "pcm",
-      recorder: {
-        recorder: null,
-        audioChunks: [],
-        stoppedPromise: null,
-        stoppedResolve: null,
-        stoppedReject: null,
-      },
-    };
-  }, [decodeAudioData, emitPcmSegments]);
+      if (pending.length > 0) {
+        onPcmSegmentRef.current(int16ToBase64(pending));
+      }
+
+      refs.current = {
+        stream: null,
+        context: null,
+        source: null,
+        processor: null,
+        gain: null,
+        pending: new Int16Array(0),
+        started: false,
+        mode: "pcm",
+        recorder: {
+          recorder: null,
+          audioChunks: [],
+          stoppedPromise: null,
+          stoppedResolve: null,
+          stoppedReject: null,
+        },
+      };
+    },
+    [decodeAudioData, emitPcmSegments],
+  );
 
   useEffect(() => {
     return () => {

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "./read-on-open";
 import { Pressable, Text, TextInput, View } from "react-native";
 import { taskManagementRpc, type ManagementInput } from "../shared/management";
 import { fleetRpc } from "../shared/fleet";
@@ -14,6 +14,9 @@ import { observedList, retainRequestIdentity } from "./management-query";
 import { NativeQueuedInstruction } from "./native-queued-instruction";
 type SessionRole = "planning" | "orchestration" | "implementation";
 // "Default" sends no role: the session gets the installation's ordinary defaults, exactly as before roles existed.
+// One window for list and health. Both are read when the view opens or is refreshed; act() runs a live check before any write.
+const FRESH_MS = 60000;
+
 const ROLE_CHOICES: ReadonlyArray<readonly [SessionRole | null, string]> = [
   [null, "Default"],
   ["planning", "Planning"],
@@ -44,8 +47,6 @@ export function ManagementPanel({
     queryKey: ["orca-fleet", host?.id],
     queryFn: () => readFleet({}),
     staleTime: 5000,
-    refetchInterval: 15000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const nodes = fleet.data?.nodes.filter((n) => n.task === taskId) ?? [];
@@ -87,8 +88,6 @@ export function ManagementPanel({
   const health = useQuery({
     queryKey: ["orca-management-health"],
     queryFn: checkConnection,
-    refetchInterval: 5000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const [clock, setClock] = useState(Date.now());
@@ -100,8 +99,6 @@ export function ManagementPanel({
     queryKey: ["orca-management", taskId],
     queryFn: () => observedList(() => manage({ action: "list" })),
     staleTime: 5000,
-    refetchInterval: 30000,
-    refetchIntervalInBackground: false,
     retry: false,
   });
   const [provider, setProvider] = useState<"claude" | "codex">("claude"),
@@ -145,10 +142,10 @@ export function ManagementPanel({
   const connected =
     list.data?.status === "observed" &&
     !list.isError &&
-    clock - Date.parse(list.data.observedAt) < 60000 &&
+    clock - Date.parse(list.data.observedAt) < FRESH_MS &&
     health.data?.status === "observed" &&
     !health.isError &&
-    clock - health.dataUpdatedAt < 8000;
+    clock - health.dataUpdatedAt < FRESH_MS;
   const fresh = connected && list.data?.taskAuthority?.allowed === true;
   const idFor = (actionKey: string) => {
     const key = `${taskId}:${actionKey}`;

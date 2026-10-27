@@ -66,7 +66,7 @@ export function SidebarSessions({
         onPress={toggleExpanded}
         accessibilityRole="button"
         accessibilityState={accessibilityState}
-        accessibilityLabel={`All sessions (${rows.length}). ${counts.running} running, ${counts.waiting} waiting on background jobs, ${counts.idle} idle`}
+        accessibilityLabel={`All sessions (${rows.length}). ${counts.running} running, ${counts.waiting} working in background, ${counts.idle} idle`}
         testID="sidebar-all-sessions-toggle"
         style={headingStyle}
       >
@@ -74,8 +74,7 @@ export function SidebarSessions({
       </Pressable>
       {expanded && (
         <Text style={styles.counts}>
-          {counts.running} running · {counts.waiting} waiting on background jobs · {counts.idle}{" "}
-          idle
+          {counts.running} running · {counts.waiting} working in background · {counts.idle} idle
         </Text>
       )}
       {expanded &&
@@ -123,7 +122,7 @@ function statusLabel(row: SidebarSessionRow): string {
   if (row.status === "error") return "Failed";
   if (row.status === "initializing") return "Starting";
   if (row.backgroundWorkCount > 0)
-    return `Waiting on ${row.backgroundWorkCount} background job${row.backgroundWorkCount === 1 ? "" : "s"}`;
+    return `Working in background (${row.backgroundWorkCount} job${row.backgroundWorkCount === 1 ? "" : "s"})`;
   return "Idle";
 }
 

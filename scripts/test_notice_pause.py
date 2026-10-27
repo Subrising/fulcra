@@ -373,6 +373,20 @@ class NoticePauseTests(unittest.TestCase):
         self.assertIn('--inbound-only', actual[0][1])
         self.assertIn('Send this to your lead.', actual[0][1])
 
+    def test_own_lead_relay_mark_is_accepted_and_held(self):
+        code = self.gate.send('/native/cli', ['send', 'claude-owner', '--prompt', 'DECISION merge?', '--from', 'worker@book', '--outbound-server-only', 'mini', '--outbound-parent', 'claude-owner@mini'])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.records()[0]['sender']['outboundParent'], 'claude-owner@mini')
+
+    def test_own_lead_relay_mark_survives_held_replay(self):
+        self.gate.send('/native/cli', ['send', 'claude-owner', '--prompt', 'DECISION merge?', '--from', 'worker@book', '--outbound-server-only', 'mini', '--outbound-parent', 'claude-owner@mini'])
+        self.policy([])
+        self.gate.drain()
+        actual = [call for call in self.sends() if '--check-only' not in call[1]]
+        self.assertEqual(len(actual), 1)
+        args = actual[0][1]
+        self.assertEqual(args[args.index('--outbound-parent') + 1], 'claude-owner@mini')
+
     def test_remote_opt_out_reaches_the_native_sender_check(self):
         self.policy([])
         self.gate.send('/native/cli', ['send', 'codex-owner', '--prompt', 'quiet', '--no-notify-on-finish'])

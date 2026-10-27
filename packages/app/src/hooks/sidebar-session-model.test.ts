@@ -106,6 +106,28 @@ describe("selectSidebarSessionRows", () => {
     // lead-1 has no line and no parent, and worker-1 reports to it: flagged.
     expect(rows.find((row) => row.agentId === "lead-1")?.lead).toBe("No reporting line recorded");
   });
+  it("sorts background work right after working chats, before idle ones (FU-497)", () => {
+    const idle = agent("a", "Alpha idle");
+    const busy = {
+      ...agent("z", "Zulu background"),
+      backgroundWork: { count: 1 },
+    } as unknown as Agent;
+    const work = { ...agent("m", "Mike running"), status: "running" } as Agent;
+    const rows = selectSidebarSessionRows(
+      {
+        mini: {
+          agents: new Map([
+            ["a", idle],
+            ["z", busy],
+            ["m", work],
+          ]),
+        },
+      },
+      ["mini"],
+    );
+    expect(rows.map((row) => row.title)).toEqual(["Mike running", "Zulu background", "Alpha idle"]);
+  });
+
   it("keeps sessions on other hosts and counts background work separately", () => {
     const lead = { ...agent("lead", "Lead"), status: "running" } as Agent;
     const worker = { ...agent("worker", "Worker"), backgroundWork: { count: 2 } } as Agent;

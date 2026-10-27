@@ -11,6 +11,16 @@ import { WorktreeLifecycle, contained } from "./worktree-lifecycle.mjs";
 const exec = promisify(execFile);
 // All sessions whose working directories share this job must be known and inactive.
 export function createWorktreeLifecycle(control, home, options = {}) {
+  // FU-423: an archived session's record is read once per controller run. It is read again only after the live
+  // directory lists it again (unarchived). Reads are one at a time, not one burst per job directory.
+  const archived = new Map();
+  const snapshotOf = async (id) => {
+    if (control.native.isLive?.(id) === false && archived.has(id)) return archived.get(id);
+    const s = await control.native.snapshot(id);
+    if (s?.archivedAt) archived.set(id, s);
+    else archived.delete(id);
+    return s;
+  };
   const service = new WorktreeLifecycle({
     home,
     db: control.store.db,
@@ -28,7 +38,8 @@ export function createWorktreeLifecycle(control, home, options = {}) {
         if (e.code !== "ENOENT") throw e;
       }
       if (!rows.length) return { state: "unknown" };
-      const snapshots = await Promise.all(rows.map((r) => control.native.snapshot(r.id)));
+      const snapshots = [];
+      for (const r of rows) snapshots.push(await snapshotOf(r.id));
       const label = snapshots.find((s) => s?.title)?.title;
       if (snapshots.some((s) => !s)) return { state: "unknown" };
       if (
@@ -121,6 +132,8 @@ export class OwnedSessionCleanup {
           const row = c.store.get(id);
           if (!row || row.mode !== "delegated" || !ownedBySeat(db, id) || c.native.route?.(id))
             return;
+          // FU-423: an archived session is already cleaned up; the timer pass does not fetch it.
+          if (!manual && !only && c.native.isLive?.(id) === false) return;
           if (
             has("role_bindings") &&
             db.prepare("SELECT 1 FROM role_bindings WHERE session=? AND state='assigned'").get(id)

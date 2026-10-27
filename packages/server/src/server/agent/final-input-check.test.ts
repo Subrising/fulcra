@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import {
   createFinalInputCheck,
   hasFinalInputHandoff,
@@ -8,6 +8,28 @@ import {
   waitForFinalInputHandoff,
   requiresProviderInputHandoff,
 } from "./final-input-check.js";
+
+test("a handoff timeout revokes a delayed transport check before recovery can retry", async () => {
+  vi.useFakeTimers();
+  try {
+    let sent = 0;
+    const handle = createFinalInputCheck(
+      () => undefined,
+      () => {
+        sent++;
+      },
+    );
+    const outcome = waitForFinalInputHandoff(handle).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(await outcome).toMatchObject({ message: "Final notice handoff timed out" });
+    expect(() => commitFinalInputCheck(handle)).toThrow("Final notice handoff timed out");
+    expect(sent).toBe(0);
+    recordFinalInputHandoff(handle);
+    expect(hasFinalInputHandoff(handle)).toBe(false);
+  } finally {
+    vi.useRealTimers();
+  }
+});
 
 test("early/repeated refusal checks do not consume; concrete handoff commits once", async () => {
   let allowed = true,

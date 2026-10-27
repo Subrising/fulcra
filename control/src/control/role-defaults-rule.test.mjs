@@ -240,8 +240,10 @@ test("default permission modes: Claude auto, Codex auto-review; a Settings choic
     claude: "auto",
     codex: "auto",
   });
+  await writeRoleDefaults(root, { mode: { provider: "claude", modeId: "bypassPermissions" } });
+  assert.equal(readRoleDefaults(root).modes.claude, "bypassPermissions");
   await assert.rejects(
-    writeRoleDefaults(root, { mode: { provider: "claude", modeId: "bypassPermissions" } }),
+    writeRoleDefaults(root, { mode: { provider: "claude", modeId: "danger" } }),
     /Unknown mode/,
   );
   await assert.rejects(
@@ -279,11 +281,17 @@ test("every controller create path launches with the default mode; an explicit m
     "auto",
     "a Settings choice wins",
   );
-  assert.throws(
-    () => sessionDefaults("claude", { modeId: "bypassPermissions" }, config),
-    /Refused mode for claude/,
-    "Claude bypass stays refused",
+  assert.equal(
+    sessionDefaults("claude", { modeId: "bypassPermissions" }, config).modeId,
+    "bypassPermissions",
+    "Claude bypass is accepted as an explicit mode",
   );
+  // FU-477: a new session launched with a saved bypassPermissions default gets that mode.
+  await writeRoleDefaults(config.home, {
+    mode: { provider: "claude", modeId: "bypassPermissions" },
+  });
+  assert.equal(sessionDefaults("claude", {}, config, "implementation").modeId, "bypassPermissions");
+  assert.throws(() => sessionDefaults("claude", { modeId: "danger" }, config), /Unsupported mode/);
 });
 
 test("fresh and migrated homes seed installation modes once and preserve explicit Settings bytes", async () => {

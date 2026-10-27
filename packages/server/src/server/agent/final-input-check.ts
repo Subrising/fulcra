@@ -10,7 +10,25 @@ interface State {
   resolve: () => void;
   reject: (error: unknown) => void;
 }
+/**
+ * A final check that withdraws its input on purpose: the session did not start a turn and stays as it was. The
+ * manager does not record a failed turn for it. `reason` names the condition that refused.
+ */
+export class FinalInputWithdrawnError extends Error {
+  constructor(
+    message: string,
+    readonly reason: string,
+  ) {
+    super(message);
+    this.name = "FinalInputWithdrawnError";
+  }
+}
 const checks = new WeakMap<object, State>();
+export class FinalInputHandoffTimeoutError extends Error {
+  constructor() {
+    super("Final notice handoff timed out");
+  }
+}
 export function createFinalInputCheck(
   check: () => void,
   beforeHandoff?: () => void,
@@ -57,6 +75,7 @@ export function assertFinalInputCheck(handle: object | undefined): void {
   const state = checks.get(handle);
   if (!state) throw new Error("Private final input check unavailable");
   try {
+    if (state.failure) throw state.failure;
     const result: unknown = state.check();
     if (result && typeof result === "object" && "then" in result) {
       void Promise.resolve(result).catch(() => {});
@@ -110,7 +129,12 @@ export function waitForFinalInputHandoff(handle: object): Promise<void> {
   const state = checks.get(handle);
   if (!state) return Promise.reject(new Error("Private final input check unavailable"));
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("Final notice handoff timed out")), 30000);
+    const timer = setTimeout(() => {
+      // Revoke a delayed transport's check before exposing an uncertain result to recovery.
+      const error = new FinalInputHandoffTimeoutError();
+      failFinalInputHandoff(handle, error);
+      reject(error);
+    }, 30000);
     state.promise.then(
       () => {
         clearTimeout(timer);

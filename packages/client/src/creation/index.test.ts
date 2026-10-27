@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import type {
   AgentSnapshotPayload,
   CreationSnapshot,
@@ -221,4 +221,20 @@ test.each([
     input: { workspaceId: workspace.id, config: { cwd: "/project/worktree/src" } },
   });
   f.client.close();
+});
+
+test("creation has a bounded wait across disconnects and keeps the key in its error", async () => {
+  vi.useFakeTimers();
+  const f = fixture(true);
+  try {
+    const result = f.client.createWorkspace(f.input);
+    const rejected = expect(result).rejects.toThrow(/intent-one.*timed out/);
+    f.client.reconnect();
+    await vi.advanceTimersByTimeAsync(240_000);
+    await rejected;
+    f.resolve({ workspace, error: null });
+  } finally {
+    f.client.close();
+    vi.useRealTimers();
+  }
 });

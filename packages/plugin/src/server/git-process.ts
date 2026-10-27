@@ -43,6 +43,25 @@ const runtime = (registry[runtimeKey] ??= {
   fetches: new Map(),
 });
 const { children, termination, fetches } = runtime;
+const slotWaiters: Array<() => void> = [];
+/** Thrown when every git child slot is busy. The caller may wait for a slot and try again. */
+export class GitChildLimitError extends Error {
+  constructor() {
+    super("Fulcra git child limit reached");
+    this.name = "GitChildLimitError";
+  }
+}
+export function isGitChildLimitError(error: unknown): boolean {
+  return error instanceof GitChildLimitError;
+}
+/** Resolves when a git child slot is free. A closing child wakes one waiter at a time, in order. */
+export function waitForGitChildSlot(): Promise<void> {
+  if (children.size < GIT_CHILD_LIMIT) return Promise.resolve();
+  return new Promise((resolve) => slotWaiters.push(resolve));
+}
+function wakeSlotWaiters(): void {
+  while (slotWaiters.length > 0 && children.size < GIT_CHILD_LIMIT) slotWaiters.shift()!();
+}
 const liveGroups = (runtime.liveGroups ??= new Set<number>());
 if (!runtime.exitCleanupRegistered) {
   runtime.exitCleanupRegistered = true;
@@ -217,7 +236,7 @@ function gitExecutable(): string {
 }
 
 export function spawnGitProcess(args: string[], options: SpawnOptions = {}): ChildProcess {
-  if (children.size >= GIT_CHILD_LIMIT) throw new Error("Fulcra git child limit reached");
+  if (children.size >= GIT_CHILD_LIMIT) throw new GitChildLimitError();
   const timeout = Math.min(
     options.timeout && options.timeout > 0 ? options.timeout : GIT_TIMEOUT_MS,
     GIT_MAX_TIMEOUT_MS,
@@ -253,10 +272,12 @@ export function spawnGitProcess(args: string[], options: SpawnOptions = {}): Chi
     clearTimeout(timer);
     options.signal?.removeEventListener("abort", abort);
     // A failed tree cleanup keeps its slot. Do not admit an unbounded series of leaks.
-    void (termination.get(child) ?? Promise.resolve()).then(
-      () => !cleanupFailed && children.delete(child),
-      () => false,
-    );
+    void (termination.get(child) ?? Promise.resolve())
+      .then(
+        () => !cleanupFailed && children.delete(child),
+        () => false,
+      )
+      .then(wakeSlotWaiters);
   });
   return child;
 }
@@ -448,8 +469,10 @@ export function execGitCommand(
   return withGitFetchPolicy(
     options.cwd ?? process.cwd(),
     args,
-    () =>
-      new Promise((resolve, reject) => {
+    async () => {
+      // Wait for a free slot instead of failing when other git work fills all of them.
+      while (children.size >= GIT_CHILD_LIMIT) await waitForGitChildSlot();
+      return new Promise((resolve, reject) => {
         const child = spawnGitProcess(args, {
           cwd: options.cwd,
           env: options.env,
@@ -511,7 +534,8 @@ export function execGitCommand(
           child.stdin!.on("error", () => {});
           child.stdin!.end(options.input);
         }
-      }),
+      });
+    },
     options.retryFetch,
     options.input,
   );
@@ -527,7 +551,7 @@ export function execGitCommandSync(
   args: string[],
   options: ExecFileSyncOptions = {},
 ): string | Buffer {
-  if (children.size >= GIT_CHILD_LIMIT) throw new Error("Fulcra git child limit reached");
+  if (children.size >= GIT_CHILD_LIMIT) throw new GitChildLimitError();
   const timeout = Math.min(
     options.timeout && options.timeout > 0 ? options.timeout : GIT_TIMEOUT_MS,
     GIT_MAX_TIMEOUT_MS,

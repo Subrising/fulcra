@@ -238,7 +238,7 @@ async function fixture(terminalFailure = false) {
       limited = false;
     },
     due: () => {
-      now = resetSeconds * 1000 + 30001;
+      now = resetSeconds * 1000 + 120001;
     },
     restartController() {
       store.close();

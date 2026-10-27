@@ -78,6 +78,7 @@ export function buildConfigOverrides(record: StoredAgentRecord): Partial<AgentSe
     toolPolicy: record.config?.toolPolicy ?? undefined,
     systemPrompt: record.config?.systemPrompt ?? undefined,
     mcpServers: record.config?.mcpServers ?? undefined,
+    launchEnv: record.config?.launchEnv ?? undefined,
   });
 }
 
@@ -100,6 +101,7 @@ export function buildSessionConfig(
     toolPolicy: overrides.toolPolicy,
     systemPrompt: overrides.systemPrompt,
     mcpServers: overrides.mcpServers,
+    launchEnv: overrides.launchEnv,
   });
 }
 

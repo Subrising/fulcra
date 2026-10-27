@@ -69,7 +69,7 @@ export async function backfillWorkspaceIdForLegacyAgents(options: {
   logger: Logger;
 }): Promise<number> {
   const workspaceRecords = await options.workspaceRegistry.list();
-  const records = await options.agentStorage.list();
+  const records = await options.agentStorage.listLoaded();
   let migrated = 0;
 
   for (const record of records) {

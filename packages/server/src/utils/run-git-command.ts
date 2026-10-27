@@ -14,6 +14,8 @@ import {
 } from "./git-command-trace.js";
 import {
   spawnGitProcess,
+  isGitChildLimitError,
+  waitForGitChildSlot,
   terminateGitProcess,
   withGitFetchPolicy,
 } from "@getpaseo/plugin/server/git";
@@ -31,6 +33,7 @@ const DEFAULT_STDERR_LIMIT = 2048;
 
 let gitProcessScheduler = new GitProcessScheduler(resolveGitProcessPolicy({ env: process.env }));
 let gitRuntimeMetrics = createGitCommandRuntimeMetricsWindow(gitProcessScheduler.policy);
+let gitQueueLogger: Pick<Logger, "warn"> | undefined;
 const gitCommandPriority = new AsyncLocalStorage<GitProcessPriority>();
 
 export function runWithGitCommandPriority<T>(priority: GitProcessPriority, operation: () => T): T {
@@ -44,7 +47,11 @@ function createGitCommandRuntimeMetricsWindow(policy: GitProcessPolicy) {
   });
 }
 
-export function configureGitProcessPolicy(policy: GitProcessPolicy): void {
+export function configureGitProcessPolicy(
+  policy: GitProcessPolicy,
+  logger?: Pick<Logger, "warn">,
+): void {
+  gitQueueLogger = logger;
   gitProcessScheduler = new GitProcessScheduler(policy);
   gitRuntimeMetrics = createGitCommandRuntimeMetricsWindow(policy);
 }
@@ -330,6 +337,24 @@ function executeGitCommand<Output>(
     pending: gitProcessScheduler.pendingCount,
   });
   const runtimeMetric = gitRuntimeMetrics.submit(getGitOperation(args), provenance);
+  const submittedAt = Date.now();
+  const warningScheduler = gitProcessScheduler;
+  const queueLogger = gitQueueLogger;
+  // Include scheduler admission and the native child-slot wait. The process timeout starts after both.
+  const queueWarning = setTimeout(() => {
+    queueLogger?.warn(
+      {
+        operation: getGitOperation(args),
+        cwd: options.cwd,
+        provenance,
+        waitMs: Date.now() - submittedAt,
+        active: warningScheduler.activeCount,
+        pending: warningScheduler.pendingCount,
+      },
+      "Git command has waited 60 seconds for a process slot",
+    );
+  }, 60_000);
+  queueWarning.unref?.();
   const startCommand = () => {
     let releaseProcessSlot!: () => void;
     const exited = new Promise<void>((resolve) => {
@@ -447,181 +472,192 @@ function executeGitCommand<Output>(
         });
       };
       let child: ReturnType<typeof spawnGitProcess>;
-      try {
-        // `core.quotepath=false` makes git emit raw UTF-8 paths instead of
-        // octal-escaping non-ASCII bytes (e.g. `测试文件.txt` vs `"\346\265\213..."`).
-        // `core.fsmonitor=false` prevents repository config from launching a command.
-        options.beforeSpawn?.();
-        child = spawnGitProcess(
-          ["-c", "core.quotepath=false", "-c", "core.fsmonitor=false", ...args],
-          {
-            cwd: options.cwd,
-            env: createExternalCommandProcessEnv("git", process.env, envOverlay),
-            timeout,
-            shell: false,
-            stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-          },
-        );
-        spawnGitCommandTrace(commandTrace, child.pid);
-      } catch (error) {
-        rejectSpawnFailure(error);
-        return;
-      }
-
-      const stdout = child.stdout;
-      const stderr = child.stderr;
-      if (!stdout || !stderr) {
-        stopChild();
-        rejectSpawnFailure(new Error("Git process did not expose piped stdout and stderr"));
-        return;
-      }
-
-      timer = setTimeout(() => {
-        // `stopped` lets a caller repair what the command left only after its tree is killed (FU-372).
-        // `stopped` rejects when the kill fails: then nothing proves the old tree is gone.
-        const stopped = terminateGitProcess(child);
-        stopped.catch((cleanupError: unknown) => {
-          processError =
-            cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError));
-        });
-        timeoutError = new GitCommandTimeoutError(
-          `Git command timed out after ${timeout}ms: ${command}`,
-          stopped,
-        );
-        settle(() => reject(timeoutError));
-        if (processExit) {
-          settleTimeoutTrace(processExit.exitCode, processExit.signal);
-        }
-      }, timeout);
-
-      stdout.on("data", (chunk: Buffer | string) => {
-        if (settled || truncated) return;
-
-        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        const remainingBytes = maxOutputBytes - stdoutBytes;
-
-        if (remainingBytes <= 0) {
-          truncated = true;
-          stopChild();
-          return;
-        }
-
-        if (buffer.length > remainingBytes) {
-          stdoutChunks.push(buffer.subarray(0, remainingBytes));
-          stdoutBytes += remainingBytes;
-          truncated = true;
-          stopChild();
-          return;
-        }
-
-        stdoutChunks.push(buffer);
-        stdoutBytes += buffer.length;
-      });
-
-      stderr.on("data", (chunk: Buffer | string) => {
-        if (settled || stderrBytes >= DEFAULT_STDERR_LIMIT) return;
-
-        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        const remainingBytes = DEFAULT_STDERR_LIMIT - stderrBytes;
-
-        if (buffer.length > remainingBytes) {
-          stderrChunks.push(buffer.subarray(0, remainingBytes));
-          stderrBytes += remainingBytes;
-          return;
-        }
-
-        stderrChunks.push(buffer);
-        stderrBytes += buffer.length;
-      });
-
-      child.on("error", (error) => {
-        processError = error;
-        if (logger && traceContext) {
-          logger.trace(
+      // When every git child slot is busy the command waits in line. It does not fail.
+      const launch = (): void => {
+        try {
+          // `core.quotepath=false` makes git emit raw UTF-8 paths instead of
+          // octal-escaping non-ASCII bytes (e.g. `测试文件.txt` vs `"\346\265\213..."`).
+          // `core.fsmonitor=false` prevents repository config from launching a command.
+          options.beforeSpawn?.();
+          child = spawnGitProcess(
+            ["-c", "core.quotepath=false", "-c", "core.fsmonitor=false", ...args],
             {
-              ...traceContext,
-              err: error,
-              durationMs: Date.now() - startedAt,
+              cwd: options.cwd,
+              env: createExternalCommandProcessEnv("git", process.env, envOverlay),
+              timeout,
+              shell: false,
+              stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
             },
-            "Git command process error",
           );
+          clearTimeout(queueWarning);
+          spawnGitCommandTrace(commandTrace, child.pid);
+        } catch (error) {
+          if (isGitChildLimitError(error)) {
+            void waitForGitChildSlot().then(launch);
+            return;
+          }
+          rejectSpawnFailure(error);
+          return;
         }
-      });
+        attach();
+      };
+      const attach = (): void => {
+        const stdout = child.stdout;
+        const stderr = child.stderr;
+        if (!stdout || !stderr) {
+          stopChild();
+          rejectSpawnFailure(new Error("Git process did not expose piped stdout and stderr"));
+          return;
+        }
 
-      if (options.input !== undefined) {
-        child.stdin!.on("error", (error: NodeJS.ErrnoException) => {
-          // A command may close stdin when it exits or reaches the output limit.
-          if (error.code !== "EPIPE") {
-            processError = error;
+        timer = setTimeout(() => {
+          // `stopped` lets a caller repair what the command left only after its tree is killed (FU-372).
+          // `stopped` rejects when the kill fails: then nothing proves the old tree is gone.
+          const stopped = terminateGitProcess(child);
+          stopped.catch((cleanupError: unknown) => {
+            processError =
+              cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError));
+          });
+          timeoutError = new GitCommandTimeoutError(
+            `Git command timed out after ${timeout}ms: ${command}`,
+            stopped,
+          );
+          settle(() => reject(timeoutError));
+          if (processExit) {
+            settleTimeoutTrace(processExit.exitCode, processExit.signal);
+          }
+        }, timeout);
+
+        stdout.on("data", (chunk: Buffer | string) => {
+          if (settled || truncated) return;
+
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          const remainingBytes = maxOutputBytes - stdoutBytes;
+
+          if (remainingBytes <= 0) {
+            truncated = true;
             stopChild();
+            return;
+          }
+
+          if (buffer.length > remainingBytes) {
+            stdoutChunks.push(buffer.subarray(0, remainingBytes));
+            stdoutBytes += remainingBytes;
+            truncated = true;
+            stopChild();
+            return;
+          }
+
+          stdoutChunks.push(buffer);
+          stdoutBytes += buffer.length;
+        });
+
+        stderr.on("data", (chunk: Buffer | string) => {
+          if (settled || stderrBytes >= DEFAULT_STDERR_LIMIT) return;
+
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          const remainingBytes = DEFAULT_STDERR_LIMIT - stderrBytes;
+
+          if (buffer.length > remainingBytes) {
+            stderrChunks.push(buffer.subarray(0, remainingBytes));
+            stderrBytes += remainingBytes;
+            return;
+          }
+
+          stderrChunks.push(buffer);
+          stderrBytes += buffer.length;
+        });
+
+        child.on("error", (error) => {
+          processError = error;
+          if (logger && traceContext) {
+            logger.trace(
+              {
+                ...traceContext,
+                err: error,
+                durationMs: Date.now() - startedAt,
+              },
+              "Git command process error",
+            );
           }
         });
-        child.stdin!.end(options.input);
-      }
 
-      child.on("exit", markProcessExited);
-
-      child.on("close", (exitCode, signal) => {
-        markProcessExited(exitCode, signal);
-        const result: GitCommandResult<Output> = {
-          stdout: decode(Buffer.concat(stdoutChunks)),
-          stderr: Buffer.concat(stderrChunks).toString("utf8"),
-          truncated,
-          exitCode,
-          signal,
-        };
-        if (logger && traceContext) {
-          logger.trace(
-            {
-              ...traceContext,
-              durationMs: Date.now() - startedAt,
-              exitCode,
-              signal,
-              truncated,
-              stdoutBytes,
-              stderrBytes,
-            },
-            "Git command closed",
-          );
+        if (options.input !== undefined) {
+          child.stdin!.on("error", (error: NodeJS.ErrnoException) => {
+            // A command may close stdin when it exits or reaches the output limit.
+            if (error.code !== "EPIPE") {
+              processError = error;
+              stopChild();
+            }
+          });
+          child.stdin!.end(options.input);
         }
 
-        if (timeoutError) {
-          return;
-        }
+        child.on("exit", markProcessExited);
 
-        if (processError) {
-          settleGitCommandTrace(commandTrace, {
-            outcome: "spawn_error",
+        child.on("close", (exitCode, signal) => {
+          markProcessExited(exitCode, signal);
+          const result: GitCommandResult<Output> = {
+            stdout: decode(Buffer.concat(stdoutChunks)),
+            stderr: Buffer.concat(stderrChunks).toString("utf8"),
+            truncated,
             exitCode,
             signal,
+          };
+          if (logger && traceContext) {
+            logger.trace(
+              {
+                ...traceContext,
+                durationMs: Date.now() - startedAt,
+                exitCode,
+                signal,
+                truncated,
+                stdoutBytes,
+                stderrBytes,
+              },
+              "Git command closed",
+            );
+          }
+
+          if (timeoutError) {
+            return;
+          }
+
+          if (processError) {
+            settleGitCommandTrace(commandTrace, {
+              outcome: "spawn_error",
+              exitCode,
+              signal,
+            });
+            settle(() => reject(processError));
+            return;
+          }
+
+          settleGitCommandTrace(commandTrace, {
+            outcome: "closed",
+            exitCode,
+            signal,
+            truncated,
           });
-          settle(() => reject(processError));
-          return;
-        }
 
-        settleGitCommandTrace(commandTrace, {
-          outcome: "closed",
-          exitCode,
-          signal,
-          truncated,
-        });
+          if (!truncated && !acceptExitCodes.includes(exitCode ?? -1)) {
+            const stderrPreview = result.stderr.trim() || "(no stderr)";
+            const truncationNote = result.truncated ? " (stdout truncated)" : "";
 
-        if (!truncated && !acceptExitCodes.includes(exitCode ?? -1)) {
-          const stderrPreview = result.stderr.trim() || "(no stderr)";
-          const truncationNote = result.truncated ? " (stdout truncated)" : "";
-
-          settle(() =>
-            reject(
-              new Error(
-                `Git command failed: ${command}${truncationNote} (exit code: ${String(exitCode)}, signal: ${signal ?? "none"})\n${stderrPreview}`,
+            settle(() =>
+              reject(
+                new Error(
+                  `Git command failed: ${command}${truncationNote} (exit code: ${String(exitCode)}, signal: ${signal ?? "none"})\n${stderrPreview}`,
+                ),
               ),
-            ),
-          );
-          return;
-        }
+            );
+            return;
+          }
 
-        settle(() => resolve(result));
-      });
+          settle(() => resolve(result));
+        });
+      };
+      launch();
     });
     return { result: resultPromise, exited };
   };
@@ -632,7 +668,7 @@ function executeGitCommand<Output>(
     gitProcessScheduler.activeCount,
     gitProcessScheduler.pendingCount,
   );
-  return promise;
+  return promise.finally(() => clearTimeout(queueWarning));
 }
 
 export const runGitCommand: RunGitCommand = runGitCommandWithProvenance;

@@ -186,6 +186,8 @@ export const ptBR: TranslationResources = {
       removeReview: "Remover anexo de revisão",
     },
     errors: {
+      confirmationPending:
+        "A confirmação da mensagem está pendente. Reconecte para verificar a entrega.",
       failedToSend: "Falha ao enviar mensagem",
       failedToCreateAgent: "Falha ao criar agente",
       noHostSelected: "Nenhum host selecionado",

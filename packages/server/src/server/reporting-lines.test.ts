@@ -119,6 +119,7 @@ describe("reporting lines", () => {
     expect(await check({ "fulcra.reports-to": `${main.id}@${BOOK}` })).toMatchObject({
       inboundOnly: false,
       outboundServerOnly: BOOK,
+      outboundParent: `${main.id}@${BOOK}`,
     });
     expect(await check({ "fulcra.reports-to": "lead-1", "fulcra.direct-link": main.id })).toEqual({
       inboundOnly: false,
@@ -149,6 +150,72 @@ describe("reporting lines", () => {
       ).toBe(false);
     }
   });
+  it("FU-402 lets a worker on another computer reach its own lead here, and nobody else", async () => {
+    const bookWorker = agent("book-work", "Release", { "fulcra.reports-to": `${lead.id}@${MINI}` });
+    const source: LineStore = {
+      get: async (id) => (id === bookWorker.id ? bookWorker : null),
+      list: async () => [bookWorker],
+    };
+    const relayed = async (targetId: string) => ({
+      agentId: bookWorker.id,
+      serverId: BOOK,
+      ...(await decideOutboundSend(source, {
+        senderId: bookWorker.id,
+        targetId,
+        localServerId: BOOK,
+      })),
+    });
+    const atMini = async (target: LineAgent) =>
+      checkReportingLine({
+        sender: await relayed(target.id),
+        senderAgent: null,
+        target,
+        senderParent: null,
+        localServerId: MINI,
+        mainAssistantId: main.id,
+      });
+    expect(await atMini(lead)).toEqual({ allowed: true, why: "parent" });
+    expect((await atMini(otherLead)).allowed).toBe(false);
+    // The claim names the source's own line host; another host cannot use it.
+    expect(
+      checkReportingLine({
+        sender: await relayed(lead.id),
+        senderAgent: null,
+        target: lead,
+        senderParent: null,
+        localServerId: "srv_pc",
+        mainAssistantId: main.id,
+      }).allowed,
+    ).toBe(false);
+    // The mark names one lead on one host. Another target or a missing host check is refused.
+    for (const forged of [
+      { outboundServerOnly: MINI, outboundParent: `${otherLead.id}@${MINI}` },
+      { outboundServerOnly: MINI, outboundParent: `${lead.id}@srv_pc` },
+      { outboundParent: `${lead.id}@${MINI}` },
+    ])
+      expect(
+        checkReportingLine({
+          sender: { agentId: bookWorker.id, serverId: BOOK, ...forged },
+          senderAgent: null,
+          target: lead,
+          senderParent: null,
+          localServerId: MINI,
+          mainAssistantId: main.id,
+        }).allowed,
+      ).toBe(false);
+    // Without the source's confirmation the old refusal stays.
+    expect(
+      checkReportingLine({
+        sender: { agentId: bookWorker.id, serverId: BOOK },
+        senderAgent: null,
+        target: lead,
+        senderParent: null,
+        localServerId: MINI,
+        mainAssistantId: main.id,
+      }),
+    ).toMatchObject({ allowed: false, reason: expect.stringContaining("From another computer") });
+  });
+
   it("allows a send up to the parent and down to the chat's own children", () => {
     expect(send(worker, lead)).toEqual({ allowed: true, why: "parent" });
     expect(send(lead, worker)).toEqual({ allowed: true, why: "child" });
@@ -310,6 +377,74 @@ describe("reporting lines", () => {
     const made = agent("made-1", "Worker", { "fulcra.parent-session": "lead-1" });
     expect(send(made, lead)).toEqual({ allowed: true, why: "parent" });
     expect(send(made, main).allowed).toBe(false);
+  });
+
+  describe("FU-485 a chat sends to a chat it created", () => {
+    const made = agent("made-2", "Partner", {
+      "fulcra.reports-to": "owner",
+      "paseo.parent-agent-id": "lead-1",
+    });
+    const direct = (from: LineAgent, to: LineAgent, serverId?: string) =>
+      checkReportingLine({
+        sender: { agentId: from.id, ...(serverId ? { serverId } : {}) },
+        senderAgent: serverId ? null : from,
+        target: to,
+        senderParent: null,
+        localServerId: MINI,
+      });
+
+    it("allows a send to a child by parent id when its reporting line names another chat", () => {
+      expect(direct(lead, made)).toEqual({ allowed: true, why: "child" });
+      expect(direct(otherLead, made).allowed).toBe(false);
+    });
+
+    it("allows the controller's parent label too, and a qualified parent from another computer", () => {
+      const byController = agent("made-3", "Worker", {
+        "fulcra.reports-to": "owner",
+        "fulcra.parent-session": "lead-1",
+      });
+      expect(direct(lead, byController)).toEqual({ allowed: true, why: "child" });
+      const remoteChild = agent("made-4", "Worker", {
+        "fulcra.reports-to": "owner",
+        "paseo.parent-agent-id": `lead-1@${BOOK}`,
+      });
+      expect(direct(lead, remoteChild, BOOK)).toEqual({ allowed: true, why: "child" });
+    });
+
+    it("still refuses a held child", () => {
+      const held = agent("made-5", "Partner", {
+        "paseo.parent-agent-id": "lead-1",
+        "fulcra.reports-to": "owner",
+        "fulcra.hold": "done",
+      });
+      expect(direct(lead, held)).toMatchObject({ allowed: false });
+    });
+
+    it("keeps a three-level chain: a lead sends down to what it started, a worker only to its lead", () => {
+      const gag = agent("gag-1", "Gag games lead", { "fulcra.reports-to": "main-1" });
+      const shipIt = agent("ship-1", "Ship It lead", {
+        "fulcra.reports-to": "main-1",
+        "paseo.parent-agent-id": "gag-1",
+      });
+      const shipWorker = agent("ship-w", "Ship It worker", {
+        "fulcra.reports-to": "main-1",
+        "paseo.parent-agent-id": "ship-1",
+      });
+      const chain = new Map<string, LineAgent>();
+      for (const a of [main, gag, shipIt, shipWorker]) chain.set(a.id, a);
+      const run = (from: LineAgent, to: LineAgent) =>
+        checkReportingLine({
+          sender: { agentId: from.id },
+          senderAgent: from,
+          target: to,
+          senderParent: chain.get(from.labels?.["fulcra.reports-to"] ?? "") ?? null,
+          localServerId: MINI,
+        });
+      expect(run(shipIt, shipWorker)).toEqual({ allowed: true, why: "child" });
+      expect(run(gag, shipIt)).toEqual({ allowed: true, why: "child" });
+      expect(run(shipWorker, gag).allowed).toBe(false);
+      expect(run(shipWorker, shipIt).allowed).toBe(false);
+    });
   });
 
   describe("a prompt through the Paseo MCP tool", () => {

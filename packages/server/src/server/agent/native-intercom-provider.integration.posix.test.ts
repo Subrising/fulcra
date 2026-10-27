@@ -1045,7 +1045,7 @@ test("a later send_agent_prompt replaces a refused pending finish notice", async
   }
 }, 10000);
 
-test("startup marks an interrupted sending finish unknown and never resends it", async () => {
+test("FU-424 startup sends an interrupted sending finish once when the parent has no copy", async () => {
   const { f, childId, offReportUp } = await defaultOwnedNoticeFixture(false);
   const recoveredStorage = new AgentStorage(path.join(f.directory, "agents"), createTestLogger());
   const service = new ReportUpService({
@@ -1065,13 +1065,23 @@ test("startup marks an interrupted sending finish unknown and never resends it",
       "finished",
     );
     await f.agentStorage.markFinishNoticeSending(childId, pending!.messageId);
-    const before = f.server.requests().filter((request) => request.method === "turn/start").length;
+    const noticeTurns = () =>
+      f.server
+        .requests()
+        .filter(
+          (request) =>
+            request.method === "turn/start" &&
+            (request.params as { threadId?: string }).threadId === f.agent.persistence!.sessionId &&
+            JSON.stringify(request).includes(childId),
+        );
+    expect(noticeTurns()).toHaveLength(0);
     await service.recoverOwnedFinishes();
     await service.recoverOwnedFinishes();
-    expect(await recoveredStorage.getFinishNotice(childId)).toMatchObject({ status: "unknown" });
-    expect(f.server.requests().filter((request) => request.method === "turn/start")).toHaveLength(
-      before,
-    );
+    expect(await recoveredStorage.getFinishNotice(childId)).toMatchObject({
+      status: "delivered",
+      messageId: pending!.messageId,
+    });
+    expect(noticeTurns()).toHaveLength(1);
   } finally {
     service.stop();
     offReportUp();

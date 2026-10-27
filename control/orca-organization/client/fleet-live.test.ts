@@ -8,7 +8,6 @@ import {
   appLinkTargets,
   describeLiveState,
   displayHostName,
-  FLEET_AUTO_RETRY_LIMIT,
   fleetReadState,
   isWorkingForDisplay,
   matchLiveEntries,
@@ -224,7 +223,6 @@ test("liveOverlayIsDisplayOnly: overlay values reach only display text and the d
   const allowed = [
     'import { useLiveHostOverlay, describeLiveState, isWorkingForDisplay, useAppHostList, displayHostName, plainNodeError, useAppLinkSections, allHostsLabel, appLinkTargets, fleetReadState } from "./fleet-live";',
     'import { AppLinkSections } from "./fleet-app-link";',
-    'import { FLEET_AUTO_RETRY_LIMIT } from "./fleet-live-model";',
     "const appLink = useAppLinkSections(useMemo(() => appLinkTargets(hostList.data?.hosts ?? [], localHost, host), [hostList.data, localHost, host]), enrolledAgentIds, frozen);",
     "{appLink.length > 0 && <Text style={muted}>Below is what this app can see of your other Macs.</Text>}",
     "<AppLinkSections sections={appLink} theme={props.theme} />",
@@ -393,19 +391,19 @@ test("the app-link section is reading only: no actions, navigation or RPC in its
 test("an unreadable Mac gets a bounded error state, never an endless 'retrying' (h2)", () => {
   const base = { hasData: false, isError: true, hostName: "Book", reason: "Observation timed out" };
   const first = fleetReadState({ ...base, failures: 1 });
-  assert.equal(first.kind, "retrying");
-  assert.equal(first.autoRetry, true);
+  assert.equal(first.kind, "failed");
+  assert.equal(first.autoRetry, false);
   assert.match(
     first.message!,
-    /can't read sessions on Book right now \(attempt 1 of 3\); trying again\. Reason: Observation timed out\./,
+    /can't read sessions on Book right now\. Select Try again to refresh\. Reason: Observation timed out\./,
   );
-  const stopped = fleetReadState({ ...base, failures: FLEET_AUTO_RETRY_LIMIT });
+  const stopped = fleetReadState({ ...base, failures: 3 });
   assert.deepEqual(
     [stopped.kind, stopped.autoRetry],
     ["failed", false],
-    "retries stop after the limit",
+    "a failed read waits for refresh",
   );
-  assert.match(stopped.message!, /stopped retrying after 3 attempts/);
+  assert.match(stopped.message!, /Select Try again to refresh/);
   for (const failures of [1, 2, 3, 10])
     assert.doesNotMatch(fleetReadState({ ...base, failures }).message!, /not answering yet/);
   assert.equal(

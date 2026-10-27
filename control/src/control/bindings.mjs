@@ -9,6 +9,7 @@ import { localHostName } from "./portable-host.mjs";
 const bookProvider = (creation) => creation.provider;
 import { readProjectDirectory } from "./projects.mjs";
 import { managementRefusal } from "./management-refusal.mjs";
+import { renameReplacing } from "./rename-retry.mjs";
 const keys = (a, names) =>
   a && typeof a === "object" && !Array.isArray(a) && Object.keys(a).sort().join() === names;
 const SEAT = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
@@ -334,7 +335,12 @@ export class Bindings {
       flag: "wx",
       flush: true,
     });
-    fs.renameSync(temporary, file);
+    try {
+      renameReplacing(temporary, file);
+    } catch (error) {
+      fs.rmSync(temporary, { force: true });
+      throw error;
+    }
     this.db
       .prepare("INSERT OR REPLACE INTO role_credentials VALUES (?,?,?)")
       .run(s.id, s.generation, hash(token));

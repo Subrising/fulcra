@@ -1,6 +1,13 @@
+import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { resolveForgeRemoteUrl } from "../utils/forge-remote.js";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
+import { gitFailureLogFields } from "../utils/git-known-error.js";
+import {
+  fetchSkipTicksAfterFailures,
+  isDeadWorkspaceFolder,
+  jitterMs,
+} from "../utils/dead-workspace.js";
 import { basename, dirname, join, resolve } from "node:path";
 import { LRUCache } from "lru-cache";
 import { CheckoutDiffCache } from "./checkout-diff-cache.js";
@@ -94,6 +101,10 @@ const DEGRADED_GIT_POLL_INTERVAL_MS = 5_000;
 // does not. Explicit reads still force a refresh, so this only bounds background discovery of
 // changes made outside Paseo.
 const DEGRADED_GIT_POLL_MAX_INTERVAL_MS = 60_000;
+// FU-423: a folder that is not a Git checkout, or no longer exists, has nothing for Git to report. Its poll only
+// checks (with stat, never a git process) whether the folder or a `.git` entry appeared, and backs off to this
+// gap. An explicit read still forces a full refresh.
+const NON_CHECKOUT_POLL_MAX_INTERVAL_MS = 600_000;
 // A dependency install creates directories for minutes. Collapse the burst into
 // a couple of `git ls-files` runs rather than one per event.
 const WORKING_TREE_IGNORE_REFRESH_QUIET_MS = 300;
@@ -392,7 +403,9 @@ interface WorkspaceGitServiceDependencies {
   ) => Promise<WorkspaceGitFetchResult>;
   runGitCommand: typeof runGitCommand;
   getWorkspaceGitSelfHealPhaseMs: typeof getWorkspaceGitObservationReensurePhaseMs;
+  workspaceFolderExists: (cwd: string) => boolean;
   createWatcherLivenessCanary: typeof createWatcherLivenessCanary;
+  checkoutProbe: typeof checkoutProbe;
   now: () => Date;
 }
 
@@ -459,6 +472,8 @@ interface RepoGitTarget {
   recovery: WatchRecoveryState;
   intervalId: NodeJS.Timeout | null;
   fetchInFlight: boolean;
+  fetchFailures: number;
+  fetchSkipTicks: number;
   bufferedFetchMetadataEvents: FileChange[];
   recentFetchRemoteRefChanges: Map<
     string,
@@ -577,7 +592,9 @@ function buildDefaultWorkspaceGitServiceDeps(
     runGitFetch: fetchWorkspaceGitRemote,
     runGitCommand,
     getWorkspaceGitSelfHealPhaseMs: getWorkspaceGitObservationReensurePhaseMs,
+    workspaceFolderExists: existsSync,
     createWatcherLivenessCanary,
+    checkoutProbe,
     now: () => new Date(),
   };
 }
@@ -1581,11 +1598,11 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     }
   }
 
-  private degradedPollDelayMs(quietTickCount: number): number {
-    return Math.min(
-      DEGRADED_GIT_POLL_MAX_INTERVAL_MS,
-      DEGRADED_GIT_POLL_INTERVAL_MS * 2 ** quietTickCount,
-    );
+  private degradedPollDelayMs(
+    quietTickCount: number,
+    maxMs = DEGRADED_GIT_POLL_MAX_INTERVAL_MS,
+  ): number {
+    return Math.min(maxMs, DEGRADED_GIT_POLL_INTERVAL_MS * 2 ** quietTickCount);
   }
 
   // A refresh that throws is swallowed by refreshWorkspaceTarget and leaves the fingerprint
@@ -1613,6 +1630,21 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     const poll = async () => {
       target.fallbackPollTimer = null;
       if (target.closed || this.workingTreeWatchTargets.get(target.cwd) !== target) {
+        return;
+      }
+      // FU-423: no git process for a deleted folder or a folder with no `.git` here or above it.
+      if (target.repoRoot === null && (await this.deps.checkoutProbe(cwd)) !== "checkout") {
+        if (target.closed || this.workingTreeWatchTargets.get(target.cwd) !== target) {
+          return;
+        }
+        target.fallbackPollQuietTickCount += 1;
+        target.fallbackPollTimer = setTimeout(
+          poll,
+          this.degradedPollDelayMs(
+            target.fallbackPollQuietTickCount,
+            NON_CHECKOUT_POLL_MAX_INTERVAL_MS,
+          ),
+        );
         return;
       }
       const changes = await Promise.all(
@@ -2161,6 +2193,8 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
       fallbackPollQuietTickCount: 0,
       recovery: { attemptCount: 0, timer: null, establishedAt: null },
       intervalId: null,
+      fetchFailures: 0,
+      fetchSkipTicks: 0,
       fetchInFlight: false,
       bufferedFetchMetadataEvents: [],
       recentFetchRemoteRefChanges: new Map(),
@@ -2753,9 +2787,14 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
           target.observationReensureTimer = null;
           return;
         }
+        if (isDeadWorkspaceFolder(target.cwd, this.deps.workspaceFolderExists)) {
+          // The folder is gone: stop the 60 s check for this record.
+          target.observationReensureTimer = null;
+          return;
+        }
         target.observationReensureTimer = setTimeout(
           reensureObservation,
-          WORKSPACE_GIT_OBSERVATION_REENSURE_INTERVAL_MS,
+          jitterMs(WORKSPACE_GIT_OBSERVATION_REENSURE_INTERVAL_MS),
         );
         this.scheduleWorkspaceObservationSetup(target);
       };
@@ -3554,6 +3593,10 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     if (target.fetchInFlight) {
       return;
     }
+    if (target.fetchSkipTicks > 0) {
+      target.fetchSkipTicks -= 1;
+      return;
+    }
 
     target.fetchInFlight = true;
     this.logger.debug(
@@ -3577,9 +3620,13 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
           },
           createRunGitCommand("background-fetch"),
         );
+        target.fetchFailures = 0;
       } catch (error) {
+        // After 3 failures in a row, skip 1, 2, 4... later ticks (at most 16) before the next try.
+        target.fetchFailures += 1;
+        target.fetchSkipTicks = fetchSkipTicksAfterFailures(target.fetchFailures);
         this.logger.warn(
-          { err: error, repoGitRoot: target.repoGitRoot, cwd: target.cwd },
+          gitFailureLogFields(error, { repoGitRoot: target.repoGitRoot, cwd: target.cwd }),
           "Background git fetch failed",
         );
       }
@@ -4003,4 +4050,29 @@ function computeGenericForgeNextInterval(
     baseInterval * 2 ** (consecutiveErrors - 1),
     FORGE_PR_STATUS_POLL_ERROR_BACKOFF_CAP_MS,
   );
+}
+
+// FU-423: cheap check for the fallback poll of a folder that was not a Git checkout. "missing": the folder is gone;
+// "none": no `.git` entry in it or any parent; "checkout": a `.git` entry exists, so a Git refresh can find a repo.
+// Any other stat error counts as "checkout", so an unexpected state still gets the full refresh.
+export async function checkoutProbe(cwd: string): Promise<"missing" | "none" | "checkout"> {
+  try {
+    await stat(cwd);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR" ? "missing" : "checkout";
+  }
+  let dir = resolve(cwd);
+  for (;;) {
+    try {
+      await stat(join(dir, ".git"));
+      return "checkout";
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") return "checkout";
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return "none";
+    dir = parent;
+  }
 }

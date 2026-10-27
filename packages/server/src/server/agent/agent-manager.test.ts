@@ -825,6 +825,47 @@ test("retains native message correlation after a manager restart and invalidates
   }
 });
 
+// FU-471: listing the prompts of a stored session restored its provider (a Claude resume replays the whole
+// transcript, up to 1 GB) and read every payload in its journal.
+test("a stored session lists its prompts from the journal without restoring its provider", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-stored-prompts-"));
+  const directory = join(workdir, "timeline");
+  let resumes = 0;
+  const client = new (class extends TestAgentClient {
+    override async resumeSession(): Promise<AgentSession> {
+      resumes++;
+      return new TestAgentSession({ provider: "codex", cwd: workdir });
+    }
+  })();
+  const first = new AgentManager({
+    clients: { codex: client },
+    durableTimelineStore: new FileAgentTimelineStore(directory),
+    logger,
+  });
+  const second = new AgentManager({
+    clients: { codex: client },
+    durableTimelineStore: new FileAgentTimelineStore(directory),
+    logger,
+  });
+  const agent = await first.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    for (const text of ["first ask", "second ask"]) {
+      await first.appendTimelineItem(agent.id, { type: "user_message", text });
+      await first.appendTimelineItem(agent.id, { type: "assistant_message", text: "answer" });
+    }
+    const loaded = await first.getTimelinePromptIndex(agent.id);
+    expect(loaded.prompts.map((prompt) => prompt.preview)).toEqual(["first ask", "second ask"]);
+    await first.closeAgent(agent.id);
+    expect(await second.fetchStoredTimelinePromptIndex(agent.id)).toEqual(loaded);
+    expect(resumes).toBe(0);
+  } finally {
+    await first.closeAgent(agent.id);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("durable writes fence publication without blocking another session", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-write-barrier-"));
   const entered = deferred<void>(),
@@ -3130,6 +3171,66 @@ test("setAgentMode persists the selected mode across session reload", async () =
   expect(reloaded.currentModeId).toBe("full-access");
 });
 
+test.each([false, true])(
+  "reload closes a phantom pending start when interrupt has no transport (close fails first: %s)",
+  async (closeFailsFirst) => {
+    const workdir = mkdtempSync(join(tmpdir(), "reload-pending-start-"));
+    const storage = new AgentStorage(join(workdir, "agents"), logger);
+    let closed = 0;
+    let failClose = closeFailsFirst;
+    class PhantomSession extends TestAgentSession {
+      override async interrupt(): Promise<void> {
+        throw new Error("transport unavailable");
+      }
+      override async close(): Promise<void> {
+        closed++;
+        if (failClose) throw new Error("close unavailable");
+      }
+    }
+    class PhantomClient extends TestAgentClient {
+      override async createSession(config: AgentSessionConfig) {
+        return new PhantomSession(config);
+      }
+      override async resumeSession(
+        handle: AgentPersistenceHandle,
+        config?: Partial<AgentSessionConfig>,
+      ) {
+        const session = new TestAgentSession({ provider: "codex", cwd: workdir, ...config });
+        session.describePersistence = () => handle;
+        return session;
+      }
+    }
+    const manager = new AgentManager({
+      clients: { codex: new PhantomClient() },
+      registry: storage,
+      logger,
+      rescueTimeouts: { interruptSessionMs: 1 },
+    });
+    try {
+      const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+      const old = manager.streamAgent(agent.id, "pending start");
+      expect(manager.hasInFlightRun(agent.id)).toBe(true);
+      if (closeFailsFirst) {
+        await expect(manager.reloadAgentSession(agent.id)).rejects.toThrow("close unavailable");
+        expect(manager.getAgent(agent.id)?.instanceId).toBe(agent.instanceId);
+        expect(manager.hasInFlightRun(agent.id)).toBe(true);
+        failClose = false;
+      }
+      const replacement = await manager.reloadAgentSession(agent.id);
+      expect(closed).toBe(closeFailsFirst ? 2 : 1);
+      expect(replacement.lifecycle).toBe("idle");
+      expect(replacement.persistence?.sessionId).toBe(agent.persistence?.sessionId);
+      expect(manager.hasInFlightRun(agent.id)).toBe(false);
+      await expect(old.next()).rejects.toThrow("pending turn changed");
+      expect(manager.hasInFlightRun(agent.id)).toBe(false);
+    } finally {
+      for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
+      await manager.flush();
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  },
+);
+
 async function quietMcpFixture(
   managerOptions: Pick<
     AgentManagerOptions,
@@ -3943,6 +4044,49 @@ test("update-7: a reconnect restarts a session whose provider turn failed; a pla
       await f.manager.refreshAgentMcp({ ...f.input, expected, changes: {}, reconnect: true }),
     ).toMatchObject({ outcome: "refreshed" });
     expect(f.client.resumeOverrides).toHaveLength(1);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("FU-496: a reconnect refuses an idle session that still owns background work", async () => {
+  const f = await quietMcpFixture();
+  try {
+    expect(f.manager.getAgent(f.created.id)?.lifecycle).toBe("idle");
+    const state = await f.manager.getAgentMcpRefreshState(f.created.id);
+    const expected = {
+      provider: state!.provider,
+      sessionId: state!.sessionId!,
+      configRevision: state!.configRevision,
+    };
+    const work = (count: number) =>
+      f.client.sessions[0].pushEvent({
+        type: "background_work_changed",
+        provider: "codex",
+        backgroundWork:
+          count === 0
+            ? null
+            : {
+                count,
+                kinds: ["workflow"],
+                source: "provider",
+                since: "2026-10-25T01:35:46.000Z",
+                observedAt: "2026-10-25T01:36:00.000Z",
+              },
+      });
+    work(1);
+    await vi.waitFor(() => expect(f.manager.getAgent(f.created.id)?.backgroundWork?.count).toBe(1));
+    expect(
+      await f.manager.refreshAgentMcp({ ...f.input, expected, changes: {}, reconnect: true }),
+    ).toMatchObject({ outcome: "refused", reason: "busy" });
+    expect(f.client.sessions[0].closeCount).toBe(0);
+    work(0);
+    await vi.waitFor(() =>
+      expect(f.manager.getAgent(f.created.id)?.backgroundWork ?? null).toBeNull(),
+    );
+    expect(
+      await f.manager.refreshAgentMcp({ ...f.input, expected, changes: {}, reconnect: true }),
+    ).toMatchObject({ outcome: "refreshed" });
   } finally {
     await f.cleanup();
   }
@@ -10268,8 +10412,8 @@ test("archiveAgent re-reads a child before deciding whether to cascade", async (
   class ChildOpensAfterCascadeListStorage extends AgentStorage {
     childId: string | null = null;
 
-    override async list(): Promise<StoredAgentRecord[]> {
-      const records = await super.list();
+    override async listLoaded(): Promise<StoredAgentRecord[]> {
+      const records = await super.listLoaded();
       const parentIsArchived = records.some(
         (record) => record.id !== this.childId && Boolean(record.archivedAt),
       );
@@ -16608,6 +16752,479 @@ test.each(["close", "archive"] as const)("H2 resource errors never block %s", as
     sample.mockRestore();
     cleanup.mockRestore();
     await manager.flushForShutdown();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("FU-425: two archives of a session whose turn ignores interrupt both finish and close it once", async () => {
+  const fixture = await createControlledInterruptFixture({
+    name: "fu425-stuck-turn",
+    agentId: "00000000-0000-4000-8000-000000000425",
+    turnId: "stuck-turn",
+    // The provider acknowledges the interrupt, but the turn goes on.
+    interrupt: async () => undefined,
+  });
+  let closeCalls = 0;
+  const close = fixture.session.close.bind(fixture.session);
+  fixture.session.close = async () => {
+    closeCalls += 1;
+    await close();
+  };
+  const stillWorking = setInterval(() => {
+    fixture.session.pushEvent({
+      type: "timeline",
+      provider: "codex",
+      turnId: "stuck-turn",
+      item: { type: "assistant_message", text: "still working" },
+    });
+  }, 20);
+  const dependencies = { agentManager: fixture.manager, agentStorage: fixture.storage, logger };
+  try {
+    await fixture.startForegroundRun();
+    const [first, second] = await Promise.all([
+      archiveSafetyCommand(dependencies, fixture.agentId),
+      archiveSafetyCommand(dependencies, fixture.agentId),
+    ]);
+    const stored = await fixture.storage.get(fixture.agentId);
+    expect(stored?.archivedAt).toEqual(expect.any(String));
+    expect(first.archivedAt).toBe(stored?.archivedAt);
+    expect(second.archivedAt).toBe(stored?.archivedAt);
+    expect(fixture.manager.getAgent(fixture.agentId)).toBeNull();
+    expect(closeCalls).toBe(1);
+  } finally {
+    clearInterval(stillWorking);
+    await fixture.manager.flush();
+    await fixture.storage.flush();
+  }
+});
+
+test("FU-425: an event for an agent that left the manager is dropped with one info line", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-fu425-late-event-"));
+  const eventLogger = createTestLogger();
+  const errors = vi.spyOn(eventLogger, "error");
+  const infos = vi.spyOn(eventLogger, "info");
+  const client = new SessionRecordingAgentClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger: eventLogger });
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+    const internal = manager as unknown as {
+      agents: Map<string, unknown>;
+      dispatchSessionEvent(): Promise<void>;
+    };
+    const live = internal.agents.get(agent.id);
+    // The stuck turn's event is in flight when a close retires the agent.
+    vi.spyOn(internal, "dispatchSessionEvent").mockImplementationOnce(async () => {
+      internal.agents.delete(agent.id);
+      throw new Error(`Unknown agent '${agent.id}'`);
+    });
+    client.sessions[0]!.pushEvent({
+      type: "timeline",
+      provider: "codex",
+      item: { type: "assistant_message", text: "late" },
+    });
+    await manager.flush();
+    expect(errors.mock.calls.some((call) => call.includes("Failed to process session event"))).toBe(
+      false,
+    );
+    expect(
+      infos.mock.calls.filter((call) =>
+        call.includes("Dropped a session event for an agent that is no longer loaded"),
+      ),
+    ).toHaveLength(1);
+    internal.agents.set(agent.id, live);
+    await manager.closeAgent(agent.id);
+  } finally {
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+// FU-425: a Claude turn that does not stop. The provider acknowledges the interrupt, the turn goes on and
+// keeps sending events, and the resumed session goes on with it. Close ends the events, as Claude does.
+class StuckTurnSession extends TestAgentSession {
+  closeCalls = 0;
+  private pump: NodeJS.Timeout | null = null;
+
+  override async startTurn(): Promise<{ turnId: string }> {
+    setTimeout(() => {
+      this.pushEvent({ type: "turn_started", provider: "codex", turnId: "stuck-turn" });
+    }, 0);
+    return { turnId: "stuck-turn" };
+  }
+
+  override async interrupt(): Promise<void> {}
+
+  override async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
+    yield {
+      type: "timeline",
+      provider: "codex",
+      item: { type: "assistant_message", text: "before" },
+    };
+  }
+
+  override async close(): Promise<void> {
+    this.closeCalls += 1;
+    this.stopEvents();
+  }
+
+  keepWorking(): void {
+    this.pump = setInterval(() => {
+      this.pushEvent({
+        type: "timeline",
+        provider: "codex",
+        turnId: "stuck-turn",
+        item: { type: "user_message", text: "still working", messageId: randomUUID() },
+      });
+    }, 1);
+  }
+
+  stopEvents(): void {
+    if (this.pump) clearInterval(this.pump);
+    this.pump = null;
+  }
+}
+
+async function createStuckTurnRefreshFixture(name: string) {
+  const workdir = mkdtempSync(join(tmpdir(), `agent-manager-${name}-`));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const managerLogger = createTestLogger();
+  const errors = vi.spyOn(managerLogger, "error");
+  const sessions: StuckTurnSession[] = [];
+  const open = (cwd: string) => {
+    const session = new StuckTurnSession({ provider: "codex", cwd });
+    session.keepWorking();
+    sessions.push(session);
+    return session;
+  };
+  const client = new (class extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      return open(config.cwd);
+    }
+    override async resumeSession(
+      _handle: AgentPersistenceHandle,
+      config?: Partial<AgentSessionConfig>,
+    ): Promise<AgentSession> {
+      return open(config?.cwd ?? workdir);
+    }
+  })();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: storage,
+    logger: managerLogger,
+    durableTimelineStore: new FileAgentTimelineStore(join(workdir, ".journal")),
+    rescueTimeouts: { interruptSessionMs: 10 },
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+  const run = manager.streamAgent(agent.id, "work until stopped");
+  void (async () => {
+    for await (const _event of run) {
+      // Keep the foreground stream subscribed.
+    }
+  })();
+  await manager.waitForAgentRunStart(agent.id);
+  return {
+    agentId: agent.id,
+    manager,
+    storage,
+    sessions,
+    // The refresh request: stop the run, reload from persistence, then replay the provider history.
+    async refresh(): Promise<void> {
+      await manager.cancelAgentRun(agent.id);
+      await manager.reloadAgentSession(agent.id, undefined, { rehydrateFromDisk: true });
+      await manager.hydrateTimelineFromProvider(agent.id, { broadcast: true });
+    },
+    timelineErrors(): unknown[][] {
+      return errors.mock.calls.filter(
+        (call) =>
+          call.includes("Failed to commit timeline") ||
+          call.includes("Failed to process session event"),
+      );
+    },
+    async cleanup(): Promise<void> {
+      for (const session of sessions) session.stopEvents();
+      for (const live of manager.listAgents()) await manager.closeAgent(live.id);
+      await manager.flush();
+      await storage.flush();
+      rmSync(workdir, { recursive: true, force: true });
+    },
+  };
+}
+
+test("FU-425: a refresh while the turn keeps writing rows resumes the session with its timeline", async () => {
+  const fixture = await createStuckTurnRefreshFixture("fu425-refresh");
+  try {
+    await fixture.refresh();
+    const [original, resumed] = fixture.sessions;
+    expect(original!.closeCalls).toBe(1);
+    expect((fixture.manager.getAgent(fixture.agentId) as { session?: unknown }).session).toBe(
+      resumed,
+    );
+    expect(() => fixture.manager.getTimeline(fixture.agentId)).not.toThrow();
+    resumed!.stopEvents();
+    await fixture.manager.flush();
+    expect(fixture.timelineErrors()).toEqual([]);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("FU-425: an archive after that refresh archives the record and closes the provider", async () => {
+  const fixture = await createStuckTurnRefreshFixture("fu425-refresh-archive");
+  try {
+    await fixture.refresh();
+    await archiveSafetyCommand(
+      { agentManager: fixture.manager, agentStorage: fixture.storage, logger },
+      fixture.agentId,
+    );
+    expect((await fixture.storage.get(fixture.agentId))?.archivedAt).toEqual(expect.any(String));
+    expect(fixture.manager.getAgent(fixture.agentId)).toBeNull();
+    expect(fixture.sessions.map((session) => session.closeCalls)).toEqual([1, 1]);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+// FU-441: follow-ups of the FU-425 review.
+interface TimelineReplayInternals {
+  recordTimeline(agentId: string, item: AgentTimelineItem): Promise<unknown>;
+  resetTimelineForReplay(
+    agentId: string,
+    history: { item: AgentTimelineItem; timestamp?: string }[],
+  ): Promise<unknown[]>;
+}
+
+function assistantText(text: string): AgentTimelineItem {
+  return { type: "assistant_message", text };
+}
+
+test("FU-441: a timeline failure from a write that raced a close does not break the next resume", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-fu441-stale-"));
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    durableTimelineStore: new FileAgentTimelineStore(join(workdir, ".journal")),
+    logger,
+  });
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+    await manager.closeAgent(agent.id);
+    // The write of an event that started before the close runs after the runtime left the store.
+    await (manager as unknown as TimelineReplayInternals)
+      .recordTimeline(agent.id, assistantText("late"))
+      .catch(() => undefined);
+    await manager.resumeAgentFromPersistence(
+      { provider: "codex", sessionId: "fu441-stale" },
+      { cwd: workdir },
+      agent.id,
+    );
+    await expect(
+      manager.appendTimelineItem(agent.id, assistantText("after resume")),
+    ).resolves.toEqual({ seq: expect.any(Number), epoch: expect.any(String) });
+  } finally {
+    await manager.closeAgent(manager.listAgents()[0]?.id ?? "").catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("FU-441: the dropped-event info line keeps the error", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-fu441-log-"));
+  const eventLogger = createTestLogger();
+  const infos = vi.spyOn(eventLogger, "info");
+  const client = new SessionRecordingAgentClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger: eventLogger });
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+    const internal = manager as unknown as {
+      agents: Map<string, unknown>;
+      dispatchSessionEvent(): Promise<void>;
+    };
+    const live = internal.agents.get(agent.id);
+    const fault = new Error("provider fault");
+    vi.spyOn(internal, "dispatchSessionEvent").mockImplementationOnce(async () => {
+      internal.agents.delete(agent.id);
+      throw fault;
+    });
+    client.sessions[0]!.pushEvent({
+      type: "timeline",
+      provider: "codex",
+      item: assistantText("late"),
+    });
+    await manager.flush();
+    const dropped = infos.mock.calls.find((call) =>
+      call.includes("Dropped a session event for an agent that is no longer loaded"),
+    );
+    expect(dropped?.[0]).toMatchObject({ err: fault, agentId: agent.id });
+    internal.agents.set(agent.id, live);
+    await manager.closeAgent(agent.id);
+  } finally {
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("FU-441: a live row written during a replay comes after the replayed rows", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-fu441-order-"));
+  const store = new FileAgentTimelineStore(join(workdir, ".journal"));
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    durableTimelineStore: store,
+    logger,
+  });
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+    const internal = manager as unknown as TimelineReplayInternals;
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const deleteAgent = store.deleteAgent.bind(store);
+    vi.spyOn(store, "deleteAgent").mockImplementationOnce(async (id) => {
+      entered.resolve();
+      await release.promise;
+      await deleteAgent(id);
+    });
+    const replay = internal.resetTimelineForReplay(agent.id, [
+      { item: assistantText("history 1") },
+      { item: assistantText("history 2") },
+    ]);
+    await entered.promise;
+    // The replay is in its queued write. A live row arrives now and waits behind it.
+    const live = internal.recordTimeline(agent.id, assistantText("live"));
+    release.resolve();
+    await Promise.all([replay, live]);
+    const rows = await store.getCommittedRows(agent.id);
+    expect(rows.map((row) => (row.item as { text: string }).text)).toEqual([
+      "history 1",
+      "history 2",
+      "live",
+    ]);
+    expect(rows.map((row) => row.seq)).toEqual([1, 2, 3]);
+  } finally {
+    await manager.closeAgent(manager.listAgents()[0]?.id ?? "").catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("FU-441: a failed rebuild keeps the old rows and leaves the timeline writable", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-fu441-rebuild-"));
+  const store = new FileAgentTimelineStore(join(workdir, ".journal"));
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    durableTimelineStore: store,
+    logger,
+  });
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+    await manager.appendTimelineItem(agent.id, assistantText("kept"));
+    vi.spyOn(store, "getCommittedRows").mockRejectedValueOnce(new Error("disk read failed"));
+    const internal = manager as unknown as TimelineReplayInternals;
+    await expect(internal.resetTimelineForReplay(agent.id, [])).rejects.toThrow("disk read failed");
+    await expect(
+      manager.appendTimelineItem(agent.id, assistantText("after failure")),
+    ).resolves.toEqual({ seq: expect.any(Number), epoch: expect.any(String) });
+    const rows = await store.getCommittedRows(agent.id);
+    expect(rows.map((row) => (row.item as { text: string }).text)).toEqual([
+      "kept",
+      "after failure",
+    ]);
+  } finally {
+    await manager.closeAgent(manager.listAgents()[0]?.id ?? "").catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("archiveAgent with ifQuiet refuses a session whose user message changed since it was picked", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-quiet-archive-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const manager = new AgentManager({
+    clients: { codex: new NativeArchiveRecordingClient() },
+    registry: storage,
+    logger,
+  });
+  const agent = await manager.createAgent(
+    { provider: "codex", cwd: workdir, title: "Quiet archive target" },
+    undefined,
+    { workspaceId: undefined },
+  );
+
+  await expect(
+    manager.archiveAgent(agent.id, undefined, {
+      ifQuiet: { lastUserMessageAt: "2026-10-21T10:00:00.000Z" },
+    }),
+  ).rejects.toThrow("no longer quiet");
+  expect((await storage.get(agent.id))?.archivedAt ?? null).toBeNull();
+
+  await manager.archiveAgent(agent.id, undefined, { ifQuiet: { lastUserMessageAt: null } });
+  expect((await storage.get(agent.id))?.archivedAt).toBeTruthy();
+});
+
+test("archiving a live session does not read the archived records that boot left on disk", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-archive-guard-"));
+  const agentsDir = join(workdir, "agents");
+  mkdirSync(join(agentsDir, "project"), { recursive: true });
+  for (let i = 0; i < 3; i++) {
+    const id = `00000000-0000-4000-8000-00000000000${i}`;
+    writeFileSync(
+      join(agentsDir, "project", `${id}.json`),
+      JSON.stringify({
+        id,
+        provider: "codex",
+        cwd: workdir,
+        workspaceId: "workspace-a",
+        createdAt: "2026-10-01T00:00:00.000Z",
+        updatedAt: "2026-10-01T00:00:00.000Z",
+        archivedAt: "2026-10-02T00:00:00.000Z",
+        labels: {},
+        lastStatus: "closed",
+        config: null,
+      }),
+    );
+  }
+  const storage = new AgentStorage(agentsDir, logger);
+  const manager = new AgentManager({
+    clients: { codex: new NativeArchiveRecordingClient() },
+    registry: storage,
+    logger,
+  });
+  const agent = await manager.createAgent(
+    { provider: "codex", cwd: workdir, title: "Live" },
+    undefined,
+    { workspaceId: "workspace-a" },
+  );
+  expect(storage.archivedOnDiskCount).toBe(3);
+  await manager.archiveAgent(agent.id);
+  expect(storage.archivedOnDiskCount).toBe(3);
+});
+
+// FU-479: a restarted session ran with the daemon's Claude config, not the one it was created with.
+test("a session keeps its CLAUDE_CONFIG_DIR across a daemon restart", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-config-dir-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const resumed: Array<string | undefined> = [];
+  const client = new (class extends TestAgentClient {
+    override async resumeSession(
+      _handle: AgentPersistenceHandle,
+      config?: Partial<AgentSessionConfig>,
+      context?: AgentLaunchContext,
+    ): Promise<AgentSession> {
+      resumed.push(context?.env?.CLAUDE_CONFIG_DIR);
+      return new TestAgentSession({ provider: "codex", cwd: config?.cwd ?? workdir });
+    }
+  })();
+  const first = new AgentManager({ clients: { codex: client }, registry: storage, logger });
+  const second = new AgentManager({ clients: { codex: client }, registry: storage, logger });
+  const agent = await first.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+    env: { CLAUDE_CONFIG_DIR: "/accounts/second" },
+  });
+  try {
+    await first.flush();
+    await first.closeAgent(agent.id);
+    await ensureAgentLoaded(agent.id, {
+      agentManager: second,
+      agentStorage: storage,
+      validProviders: ["codex"],
+      logger,
+    });
+    expect(resumed).toEqual(["/accounts/second"]);
+  } finally {
+    await first.closeAgent(agent.id).catch(() => undefined);
+    await second.closeAgent(agent.id).catch(() => undefined);
     rmSync(workdir, { recursive: true, force: true });
   }
 });

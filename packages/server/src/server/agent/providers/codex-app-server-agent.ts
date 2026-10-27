@@ -108,6 +108,7 @@ import { z } from "zod";
 import { renderPromptAttachmentAsText } from "../prompt-attachments.js";
 import { composeSystemPromptParts } from "../system-prompt.js";
 import { curateAgentActivity } from "../activity-curator.js";
+import { assertCodexRolloutSize } from "./codex/rollout-size.js";
 import { CodexAsyncQuestions, codexAsyncQuestionToTimeline } from "./codex/async-questions.js";
 import {
   mapCodexToolCallEnvelope,
@@ -4206,6 +4207,42 @@ export class CodexAppServerAgentSession implements AgentSession {
     }
   }
 
+  async getInputReceipt(messageId: string): Promise<"present" | "absent" | "unknown"> {
+    const client = this.client;
+    const threadId = this.currentThreadId;
+    if (!client || !threadId) return "unknown";
+    let complete = false;
+    const { timeline } = await loadCodexThreadHistoryTimeline({
+      threadId,
+      cwd: this.config.cwd ?? null,
+      requestThread: async (id) => {
+        const response = await readCodexThread(client, id);
+        const thread = toObjectRecord(toObjectRecord(response)?.thread);
+        const turns = thread?.turns;
+        complete =
+          Array.isArray(turns) &&
+          (thread?.historyMode === undefined || thread.historyMode === "legacy") &&
+          turns.every((turn) => {
+            const row = toObjectRecord(turn);
+            return (
+              Array.isArray(row?.items) &&
+              (row?.itemsView === undefined || row.itemsView === "full")
+            );
+          });
+        return response;
+      },
+    });
+    if (this.client !== client || this.currentThreadId !== threadId) return "unknown";
+    const inputs = timeline.flatMap((entry) =>
+      entry.item.type === "user_message" ? [entry.item] : [],
+    );
+    if (inputs.some((item) => item.clientMessageId === messageId)) return "present";
+    if (!complete) return "unknown";
+    // Older app servers can omit client IDs. Their history cannot prove this input absent.
+    if (inputs.length && !inputs.some((item) => item.clientMessageId)) return "unknown";
+    return "absent";
+  }
+
   private async loadPersistedHistory(client: CodexAppServerClientLike | null): Promise<void> {
     if (!client || !this.currentThreadId) return;
     const threadId = this.currentThreadId;
@@ -4330,6 +4367,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       if (ids.includes(this.currentThreadId)) {
         return;
       }
+      await assertCodexRolloutSize(this.codexHome, preparedThread);
       const response = await this.client.request("thread/resume", params);
       this.rememberResolvedThreadConfig(response);
       this.markPublicBaselineSubmitted(preparedClient, params, preparedThread);
@@ -4449,6 +4487,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     const params: Record<string, unknown> = {
       threadId: this.currentThreadId,
       input,
+      ...(options?.clientMessageId ? { clientUserMessageId: options.clientMessageId } : {}),
     };
     const { approvalPolicy, sandboxPolicyType } = this.applyTurnWorkflowPolicy(params, preset);
 

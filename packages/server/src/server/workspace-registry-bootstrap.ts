@@ -94,7 +94,7 @@ export async function bootstrapWorkspaceRegistries(options: {
       workspace.workspaceId,
     ]),
   );
-  const records = await options.agentStorage.list();
+  const records = await options.agentStorage.listLoaded();
   // A legacy agent can outlive its working directory. Reconciliation treats a
   // missing directory as absent rather than asking Git about it; bootstrap must
   // do the same before materializing its first workspace record.

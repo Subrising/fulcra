@@ -20,6 +20,13 @@ import { writeJsonQueueFile, writeJsonFileDurable } from "./atomic-file.js";
 // admitted with its sender's source (a chat: "agent", the owner: "human"), not with the event's ambient context.
 
 const cleanup: Array<() => Promise<void>> = [];
+class SlowAgentStorage extends AgentStorage {
+  beforeSnapshot?: () => Promise<void>;
+  override async applySnapshot(...args: Parameters<AgentStorage["applySnapshot"]>): Promise<void> {
+    await this.beforeSnapshot?.();
+    return super.applySnapshot(...args);
+  }
+}
 afterEach(async () => {
   vi.useRealTimers();
   for (const close of cleanup.splice(0).toReversed()) await close();
@@ -29,10 +36,11 @@ afterEach(async () => {
 async function fixture(
   provider: "claude" | "opencode" | "codex" = "claude",
   closeSession?: () => Promise<void>,
+  writeQueue?: typeof writeJsonQueueFile,
 ) {
   const home = await mkdtemp(join(tmpdir(), "held-trust-")),
     logger = createTestLogger();
-  const storage = new AgentStorage(join(home, "agents"), logger);
+  const storage = new SlowAgentStorage(join(home, "agents"), logger);
   await storage.initialize();
   const host = new TrustedPlugins();
   host.initializeKnownAgents([]);
@@ -70,7 +78,12 @@ async function fixture(
     });
   const sender = await create();
   const target = await create();
-  const queue = queuedAgentMessagesFor({ agentManager: manager, agentStorage: storage, logger });
+  const queue = queuedAgentMessagesFor({
+    agentManager: manager,
+    agentStorage: storage,
+    logger,
+    writeQueue,
+  });
   const busy = new Set<string>();
   const realInFlight = manager.hasInFlightRun.bind(manager);
   vi.spyOn(manager, "hasInFlightRun").mockImplementation(
@@ -351,13 +364,62 @@ test("a new manager loads an idle restored receiver and delivers its retained ba
   ]);
 });
 
-test("an attempted message becomes uncertain after restart and never replays", async () => {
+test("an absent uncertain message is reconciled once after receiver reload", async () => {
   const f = await fixture();
   f.busy.add(f.target.id);
-  await f.send("possibly accepted", f.sender.id);
+  const messageId = randomUUID();
+  await f.send("possibly accepted", f.sender.id, false, messageId);
   await f.queue.close();
   const records = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
   records[0].state = "dispatching";
+  records[0].nativeReceipt = true;
+  records[0].runtimeInstanceId = f.target.instanceId;
+  await writeFile(f.storage.heldMessagesPath, JSON.stringify(records));
+  const restored = new QueuedAgentMessages({
+    agentManager: f.manager,
+    agentStorage: f.storage,
+    logger: f.logger,
+  });
+  cleanup.push(() => restored.close());
+  f.busy.delete(f.target.id);
+  await f.host.daemon(() => f.manager.reloadAgentSession(f.target.id));
+  await restored.start();
+  await restored.waitForDelivery(f.target.id, messageId, new AbortController().signal);
+  await restored.close();
+  expect(JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"))[0].state).toBe("delivered");
+  expect(f.prompts.filter((prompt) => prompt === "possibly accepted")).toHaveLength(1);
+});
+
+test("a present uncertain message is marked delivered without another provider input", async () => {
+  const f = await fixture();
+  const messageId = randomUUID();
+  await f.send("already accepted", f.sender.id, false, messageId);
+  await f.queue.waitForDelivery(f.target.id, messageId, new AbortController().signal);
+  await f.queue.close();
+  const records = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
+  records[0].state = "uncertain";
+  await writeFile(f.storage.heldMessagesPath, JSON.stringify(records));
+  const restored = new QueuedAgentMessages({
+    agentManager: f.manager,
+    agentStorage: f.storage,
+    logger: f.logger,
+  });
+  cleanup.push(() => restored.close());
+  await restored.start();
+  await restored.waitForDelivery(f.target.id, messageId, new AbortController().signal);
+  await restored.close();
+  expect(f.prompts.filter((prompt) => prompt === "already accepted")).toHaveLength(1);
+});
+
+test("legacy uncertainty without a native receipt never replays absent journal input", async () => {
+  const f = await fixture();
+  f.busy.add(f.target.id);
+  const messageId = randomUUID();
+  await f.queue.enqueue(f.target.id, { text: "unproven legacy input", messageId });
+  await f.queue.close();
+  const records = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
+  records[0].state = "uncertain";
+  delete records[0].nativeReceipt;
   await writeFile(f.storage.heldMessagesPath, JSON.stringify(records));
   const restored = new QueuedAgentMessages({
     agentManager: f.manager,
@@ -367,9 +429,125 @@ test("an attempted message becomes uncertain after restart and never replays", a
   cleanup.push(() => restored.close());
   f.busy.delete(f.target.id);
   await restored.start();
-  await restored.close();
-  expect(JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"))[0].state).toBe("uncertain");
-  expect(f.prompts).not.toContain("possibly accepted");
+  expect(await restored.messageState(f.target.id, messageId)).toBe("uncertain");
+  expect(f.prompts).not.toContain("unproven legacy input");
+});
+
+test("a failed absent-message retry stays uncertain instead of looping", async () => {
+  const f = await fixture();
+  f.busy.add(f.target.id);
+  const messageId = randomUUID();
+  await f.queue.enqueue(f.target.id, { text: "refused recovery", messageId });
+  await f.queue.close();
+  const records = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
+  records[0].state = "uncertain";
+  records[0].nativeReceipt = true;
+  records[0].runtimeInstanceId = f.target.instanceId;
+  await writeFile(f.storage.heldMessagesPath, JSON.stringify(records));
+  const restored = new QueuedAgentMessages({
+    agentManager: f.manager,
+    agentStorage: f.storage,
+    logger: f.logger,
+  });
+  cleanup.push(() => restored.close());
+  f.busy.delete(f.target.id);
+  await f.host.daemon(() => f.manager.reloadAgentSession(f.target.id));
+  f.deny();
+  await restored.start();
+  await expect(
+    restored.waitForDelivery(f.target.id, messageId, new AbortController().signal),
+  ).rejects.toThrow();
+  expect(await restored.messageState(f.target.id, messageId)).toBe("uncertain");
+  expect(f.prompts).not.toContain("refused recovery");
+});
+
+test("a 60 second storage write returns a send error at 15 seconds and never sends late", async () => {
+  const f = await fixture();
+  await f.manager.flush();
+  let entered!: () => void;
+  const writing = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  f.storage.beforeSnapshot = async () => {
+    entered();
+    await new Promise((resolve) => setTimeout(resolve, 60_000));
+  };
+  let finished = false;
+  const sending = f.send("slow write", undefined, false, randomUUID()).then(() => {
+    finished = true;
+    return undefined;
+  });
+  await writing;
+  await vi.advanceTimersByTimeAsync(15_000);
+  const finishedAtDeadline = finished;
+  const responsesAtDeadline = f.messages.filter(
+    (message) => message.type === "send_agent_message_response",
+  );
+  f.storage.beforeSnapshot = undefined;
+  await vi.advanceTimersByTimeAsync(45_000);
+  await sending;
+  vi.useRealTimers();
+  await f.manager.flush();
+  expect(finishedAtDeadline).toBe(true);
+  expect(responsesAtDeadline).toEqual([
+    expect.objectContaining({
+      payload: expect.objectContaining({
+        accepted: false,
+        error: expect.stringContaining("Send timed out after 15 seconds"),
+      }),
+    }),
+  ]);
+  expect(f.prompts).not.toContain("slow write");
+  expect(
+    f.messages.filter((message) => message.type === "send_agent_message_response"),
+  ).toHaveLength(1);
+});
+
+test("a 60 second held queue write returns at 15 seconds and retains one admission", async () => {
+  let block = false;
+  let entered!: () => void;
+  const writing = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const f = await fixture("claude", undefined, async (file, records) => {
+    if (block) {
+      entered();
+      await new Promise((resolve) => setTimeout(resolve, 60_000));
+    }
+    await writeJsonQueueFile(file, records);
+  });
+  await f.queue.start();
+  block = true;
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const messageId = randomUUID();
+  let finished = false;
+  const sending = f.send("slow durable queue", f.sender.id, false, messageId).then(() => {
+    finished = true;
+    return undefined;
+  });
+  await writing;
+  await vi.advanceTimersByTimeAsync(15_000);
+  const finishedAtDeadline = finished;
+  const responsesAtDeadline = f.messages.filter(
+    (message) => message.type === "send_agent_message_response",
+  );
+  block = false;
+  await vi.advanceTimersByTimeAsync(45_000);
+  vi.useRealTimers();
+  await sending;
+  await f.queue.waitForDelivery(f.target.id, messageId, new AbortController().signal);
+  await f.send("slow durable queue", f.sender.id, false, messageId);
+  expect(finishedAtDeadline).toBe(true);
+  expect(responsesAtDeadline).toEqual([
+    expect.objectContaining({
+      payload: expect.objectContaining({
+        accepted: false,
+        error: expect.stringContaining("Delivery is unknown"),
+      }),
+    }),
+  ]);
+  expect(f.prompts.filter((prompt) => prompt === "slow durable queue")).toHaveLength(1);
 });
 
 test("a queued message to a closed receiver records a refusal and tells its sender", async () => {
@@ -1150,4 +1328,57 @@ test("an ancestor label read error holds Claude input", async () => {
   await f.send("Hold input");
   expect(f.pending()).toBe(1);
   expect(f.prompts).toEqual([]);
+});
+
+// FU-409: the file was rewritten with fsync many times a minute while it carried hundreds of settled records.
+test("settled held records leave the file after a day and an unchanged queue is not rewritten", async () => {
+  const f = await fixture();
+  f.busy.add(f.target.id);
+  await f.send("still waiting", f.sender.id);
+  await f.queue.close();
+  const [waiting] = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
+  const settled = (state: "delivered" | "refused", settledAt?: number) => ({
+    ...waiting,
+    id: randomUUID(),
+    request: { ...waiting.request, messageId: randomUUID() },
+    state,
+    ...(settledAt ? { settledAt } : {}),
+  });
+  const day = 24 * 60 * 60 * 1000;
+  const stale = Array.from({ length: 500 }, (_, index) =>
+    settled(index % 2 ? "delivered" : "refused", Date.now() - day - 60_000),
+  );
+  const fresh = settled("delivered", Date.now() - 60_000);
+  const legacy = settled("delivered");
+  await writeFile(f.storage.heldMessagesPath, JSON.stringify([...stale, fresh, legacy, waiting]));
+  const restored = new QueuedAgentMessages({
+    agentManager: f.manager,
+    agentStorage: f.storage,
+    logger: f.logger,
+  });
+  cleanup.push(() => restored.close());
+  await restored.start();
+  const kept = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
+  expect(kept.map((record: { id: string }) => record.id)).toEqual([
+    fresh.id,
+    legacy.id,
+    waiting.id,
+  ]);
+  // A record from before settle times were kept starts its day now.
+  expect(kept[1].settledAt).toBeGreaterThan(Date.now() - 60_000);
+
+  // Same records in other whitespace: a rewrite would show as the compact form again.
+  const spaced = JSON.stringify(kept, null, 1);
+  await writeFile(f.storage.heldMessagesPath, spaced);
+  await (restored as unknown as { save(): Promise<void> }).save();
+  expect(await readFile(f.storage.heldMessagesPath, "utf8")).toBe(spaced);
+
+  const now = Date.now();
+  vi.spyOn(Date, "now").mockReturnValue(now + day + 60_000);
+  await (restored as unknown as { save(): Promise<void> }).save();
+  expect(
+    JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8")).map(
+      (record: { id: string }) => record.id,
+    ),
+  ).toEqual([waiting.id]);
 });
