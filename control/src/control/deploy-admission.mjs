@@ -1,5 +1,6 @@
 import { execGitCommandSync } from "@getpaseo/plugin/server/git";
 import { bindGuardHome } from "./native-release-hooks.mjs";
+import { guardSiblingBytes, writeGuardSibling } from "./guard-sibling.mjs";
 import { localJson } from "../local-machine.mjs";
 import fs from "node:fs";
 import path from "node:path";
@@ -90,6 +91,7 @@ const guard = Buffer.from(
   ),
   guardHash = digest(guard);
 const destination = `${home}/admission/${guardHash}/admission-guard.mjs`;
+const guardSibling = guardSiblingBytes(directory, path.resolve(root, ".."));
 const replacements = {
   "../session.js": [
     [
@@ -193,6 +195,7 @@ if (process.argv[2] === "--apply") {
     if (digest(fs.readFileSync(destination)) !== guardHash)
       throw new Error("Guard destination drift");
   } else fs.writeFileSync(destination, guard, { flag: "wx", mode: 0o600 });
+  writeGuardSibling(destination, guardSibling);
   for (const name of Object.keys(staged)) {
     if (digest(fs.readFileSync(base + name)) !== expected[name])
       throw new Error("Concurrent product edit");
