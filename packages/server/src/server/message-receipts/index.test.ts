@@ -1,5 +1,5 @@
 import { mkdtemp, rm, readFile, writeFile, readdir, utimes, chmod } from "node:fs/promises";
-import { readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
@@ -995,6 +995,43 @@ posixTest("a guard failing after the rename recovers through the disk rebuild", 
   expect((await receiptFile(directory, "raced")).record.state).toBe("cancelled");
   requests.stop();
 });
+
+posixTest(
+  "a guard failing after the dispatch rename refuses the receipt instead of blocking the agent",
+  async () => {
+    const { directory } = await fixture();
+    const requests = new MessageReceipts(directory, Date.now, undefined, { warn: () => {} });
+    const observed = vi.fn();
+    const dispatching = () =>
+      readdirSync(directory).some(
+        (name) =>
+          /^[a-f0-9]{64}\.json$/.test(name) &&
+          JSON.parse(readFileSync(path.join(directory, name), "utf8")).state === "dispatching",
+      );
+    await requests.enqueue({
+      ...queued(),
+      messageId: "stuck",
+      observe: observed,
+      authorize: () => {
+        if (dispatching()) throw new Error("ownership revoked");
+      },
+    });
+    const dispatch = vi.fn(async () => "turn");
+    await expect(requests.dispatchNext("target", () => true, dispatch)).rejects.toThrow(
+      "ownership revoked",
+    );
+    expect(dispatch).not.toHaveBeenCalled();
+    await requests.enqueue({ ...queued(), messageId: "next" });
+    expect(requests.health().healthy).toBe(true);
+    expect((await receiptFile(directory, "stuck")).record.state).toBe("refused");
+    expect(observed).toHaveBeenLastCalledWith(expect.objectContaining({ state: "refused" }));
+    expect(await requests.dispatchNext("target", () => true, dispatch)).toMatchObject({
+      state: "delivered",
+    });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    requests.stop();
+  },
+);
 
 posixTest("a failed rebuild keeps memory as it was and can be retried", async () => {
   const { directory } = await fixture();

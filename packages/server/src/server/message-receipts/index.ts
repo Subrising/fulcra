@@ -355,12 +355,28 @@ export class MessageReceipts {
       await this.initialize();
       return;
     }
-    const { maps, records, diskCount, watermark } = await this.readLedger();
+    const ledger = await this.readLedger();
+    const { maps, records, watermark } = ledger;
+    let diskCount = ledger.diskCount;
     // Swap without awaiting: nothing observes a half-built ledger.
     const changed: Array<[string, QueuedReceipt]> = [];
-    for (const [key, receipt] of records)
-      if (this.records.get(key)?.state !== receipt.state) changed.push([key, receipt]);
+    const refuse: Array<[string, QueuedReceipt]> = [];
+    const rollback: Array<[string, QueuedReceipt, QueuedReceipt]> = [];
+    for (const [key, disk] of records) {
+      const memory = this.records.get(key);
+      if (!memory) continue;
+      // Disk says dispatching but memory still says queued: the guard failed after the rename and dispatch() never
+      // ran, so no effect can have happened. Refuse it; a stuck dispatching receipt would block the agent.
+      if (memory.state === "queued" && disk.state === "dispatching") refuse.push([key, disk]);
+      else if (memory.state !== disk.state) changed.push([key, disk]);
+      // Same state, different content (a refused collection merge): memory is what was admitted. Put it back.
+      else if (canonicalJson(memory) !== canonicalJson(disk)) rollback.push([key, memory, disk]);
+    }
     for (const [key, receipt] of this.records) if (!records.has(key)) records.set(key, receipt); // Not on disk: keep, never drop silently.
+    for (const [key, memory, disk] of rollback) {
+      records.set(key, memory);
+      diskCount += this.weight(memory) - this.weight(disk);
+    }
     const swap = <V>(target: Map<string, V>, next: Map<string, V>) => {
       target.clear();
       for (const [k, v] of next) target.set(k, v);
@@ -379,6 +395,9 @@ export class MessageReceipts {
       if (receipt.state !== "queued" && receipt.state !== "dispatching")
         this.admissions.delete(key);
     }
+    for (const [key, memory] of rollback)
+      await writeJsonFileDurable(path.join(this.directory, `${key}.json`), memory);
+    for (const [key, disk] of refuse) await this.commit(key, { ...disk, state: "refused" });
     await this.settleOrphans();
     this.armExpiry();
   }
