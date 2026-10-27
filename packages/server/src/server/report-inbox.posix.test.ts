@@ -721,9 +721,10 @@ test("native report journal: source replacement during member durability refuses
     release();
     await failed;
     const dispatch = vi.fn(async () => "native-id");
-    await expect(f.receipts.dispatchNext(f.prime.agentId, () => true, dispatch)).rejects.toThrow(
-      "durability",
-    );
+    // The ledger rebuilds from disk after the race (FU-531); the failed admission left no authority to dispatch.
+    await expect(
+      f.receipts.dispatchNext(f.prime.agentId, () => true, dispatch),
+    ).resolves.toBeNull();
     expect(dispatch).not.toHaveBeenCalled();
   } finally {
     release();
