@@ -9,6 +9,7 @@ import type {
   CreationSnapshot,
   WorkspaceDescriptorPayload,
 } from "@getpaseo/protocol/messages";
+import { GitProcessScheduler } from "../../utils/git-process-scheduler.js";
 import { writeFileAtomic } from "../atomic-file.js";
 import { CreationService, type CreationInput } from "./index.js";
 
@@ -470,3 +471,50 @@ test("stalled receipt storage returns an unknown failure and cannot start a late
     await result;
   }
 });
+
+test("a full Git queue cannot keep a new workspace at accepted forever", async () => {
+  const f = await fixture();
+  const held = deferred();
+  const started = deferred();
+  let active = 0;
+  const scheduler = new GitProcessScheduler({
+    maxProcessesPerSecond: 1000,
+    maxProcessConcurrency: 8,
+  });
+  const blockers = Array.from({ length: 8 }, () =>
+    scheduler.run(() => {
+      if (++active === 8) started.resolve();
+      return { result: held.promise, exited: held.promise };
+    }),
+  );
+  await started.promise;
+  const service = new CreationService(f.directory, silentLogger, undefined, undefined, {
+    timeoutMs: 20,
+  });
+  const phases: string[] = [];
+  try {
+    const result = await service.create(
+      {
+        ...f.input,
+        provision: async () => {
+          await scheduler.run(() => ({ result: Promise.resolve(), exited: Promise.resolve() }));
+          return { workspace };
+        },
+      },
+      (snapshot) => phases.push(snapshot.phase),
+    );
+    expect(result).toMatchObject({
+      phase: "failed",
+      failedStage: "workspace",
+      errorCode: "creation_timeout",
+      outcomeUnknown: true,
+    });
+    expect(phases).toEqual(["accepted", "failed"]);
+    expect(scheduler.activeCount).toBe(8);
+    expect(scheduler.pendingCount).toBe(1);
+  } finally {
+    held.resolve();
+    await Promise.all(blockers);
+  }
+  expect(f.calls).toEqual([]);
+}, 1000);
