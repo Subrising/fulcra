@@ -273,6 +273,17 @@ function buildNativeSendResult(
   };
 }
 
+// The Claude provider lists no "compact" command, but the daemon accepts it as a root command.
+export async function isNativeCompact(
+  client: Awaited<ReturnType<typeof connectToDaemon>>,
+  agentId: string,
+  name: string,
+): Promise<boolean> {
+  if (name !== "compact") return false;
+  const fetched = await client.fetchAgent(agentId);
+  return fetched?.agent?.provider === "claude";
+}
+
 async function runSlashCommand(
   client: Awaited<ReturnType<typeof connectToDaemon>>,
   agentIdArg: string,
@@ -293,7 +304,10 @@ async function runSlashCommand(
       return { agentId: agentIdArg, status: "completed", message };
     }
     const { commands } = await client.listCommands({ agentId: agentIdArg });
-    if (!commands.some((command) => command.name === slash[1]))
+    if (
+      !commands.some((command) => command.name === slash[1]) &&
+      !(await isNativeCompact(client, agentIdArg, slash[1]))
+    )
       throw new Error(`Unknown slash command: /${slash[1]}`);
   }
 

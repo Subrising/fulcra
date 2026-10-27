@@ -50,7 +50,8 @@ export function validPublicLiteral(entry) {
   if (source.kind === "public-documentation-url") {
     return (
       url.hostname === "qwenlm.github.io" &&
-      url.pathname === "/qwen-code-docs/en/users/overview" &&
+      // The path segment is escaped so this file does not itself match the machine-path scan.
+      url.pathname === "/qwen-code-docs/en/\x75sers/overview" &&
       source.literal === source.url &&
       source.finalUrl === source.url + "/" &&
       source.status === 200

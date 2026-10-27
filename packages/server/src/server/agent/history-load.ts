@@ -154,7 +154,7 @@ export function changePluginCacheBytes(delta: number): void {
 export function logHistoryLoad(
   logger: Logger,
   boundary: "start" | "end" | "error",
-  source: "claude" | "claude_catalog" | "journal",
+  source: "claude" | "claude_resume" | "claude_catalog" | "journal",
   replayBytes: number,
   level: "info" | "debug" = "info",
 ): void {
@@ -180,12 +180,20 @@ export interface HistoryLine {
 }
 
 /** Keeps one record, rather than the whole file. Offsets count UTF-8 bytes, including LF. */
+/** `endOffset` stops at that byte offset, so a reader sees the file as it was when it was measured. */
 export async function* readHistoryLines(
   file: FileHandle,
   allowPartialLastLine = false,
   signal?: AbortSignal,
+  endOffset?: number,
 ): AsyncGenerator<HistoryLine> {
-  const stream = file.createReadStream({ autoClose: false, highWaterMark: 64 * 1024, signal });
+  if (endOffset === 0) return;
+  const stream = file.createReadStream({
+    autoClose: false,
+    highWaterMark: 64 * 1024,
+    signal,
+    ...(endOffset === undefined ? {} : { end: endOffset - 1 }),
+  });
   let pieces: Buffer[] = [];
   let bytes = 0;
   let offset = 0;

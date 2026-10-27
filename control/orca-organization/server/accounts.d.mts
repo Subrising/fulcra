@@ -173,6 +173,7 @@ export function sessionOpenHook(o: {
   now?: () => number;
   env?: NodeJS.ProcessEnv;
   onAllLimited?: (x: any) => void;
+  onRisk?: (x: any) => void;
 }): (input: { request: any }) => Promise<any>;
 export function setDefaultAccount(
   root: string,

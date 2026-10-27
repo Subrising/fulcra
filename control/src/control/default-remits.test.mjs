@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { flat } from "./source-text.mjs";
 import { randomUUID } from "node:crypto";
 import { fixture, P } from "./decisions.fixture.mjs";
 import { Remits } from "./remits.mjs";
@@ -153,7 +154,7 @@ test("internal refresh retries failed directory reads and requires a Delivery bi
   assert.equal(f.control.remits.count("cc_remits"), 1);
 });
 test("controller startup and watchdog share the internal refresh and shutdown drains it", () => {
-  const source = fs.readFileSync(new URL("./server.mjs", import.meta.url), "utf8");
+  const source = flat(fs.readFileSync(new URL("./server.mjs", import.meta.url), "utf8"));
   assert.match(source, /const refreshEvents = [^\n]*control\.remits\.refresh\(\)/);
   assert.match(source, /await refreshEvents\(\);/);
   assert.match(source, /eventWatchdog = setInterval[^\n]*refreshEvents/);

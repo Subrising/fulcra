@@ -4,7 +4,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { auditPackagedBundle, reviewKey } from "./no-machine-ties.mjs";
+import { auditPackagedBundle, reviewKey, forbidden } from "./no-machine-ties.mjs";
+// The second pattern on the line is an owner's private name term (local/personal-patterns.json).
+const needsPersonalPattern = {
+  skip: forbidden.test(["Da", "vid"].join(""))
+    ? false
+    : "local/personal-patterns.json has no name term for this case",
+};
 const marker = ["", "Users", "runner", "build"].join("/");
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 function fixture(fn) {
@@ -96,24 +102,28 @@ test("archive entries have independent provenance; vendor exemption cannot hide 
     assert.equal(result.passed, false);
     assert(result.unexempted.some((hit) => hit.file === archive + "!/dist/main.js"));
   }));
-test("archive tails and multiple patterns on one line are not hidden by entry reviews", () =>
-  fixture((root) => {
-    const archive = "Contents/Resources/app.asar",
-      vendor = archive + "!/node_modules/vendor/index.js";
-    const second = ["Da", "vid"].join("");
-    const body = marker + " " + second;
-    put(root, archive, asar({ "node_modules/vendor/index.js": body }));
-    assert.equal(
-      auditPackagedBundle(root, [{ ...exemption, file: vendor, sha256: digest(body) }]).passed,
-      false,
-    );
-    put(
-      root,
-      archive,
-      Buffer.concat([asar({ "node_modules/vendor/index.js": marker }), Buffer.from(marker)]),
-    );
-    assert.equal(auditPackagedBundle(root, [{ ...exemption, file: vendor }]).passed, false);
-  }));
+test(
+  "archive tails and multiple patterns on one line are not hidden by entry reviews",
+  needsPersonalPattern,
+  () =>
+    fixture((root) => {
+      const archive = "Contents/Resources/app.asar",
+        vendor = archive + "!/node_modules/vendor/index.js";
+      const second = ["Da", "vid"].join("");
+      const body = marker + " " + second;
+      put(root, archive, asar({ "node_modules/vendor/index.js": body }));
+      assert.equal(
+        auditPackagedBundle(root, [{ ...exemption, file: vendor, sha256: digest(body) }]).passed,
+        false,
+      );
+      put(
+        root,
+        archive,
+        Buffer.concat([asar({ "node_modules/vendor/index.js": marker }), Buffer.from(marker)]),
+      );
+      assert.equal(auditPackagedBundle(root, [{ ...exemption, file: vendor }]).passed, false);
+    }),
+);
 
 test("malformed and escaping archive entries fail closed", () =>
   fixture((root) => {
