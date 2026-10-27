@@ -341,6 +341,18 @@ describe("send slash commands", () => {
     expect(result.data.message).toBe("Personal: ok");
     expect(client.sendAgentMessage).not.toHaveBeenCalled();
   });
+  it("accepts /compact for a Claude session whose provider list lacks it", async () => {
+    client.listCommands.mockResolvedValue({ commands: [{ name: "init" }] });
+    client.fetchAgent.mockResolvedValue({ agent: { id: "resolved-target", provider: "claude" } });
+    await parsedSend(["target", "/compact", "--no-wait"]);
+    expect(client.sendAgentMessage).toHaveBeenCalledTimes(1);
+  });
+  it("still refuses /compact for a non-Claude session that lacks it", async () => {
+    client.listCommands.mockResolvedValue({ commands: [{ name: "init" }] });
+    client.fetchAgent.mockResolvedValue({ agent: { id: "resolved-target", provider: "codex" } });
+    await expect(parsedSend(["target", "/compact"])).rejects.toMatchObject({ code: "SEND_FAILED" });
+    expect(client.sendAgentMessage).not.toHaveBeenCalled();
+  });
   it.each(["/foo", "/unknown"])(
     "refuses an unknown slash command and never falls through to the model: %s",
     async (prompt) => {

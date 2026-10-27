@@ -104,7 +104,7 @@ class PausedIpcWorker {
   }
 }
 
-function createClient(options?: { idleTtlMs?: number }) {
+function createClient(options?: { idleTtlMs?: number; sessionIdleTtlMs?: number }) {
   const workers: FakeLocalSpeechWorker[] = [];
   const client = new LocalSpeechWorkerClient({
     logger: pino({ level: "silent" }),
@@ -116,6 +116,7 @@ function createClient(options?: { idleTtlMs?: number }) {
     },
     requestTimeoutMs: 1000,
     idleTtlMs: options?.idleTtlMs ?? 1000,
+    ...(options?.sessionIdleTtlMs ? { sessionIdleTtlMs: options.sessionIdleTtlMs } : {}),
     forkWorker: () => {
       const worker = new FakeLocalSpeechWorker();
       workers.push(worker);
@@ -374,6 +375,28 @@ describe("LocalSpeechWorkerClient", () => {
 
     await expect(startedPromise).resolves.toEqual([]);
     await expect(stoppedPromise).resolves.toEqual([]);
+  });
+
+  it("closes a session the client left open, then idle-stops the worker", async () => {
+    const { client, workers } = createClient({ idleTtlMs: 5, sessionIdleTtlMs: 20 });
+    const provider = new WorkerBackedSpeechToTextProvider(client, "voiceStt");
+    const session = provider.createSession({ logger: pino({ level: "silent" }) });
+    const connect = session.connect();
+    workers[0].respond(workers[0].sent[0], { requiredSampleRate: 16000 });
+    await connect;
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    session.appendPcm16(Buffer.from([1, 2]));
+    workers[0].respond(workers[0].sent[1], {});
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    expect(workers[0].sent.some((m) => m.type === "session.close")).toBe(false);
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const closeRequest = workers[0].sent.find((m) => m.type === "session.close");
+    expect(closeRequest).toBeDefined();
+    workers[0].respond(closeRequest!, {});
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(workers[0].kills).toBe(1);
   });
 
   it("kills an idle worker and respawns on later use", async () => {
