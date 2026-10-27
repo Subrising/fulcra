@@ -225,14 +225,23 @@ export default function(client) { client.addSettingsScreen({ id: 'accounts', tit
     ]) {
       await page.setViewportSize({ width, height });
       await page.goto(buildSettingsHostSectionRoute(getServerId(), "plugins"));
-      await page.getByRole("button", { name: "Actions for api-spend-test", exact: true }).click();
-      await page
-        .getByRole("menuitem", { name: "API accounts", exact: true })
-        .click({ timeout: 15000 });
       const field = page.getByRole("textbox", {
         name: "Top-up date for Personal API",
         exact: true,
       });
+      // The plugin list re-renders as the plugin loads and can close the menu or swallow the
+      // item press, so open the accounts view again until its field shows.
+      let attempt = 0;
+      await expect(async () => {
+        if (attempt++ > 0) await page.keyboard.press("Escape");
+        await page
+          .getByRole("button", { name: "Actions for api-spend-test", exact: true })
+          .click({ timeout: 5_000 });
+        await page
+          .getByRole("menuitem", { name: "API accounts", exact: true })
+          .click({ timeout: 5_000 });
+        await expect(field).toBeVisible({ timeout: 5_000 });
+      }).toPass({ timeout: 45_000 });
       await expect(field).toBeVisible();
       await field.fill("2026-10-02");
       await page
