@@ -6,7 +6,8 @@ import os from "node:os";
 import path from "node:path";
 
 const EXTRA_PATH = [
-  "/opt/homebrew/bin",
+  // The directory this runtime's own node lives in: where a package manager put its tools on this machine.
+  path.dirname(process.execPath),
   "/usr/local/bin",
   "/usr/bin",
   "/bin",

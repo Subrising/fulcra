@@ -10,7 +10,7 @@
 // a small module, and both run as a short-lived "daemon boot" next to the REAL guard, deployed under a private
 // controller home exactly as human-log.fixture.mjs does, so its durable human-input log is the evidence. The seat-sweep
 // tests then read that log through the real Controller.
-import test from "node:test";
+import { retiredPatchRoute, testUnless } from "./legacy-patch-route.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -39,6 +39,7 @@ assert(
   source && path.isAbsolute(source),
   "Set ORCA_MCP_TEST_NATIVE to a PRISTINE compiled server dist (dist/server/server)",
 );
+const test = testUnless(retiredPatchRoute(source));
 const control = path.dirname(fileURLToPath(import.meta.url));
 const pristine = fs.readFileSync(path.join(source, "agent/agent-manager.js"), "utf8");
 const pristineBootstrap = fs.readFileSync(path.join(source, "bootstrap.js"), "utf8");

@@ -394,9 +394,9 @@ test("every problem says what to do about it", () => {
 // trust it because it was printed. So every name printed is checked against the server's own case list.
 const rpcCases = () =>
   new Set(
-    [...fs.readFileSync(path.join(here, "rpc.mjs"), "utf8").matchAll(/case '([a-z-]+)':/g)].map(
-      (m) => m[1],
-    ),
+    [
+      ...fs.readFileSync(path.join(here, "rpc.mjs"), "utf8").matchAll(/case ["']([a-z-]+)["']:/g),
+    ].map((m) => m[1]),
   );
 // A candidate is a hyphenated token whose first segment is a namespace rpc.mjs actually uses, so ordinary
 // hyphenated English ("re-bind", "back-filled") is not mistaken for an RPC name while "roles-allowance-st"

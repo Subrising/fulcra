@@ -12,7 +12,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.join(here, "..", "..");
 const guide = fs.readFileSync(path.join(repo, "docs", "orca-user-guide.md"), "utf8");
 const rpcCases = new Set(
-  [...fs.readFileSync(path.join(here, "rpc.mjs"), "utf8").matchAll(/case '([a-z-]+)':/g)].map(
+  [...fs.readFileSync(path.join(here, "rpc.mjs"), "utf8").matchAll(/case ["']([a-z-]+)["']:/g)].map(
     (m) => m[1],
   ),
 );
@@ -62,7 +62,7 @@ test("the guide states the provider and host limits the code actually enforces",
   // this fails and the guide gets corrected instead of quietly becoming a lie.
   assert.match(
     fs.readFileSync(path.join(here, "role-sessions.mjs"), "utf8"),
-    /\['claude', ?'codex'\]/,
+    /\[["']claude["'], ?["']codex["']\]/,
     "the provider fence moved; the guide says claude and codex only",
   );
   assert.match(guide, /`claude` and `codex` only/);

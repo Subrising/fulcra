@@ -51,8 +51,13 @@ agent record and turn events.
 
 The process shares a 128 MiB input allowance across full transcript and journal replays.
 A separate 16 MiB allowance serves commits and page reads up to 16 MiB. Large inputs use one lane alone.
-These allowances bound concurrent parsing work. Converted provider history remains until its session consumes it.
-Concurrent identical Claude resumes share parsed data. Each caller keeps its own mutable session.
+These allowances bound concurrent parsing work.
+A Claude resume reads its transcript once for session state only (rewind anchors, tasks, tool links) and keeps no timeline.
+It converts the timeline only when the session's history is streamed, from the bytes present at resume.
+A daemon with a stored timeline never streams it, so a 1 GB lead transcript costs one pass and no retained timeline.
+Both reads skip Claude Code bookkeeping records (`api-request`, `api-request-blob`, `last-prompt` and others) before parsing.
+`api-request-blob` holds copies of earlier messages; converting it showed duplicate tool calls and text.
+Concurrent identical Claude timeline reads share parsed data. Each caller keeps its own mutable session.
 Closing a caller abandons its load. Closing the last caller also cancels a queued or active read.
 
 Live agents pin journal metadata until their runtime closes. Pending operations and index writes also pin it.

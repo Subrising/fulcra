@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { flat } from "./source-text.mjs";
 import { closeWithin } from "./native-close.mjs";
 
 // W1 rebuild scratch home: on a daemon shutdown native.close() never settled (the stopping host no longer answers the
@@ -33,10 +34,14 @@ test("a native close that settles (fulfilled or rejected, even synchronously thr
 
 test("stop() bounds native.close() before store.close()", () => {
   const source = fs.readFileSync(new URL("./server.mjs", import.meta.url), "utf8");
-  const stop = source.match(/async function stop\(\)[^\n]*/)[0];
+  const body = source.slice(
+    source.indexOf("async function stop()"),
+    source.indexOf('process.on("SIGTERM", stop)'),
+  );
+  const stop = flat(body);
   assert.match(
     stop,
-    /if \(!await closeWithin\(\(\) => native\.close\(\)\)\) log\.line\(\{ nativeCloseDeadline: true \}\); store\.close\(\);/,
+    /if \(!\(await closeWithin\(\(\) => native\.close\(\)\)\)\) log\.line\(\{ nativeCloseDeadline: true \}\); store\.close\(\);/,
   );
   assert.doesNotMatch(stop, /await native\.close\(\)/, "no unbounded native close");
 });
