@@ -12,9 +12,10 @@ import {
 } from "fs";
 import { execFileSync, spawnSync } from "child_process";
 import { tmpdir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
 import { runWorktreeSetupCommands } from "./worktree";
 import {
+  collectUnusedDependencySets,
   harvestDependencies,
   isDependencyInstallCommand,
   linkCachedDependencies,
@@ -30,12 +31,22 @@ function writeProject(root: string, workspaces: string[]): void {
     JSON.stringify({ name: "fixture", private: true, workspaces }, null, 2),
   );
   for (const name of workspaces) {
+    const packageName = name.replace("pkg/", "fixture-");
     mkdirSync(join(root, name), { recursive: true });
     writeFileSync(
       join(root, name, "package.json"),
-      JSON.stringify({ name: name.replace("pkg/", "fixture-"), version: "1.0.0" }),
+      JSON.stringify({
+        name: packageName,
+        version: "1.0.0",
+        bin: { [`${packageName}-bin`]: "cli.js" },
+      }),
     );
     writeFileSync(join(root, name, "index.js"), `module.exports = ${JSON.stringify(name)};\n`);
+    // The workspace bin prints where it runs from.
+    writeFileSync(
+      join(root, name, "cli.js"),
+      "#!/usr/bin/env node\nconsole.log(require('fs').realpathSync(__filename));\n",
+    );
   }
   writeFileSync(
     join(root, "paseo.json"),
@@ -67,7 +78,7 @@ function copyProject(source: string, target: string): void {
   for (const pkg of ["pkg/a", "pkg/b"]) {
     if (existsSync(join(source, pkg))) {
       mkdirSync(join(target, pkg), { recursive: true });
-      for (const name of ["package.json", "index.js"]) {
+      for (const name of ["package.json", "index.js", "cli.js"]) {
         writeFileSync(join(target, pkg, name), readFileSync(join(source, pkg, name)));
       }
     }
@@ -209,6 +220,112 @@ describe("worktree dependency reuse", () => {
     expect(existsSync(join(entry.dir, "node_modules", "real", "index.js"))).toBe(true);
     expect(existsSync(join(entry.dir, "pkg", "a", "node_modules", "own", "index.js"))).toBe(true);
   });
+
+  it("runs workspace bins from the linked worktree itself", async () => {
+    const first = join(projectRoot, "first");
+    const second = join(projectRoot, "second");
+    await runSetup(first);
+    const secondResults = await runSetup(second);
+    expect(secondResults[0]?.stdout).toContain("Skipped");
+
+    const bin = join(second, "node_modules", ".bin");
+    expect(lstatSync(bin).isSymbolicLink()).toBe(false);
+    const shim = join(bin, process.platform === "win32" ? "fixture-a-bin.cmd" : "fixture-a-bin");
+    const run = spawnSync(`"${shim}"`, [], { cwd: second, shell: true, encoding: "utf8" });
+    expect({ status: run.status, stderr: run.stderr }).toEqual({ status: 0, stderr: "" });
+    expect(run.stdout.trim()).toBe(realpathSync(join(second, "pkg", "a", "cli.js")));
+  }, 120_000);
+
+  it("installs a new lockfile once when worktrees start together", async () => {
+    const first = join(projectRoot, "first");
+    const second = join(projectRoot, "second");
+    const results = await Promise.all([runSetup(first), runSetup(second)]);
+    const skipped = results.filter((r) => r[0]?.stdout.includes("Skipped: linked"));
+    expect(skipped).toHaveLength(1);
+    expect(results.flat().map((r) => r.exitCode)).toEqual([0, 0, 0, 0]);
+  }, 120_000);
+
+  it("gives the npm cache preference to install commands only", async () => {
+    const first = join(projectRoot, "first");
+    writeFileSync(
+      join(first, "paseo.json"),
+      JSON.stringify({
+        worktree: {
+          setup: [
+            "npm install --no-audit --no-fund",
+            'node -e "process.exit(process.env.npm_config_prefer_offline ? 1 : 0)"',
+          ],
+        },
+      }),
+    );
+    const previous = process.env.npm_config_prefer_offline;
+    delete process.env.npm_config_prefer_offline;
+    try {
+      const results = await runSetup(first);
+      expect(results.map((r) => r.exitCode)).toEqual([0, 0]);
+    } finally {
+      if (previous !== undefined) {
+        process.env.npm_config_prefer_offline = previous;
+      }
+    }
+  }, 120_000);
+
+  it.runIf(process.platform === "win32")(
+    "does not share the set when the deny-delete rule cannot be set",
+    () => {
+      const first = join(projectRoot, "first");
+      mkdirSync(join(first, "node_modules", "real"), { recursive: true });
+      writeFileSync(join(first, "node_modules", "real", "index.js"), "module.exports = 1;\n");
+      const entry = resolveDependencyCacheEntry(first)!;
+      const path = process.env.PATH;
+      // icacls is not found, as when the rule fails on a disk without ACLs.
+      process.env.PATH = join(tempDir, "no-tools");
+      try {
+        expect(harvestDependencies(first, entry)).toBe(false);
+      } finally {
+        process.env.PATH = path;
+      }
+      expect(lstatSync(join(first, "node_modules", "real")).isSymbolicLink()).toBe(false);
+      expect(existsSync(join(first, "node_modules", "real", "index.js"))).toBe(true);
+      expect(existsSync(entry.dir)).toBe(false);
+    },
+  );
+
+  it("puts node_modules back after a share was cut off", async () => {
+    const first = join(projectRoot, "first");
+    const second = join(projectRoot, "second");
+    const entry = resolveDependencyCacheEntry(first)!;
+    // State after a crash: first's folders sit in a staging folder with their origin.
+    const staging = join(dirname(entry.dir), `.staging-${entry.key}-crash`);
+    mkdirSync(join(staging, "node_modules", "real"), { recursive: true });
+    writeFileSync(join(staging, "node_modules", "real", "index.js"), "module.exports = 1;\n");
+    writeFileSync(
+      join(staging, ".paseo-deps-origin.json"),
+      JSON.stringify({ worktreePath: first, nodeModulesDirs: ["node_modules"], projectLinks: [] }),
+    );
+
+    const results = await runSetup(second);
+    expect(results.map((r) => r.exitCode)).toEqual([0, 0]);
+    expect(readFileSync(join(first, "node_modules", "real", "index.js"), "utf8")).toContain("1");
+    expect(existsSync(staging)).toBe(false);
+  }, 120_000);
+
+  it("deletes a shared set when no worktree uses it", async () => {
+    const first = join(projectRoot, "first");
+    const second = join(projectRoot, "second");
+    await runSetup(first);
+    await runSetup(second);
+    const entry = resolveDependencyCacheEntry(first)!;
+    const root = dirname(entry.dir);
+
+    expect(await collectUnusedDependencySets(root)).toEqual([]);
+    removeTree(first);
+    expect(await collectUnusedDependencySets(root)).toEqual([]);
+    // The second worktree installs its own node_modules; nothing uses the set now.
+    rmSync(join(second, "node_modules"), { recursive: true, force: true });
+    expect(await collectUnusedDependencySets(root)).toEqual([entry.key]);
+    expect(existsSync(entry.dir)).toBe(false);
+  }, 120_000);
 
   it("installs again when the lockfile changes", async () => {
     const first = join(projectRoot, "first");
