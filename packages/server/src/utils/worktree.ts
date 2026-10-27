@@ -48,10 +48,15 @@ import { parseGitRevParsePath, resolveGitRevParsePath } from "./git-rev-parse-pa
 import { expandTilde, getRealpathAwareRelativePath, isPathInsideRoot } from "./path.js";
 import { terminateWithTreeKill } from "./tree-kill.js";
 import {
+  acquireDependencyLock,
+  collectUnusedDependencySets,
   type DependencyCacheEntry,
+  type DependencyLock,
+  DependencyRestoreError,
   harvestDependencies,
   isDependencyInstallCommand,
   linkCachedDependencies,
+  recoverInterruptedHarvests,
   resolveDependencyCacheEntry,
 } from "./worktree-dependency-reuse.js";
 
@@ -671,17 +676,72 @@ export async function runWorktreeSetupCommands(options: {
       ...(options.repoRootPath ? { repoRootPath: options.repoRootPath } : {}),
     }));
   const setupEnv = createStringCommandShellEnv(createExternalProcessEnv(process.env, runtimeEnv));
-  // Installs that do run read the warm npm cache first.
-  setupEnv.npm_config_prefer_offline ??= "true";
 
-  const dependencyEntry = resolveDependencyCacheEntrySafely(options.worktreePath);
-  const reusedDependencies =
-    dependencyEntry !== null &&
-    tryDependencyReuse(() => linkCachedDependencies(options.worktreePath, dependencyEntry));
+  const dependencyEntry = setupCommands.some(isDependencyInstallCommand)
+    ? resolveDependencyCacheEntrySafely(options.worktreePath)
+    : null;
+  // One worktree installs a new lockfile; the others wait for its set and link it.
+  let dependencyLock = dependencyEntry
+    ? await acquireDependencyLockSafely(dependencyEntry, options.signal)
+    : null;
+  const releaseDependencyLock = () => {
+    dependencyLock?.release();
+    dependencyLock = null;
+  };
+  try {
+    if (dependencyEntry && dependencyLock) {
+      tryDependencyReuse(() => {
+        recoverInterruptedHarvests(dependencyEntry);
+        return true;
+      });
+    }
+    const reusedDependencies =
+      dependencyEntry !== null &&
+      tryDependencyReuse(() => linkCachedDependencies(options.worktreePath, dependencyEntry));
+    if (reusedDependencies) {
+      releaseDependencyLock();
+    }
+    return await runSetupCommandList({
+      options,
+      setupCommands,
+      setupEnv,
+      dependencyEntry,
+      reusedDependencies,
+      releaseDependencyLock,
+    });
+  } finally {
+    releaseDependencyLock();
+    if (dependencyEntry) {
+      void collectUnusedDependencySets(dirname(dependencyEntry.dir), dependencyEntry.key).catch(
+        (error) => console.warn("Unused dependency set cleanup failed:", error),
+      );
+    }
+  }
+}
 
+async function runSetupCommandList(input: {
+  options: {
+    worktreePath: string;
+    cleanupOnFailure: boolean;
+    signal?: AbortSignal;
+    onEvent?: (event: WorktreeSetupCommandProgressEvent) => void;
+  };
+  setupCommands: string[];
+  setupEnv: NodeJS.ProcessEnv;
+  dependencyEntry: DependencyCacheEntry | null;
+  reusedDependencies: boolean;
+  releaseDependencyLock: () => void;
+}): Promise<WorktreeSetupCommandResult[]> {
+  const { options, setupCommands, setupEnv, dependencyEntry, reusedDependencies } = input;
+  // Installs pinned by a lockfile read the warm npm cache first.
+  const installEnv = {
+    ...setupEnv,
+    npm_config_prefer_offline: setupEnv.npm_config_prefer_offline ?? "true",
+  };
   const results: WorktreeSetupCommandResult[] = [];
   for (const [index, cmd] of setupCommands.entries()) {
-    if (reusedDependencies && isDependencyInstallCommand(cmd)) {
+    const isInstall = isDependencyInstallCommand(cmd);
+    if (reusedDependencies && dependencyEntry && isInstall) {
       const result: WorktreeSetupCommandResult = {
         command: cmd,
         cwd: options.worktreePath,
@@ -711,11 +771,12 @@ export async function runWorktreeSetupCommands(options: {
       results.push(result);
       continue;
     }
+    const commandEnv = isInstall && dependencyEntry ? installEnv : setupEnv;
     const result = options.onEvent
       ? await execSetupCommandStreamed({
           command: cmd,
           cwd: options.worktreePath,
-          env: setupEnv,
+          env: commandEnv,
           index: index + 1,
           total: setupCommands.length,
           signal: options.signal,
@@ -723,7 +784,7 @@ export async function runWorktreeSetupCommands(options: {
         })
       : await execSetupCommand(cmd, {
           cwd: options.worktreePath,
-          env: setupEnv,
+          env: commandEnv,
         });
     results.push(result);
 
@@ -740,12 +801,32 @@ export async function runWorktreeSetupCommands(options: {
         results,
       );
     }
-    if (!reusedDependencies && dependencyEntry !== null && isDependencyInstallCommand(cmd)) {
-      tryDependencyReuse(() => harvestDependencies(options.worktreePath, dependencyEntry));
+    if (!reusedDependencies && dependencyEntry !== null && isInstall) {
+      try {
+        tryDependencyReuse(() => harvestDependencies(options.worktreePath, dependencyEntry));
+      } catch (error) {
+        throw new WorktreeSetupError(
+          error instanceof Error ? error.message : String(error),
+          results,
+        );
+      }
+      input.releaseDependencyLock();
     }
   }
 
   return results;
+}
+
+async function acquireDependencyLockSafely(
+  entry: DependencyCacheEntry,
+  signal: AbortSignal | undefined,
+): Promise<DependencyLock | null> {
+  try {
+    return await acquireDependencyLock(entry, { signal });
+  } catch (error) {
+    console.warn("Could not take the dependency lock. The normal install path is used:", error);
+    return null;
+  }
 }
 
 function resolveDependencyCacheEntrySafely(worktreePath: string): DependencyCacheEntry | null {
@@ -757,11 +838,15 @@ function resolveDependencyCacheEntrySafely(worktreePath: string): DependencyCach
   }
 }
 
-// Dependency reuse only saves time. A failure falls back to the normal install.
+// Dependency reuse only saves time. A failure falls back to the normal install. A worktree
+// that lost its node_modules folders is a real failure and stops the setup.
 function tryDependencyReuse(step: () => boolean): boolean {
   try {
     return step();
   } catch (error) {
+    if (error instanceof DependencyRestoreError) {
+      throw error;
+    }
     console.warn("Dependency reuse step failed. The normal install path is used:", error);
     return false;
   }
