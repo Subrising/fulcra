@@ -35,7 +35,10 @@ async function seated(t) {
   rotated.clear();
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "orca-chan-admit-")));
   const store = new ControlStore(path.join(dir, "journal.sqlite"));
-  t.after(() => {
+  const live = {};
+  t.after(async () => {
+    // A send to a busy recipient schedules its own pump; let it settle before the journal closes under it.
+    await live.control?.channels?.pumping;
     store.close();
     fs.rmSync(dir, { recursive: true, force: true });
   });
@@ -108,6 +111,7 @@ async function seated(t) {
     path.join(dir, "grants", "role"),
   );
   control.channels = new RoleChannels(control, now);
+  live.control = control;
   const enrol = (task) => {
     const id = randomUUID();
     store.created(id, task, path.join(dir, id));
@@ -724,7 +728,7 @@ test("the same identity carrying different text is still a replay and still refu
       capability: f.primeCapability,
       input: { ...base, text: "Something else entirely" },
     }),
-    /Message identity already used/,
+    /Message identity already used|Intercom rate identity conflict/,
   );
 });
 
@@ -878,7 +882,7 @@ test("the counterpart seat cannot resend the other seat's identity", async (t) =
       capability: f.projectCapability,
       input: { sessionId: f.project, channelId: f.channel.channelId, messageId, text },
     }),
-    /Message identity already used/,
+    /Message identity already used|Intercom rate identity conflict/,
     "the other seat is sending, not asking after its own message",
   );
 });

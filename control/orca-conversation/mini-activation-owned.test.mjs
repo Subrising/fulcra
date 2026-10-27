@@ -74,5 +74,5 @@ test("the owned check is the daemon's management health: ready passes, anything 
 
 test("the Mini host probe also reads the owned child's task root", () => {
   const source = fs.readFileSync(new URL("./hosts.mjs", import.meta.url), "utf8");
-  assert.match(source, /base \+ '\/home\/command-centre\/tasks'/);
+  assert.match(source, /base \+ ["']\/home\/command-centre\/tasks["']/);
 });

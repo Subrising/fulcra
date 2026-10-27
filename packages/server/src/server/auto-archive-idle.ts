@@ -78,6 +78,13 @@ function isProtected(
   );
 }
 
+// FU-498: a restart saves every session that was open as `idle` but leaves it unloaded (revive-on-restart.ts), so
+// after a restart no stored record reads `closed`. An unloaded `idle` record with no cut-off turn is closed too.
+function isDormant(record: StoredAgentRecord, lifecycle: string | null): boolean {
+  if (record.lastStatus === "closed") return true;
+  return lifecycle === null && record.lastStatus === "idle" && !record.interruptedTurn;
+}
+
 function idleSince(record: StoredAgentRecord): number {
   const stamp = Date.parse(record.lastActivityAt ?? record.updatedAt);
   return Number.isFinite(stamp) ? stamp : Number.POSITIVE_INFINITY;
@@ -110,7 +117,7 @@ export function pickAutoArchive(input: AutoArchiveInput): AutoArchiveCandidate[]
   for (const record of input.records) {
     if (isProtected(record, input, targets)) continue;
     const lifecycle = input.lifecycleOf(record.id);
-    const closed = (lifecycle === null || lifecycle === "closed") && record.lastStatus === "closed";
+    const closed = (lifecycle === null || lifecycle === "closed") && isDormant(record, lifecycle);
     let reason: AutoArchiveReason | null = null;
     if (closed) reason = closedReason(record, input) ? "closed-idle" : null;
     else if (lifecycle === "idle") reason = doneReason(record, input) ? "done-idle" : null;

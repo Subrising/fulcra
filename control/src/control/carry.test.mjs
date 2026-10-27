@@ -1,6 +1,7 @@
 // H7 item 4 (G18): a re-delegation of the SAME session carries the team authority it held at its last delegated
 // generation -- manager grant, inbox credential, supervision links, its own worker link, routine grant -- and nothing else.
 import fs from "node:fs";
+import { flat } from "./source-text.mjs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -302,7 +303,7 @@ test("a worker whose manager started a new epoch, or on another task, stays orph
 });
 test("handback carries inside its own flow, after the role credential, and a carry failure never fails the handback (static)", () => {
   const src = fs.readFileSync(new URL("./controller.mjs", import.meta.url), "utf8"),
-    h = src.slice(src.indexOf("  async handback("), src.indexOf("  async reestablish("));
+    h = flat(src.slice(src.indexOf("  async handback("), src.indexOf("  async reestablish(")));
   assert.ok(
     h.indexOf("carryAuthority(this.store.db, id)") > h.indexOf("this.bindings?.reissueRole(id)"),
   );

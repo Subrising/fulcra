@@ -1,5 +1,6 @@
 // H7 item 5: ./SESSION-ID is written into every controller-created session's job directory at creation.
 import fs from "node:fs";
+import { flat } from "./source-text.mjs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -67,9 +68,11 @@ test("a planted symlink, FIFO or HARD LINK is replaced, never written through; a
 });
 test("native.create writes it after the agent exists and reports it in the creation result (static)", () => {
   const src = fs.readFileSync(new URL("./native.mjs", import.meta.url), "utf8");
-  const create = src.slice(
-    src.indexOf("    async create(a, { fresh = false } = {}) {"),
-    src.indexOf("    async inspect(id) {"),
+  const create = flat(
+    src.slice(
+      src.indexOf("    async create(a, { fresh = false, parent = null, project = null } = {}) {"),
+      src.indexOf("    async inspect(id) {"),
+    ),
   );
   assert.ok(
     create.indexOf("writeSessionId(cwd, agent.id)") > create.indexOf("await client.agents.create("),

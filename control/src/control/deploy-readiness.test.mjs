@@ -38,7 +38,7 @@ test("quiescence: a running session blocks, and a human session is not counted",
   assert.match(quiescence(FOUR, allIdle).measured, /all 4 delegated session\(s\) idle/);
   const running = { ...allIdle, [FOUR[1].id]: { observed: { status: "running", pending: 0 } } };
   assert.equal(quiescence(FOUR, running).verdict, NOGO);
-  assert.match(quiescence(FOUR, running).measured, /655cd98f status=running/);
+  assert.match(quiescence(FOUR, running).measured, /00000000 status=running/);
   // pending is a separate way to be busy and must block on its own.
   const pending = { ...allIdle, [FOUR[0].id]: { observed: { status: "idle", pending: 2 } } };
   assert.equal(quiescence(FOUR, pending).verdict, NOGO);
@@ -57,7 +57,7 @@ test("a check that could not run is NO-GO and says so, never GO", () => {
   const r = quiescence(FOUR, unreadable);
   assert.equal(r.verdict, NOGO);
   assert.equal(r.certainty, "unmeasured");
-  assert.match(r.measured, /could not measure.*4f99d140 \(timed out\)/);
+  assert.match(r.measured, /could not measure.*00000000 \(timed out\)/);
   for (const dead of [
     quiescence(null, {}),
     quiescence(FOUR, {}),
@@ -199,7 +199,7 @@ test("every check prints the command that produced its number", () => {
 // A wrong RPC name is trusted because it was printed. Checked against the server's own case list.
 test("every RPC this tool uses exists in rpc.mjs, and none of them writes", () => {
   const rpc = fs.readFileSync(path.join(here, "rpc.mjs"), "utf8");
-  const known = new Set([...rpc.matchAll(/case '([a-z-]+)':/g)].map((m) => m[1]));
+  const known = new Set([...rpc.matchAll(/case ["']([a-z-]+)["']:/g)].map((m) => m[1]));
   assert.ok(known.size > 20, `only ${known.size} RPC cases parsed`);
   assert.deepEqual(
     READS.filter((r) => !known.has(r)),
@@ -231,7 +231,7 @@ test("every RPC this tool uses exists in rpc.mjs, and none of them writes", () =
     "a mutating RPC is named in this tool",
   );
   assert.deepEqual(
-    [...src.matchAll(/ask\('([a-z-]+)'/g)].map((m) => m[1]).filter((m) => !READS.includes(m)),
+    [...src.matchAll(/ask\(["']([a-z-]+)["']/g)].map((m) => m[1]).filter((m) => !READS.includes(m)),
     [],
     "the tool calls an RPC it did not declare as a read",
   );
@@ -241,11 +241,11 @@ test("quiescence is measured without taking any session over", async () => {
   const src = fs.readFileSync(path.join(here, "deploy-readiness.mjs"), "utf8");
   // The whole point of the change: the controller's observe RPC is never called for quiescence.
   assert.deepEqual(
-    [...src.matchAll(/ask\('([a-z-]+)'/g)].map((m) => m[1]),
+    [...src.matchAll(/ask\(["']([a-z-]+)["']/g)].map((m) => m[1]),
     ["list"],
     "the only controller call left is list, which is a journal read",
   );
-  assert.doesNotMatch(src, /ask\('observe'/, "observe takes delegated sessions over");
+  assert.doesNotMatch(src, /ask\(["']observe["']/, "observe takes delegated sessions over");
   // The old warning must be gone -- and gone because it stopped being true, which is what the tests
   // above and below establish. The note must not keep threatening a cost the tool no longer imposes.
   const note = quiescence(FOUR, Object.fromEntries(FOUR.map((s) => [s.id, idle(s.id)]))).note ?? "";

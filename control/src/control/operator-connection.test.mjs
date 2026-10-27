@@ -4,6 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { flat } from "./source-text.mjs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -124,9 +125,10 @@ test("the protocol is otherwise unchanged: errors carry errorFields, one request
 test("server.mjs serves the socket through operatorConnection and sets no timeout of its own (static)", () => {
   const src = fs.readFileSync(new URL("./server.mjs", import.meta.url), "utf8");
   assert.match(
-    src,
-    /net\.createServer\(operatorConnection\(\{ dispatch, operations, errorFields: e => e instanceof InstructionAllowanceExhausted \? \{ code: e\.code \} : \{\} \}\)\)/,
+    flat(src),
+    /const connections = gateConnections\(operatorConnection\(\{ dispatch, operations, errorFields: \(e\) => \(e instanceof InstructionAllowanceExhausted \? \{ code: e\.code \} : \{\}\) \}\)/,
   );
+  assert.match(flat(src), /const server = net\.createServer\(connections\.handler\)/);
   assert.equal(
     /\.setTimeout\(\s*\d/.test(
       src.slice(

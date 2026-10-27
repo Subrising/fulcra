@@ -42,7 +42,7 @@ export function createCreditWarnings(control, root) {
   async function riskOnce() {
     for (const n of pendingRiskNotices(root))
       if (
-        control.wakes?.accountPaidWhileFree(n.key, {
+        control.wakes?.accountPaidWhileFree?.(n.key, {
           account: safeName(n.account),
           accountId: n.accountId,
         })
@@ -55,8 +55,15 @@ export function createCreditWarnings(control, root) {
     flight = (async () => {
       do {
         dirty = false;
-        await checkOnce();
+        // A failed billing pass must not hide the paid-while-free notices; report the first error afterwards.
+        let failure;
+        try {
+          await checkOnce();
+        } catch (error) {
+          failure = error;
+        }
         await riskOnce();
+        if (failure) throw failure;
       } while (dirty);
     })().finally(() => {
       flight = null;

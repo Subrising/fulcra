@@ -245,21 +245,22 @@ test("a seat cannot reach another project, another seat, or beyond its allowance
   await start(f);
   await assert.rejects(start(f), /allowance reached/);
   assert.equal(f.created.length, 2);
-  // An operator cannot silently reset the count below what was already spent.
-  await assert.rejects(
-    f.request({
-      method: "roles-allowance-set",
-      operator: "test-operator",
-      input: {
-        role: "project-orchestrator",
-        seat: P(1),
-        expectedRevision: 1,
-        maxSessions: 1,
-        note: "Trying to reset the count",
-      },
-    }),
-    /below what this seat has already used/,
-  );
+  // An operator may lower the allowance below what was already spent: it limits future work only, and the
+  // recorded count is never reset.
+  const lowered = await f.request({
+    method: "roles-allowance-set",
+    operator: "test-operator",
+    input: {
+      role: "project-orchestrator",
+      seat: P(1),
+      expectedRevision: 1,
+      maxSessions: 1,
+      note: "Lowering the allowance after two sessions",
+    },
+  });
+  assert.equal(lowered.used, 2, "the spent count is kept");
+  await assert.rejects(start(f), /allowance reached/);
+  assert.equal(f.created.length, 2);
 });
 
 test("replacing the leader ends its allowance and leaves the parent link as recorded history", async (t) => {
@@ -284,7 +285,7 @@ test("replacing the leader ends its allowance and leaves the parent link as reco
     allowances.allowances.map((x) => [
       x.seatRevision,
       x.maxSessions,
-      x.used,
+      x.lifetimeUsed,
       x.current,
       x.conferredBy,
     ]),

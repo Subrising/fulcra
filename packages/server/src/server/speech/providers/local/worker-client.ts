@@ -30,6 +30,8 @@ import { bufferToWorkerBytes, workerBytesToBuffer } from "./worker-bytes.js";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
 const DEFAULT_IDLE_TTL_MS = 30 * 60 * 1000;
+// A client that leaves a speech session open without sending anything must not pin the worker.
+const DEFAULT_SESSION_IDLE_TTL_MS = 5 * 60 * 1000;
 const MAX_STT_TIMEOUT_MS = 5 * 60 * 1000;
 export function localSttTimeout(
   audioDurationMs: number,
@@ -90,6 +92,7 @@ interface LocalSpeechWorkerClientOptions {
   logger: pino.Logger;
   requestTimeoutMs?: number;
   idleTtlMs?: number;
+  sessionIdleTtlMs?: number;
   forkWorker?: () => LocalSpeechWorkerProcess;
 }
 
@@ -198,6 +201,8 @@ export class LocalSpeechWorkerClient {
   private readonly logger: pino.Logger;
   private readonly requestTimeoutMs: number;
   private readonly idleTtlMs: number;
+  private readonly sessionIdleTtlMs: number;
+  private readonly sessionIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly forkWorker: () => LocalSpeechWorkerProcess;
   private readonly pendingRequests = new Map<string, PendingRequest>();
   private readonly activeSessionIds = new Set<string>();
@@ -216,6 +221,7 @@ export class LocalSpeechWorkerClient {
     this.logger = options.logger.child({ component: "local-speech-worker-client" });
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.idleTtlMs = options.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
+    this.sessionIdleTtlMs = options.sessionIdleTtlMs ?? DEFAULT_SESSION_IDLE_TTL_MS;
     this.forkWorker = options.forkWorker ?? forkLocalSpeechWorker;
   }
 
@@ -250,6 +256,7 @@ export class LocalSpeechWorkerClient {
     this.activeSessionIds.add(sessionId);
     this.sessionAudioBytes.set(sessionId, 0);
     this.sessionEmitters.set(sessionId, emitter);
+    this.touchSession(sessionId);
     try {
       const result = await this.sendRequest<LocalSpeechCreateSessionResult>({
         type: "session.create",
@@ -260,6 +267,7 @@ export class LocalSpeechWorkerClient {
       });
       return { sessionId, requiredSampleRate: result.requiredSampleRate };
     } catch (err) {
+      this.clearSessionIdleTimer(sessionId);
       this.activeSessionIds.delete(sessionId);
       this.sessionAudioBytes.delete(sessionId);
       this.sessionEmitters.delete(sessionId);
@@ -269,6 +277,7 @@ export class LocalSpeechWorkerClient {
   }
 
   appendSessionAudio(sessionId: string, audio: Buffer): void {
+    this.touchSession(sessionId);
     this.sessionAudioBytes.set(
       sessionId,
       (this.sessionAudioBytes.get(sessionId) ?? 0) + audio.length,
@@ -283,12 +292,14 @@ export class LocalSpeechWorkerClient {
   }
 
   commitSession(sessionId: string): void {
+    this.touchSession(sessionId);
     void this.sendRequest({ type: "session.commit", sessionId }).catch((err) => {
       this.emitSessionError(sessionId, err);
     });
   }
 
   clearSession(sessionId: string): void {
+    this.touchSession(sessionId);
     this.sessionAudioBytes.set(sessionId, 0);
     void this.sendRequest({ type: "session.clear", sessionId }).catch((err) => {
       this.emitSessionError(sessionId, err);
@@ -296,12 +307,14 @@ export class LocalSpeechWorkerClient {
   }
 
   flushSession(sessionId: string): void {
+    this.touchSession(sessionId);
     void this.sendRequest({ type: "session.flush", sessionId }).catch((err) => {
       this.emitSessionError(sessionId, err);
     });
   }
 
   resetSession(sessionId: string): void {
+    this.touchSession(sessionId);
     this.sessionAudioBytes.set(sessionId, 0);
     void this.sendRequest({ type: "session.reset", sessionId }).catch((err) => {
       this.emitSessionError(sessionId, err);
@@ -309,6 +322,7 @@ export class LocalSpeechWorkerClient {
   }
 
   closeSession(sessionId: string): void {
+    this.clearSessionIdleTimer(sessionId);
     this.activeSessionIds.delete(sessionId);
     this.sessionAudioBytes.delete(sessionId);
     this.sessionEmitters.delete(sessionId);
@@ -320,6 +334,8 @@ export class LocalSpeechWorkerClient {
 
   shutdown(): void {
     this.clearIdleTimer();
+    for (const timer of this.sessionIdleTimers.values()) clearTimeout(timer);
+    this.sessionIdleTimers.clear();
     this.rejectAllPending(new Error("Local speech worker shut down"));
     this.activeSessionIds.clear();
     this.sessionAudioBytes.clear();
@@ -620,6 +636,24 @@ export class LocalSpeechWorkerClient {
       { err: error, workerPid, sessionId },
       "Local speech worker session error had no listener",
     );
+  }
+
+  private touchSession(sessionId: string): void {
+    if (!this.activeSessionIds.has(sessionId)) return;
+    this.clearSessionIdleTimer(sessionId);
+    const timer = setTimeout(() => {
+      this.sessionIdleTimers.delete(sessionId);
+      this.logger.warn({ sessionId }, "Closing idle local speech session");
+      this.closeSession(sessionId);
+    }, this.sessionIdleTtlMs);
+    timer.unref?.();
+    this.sessionIdleTimers.set(sessionId, timer);
+  }
+
+  private clearSessionIdleTimer(sessionId: string): void {
+    const timer = this.sessionIdleTimers.get(sessionId);
+    if (timer) clearTimeout(timer);
+    this.sessionIdleTimers.delete(sessionId);
   }
 
   private scheduleIdleShutdownIfReady(): void {
