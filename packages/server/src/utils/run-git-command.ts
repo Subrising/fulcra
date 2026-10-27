@@ -33,6 +33,7 @@ const DEFAULT_STDERR_LIMIT = 2048;
 
 let gitProcessScheduler = new GitProcessScheduler(resolveGitProcessPolicy({ env: process.env }));
 let gitRuntimeMetrics = createGitCommandRuntimeMetricsWindow(gitProcessScheduler.policy);
+let gitQueueLogger: Pick<Logger, "warn"> | undefined;
 const gitCommandPriority = new AsyncLocalStorage<GitProcessPriority>();
 
 export function runWithGitCommandPriority<T>(priority: GitProcessPriority, operation: () => T): T {
@@ -46,7 +47,11 @@ function createGitCommandRuntimeMetricsWindow(policy: GitProcessPolicy) {
   });
 }
 
-export function configureGitProcessPolicy(policy: GitProcessPolicy): void {
+export function configureGitProcessPolicy(
+  policy: GitProcessPolicy,
+  logger?: Pick<Logger, "warn">,
+): void {
+  gitQueueLogger = logger;
   gitProcessScheduler = new GitProcessScheduler(policy);
   gitRuntimeMetrics = createGitCommandRuntimeMetricsWindow(policy);
 }
@@ -332,6 +337,24 @@ function executeGitCommand<Output>(
     pending: gitProcessScheduler.pendingCount,
   });
   const runtimeMetric = gitRuntimeMetrics.submit(getGitOperation(args), provenance);
+  const submittedAt = Date.now();
+  const warningScheduler = gitProcessScheduler;
+  const queueLogger = gitQueueLogger;
+  // Include scheduler admission and the native child-slot wait. The process timeout starts after both.
+  const queueWarning = setTimeout(() => {
+    queueLogger?.warn(
+      {
+        operation: getGitOperation(args),
+        cwd: options.cwd,
+        provenance,
+        waitMs: Date.now() - submittedAt,
+        active: warningScheduler.activeCount,
+        pending: warningScheduler.pendingCount,
+      },
+      "Git command has waited 60 seconds for a process slot",
+    );
+  }, 60_000);
+  queueWarning.unref?.();
   const startCommand = () => {
     let releaseProcessSlot!: () => void;
     const exited = new Promise<void>((resolve) => {
@@ -466,6 +489,7 @@ function executeGitCommand<Output>(
               stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
             },
           );
+          clearTimeout(queueWarning);
           spawnGitCommandTrace(commandTrace, child.pid);
         } catch (error) {
           if (isGitChildLimitError(error)) {
@@ -644,7 +668,7 @@ function executeGitCommand<Output>(
     gitProcessScheduler.activeCount,
     gitProcessScheduler.pendingCount,
   );
-  return promise;
+  return promise.finally(() => clearTimeout(queueWarning));
 }
 
 export const runGitCommand: RunGitCommand = runGitCommandWithProvenance;

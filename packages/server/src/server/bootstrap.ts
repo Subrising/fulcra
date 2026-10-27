@@ -759,7 +759,10 @@ export async function createPaseoDaemon(
   rootLogger: Logger,
   dependencies: PaseoDaemonDependencies = {},
 ): Promise<PaseoDaemon> {
-  configureGitProcessPolicy(config.git ?? resolveGitProcessPolicy({ env: process.env }));
+  configureGitProcessPolicy(
+    config.git ?? resolveGitProcessPolicy({ env: process.env }),
+    rootLogger,
+  );
   const logger = rootLogger.child({ module: "bootstrap" });
   await initializeWindowsPrivateFiles(logger).catch(() => {
     logger.warn("Windows durable file commits are unavailable.");
@@ -1170,11 +1173,11 @@ export async function createPaseoDaemon(
   });
   daemonConfigStore.onFieldChange("git.maxProcessesPerSecond", () => {
     const git = daemonConfigStore.get().git;
-    if (git) configureGitProcessPolicy(git);
+    if (git) configureGitProcessPolicy(git, logger);
   });
   daemonConfigStore.onFieldChange("git.maxProcessConcurrency", () => {
     const git = daemonConfigStore.get().git;
-    if (git) configureGitProcessPolicy(git);
+    if (git) configureGitProcessPolicy(git, logger);
   });
   const initialAgentManagerState = providerSnapshotManager.getAgentManagerProviderState();
   const durableTimelineStore = createTimelineStore(config, dependencies, logger);
