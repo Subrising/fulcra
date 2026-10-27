@@ -241,6 +241,8 @@ export class MessageReceipts {
   private capacityWarningLogged = false;
   private readonly retentionMs: number;
   private readonly collectionTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // The wake callback of each collecting receipt, kept so a rebuild can re-arm its seal.
+  private readonly collectionReady = new Map<string, (agentId: string) => void>();
   constructor(
     private readonly directory: string,
     private readonly now = Date.now,
@@ -408,7 +410,19 @@ export class MessageReceipts {
       await writeJsonFileDurable(path.join(this.directory, `${key}.json`), memory);
     for (const [key, disk] of refuse) await this.commit(key, { ...disk, state: "refused" });
     await this.settleOrphans();
+    this.rearmCollections();
     this.armExpiry();
+  }
+
+  // A rolled-back record is collecting again in memory, and its seal timer already fired. Arm it afresh; one whose
+  // collectingUntil has passed seals at once.
+  private rearmCollections(): void {
+    for (const [key, ready] of this.collectionReady) {
+      const receipt = this.records.get(key);
+      if (!receipt || receipt.state !== "queued" || !receipt.collectingUntil)
+        this.collectionReady.delete(key); // Sealed, settled or gone: nothing to re-arm.
+      else if (!this.collectionTimers.has(key)) this.armCollection(key, ready);
+    }
   }
 
   // A queued receipt with no live admission cannot be dispatched (a guard failed after its rename). Settle it the way
@@ -1087,6 +1101,7 @@ export class MessageReceipts {
     if (!receipt?.collectingUntil || receipt.state !== "queued") return;
     const oldTimer = this.collectionTimers.get(key);
     if (oldTimer) clearTimeout(oldTimer);
+    this.collectionReady.set(key, onReady);
     const delay = Math.max(0, receipt.collectingUntil - this.now());
     const timer = setTimeout(() => {
       this.collectionTimers.delete(key);

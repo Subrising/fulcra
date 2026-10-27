@@ -347,6 +347,57 @@ test("a guard failing after the collection seal rename does not latch the ledger
   }
 });
 
+test("after a seal guard failure the recovered collection is sealed and wakes once", async () => {
+  const f = await fixture();
+  vi.useFakeTimers();
+  const receiptsDirectory = path.join(f.directory, "receipts");
+  const sealed = () =>
+    existsSync(receiptsDirectory) &&
+    readdirSync(receiptsDirectory)
+      .filter((name) => /^[a-f0-9]{64}\.json$/.test(name))
+      .map((name) => readFileSync(path.join(receiptsDirectory, name), "utf8"))
+      .some((text) => text.includes(f.events[0]!.id) && !text.includes("collectingUntil"));
+  let revoke = true;
+  const ready = vi.fn();
+  const factory = (batch: NativeReportBatch, messageId: string): NativeQueuedMessage => ({
+    agentId: f.prime.agentId,
+    messageId,
+    request: "Native report metadata is available in supervisor_inbox.",
+    principal: { parent: f.prime, parentEpoch: f.primeReceipt.epoch },
+    boot: f.prime.boot,
+    attachmentBytes: 0,
+    reportBatch: batch,
+    authorize: () => {
+      requireNativeReportBatch(batch);
+      if (revoke && sealed()) {
+        revoke = false; // One ownership race; the retry is clean.
+        throw new Error("ownership revoked");
+      }
+    },
+    canDispatch: () => true,
+  });
+  try {
+    await f.receipts.collectReport(f.batch, factory, ready);
+    await vi.advanceTimersByTimeAsync(2000);
+    await vi.waitFor(() => expect(f.receipts.health().healthy).toBe(false));
+    expect(ready).not.toHaveBeenCalled();
+    await f.receipts.prepareArchiveObservation();
+    await vi.advanceTimersByTimeAsync(2000);
+    await vi.waitFor(() => expect(ready).toHaveBeenCalledTimes(1));
+    expect(sealed()).toBe(true);
+    const dispatch = vi.fn(async (_input: NativeQueuedMessage, finalCheck: () => void) => {
+      finalCheck();
+      return "native-correlated-turn";
+    });
+    expect(await f.receipts.dispatchNext(f.prime.agentId, () => true, dispatch)).toMatchObject({
+      state: "delivered",
+    });
+  } finally {
+    vi.useRealTimers();
+    await f.cleanup();
+  }
+});
+
 test("native report collector: unsupported wake retains metadata without a native queued or delivered claim", async () => {
   const f = await fixture();
   vi.useFakeTimers();
