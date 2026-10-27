@@ -5,8 +5,13 @@ import { privateOwned } from "../../orca-organization/server/owned.mjs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { fileURLToPath } from "node:url";
-import { bindGuardHome, CLAUDE_QUERY_MODULE, patchNativeHooks } from "./native-release-hooks.mjs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  bindGuardHome,
+  bindPluginGit,
+  CLAUDE_QUERY_MODULE,
+  patchNativeHooks,
+} from "./native-release-hooks.mjs";
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const control = path.dirname(fileURLToPath(import.meta.url));
 export function validateStagePaths(outputRoot, controllerHome, journalFile) {
@@ -77,6 +82,19 @@ export function resolveNativeSource(selection = "maintained") {
 // controller home untouched; portable owns the controller admission directory the deployed
 // guard reads. authority.mjs imports ../portable-config.mjs, so that module is always staged
 // beside the guard directory and resolves in both layouts.
+// The product's own plugin git helper, as a file URL, or null when the product tree has no built plugin package.
+export function productPluginGit(sourceRoot) {
+  try {
+    const pkgDir = fs.realpathSync(path.join(sourceRoot, "node_modules/@getpaseo/plugin"));
+    const entry = JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf8")).exports?.[
+      "./server/git"
+    ]?.default;
+    const file = entry && path.join(pkgDir, entry);
+    return file && fs.existsSync(file) ? pathToFileURL(file).href : null;
+  } catch {
+    return null;
+  }
+}
 export function stageDestinations({ outputRoot, controllerHome, layout }) {
   if (layout !== "legacy" && layout !== "portable")
     throw Error("Explicit legacy or portable staging layout required");
@@ -310,7 +328,9 @@ export function stageNativeTurn({
     "quota-wait.mjs",
     "quota-observation.mjs",
     "authority.mjs",
+    "automatic-permission.mjs",
   ];
+  const pluginGit = productPluginGit(sourceRoot);
   const controller = {},
     controllerSources = {};
   for (const name of files) {
@@ -319,7 +339,9 @@ export function stageNativeTurn({
     const bytes =
       name === "admission-guard.mjs"
         ? bindGuardHome(source.toString("utf8"), controllerHome)
-        : source;
+        : name === "automatic-permission.mjs" && pluginGit
+          ? bindPluginGit(source.toString("utf8"), pluginGit)
+          : source;
     fs.writeFileSync(path.join(guards, name), bytes);
     controller[name] = sha(bytes);
   }

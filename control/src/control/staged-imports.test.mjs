@@ -7,6 +7,9 @@ import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
+import { bindPluginGit } from "./native-release-hooks.mjs";
+import { productPluginGit } from "./stage-native-turn.mjs";
+const PLUGIN_GIT = "@getpaseo/plugin/server/git";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const staged = JSON.parse(
   fs
@@ -15,36 +18,39 @@ const staged = JSON.parse(
     .replace(/'/g, '"')
     .replace(/,\s*\]/, "]"),
 );
-// KNOWN DEFECT (FU-506): admission-guard.mjs imports ./automatic-permission.mjs, which is not in the staged list, and that
-// module imports @getpaseo/plugin by package name, which the portable layout (guards under the controller home, no
-// node_modules beside them) cannot resolve. A staged guard cannot load in the daemon until staging copies the sibling
-// and gives it a way to resolve that package. Reported as a todo so the gap stays visible without failing the run.
-test(
-  "every staged controller module imports only staged siblings, ../portable-config.mjs or node builtins",
-  {
-    todo: "staging omits automatic-permission.mjs, which admission-guard.mjs imports",
-  },
-  () => {
-    assert.deepEqual(staged, [
-      "admission-guard.mjs",
-      "native-turn.mjs",
-      "quota-wait.mjs",
-      "quota-observation.mjs",
-      "authority.mjs",
-    ]);
-    for (const name of staged) {
-      const text = fs.readFileSync(path.join(here, name), "utf8");
-      const specifiers = [
-        ...text.matchAll(/^\s*import\s[^'"]*['"]([^'"]+)['"]/gm),
-        ...text.matchAll(/\bimport\(\s*['"]([^'"]+)['"]\s*\)/g),
-      ].map((m) => m[1]);
-      for (const s of specifiers)
-        assert.ok(
-          s.startsWith("node:") ||
-            s === "../portable-config.mjs" ||
-            (s.startsWith("./") && staged.includes(s.slice(2))),
-          `${name} imports ${s}, which is not staged into the daemon root`,
-        );
-    }
-  },
-);
+// automatic-permission.mjs imports the plugin's git helper by package name. A staged copy has no node_modules beside it,
+// so staging pins that one import to the product's file (bindPluginGit); the check accepts it for that file only.
+test("every staged controller module imports only staged siblings, ../portable-config.mjs or node builtins", () => {
+  assert.deepEqual(staged, [
+    "admission-guard.mjs",
+    "native-turn.mjs",
+    "quota-wait.mjs",
+    "quota-observation.mjs",
+    "authority.mjs",
+    "automatic-permission.mjs",
+  ]);
+  for (const name of staged) {
+    const text = fs.readFileSync(path.join(here, name), "utf8");
+    const specifiers = [
+      ...text.matchAll(/^\s*import\s[^'"]*['"]([^'"]+)['"]/gm),
+      ...text.matchAll(/\bimport\(\s*['"]([^'"]+)['"]\s*\)/g),
+    ].map((m) => m[1]);
+    for (const s of specifiers)
+      assert.ok(
+        s.startsWith("node:") ||
+          s === "../portable-config.mjs" ||
+          (s.startsWith("./") && staged.includes(s.slice(2))) ||
+          (name === "automatic-permission.mjs" && s === PLUGIN_GIT),
+        `${name} imports ${s}, which is not staged into the daemon root`,
+      );
+  }
+});
+
+test("staging pins the plugin git import of the staged permission module to the product file", () => {
+  const text = fs.readFileSync(path.join(here, "automatic-permission.mjs"), "utf8");
+  const bound = bindPluginGit(text, "file:///product/git.js");
+  assert.ok(bound.includes('from "file:///product/git.js"'));
+  assert.ok(!bound.includes(PLUGIN_GIT));
+  assert.throws(() => bindPluginGit("export {};", "file:///x.js"), /anchor changed/);
+  assert.match(productPluginGit(path.join(here, "../../..")), /^file:\/\/.*git\.js$/);
+});
