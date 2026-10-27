@@ -991,7 +991,8 @@ posixTest("a guard failing after the rename recovers through the disk rebuild", 
     state: "queued",
   });
   expect(requests.health()).toMatchObject({ healthy: true, recoveries: 1 });
-  expect((await receiptFile(directory, "raced")).record.state).toBe("queued");
+  // The receipt landed on disk but its admission failed: recovery settles it as cancelled.
+  expect((await receiptFile(directory, "raced")).record.state).toBe("cancelled");
   requests.stop();
 });
 

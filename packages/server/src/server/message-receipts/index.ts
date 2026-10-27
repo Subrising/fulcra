@@ -313,11 +313,12 @@ export class MessageReceipts {
     this.warn("Native receipt ledger recovered after a good durable write");
   }
 
-  private async rebuildFromDisk(): Promise<void> {
-    if (!this.initialized) {
-      await this.initialize();
-      return;
-    }
+  private async readLedger(): Promise<{
+    maps: LedgerMaps;
+    records: Map<string, QueuedReceipt>;
+    diskCount: number;
+    watermark: number;
+  }> {
     let files: string[];
     try {
       files = await readdir(this.directory);
@@ -326,7 +327,7 @@ export class MessageReceipts {
       files = [];
     }
     files = files.filter((file) => /^[a-f0-9]{64}\.json$/.test(file));
-    const fresh: LedgerMaps = {
+    const maps: LedgerMaps = {
       contentDebits: new Map(),
       managedClaims: new Map(),
       managedArtifacts: new Map(),
@@ -340,28 +341,36 @@ export class MessageReceipts {
       const receipt = await readReceipt(path.join(this.directory, file));
       if (!receipt) throw new Error("agent_receipt_disappeared");
       diskCount += isQueued(receipt) ? this.weight(receipt) - 1 : 0;
-      this.recoverEvidence(file, receipt, fresh);
+      this.recoverEvidence(file, receipt, maps);
       if (isQueued(receipt)) {
         watermark = Math.max(watermark, receipt.admittedAt);
         records.set(file.slice(0, -5), receipt);
       }
     }
+    return { maps, records, diskCount, watermark };
+  }
+
+  private async rebuildFromDisk(): Promise<void> {
+    if (!this.initialized) {
+      await this.initialize();
+      return;
+    }
+    const { maps, records, diskCount, watermark } = await this.readLedger();
     // Swap without awaiting: nothing observes a half-built ledger.
     const changed: Array<[string, QueuedReceipt]> = [];
     for (const [key, receipt] of records)
       if (this.records.get(key)?.state !== receipt.state) changed.push([key, receipt]);
-    for (const key of this.records.keys())
-      if (!records.has(key)) records.set(key, this.records.get(key)!); // Not on disk: keep, never drop silently.
+    for (const [key, receipt] of this.records) if (!records.has(key)) records.set(key, receipt); // Not on disk: keep, never drop silently.
     const swap = <V>(target: Map<string, V>, next: Map<string, V>) => {
       target.clear();
       for (const [k, v] of next) target.set(k, v);
     };
     swap(this.records, records);
-    swap(this.contentDebits, fresh.contentDebits);
-    swap(this.managedClaims, fresh.managedClaims);
-    swap(this.managedArtifacts, fresh.managedArtifacts);
-    swap(this.evidenceClaims, fresh.evidenceClaims);
-    swap(this.evidence, fresh.evidence);
+    swap(this.contentDebits, maps.contentDebits);
+    swap(this.managedClaims, maps.managedClaims);
+    swap(this.managedArtifacts, maps.managedArtifacts);
+    swap(this.evidenceClaims, maps.evidenceClaims);
+    swap(this.evidence, maps.evidence);
     this.diskCount = diskCount;
     this.watermark = watermark;
     // Live queued receipts keep their authority. Where the disk was ahead of memory, tell the observers.
@@ -370,7 +379,19 @@ export class MessageReceipts {
       if (receipt.state !== "queued" && receipt.state !== "dispatching")
         this.admissions.delete(key);
     }
+    await this.settleOrphans();
     this.armExpiry();
+  }
+
+  // A queued receipt with no live admission cannot be dispatched (a guard failed after its rename). Settle it the way
+  // a boot does, through commit() so observers hear it.
+  private async settleOrphans(): Promise<void> {
+    for (const [key, receipt] of this.records) {
+      if (this.admissions.has(key)) continue;
+      if (receipt.state === "queued") await this.commit(key, { ...receipt, state: "cancelled" });
+      else if (receipt.state === "dispatching")
+        await this.commit(key, { ...receipt, state: "uncertain" });
+    }
   }
 
   /** Health signal for the host: false while the ledger refuses sends. */
