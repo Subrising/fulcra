@@ -1,6 +1,7 @@
 // H7 item 5 (questions.mjs + admission-guard.mjs admitQuestionAnswer): a worker's pending question is answered with its
 // owning seat's text, through a journaled intent the native guard admits for exactly that request and response.
 import fs from "node:fs";
+import { flat } from "./source-text.mjs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -429,18 +430,18 @@ test("a question intent is never read by the routine-permission paths, before or
 });
 test("role_send_session and manager_assign_worker answer a pending question instead of sending; server wires it (static)", () => {
   const rs = fs.readFileSync(new URL("./role-sessions.mjs", import.meta.url), "utf8"),
-    sendOwned = rs.slice(rs.indexOf("  async sendOwned("));
+    sendOwned = flat(rs.slice(rs.indexOf("  async sendOwned(")));
   assert.ok(
     sendOwned.indexOf("this.control.questions.answers(a.targetSessionId, a.messageId)") > 0 &&
       sendOwned.indexOf("this.control.questions.answers(a.targetSessionId, a.messageId)") <
-        sendOwned.indexOf("await this.control.send("),
+        sendOwned.indexOf("await this.control.sendQueued("),
   );
   assert.match(
     sendOwned,
-    /check: \(\) => \{ this\.control\.bindings\.checkRole\(row\.id, capability\); this\.ownedByCaller\(row\.id, a\.targetSessionId\); \}/,
+    /check: \(\) => \{ this\.control\.bindings\.checkRole\(row\.id, capability\); this\.ownedByCaller\(row\.id, a\.targetSessionId\); this\.requireFollowupRate\(a\.targetSessionId, a\.messageId\); \}/,
   );
   const mg = fs.readFileSync(new URL("./manager.mjs", import.meta.url), "utf8"),
-    assign = mg.slice(mg.indexOf("  async assign("));
+    assign = flat(mg.slice(mg.indexOf("  async assign(")));
   assert.ok(
     assign.indexOf("this.control.questions.answers(a.workerId, a.messageId)") > 0 &&
       assign.indexOf("this.control.questions.answers(a.workerId, a.messageId)") <
@@ -528,9 +529,8 @@ test("review H7 M2: answers are bounded before anything is written, charged to t
   const src = fs.readFileSync(new URL("./permissions.mjs", import.meta.url), "utf8");
   assert.equal(
     (
-      src.match(
-        /SELECT count\(\*\) n FROM permission_intents WHERE pool NOT LIKE \\'question:%\\'/g,
-      ) ?? []
+      src.match(/SELECT count\(\*\) n FROM permission_intents WHERE pool NOT LIKE 'question:%'/g) ??
+      []
     ).length,
     2,
   );

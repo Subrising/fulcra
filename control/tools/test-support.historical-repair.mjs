@@ -14,6 +14,13 @@ function files(directory, prefix = "") {
     return entry.isFile() && /\.(js|json)$/.test(entry.name) ? [relative] : [];
   });
 }
+// The fixture is built from a commit of the product history. A checkout without that commit cannot build it; tests
+// that need it read this to skip, with the reason, instead of failing at load. A present but wrong fixture still throws.
+export function historicalRepairSkip() {
+  return fs.existsSync(path.join(root, "fixture.json"))
+    ? false
+    : "the historical pre-trusted-hook fixture is not built (see docs/historical-overlay-tests.md)";
+}
 export function historicalRepairFixture() {
   const receipt = path.join(root, "fixture.json");
   if (!fs.existsSync(receipt))

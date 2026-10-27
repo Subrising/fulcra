@@ -1,6 +1,7 @@
 // H6 item 3: controller instrumentation (metrics.mjs). Per-RPC lines, SQLite attribution, bounded rotation, the
 // event-loop sampler, and what a line must never carry.
 import fs from "node:fs";
+import { flat } from "./source-text.mjs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -211,7 +212,7 @@ test("the event-loop sampler reports delay percentiles and the RPC count, and re
   assert.equal(counter.rpcs, 0, "reset after each window");
 });
 test("server.mjs is wired: instrumented store, timed dispatch with socket times, sampler, and no raw stdout lines (static)", () => {
-  const src = fs.readFileSync(new URL("./server.mjs", import.meta.url), "utf8");
+  const src = flat(fs.readFileSync(new URL("./server.mjs", import.meta.url), "utf8"));
   assert.match(src, /store = instrumentDb\(new ControlStore\(/);
   // Merge: V3b's read-only operator lane on this socket (2a2270b4) AND the live lineage's operator-connection.mjs protocol
   // (Track 1: its request timeout no longer cuts off a running handler).
@@ -221,13 +222,13 @@ test("server.mjs is wired: instrumented store, timed dispatch with socket times,
   );
   assert.match(
     src,
-    /net\.createServer\(operatorConnection\(\{ dispatch, operations,/,
+    /gateConnections\(operatorConnection\(\{ dispatch, operations,/,
     "the timed dispatcher serves the socket",
   );
-  const conn = fs.readFileSync(new URL("./operator-connection.mjs", import.meta.url), "utf8");
+  const conn = flat(fs.readFileSync(new URL("./operator-connection.mjs", import.meta.url), "utf8"));
   assert.ok(
     conn.includes(
-      "await dispatch(JSON.parse(bytes.subarray(0, end).toString('utf8')), { acceptedAt, receivedAt })",
+      'await dispatch(JSON.parse(bytes.subarray(0, end).toString("utf8")), { acceptedAt, receivedAt })',
     ),
     "the socket\u2019s accept and receive times reach the dispatcher",
   );

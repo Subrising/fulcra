@@ -81,9 +81,9 @@ test("captured Book hooks admit owned startup but never replace an admission hoo
 });
 test("trial prompt has generic ownership and preserves all original constraints", () => {
   const source = fs.readFileSync(new URL("../session-config.mjs", import.meta.url), "utf8");
-  const literal = source.match(/systemPrompt: ('(?:[^'\\]|\\.)*')/);
+  const literal = source.match(/systemPrompt:\s*("(?:[^"\\]|\\.)*")/);
   assert.ok(literal, "actual session configuration must contain the prompt");
-  const prompt = JSON.parse('"' + literal[1].slice(1, -1) + '"');
+  const prompt = JSON.parse(literal[1]);
   assert.equal(
     prompt,
     "You are a persistent independent Orca trial worker working on an operator-assigned task. Work only on the assigned synthetic non-Git task in your directory. Preserve existing native configuration. Do not contact other sessions, create agents, schedules or publish anything. Shared memory can search current decisions by default; request history or all explicitly for earlier evidence, then read exact sources with expectedSha256. Corpus labels describe location, not authority or freshness. Do not include unrelated personal or workplace context in outputs.",

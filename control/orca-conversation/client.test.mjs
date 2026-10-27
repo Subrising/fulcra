@@ -6,6 +6,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createConversation, installedConversation, home } from "./client.mjs";
+import { localMachine } from "../src/local-machine.mjs";
+import { portable } from "../src/portable-config.mjs";
 import { ControlStore } from "../src/control/store.mjs";
 import { Controller } from "../src/control/controller.mjs";
 import { Events } from "../src/control/events.mjs";
@@ -184,6 +186,15 @@ test("invalid provider and model override fail before any preparation", async (t
   await assert.rejects(f.run({ ...a, provider: "claude", model: "other" }), /fields/);
   assert.deepEqual(f.calls, []);
   assert.equal(f.creates(), 0);
+  // The client names its hosts "mini" and "macbook"; the controller accepts only hosts the installation configures.
+  const configFile = path.join(portable.home, "config.json"),
+    original = fs.readFileSync(configFile, "utf8");
+  t.after(() => fs.writeFileSync(configFile, original, { mode: 0o600 }));
+  fs.writeFileSync(
+    configFile,
+    JSON.stringify({ ...JSON.parse(original), hosts: [{ name: "mini", serverId: null }] }),
+    { mode: 0o600 },
+  );
   await f.run({ ...a, provider: "claude", host: "mini" });
   assert.equal(f.createdInputs[0].provider, "claude");
   assert.equal(f.createdInputs[0].host, "mini");
@@ -479,11 +490,17 @@ test("installed profiles constrain supervisor provider and safely handle missing
     id = randomUUID(),
     cwd = home + "/tasks/" + randomUUID();
   const row = { id, cwd, mode: "human", generation: 1, task: f.task };
-  const profilePath = `/Volumes/test-volume/openclaw/projects/orca-paseo-20260911/home/agents/${cwd.slice(1).replaceAll("/", "-")}/${id}.json`;
-  const originalRead = fs.readFileSync;
+  const profilePath = path.join(
+    localMachine("paseoHome"),
+    "agents",
+    cwd.slice(1).replaceAll("/", "-"),
+    `${id}.json`,
+  );
+  const openclawConfig = localMachine("openclawConfig"),
+    originalRead = fs.readFileSync;
   let profile = { title: "Retained native title", provider: "claude" };
   t.mock.method(fs, "readFileSync", (file, ...args) => {
-    if (file === "/Users/test-user/.openclaw/openclaw.json")
+    if (file === openclawConfig)
       return JSON.stringify({ plugins: { entries: { "orca-command": { config: f.config } } } });
     if (file === profilePath) {
       if (!profile) throw Error("Missing profile");

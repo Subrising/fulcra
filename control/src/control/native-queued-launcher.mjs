@@ -4,7 +4,7 @@ import { authorityKey } from "./authority.mjs";
 import { queuedSessionBinding, queuedRoleSource } from "./queued-journal-policy.mjs";
 import { queuedSendPayload, payloadDigest } from "./trusted-contribution.mjs";
 import { isNativeAdmissionRefusal } from "./trusted-native-input.mjs";
-import { AUTOMATION_LIMIT, deliveryCount } from "./journal-capacity.mjs";
+import { AUTOMATION_LIMIT, JOURNAL_CAPACITY, deliveryCount } from "./journal-capacity.mjs";
 import { canonicalJson } from "@getpaseo/protocol/trusted-input";
 /** Installed private controller route. The native manager/ledger remains the only queue and sender. */
 export async function launchNativeQueued(control, raw, token, operatorGeneration, supervision) {
@@ -99,8 +99,11 @@ export async function launchNativeQueued(control, raw, token, operatorGeneration
     };
     control.store.admit(a.messageId, a.sessionId, "send", a, () => {
       check();
-      if (automated && deliveryCount(control.store.db) >= AUTOMATION_LIMIT)
-        throw Error("Journal automation capacity reached");
+      const recorded = automated ? deliveryCount(control.store.db) : 0;
+      if (automated && recorded >= AUTOMATION_LIMIT)
+        throw Error(
+          `Journal automation budget reached: ${recorded} deliveries recorded; automated sends stop at ${AUTOMATION_LIMIT} to keep ${JOURNAL_CAPACITY - AUTOMATION_LIMIT} for manual control`,
+        );
       if (automated) control.automationGuard();
       control.allowance.charge(row.task, a.messageId);
     });

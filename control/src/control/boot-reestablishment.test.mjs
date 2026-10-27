@@ -10,6 +10,7 @@
 // pin abort a suite whose results do not depend on it. The consequence is stated in IMPLEMENTATION.md:
 // this suite proves the CONTROLLER half of the fence, not the native half.
 import fs from "node:fs";
+import { flat } from "./source-text.mjs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -540,7 +541,9 @@ test("C1': the operator RPC is the only operator trigger, and the sweep has exac
           : [path.join(dir, e.name)],
       );
   const sources = walk(root).filter(
-    (f) => /\.(mjs|js)$/.test(f) && !/\.test\.mjs$|\.fixture\.mjs$|\.integration\.mjs$/.test(f),
+    (f) =>
+      /\.(mjs|js)$/.test(f) &&
+      !/\.test\.mjs$|\.cases\.mjs$|\.fixture\.mjs$|\.integration\.mjs$/.test(f),
   );
   assert.ok(sources.length > 40, "the scan must actually be reading the tree");
   const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
@@ -557,7 +560,7 @@ test("C1': the operator RPC is the only operator trigger, and the sweep has exac
   // carry exactly this one import line and nothing else that mentions re-establishment: stripping the line
   // must leave no mention, so a call to reestablish(), or an import of the gate itself, still trips here.
   const helperImport =
-    "import { humanInputFence, sessionQuiescent, promptIdentityUnchanged, observationStable } from './boot-reestablishment.mjs';";
+    /import \{\s*humanInputFence,\s*sessionQuiescent,\s*promptIdentityUnchanged,\s*observationStable,?\s*\} from ["']\.\/boot-reestablishment\.mjs["'];/g;
   const parserSchema = "methods('takeover reestablish', object({ sessionId: uuid, reason }));";
   for (const file of sources) {
     const relative = file.slice(root.length);
@@ -565,8 +568,8 @@ test("C1': the operator RPC is the only operator trigger, and the sweep has exac
     // R's allowance, kept exactly: recovery.mjs may carry the one pure-helper import line and nothing else.
     if (relative === "control/recovery.mjs") {
       assert.equal(
-        text.split(helperImport).length,
-        2,
+        text.match(helperImport)?.length,
+        1,
         "recovery.mjs imports the pure helpers exactly once, by that exact line",
       );
       text = text.replace(helperImport, "");
@@ -606,6 +609,7 @@ test("C1': the operator RPC is the only operator trigger, and the sweep has exac
   );
   // The controller never calls either trigger on its own behalf, and schedules nothing.
   const controllerSource = read("control/controller.mjs");
+  const flatController = flat(controllerSource);
   assert.equal(
     /this\.(reestablish|sweepSeat)\(/.test(controllerSource),
     false,
@@ -622,8 +626,8 @@ test("C1': the operator RPC is the only operator trigger, and the sweep has exac
     controllerSource.match(/repinSeat\(id, reason\.trim\(\), OPERATOR, false\)/g)?.length,
     1,
   );
-  assert.equal(controllerSource.match(/, SWEEP, report\)/g)?.length, 1);
-  assert.equal(controllerSource.match(/this\.repinSeat\(/g).length, 2);
+  assert.equal(flatController.match(/, SWEEP, report\)/g)?.length, 1);
+  assert.equal(flatController.match(/this\.repinSeat\(/g).length, 2);
   // seat-sweep.mjs: one call of the trigger, no timers of its own.
   const sweepSource = read("control/seat-sweep.mjs");
   assert.equal(sweepSource.match(/control\.sweepSeat\(/g).length, 1);
@@ -634,38 +638,34 @@ test("C1': the operator RPC is the only operator trigger, and the sweep has exac
   assert.equal(server.match(/sweepSeats\(/g).length, 1);
   assert.equal(server.match(/\bsweep\(\)/g).length, 2);
   // The first pass starts before the socket listens; review F3's deadline only bounds how long listen waits for it.
-  const first = server.indexOf(
-    "await Promise.race([sweep(), new Promise(resolve => setTimeout(resolve, 60000).unref())]);",
+  const flatServer = flat(server);
+  const first = flatServer.indexOf(
+    "await Promise.race([sweep(), new Promise((resolve) => setTimeout(resolve, 60000).unref())]);",
   );
   assert.ok(
-    first > -1 && first < server.indexOf("server.listen("),
+    first > -1 && first < flatServer.indexOf("server.listen("),
     "the first pass must run before the socket listens",
   );
-  const watchdog = server
-    .split("\n")
-    .find((line) => line.startsWith("eventWatchdog = setInterval("));
-  assert.ok(watchdog?.includes("sweep()"), "the second call site is the watchdog tick");
-  // WL's opt-in finished-job clean-up is the one other timer; it runs only that clean-up, never a sweep or a
-  // re-establishment.
-  const lifecycleTimer =
-    "const lifecycleTimer = setInterval(cleanFinishedJobs, 3600000); lifecycleTimer.unref();";
-  assert.equal(
-    server.split("\n").filter((line) => line === lifecycleTimer).length,
-    1,
-    "the worktree clean-up timer, exactly",
-  );
-  assert.equal(/sweep|reestablish/i.test(lifecycleTimer), false);
-  const timers = server
-    .split("\n")
-    .filter((line) => line !== lifecycleTimer && /(?<![.\w])(setInterval|setTimeout)\(/.test(line));
-  assert.equal(timers.length, 2, "no other timer in server.mjs");
+  const watchdog = flatServer.slice(flatServer.indexOf("eventWatchdog = setInterval("));
   assert.ok(
-    timers.every(
-      (line) =>
-        line.startsWith("eventWatchdog = setInterval(") ||
-        line.includes("setTimeout(resolve, 60000)"),
-    ),
-    "only the watchdog and the startup deadline",
+    watchdog.slice(0, watchdog.indexOf("}, 30000)")).includes(".then(() => sweep())"),
+    "the second call site is the watchdog tick",
+  );
+  // WL's opt-in finished-job clean-up and the main assistant label sync are the two other timers; neither runs a sweep or a
+  // re-establishment.
+  for (const timer of [
+    "const lifecycleTimer = setInterval(cleanFinishedJobs, 60000);",
+    "const seatSyncTimer = setInterval(syncSeat, 60000);",
+  ]) {
+    assert.equal(flatServer.split(timer).length, 2, timer);
+    assert.equal(/sweep|reestablish/i.test(timer), false);
+  }
+  const timers = flatServer.match(/(?<![.\w])(setInterval|setTimeout)\(/g) ?? [];
+  assert.equal(timers.length, 4, "no other timer in server.mjs");
+  assert.equal(
+    flatServer.match(/eventWatchdog = setInterval\(/g).length,
+    1,
+    "the watchdog is the only periodic caller of the sweep",
   );
 });
 

@@ -12,7 +12,15 @@ import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID, createHash } from "node:crypto";
-import { home, runBoot, humanDir, logLines, logText, armed } from "./human-log.fixture.mjs";
+import {
+  home,
+  runBoot,
+  stageGuardSibling,
+  humanDir,
+  logLines,
+  logText,
+  armed,
+} from "./human-log.fixture.mjs";
 import { humanLogVerdict, readHumanLog, CLEAN, DIRTY, UNAVAILABLE } from "./human-log.mjs";
 
 const S = "11111111-1111-4111-8111-000000000001",
@@ -27,6 +35,7 @@ test("guard: every human input is on disk, with its counter value, when guard() 
     dir = path.join(h, "admission", "inproc");
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const { bindGuardHome } = await import("./native-release-hooks.mjs");
+  stageGuardSibling(dir);
   fs.writeFileSync(
     path.join(dir, "admission-guard.mjs"),
     bindGuardHome(fs.readFileSync(new URL("./admission-guard.mjs", import.meta.url), "utf8"), h),
