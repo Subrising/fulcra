@@ -177,6 +177,38 @@ interface SendMessageInput {
 }
 
 /** Owns message delivery receipts; creation is owned by CreationService. */
+// Operating-system I/O failures (EACCES, ENOSPC, EIO...) can clear; a revoked guard or a corrupt record cannot.
+function isIoError(error: unknown): boolean {
+  for (let e = error, depth = 0; e && depth < 5; e = (e as { cause?: unknown }).cause, depth++) {
+    const code = (e as { code?: unknown }).code;
+    if (typeof code === "string") return /^E[A-Z0-9]+$/.test(code);
+  }
+  return false;
+}
+
+// Raised while the ledger is already closed. It is a symptom, never a new cause, so it must not reclassify the latch.
+class DurabilityUnavailableError extends Error {
+  constructor(options?: { cause?: unknown }) {
+    super("agent_receipt_durability_unavailable", options);
+  }
+}
+
+interface LedgerMaps {
+  contentDebits: Map<string, NativeArtifactContentDebit>;
+  managedClaims: Map<string, ManagedArtifactClaim>;
+  managedArtifacts: Map<string, ManagedArtifactJournal>;
+  evidenceClaims: Map<string, NativeEvidenceClaim>;
+  evidence: Map<string, NativeEvidenceJournal>;
+}
+
+function describeError(error: unknown): string {
+  const cause =
+    error instanceof Error && error.cause ? ` (cause: ${describeError(error.cause)})` : "";
+  const code = (error as { code?: unknown })?.code;
+  const text = error instanceof Error ? error.message : String(error);
+  return `${typeof code === "string" ? `${code}: ` : ""}${text}${cause}`;
+}
+
 export class MessageReceipts {
   private readonly contentDebits = new Map<string, NativeArtifactContentDebit>();
   private artifactStore?: NativeArtifactStore;
@@ -188,6 +220,11 @@ export class MessageReceipts {
   private recovered = false;
   private pendingOperations = 0;
   private unhealthy = false;
+  private unhealthySince: number | null = null;
+  private lastError: string | null = null;
+  private recoveries = 0;
+  // False once a non-I/O failure (a revoked guard, a corrupt record) latched the ledger: only a restart clears that.
+  private recoverable = true;
   private expiryTimer?: ReturnType<typeof setTimeout>;
   private watermark = 0;
   private readonly evidenceClaims = new Map<string, NativeEvidenceClaim>();
@@ -228,8 +265,8 @@ export class MessageReceipts {
     const result = this.tail
       .catch(() => undefined)
       .then(() => {
-        if (this.unhealthy) throw new Error("agent_receipt_durability_unavailable");
-        return operation();
+        // The healthy path stays synchronous: callers and timers depend on this ordering.
+        return this.unhealthy ? this.ensureHealthy().then(operation) : operation();
       });
     this.tail = result;
     return result.finally(() => {
@@ -237,7 +274,165 @@ export class MessageReceipts {
     });
   }
 
-  private recoverEvidence(file: string, receipt: z.infer<typeof ReceiptSchema>): void {
+  /** Latch the ledger shut after a failed durable write. The first error is logged with its cause. */
+  private markUnhealthy(error: unknown, diskAhead = false): void {
+    if (error instanceof DurabilityUnavailableError) return;
+    this.lastError = describeError(error);
+    // A guard failing after the rename leaves disk ahead of memory; the disk rebuild repairs exactly that.
+    if (!diskAhead && !isIoError(error)) this.recoverable = false;
+    if (this.unhealthy) return;
+    this.unhealthy = true;
+    this.unhealthySince = this.now();
+    this.warn(
+      `Native receipt ledger unhealthy; sends fail until a durable write succeeds: ${this.lastError}`,
+    );
+  }
+
+  /** A failed write must not outlive the fault: a good durable probe write clears the latch. */
+  private async ensureHealthy(): Promise<void> {
+    if (!this.unhealthy) return;
+    if (!this.recoverable)
+      throw new DurabilityUnavailableError({
+        cause: new Error(this.lastError ?? "latched by a non-I/O failure"),
+      });
+    const probe = path.join(this.directory, ".health-probe");
+    try {
+      await writeJsonFileDurable(probe, { probe: this.now() });
+      await unlink(probe).catch(() => undefined);
+      // A failed write may have reached disk before memory (a guard failing after the rename). The state is built
+      // from disk first and swapped in only on success, so a failed rebuild leaves memory as it was.
+      await this.rebuildFromDisk();
+    } catch (error) {
+      this.lastError = describeError(error);
+      if (!isIoError(error)) this.recoverable = false; // A corrupt record will not heal by probing again.
+      throw new DurabilityUnavailableError({ cause: error });
+    }
+    this.unhealthy = false;
+    this.unhealthySince = null;
+    this.recoveries++;
+    this.warn("Native receipt ledger recovered after a good durable write");
+  }
+
+  private async readLedger(): Promise<{
+    maps: LedgerMaps;
+    records: Map<string, QueuedReceipt>;
+    diskCount: number;
+    watermark: number;
+  }> {
+    let files: string[];
+    try {
+      files = await readdir(this.directory);
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+      files = [];
+    }
+    files = files.filter((file) => /^[a-f0-9]{64}\.json$/.test(file));
+    const maps: LedgerMaps = {
+      contentDebits: new Map(),
+      managedClaims: new Map(),
+      managedArtifacts: new Map(),
+      evidenceClaims: new Map(),
+      evidence: new Map(),
+    };
+    const records = new Map<string, QueuedReceipt>();
+    let diskCount = files.length;
+    let watermark = this.watermark;
+    for (const file of files) {
+      const receipt = await readReceipt(path.join(this.directory, file));
+      if (!receipt) throw new Error("agent_receipt_disappeared");
+      diskCount += isQueued(receipt) ? this.weight(receipt) - 1 : 0;
+      this.recoverEvidence(file, receipt, maps);
+      if (isQueued(receipt)) {
+        watermark = Math.max(watermark, receipt.admittedAt);
+        records.set(file.slice(0, -5), receipt);
+      }
+    }
+    return { maps, records, diskCount, watermark };
+  }
+
+  private async rebuildFromDisk(): Promise<void> {
+    if (!this.initialized) {
+      await this.initialize();
+      return;
+    }
+    const ledger = await this.readLedger();
+    const { maps, records, watermark } = ledger;
+    let diskCount = ledger.diskCount;
+    // Swap without awaiting: nothing observes a half-built ledger.
+    const changed: Array<[string, QueuedReceipt]> = [];
+    const refuse: Array<[string, QueuedReceipt]> = [];
+    const rollback: Array<[string, QueuedReceipt, QueuedReceipt]> = [];
+    for (const [key, disk] of records) {
+      const memory = this.records.get(key);
+      if (!memory) continue;
+      // Disk says dispatching but memory still says queued: the guard failed after the rename and dispatch() never
+      // ran, so no effect can have happened. Refuse it; a stuck dispatching receipt would block the agent.
+      if (memory.state === "queued" && disk.state === "dispatching") refuse.push([key, disk]);
+      else if (memory.state !== disk.state) changed.push([key, disk]);
+      // Same state, different content (a refused collection merge): memory is what was admitted. Put it back.
+      else if (canonicalJson(memory) !== canonicalJson(disk)) rollback.push([key, memory, disk]);
+    }
+    for (const [key, receipt] of this.records) if (!records.has(key)) records.set(key, receipt); // Not on disk: keep, never drop silently.
+    for (const [key, memory, disk] of rollback) {
+      records.set(key, memory);
+      diskCount += this.weight(memory) - this.weight(disk);
+    }
+    const swap = <V>(target: Map<string, V>, next: Map<string, V>) => {
+      target.clear();
+      for (const [k, v] of next) target.set(k, v);
+    };
+    swap(this.records, records);
+    swap(this.contentDebits, maps.contentDebits);
+    swap(this.managedClaims, maps.managedClaims);
+    swap(this.managedArtifacts, maps.managedArtifacts);
+    swap(this.evidenceClaims, maps.evidenceClaims);
+    swap(this.evidence, maps.evidence);
+    this.diskCount = diskCount;
+    this.watermark = watermark;
+    // Live queued receipts keep their authority. Where the disk was ahead of memory, tell the observers.
+    for (const [key, receipt] of changed) {
+      this.admissions.get(key)?.observe?.(this.view(receipt));
+      if (receipt.state !== "queued" && receipt.state !== "dispatching")
+        this.admissions.delete(key);
+    }
+    for (const [key, memory] of rollback)
+      await writeJsonFileDurable(path.join(this.directory, `${key}.json`), memory);
+    for (const [key, disk] of refuse) await this.commit(key, { ...disk, state: "refused" });
+    await this.settleOrphans();
+    this.armExpiry();
+  }
+
+  // A queued receipt with no live admission cannot be dispatched (a guard failed after its rename). Settle it the way
+  // a boot does, through commit() so observers hear it.
+  private async settleOrphans(): Promise<void> {
+    for (const [key, receipt] of this.records) {
+      if (this.admissions.has(key)) continue;
+      if (receipt.state === "queued") await this.commit(key, { ...receipt, state: "cancelled" });
+      else if (receipt.state === "dispatching")
+        await this.commit(key, { ...receipt, state: "uncertain" });
+    }
+  }
+
+  /** Health signal for the host: false while the ledger refuses sends. */
+  health(): {
+    healthy: boolean;
+    since: number | null;
+    lastError: string | null;
+    recoveries: number;
+  } {
+    return {
+      healthy: !this.unhealthy,
+      since: this.unhealthySince,
+      lastError: this.lastError,
+      recoveries: this.recoveries,
+    };
+  }
+
+  private recoverEvidence(
+    file: string,
+    receipt: z.infer<typeof ReceiptSchema>,
+    into: LedgerMaps = this as unknown as LedgerMaps,
+  ): void {
     if (!("recordType" in receipt)) return;
     if (receipt.recordType === "native_artifact_content_debit") {
       const { fingerprint, bytes, ...body } = receipt;
@@ -250,7 +445,7 @@ export class MessageReceipts {
       )
         throw new Error("Native content debit corrupt");
       requireContentEncoding(receipt);
-      this.contentDebits.set(file.slice(0, -5), receipt);
+      into.contentDebits.set(file.slice(0, -5), receipt);
       this.watermark = Math.max(this.watermark, receipt.at);
       return;
     }
@@ -264,16 +459,16 @@ export class MessageReceipts {
       )
         throw new Error("Managed artifact journal corrupt");
       if (receipt.recordType === "native_managed_artifact_attempt")
-        this.managedClaims.set(file.slice(0, -5), receipt);
-      else this.managedArtifacts.set(file.slice(0, -5), receipt);
+        into.managedClaims.set(file.slice(0, -5), receipt);
+      else into.managedArtifacts.set(file.slice(0, -5), receipt);
       this.watermark = Math.max(this.watermark, receipt.entry.at);
       return;
     }
     if (!validEvidence(receipt) || file !== `${digest(["native-evidence", receipt.entry.id])}.json`)
       throw new Error("Native evidence journal corrupt");
     if (receipt.recordType === "native_evidence_attempt")
-      this.evidenceClaims.set(file.slice(0, -5), receipt);
-    else this.evidence.set(file.slice(0, -5), receipt);
+      into.evidenceClaims.set(file.slice(0, -5), receipt);
+    else into.evidence.set(file.slice(0, -5), receipt);
     this.watermark = Math.max(this.watermark, receipt.entry.at);
   }
 
@@ -464,14 +659,26 @@ export class MessageReceipts {
     requireEffect?: () => void,
     allowPreCommitRefusal = false,
   ): Promise<void> {
+    // A guard that fails around the write may leave disk ahead of memory; the disk rebuild repairs exactly that.
+    let guardFailed = false;
+    const guard = requireEffect
+      ? () => {
+          try {
+            requireEffect();
+          } catch (error) {
+            guardFailed = true;
+            throw error;
+          }
+        }
+      : undefined;
     try {
       if (receipt.report && Buffer.byteLength(JSON.stringify(receipt)) > receipt.bytes)
         throw new Error("Native report consumption reservation exceeded");
-      await writeJsonFileDurable(path.join(this.directory, `${key}.json`), receipt, requireEffect);
-      requireEffect?.(); // After every durability await, immediately before memory publication.
+      await writeJsonFileDurable(path.join(this.directory, `${key}.json`), receipt, guard);
+      guard?.(); // After every durability await, immediately before memory publication.
     } catch (error) {
       if (!allowPreCommitRefusal || !(error instanceof AtomicWritePreCommitGuardError))
-        this.unhealthy = true;
+        this.markUnhealthy(error, guardFailed);
       throw error;
     }
     this.records.set(key, receipt);
@@ -504,8 +711,8 @@ export class MessageReceipts {
             return;
           }
           await this.expire(now);
-        }).catch(() => {
-          this.unhealthy = true;
+        }).catch((error) => {
+          this.markUnhealthy(error);
         });
       },
       Math.max(1, next - this.now()),
@@ -525,8 +732,8 @@ export class MessageReceipts {
     await this.serial(async () => {
       await this.initialize(undefined, true);
       await this.expire(this.clock());
-    }).catch(() => {
-      this.unhealthy = true;
+    }).catch((error) => {
+      this.markUnhealthy(error);
     });
   }
 
@@ -900,8 +1107,8 @@ export class MessageReceipts {
         }
         input.authorize();
         onReady(sealed.agentId);
-      }).catch(() => {
-        this.unhealthy = true;
+      }).catch((error) => {
+        this.markUnhealthy(error);
       });
     }, delay);
     timer.unref();
@@ -934,7 +1141,7 @@ export class MessageReceipts {
         await writeJsonFileDurable(path.join(this.directory, `${key}.json`), snapshot, authorize);
         authorize();
       } catch (error) {
-        this.unhealthy = true;
+        this.markUnhealthy(error);
         throw error;
       }
       this.evidenceClaims.set(key, snapshot);
@@ -979,7 +1186,7 @@ export class MessageReceipts {
         await writeJsonFileDurable(path.join(this.directory, `${key}.json`), snapshot, authorize);
         authorize();
       } catch (error) {
-        this.unhealthy = true;
+        this.markUnhealthy(error);
         throw error;
       }
       this.evidenceClaims.delete(key);
@@ -1064,7 +1271,7 @@ export class MessageReceipts {
         this.managedArtifacts.set(key, record);
         return record;
       } catch (error) {
-        this.unhealthy = true;
+        this.markUnhealthy(error);
         throw error;
       }
     });
@@ -1163,7 +1370,7 @@ export class MessageReceipts {
         });
         return bindReportPublication(output, check);
       } catch (error) {
-        this.unhealthy = true;
+        this.markUnhealthy(error);
         throw error;
       }
     });

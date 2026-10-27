@@ -1,4 +1,5 @@
 import { mkdtemp, rm, readFile, writeFile, readdir, utimes, chmod } from "node:fs/promises";
+import { readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
@@ -895,6 +896,176 @@ posixTest(
     requests.stop();
   },
 );
+
+posixTest(
+  "one failed durable write does not fail every later send; the ledger recovers and reports health",
+  async () => {
+    const { directory } = await fixture();
+    const warnings: string[] = [];
+    const requests = new MessageReceipts(directory, Date.now, undefined, {
+      warn: (message) => warnings.push(message),
+    });
+    await requests.enqueue({ ...queued(), messageId: "first" });
+    expect(requests.health()).toMatchObject({ healthy: true, lastError: null });
+    await chmod(directory, 0o500);
+    try {
+      await expect(requests.enqueue({ ...queued(), messageId: "blocked" })).rejects.toThrow();
+      expect(requests.health()).toMatchObject({ healthy: false });
+      expect(requests.health().lastError).toMatch(/EACCES|EPERM/);
+      await expect(
+        requests.enqueue({ ...queued(), messageId: "still-blocked" }),
+      ).rejects.toMatchObject({
+        message: "agent_receipt_durability_unavailable",
+        cause: expect.anything(),
+      });
+      // A background pass that trips on the closed ledger must not turn the fault permanent.
+      await requests.prepareArchiveObservation();
+    } finally {
+      await chmod(directory, 0o700);
+    }
+    expect(await requests.enqueue({ ...queued(), messageId: "after-fault" })).toMatchObject({
+      state: "queued",
+    });
+    expect(requests.health()).toMatchObject({ healthy: true, recoveries: 1 });
+    expect(warnings.filter((m) => m.includes("unhealthy"))).toHaveLength(1);
+    requests.stop();
+  },
+);
+
+async function receiptFile(directory: string, messageId: string) {
+  for (const name of await readdir(directory)) {
+    if (!/^[a-f0-9]{64}\.json$/.test(name)) continue;
+    const file = path.join(directory, name);
+    const record = JSON.parse(await readFile(file, "utf8"));
+    if (record.messageId === messageId) return { file, record };
+  }
+  throw new Error(`no receipt for ${messageId}`);
+}
+async function latch(directory: string, requests: MessageReceipts) {
+  await chmod(directory, 0o500);
+  try {
+    await expect(requests.enqueue({ ...queued(), messageId: "latch" })).rejects.toThrow();
+  } finally {
+    await chmod(directory, 0o700);
+  }
+  expect(requests.health().healthy).toBe(false);
+}
+
+posixTest(
+  "recovery keeps live queued receipts and tells observers where the disk was ahead",
+  async () => {
+    const { directory } = await fixture();
+    const requests = new MessageReceipts(directory, Date.now, undefined, { warn: () => {} });
+    const first = vi.fn();
+    const second = vi.fn();
+    await requests.enqueue({ ...queued(), messageId: "first", observe: first });
+    await requests.enqueue({ ...queued(), messageId: "second", observe: second });
+    await latch(directory, requests);
+    const { file, record } = await receiptFile(directory, "first");
+    await writeFile(file, JSON.stringify({ ...record, state: "cancelled" }));
+    expect(await requests.enqueue({ ...queued(), messageId: "after" })).toMatchObject({
+      state: "queued",
+    });
+    expect(first).toHaveBeenCalledWith(expect.objectContaining({ state: "cancelled" }));
+    expect(second).not.toHaveBeenCalled();
+    expect((await receiptFile(directory, "second")).record.state).toBe("queued");
+    requests.stop();
+  },
+);
+
+posixTest("a guard failing after the rename recovers through the disk rebuild", async () => {
+  const { directory } = await fixture();
+  const requests = new MessageReceipts(directory, Date.now, undefined, { warn: () => {} });
+  const landed = () => readdirSync(directory).some((name) => /^[a-f0-9]{64}\.json$/.test(name));
+  await expect(
+    requests.enqueue({
+      ...queued(),
+      messageId: "raced",
+      authorize: () => {
+        if (landed()) throw new Error("ownership revoked");
+      },
+    }),
+  ).rejects.toThrow("ownership revoked");
+  expect(requests.health().healthy).toBe(false);
+  expect(await requests.enqueue({ ...queued(), messageId: "next" })).toMatchObject({
+    state: "queued",
+  });
+  expect(requests.health()).toMatchObject({ healthy: true, recoveries: 1 });
+  // The receipt landed on disk but its admission failed: recovery settles it as cancelled.
+  expect((await receiptFile(directory, "raced")).record.state).toBe("cancelled");
+  requests.stop();
+});
+
+posixTest(
+  "a guard failing after the dispatch rename refuses the receipt instead of blocking the agent",
+  async () => {
+    const { directory } = await fixture();
+    const requests = new MessageReceipts(directory, Date.now, undefined, { warn: () => {} });
+    const observed = vi.fn();
+    const dispatching = () =>
+      readdirSync(directory).some(
+        (name) =>
+          /^[a-f0-9]{64}\.json$/.test(name) &&
+          JSON.parse(readFileSync(path.join(directory, name), "utf8")).state === "dispatching",
+      );
+    await requests.enqueue({
+      ...queued(),
+      messageId: "stuck",
+      observe: observed,
+      authorize: () => {
+        if (dispatching()) throw new Error("ownership revoked");
+      },
+    });
+    const dispatch = vi.fn(async () => "turn");
+    await expect(requests.dispatchNext("target", () => true, dispatch)).rejects.toThrow(
+      "ownership revoked",
+    );
+    expect(dispatch).not.toHaveBeenCalled();
+    await requests.enqueue({ ...queued(), messageId: "next" });
+    expect(requests.health().healthy).toBe(true);
+    expect((await receiptFile(directory, "stuck")).record.state).toBe("refused");
+    expect(observed).toHaveBeenLastCalledWith(expect.objectContaining({ state: "refused" }));
+    expect(await requests.dispatchNext("target", () => true, dispatch)).toMatchObject({
+      state: "delivered",
+    });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    requests.stop();
+  },
+);
+
+posixTest("a failed rebuild keeps memory as it was and can be retried", async () => {
+  const { directory } = await fixture();
+  const requests = new MessageReceipts(directory, Date.now, undefined, { warn: () => {} });
+  await requests.enqueue({ ...queued(), messageId: "first" });
+  await latch(directory, requests);
+  const { file } = await receiptFile(directory, "first");
+  await chmod(file, 0o000);
+  try {
+    await expect(requests.enqueue({ ...queued(), messageId: "blocked" })).rejects.toMatchObject({
+      message: "agent_receipt_durability_unavailable",
+    });
+    expect((requests as unknown as { records: Map<string, unknown> }).records.size).toBe(1);
+  } finally {
+    await chmod(file, 0o600);
+  }
+  expect(await requests.enqueue({ ...queued(), messageId: "retry" })).toMatchObject({
+    state: "queued",
+  });
+  expect(requests.health().healthy).toBe(true);
+  requests.stop();
+});
+
+posixTest("a corrupt record latches the ledger instead of probing on every call", async () => {
+  const { directory } = await fixture();
+  const requests = new MessageReceipts(directory, Date.now, undefined, { warn: () => {} });
+  await requests.enqueue({ ...queued(), messageId: "first" });
+  await latch(directory, requests);
+  const { file } = await receiptFile(directory, "first");
+  await writeFile(file, "{ not json");
+  await expect(requests.enqueue({ ...queued(), messageId: "blocked" })).rejects.toThrow();
+  expect((requests as unknown as { recoverable: boolean }).recoverable).toBe(false);
+  requests.stop();
+});
 
 test("hourly pruning runs without sends and its timer does not keep the process alive", async () => {
   const { directory } = await fixture();

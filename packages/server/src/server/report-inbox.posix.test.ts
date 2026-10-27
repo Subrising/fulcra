@@ -3,7 +3,7 @@ import { checkSessionArchive } from "../../../cli/src/commands/check/checks.js";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, realpath, readdir, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
-import { promises as fsPromises } from "node:fs";
+import { promises as fsPromises, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { parseControllerCommand } from "../../../../control/orca-organization/shared/command-parser.mjs";
 import { NativeReportRegistry } from "./report-registry.js";
@@ -258,6 +258,53 @@ test("native report collector: durable metadata precedes one sealed wake and pre
     expect(await f.receipts.dispatchNext(f.prime.agentId, () => true, dispatch)).toBeNull();
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect((await f.receipts.collectReport(nextBatch, factory, ready)).duplicate).toBe(true);
+  } finally {
+    vi.useRealTimers();
+    await f.cleanup();
+  }
+});
+
+test("a guard failing after a collection merge rename rolls the merge back and a retry merges once", async () => {
+  const f = await fixture();
+  vi.useFakeTimers();
+  const receiptsDirectory = path.join(f.directory, "receipts");
+  const nextEvent = { ...f.events[0]!, id: randomUUID(), kind: "needs-you" as const };
+  const nextBatch = f.registry.captureReportBatch([nextEvent]);
+  const onDisk = () =>
+    readdirSync(receiptsDirectory)
+      .filter((name) => /^[a-f0-9]{64}\.json$/.test(name))
+      .some((name) =>
+        readFileSync(path.join(receiptsDirectory, name), "utf8").includes(nextEvent.id),
+      );
+  const factory =
+    (revoke: boolean) =>
+    (batch: NativeReportBatch, messageId: string): NativeQueuedMessage => ({
+      agentId: f.prime.agentId,
+      messageId,
+      request: "Native report metadata is available in supervisor_inbox.",
+      principal: { parent: f.prime, parentEpoch: f.primeReceipt.epoch },
+      boot: f.prime.boot,
+      attachmentBytes: 0,
+      reportBatch: batch,
+      authorize: () => {
+        requireNativeReportBatch(batch);
+        if (revoke && onDisk()) throw new Error("ownership revoked");
+      },
+      canDispatch: () => true,
+    });
+  try {
+    await f.receipts.collectReport(f.batch, factory(false), vi.fn());
+    await expect(f.receipts.collectReport(nextBatch, factory(true), vi.fn())).rejects.toThrow(
+      "ownership revoked",
+    );
+    expect(onDisk()).toBe(true);
+    await f.receipts.prepareArchiveObservation();
+    expect(f.receipts.health().healthy).toBe(true);
+    expect(onDisk()).toBe(false);
+    expect((await f.receipts.collectReport(nextBatch, factory(false), vi.fn())).duplicate).toBe(
+      false,
+    );
+    expect(onDisk()).toBe(true);
   } finally {
     vi.useRealTimers();
     await f.cleanup();
@@ -721,9 +768,10 @@ test("native report journal: source replacement during member durability refuses
     release();
     await failed;
     const dispatch = vi.fn(async () => "native-id");
-    await expect(f.receipts.dispatchNext(f.prime.agentId, () => true, dispatch)).rejects.toThrow(
-      "durability",
-    );
+    // The ledger rebuilds from disk after the race (FU-531); the failed admission left no authority to dispatch.
+    await expect(
+      f.receipts.dispatchNext(f.prime.agentId, () => true, dispatch),
+    ).resolves.toBeNull();
     expect(dispatch).not.toHaveBeenCalled();
   } finally {
     release();
