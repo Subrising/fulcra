@@ -1,6 +1,6 @@
 import type { Logger } from "pino";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import {
@@ -42,9 +42,43 @@ const RecordSchema = z.object({
 });
 type Record = z.infer<typeof RecordSchema>;
 
+// Leave time for admission and the final reply inside the client's four-minute limit.
+const CREATION_TIMEOUT_MS = 180_000;
+const ADMISSION_TIMEOUT_MS = 30_000;
+
+class CreationTimeoutError extends Error {
+  readonly code = "creation_timeout";
+  constructor(timeoutMs: number) {
+    super(`Creation timed out after ${timeoutMs}ms. Check its receipt before retrying.`);
+  }
+}
+
+async function withinDeadline<T>(
+  timeoutMs: number,
+  operation: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => operation(controller.signal)),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          const error = new CreationTimeoutError(timeoutMs);
+          controller.abort(error);
+          reject(error);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Owns creation across socket lifetimes. Resource owners perform work; this module commits its milestones. */
 export class CreationService {
   private admission: Promise<unknown> = Promise.resolve();
+  private recovery?: Promise<void>;
   private readonly active = new Map<string, Promise<CreationSnapshot>>();
   private readonly receiptOperations = new Map<string, Promise<void>>();
   private readonly observers = new Map<string, Set<Observer>>();
@@ -55,54 +89,105 @@ export class CreationService {
       snapshot: CreationSnapshot,
     ) => Promise<void> = async () => {},
     private readonly legacyDirectory?: string,
-  ) {}
+    private readonly options: {
+      timeoutMs?: number;
+      admissionTimeoutMs?: number;
+      receiptTimeoutMs?: number;
+      writeReceipt?: typeof writeFileAtomic;
+    } = {},
+  ) {
+    // Start before accepting work. Failed recovery prevents admission, with an explicit error.
+    void this.initialize().catch((err) => this.logger.error({ err }, "Creation recovery failed"));
+  }
+
+  initialize(): Promise<void> {
+    return (this.recovery ??= this.recoverInterrupted());
+  }
+
+  private async recoverInterrupted(): Promise<void> {
+    await mkdir(this.directory, { recursive: true });
+    for (const name of await readdir(this.directory)) {
+      if (!/^[a-f0-9]{64}\.json$/.test(name)) continue;
+      const identity = name.slice(0, -5);
+      const record = await this.read(identity);
+      if (
+        !record ||
+        !record.inFlight ||
+        record.snapshot.phase === "completed" ||
+        record.snapshot.phase === "failed"
+      )
+        continue;
+      const stage =
+        record.inFlight ?? (record.snapshot.kind === "workspace" ? "workspace" : "agent");
+      // Claims and IDs survive recovery. An interrupted side effect must never be replayed.
+      await this.publish(identity, record, {
+        phase: "failed",
+        error: `${record.snapshot.kind}_request_interrupted. Check its resources before retrying.`,
+        errorCode: "creation_interrupted",
+        failedStage: stage,
+        outcomeUnknown: true,
+      });
+      this.logger.warn({ identity, stage }, "Recovered interrupted creation");
+    }
+  }
 
   async create(input: CreationInput, observer?: Observer): Promise<CreationSnapshot> {
     const identity = identityFor(input.kind, input.key);
-    const admitted = this.admission.then(async () => {
-      await mkdir(this.directory, { recursive: true });
-      const fingerprint = digest(input.request);
-      let record = await this.read(identity);
-      if (!record) record = await this.readLegacyAgent(input, fingerprint);
-      if (record && record.fingerprint !== fingerprint)
-        throw new Error(`${input.kind}_request_key_conflict`);
-      const running = this.active.get(identity);
-      if (running && record) return { completion: running, snapshot: record.snapshot };
-      if (record?.snapshot.phase === "completed") await this.validateCompleted(record.snapshot);
-      if (record?.snapshot.phase === "completed" || record?.snapshot.outcomeUnknown) {
-        return { completion: Promise.resolve(record.snapshot), snapshot: record.snapshot };
-      }
-      if (record?.inFlight) {
-        await this.publish(identity, record, {
-          phase: "failed",
-          error: `${input.kind}_request_outcome_unknown`,
-          failedStage: record.inFlight,
-          outcomeUnknown: true,
-        });
-        return { completion: Promise.resolve(record.snapshot), snapshot: record.snapshot };
-      }
-      if (!record) {
-        record = initialRecord(input, fingerprint);
-        // Persist identity before claiming resources. A failed admission can only retry these IDs.
-        await this.write(identity, record);
-      }
-      await this.claimResources(identity, record.snapshot, input);
-      if (record.snapshot.phase === "failed") {
-        await this.publish(identity, record, {
-          phase: record.snapshot.workspace ? "workspace_ready" : "accepted",
-          error: null,
-          errorCode: undefined,
-          failedStage: undefined,
-          outcomeUnknown: undefined,
-        });
-      }
-      const snapshot = record.snapshot;
-      // Defer the runner until admission has installed the initiating observer.
-      const completion = Promise.resolve().then(() => this.run(identity, record, input));
-      this.active.set(identity, completion);
-      void completion.finally(() => this.active.delete(identity)).catch(() => undefined);
-      return { completion, snapshot };
-    });
+    const previous = this.admission;
+    const admitted = withinDeadline(
+      this.options.admissionTimeoutMs ?? ADMISSION_TIMEOUT_MS,
+      async (signal) => {
+        await previous;
+        signal.throwIfAborted();
+        await this.initialize();
+        signal.throwIfAborted();
+        await mkdir(this.directory, { recursive: true });
+        const fingerprint = digest(input.request);
+        let record = await this.read(identity);
+        if (!record) record = await this.readLegacyAgent(input, fingerprint);
+        if (record && record.fingerprint !== fingerprint)
+          throw new Error(`${input.kind}_request_key_conflict`);
+        const running = this.active.get(identity);
+        if (running && record) return { completion: running, snapshot: record.snapshot };
+        if (record?.snapshot.phase === "completed") await this.validateCompleted(record.snapshot);
+        if (record?.snapshot.phase === "completed" || record?.snapshot.outcomeUnknown) {
+          return { completion: Promise.resolve(record.snapshot), snapshot: record.snapshot };
+        }
+        if (record?.inFlight) {
+          await this.publish(identity, record, {
+            phase: "failed",
+            error: `${input.kind}_request_outcome_unknown`,
+            failedStage: record.inFlight,
+            outcomeUnknown: true,
+          });
+          return { completion: Promise.resolve(record.snapshot), snapshot: record.snapshot };
+        }
+        if (!record) {
+          record = initialRecord(input, fingerprint);
+          // Persist identity before claiming resources. A failed admission can only retry these IDs.
+          await this.write(identity, record);
+        }
+        signal.throwIfAborted();
+        await this.claimResources(identity, record.snapshot, input, signal);
+        signal.throwIfAborted();
+        if (record.snapshot.phase === "failed") {
+          await this.publish(identity, record, {
+            phase: record.snapshot.workspace ? "workspace_ready" : "accepted",
+            error: null,
+            errorCode: undefined,
+            failedStage: undefined,
+            outcomeUnknown: undefined,
+          });
+        }
+        signal.throwIfAborted();
+        const snapshot = record.snapshot;
+        // Defer the runner until admission has installed the initiating observer.
+        const completion = Promise.resolve().then(() => this.run(identity, record, input));
+        this.active.set(identity, completion);
+        void completion.finally(() => this.active.delete(identity)).catch(() => undefined);
+        return { completion, snapshot };
+      },
+    );
     this.admission = admitted.then(
       () => undefined,
       () => undefined,
@@ -126,6 +211,7 @@ export class CreationService {
     const identity = identityFor(kind, key);
     const unsubscribe = this.observe(identity, observer);
     try {
+      await this.initialize();
       await this.admission;
       const record = await this.read(identity);
       if (record?.inFlight && !this.active.has(identity)) {
@@ -150,42 +236,52 @@ export class CreationService {
     input: CreationInput,
   ): Promise<CreationSnapshot> {
     try {
-      if (input.provision && !record.snapshot.workspace) {
-        record.inFlight = "workspace";
-        await this.write(identity, record);
-        const { workspace, setupSkippedReason } = await input.provision(
-          record.snapshot.workspaceId!,
-        );
+      await withinDeadline(this.options.timeoutMs ?? CREATION_TIMEOUT_MS, async (signal) => {
+        if (input.provision && !record.snapshot.workspace) {
+          record.inFlight = "workspace";
+          await this.write(identity, record);
+          signal.throwIfAborted();
+          const { workspace, setupSkippedReason } = await input.provision(
+            record.snapshot.workspaceId!,
+          );
+          signal.throwIfAborted();
+          record.inFlight = null;
+          await this.publish(identity, record, {
+            phase: "workspace_ready",
+            workspace,
+            workspaceId: workspace.id,
+            setupSkippedReason,
+          });
+        }
+        signal.throwIfAborted();
+        if (input.hasAgent && input.createAgent && !record.snapshot.agent) {
+          record.inFlight = "agent";
+          await this.write(identity, record);
+          signal.throwIfAborted();
+          const agent = await input.createAgent(
+            record.snapshot.agentId!,
+            record.snapshot.workspace,
+            async (readyAgent) => {
+              signal.throwIfAborted();
+              record.inFlight = input.hasPrompt ? "prompt" : null;
+              await this.publish(identity, record, {
+                phase: "agent_ready",
+                agent: readyAgent,
+                workspaceId: readyAgent.workspaceId ?? record.snapshot.workspaceId,
+              });
+              signal.throwIfAborted();
+            },
+          );
+          signal.throwIfAborted();
+          record.inFlight = null;
+          if (input.hasPrompt)
+            await this.publish(identity, record, { phase: "prompt_started", agent });
+          else record.snapshot = { ...record.snapshot, agent };
+        }
+        signal.throwIfAborted();
         record.inFlight = null;
-        await this.publish(identity, record, {
-          phase: "workspace_ready",
-          workspace,
-          workspaceId: workspace.id,
-          setupSkippedReason,
-        });
-      }
-      if (input.hasAgent && input.createAgent && !record.snapshot.agent) {
-        record.inFlight = "agent";
-        await this.write(identity, record);
-        const agent = await input.createAgent(
-          record.snapshot.agentId!,
-          record.snapshot.workspace,
-          async (readyAgent) => {
-            record.inFlight = input.hasPrompt ? "prompt" : null;
-            await this.publish(identity, record, {
-              phase: "agent_ready",
-              agent: readyAgent,
-              workspaceId: readyAgent.workspaceId ?? record.snapshot.workspaceId,
-            });
-          },
-        );
-        record.inFlight = null;
-        if (input.hasPrompt)
-          await this.publish(identity, record, { phase: "prompt_started", agent });
-        else record.snapshot = { ...record.snapshot, agent };
-      }
-      record.inFlight = null;
-      await this.publish(identity, record, { phase: "completed" });
+        await this.publish(identity, record, { phase: "completed" });
+      });
     } catch (error) {
       const stage = record.inFlight ?? "agent";
       const resourceId =
@@ -196,19 +292,41 @@ export class CreationService {
           : undefined;
       const rejectedBeforeProvision = code === "directory_not_found" || code === "source_required";
       const unknown =
+        code === "creation_timeout" ||
         stage === "prompt" ||
         (stage === "workspace" && !rejectedBeforeProvision) ||
-        (resourceId !== null && (await input.exists(stage, resourceId)));
+        (resourceId !== null &&
+          (await withinDeadline(ADMISSION_TIMEOUT_MS, () => input.exists(stage, resourceId)).catch(
+            () => true,
+          )));
       // A failed provider startup with no registered resource can retry under the same ID.
       // A partially provisioned resource or an attempted prompt needs reconciliation.
       if (!unknown) record.inFlight = null;
-      await this.publish(identity, record, {
-        phase: "failed",
-        error: error instanceof Error ? error.message : String(error),
-        errorCode: code,
-        failedStage: stage,
-        outcomeUnknown: unknown,
-      });
+      try {
+        await withinDeadline(this.options.receiptTimeoutMs ?? 10_000, () =>
+          this.publish(identity, record, {
+            phase: "failed",
+            error: error instanceof Error ? error.message : String(error),
+            errorCode: code,
+            failedStage: stage,
+            outcomeUnknown: unknown,
+          }),
+        );
+      } catch (receiptError) {
+        // Storage may still finish later. Keep its ordered failure write and all resource claims.
+        this.logger.error(
+          { err: receiptError, identity, stage },
+          "Creation failure receipt was not saved in time",
+        );
+        return {
+          ...record.snapshot,
+          phase: "failed",
+          error: `Creation ${input.kind}/${input.key} failed. Its receipt could not be saved in time. Check its resources before retrying.`,
+          errorCode: "creation_receipt_timeout",
+          failedStage: stage,
+          outcomeUnknown: true,
+        };
+      }
     }
     return record.snapshot;
   }
@@ -250,10 +368,12 @@ export class CreationService {
     identity: string,
     snapshot: CreationSnapshot,
     input: CreationInput,
+    signal: AbortSignal,
   ): Promise<void> {
     if (input.kind === "workspace" && snapshot.workspaceId)
-      await this.claim(identity, "workspace", snapshot.workspaceId, input.exists);
-    if (snapshot.agentId) await this.claim(identity, "agent", snapshot.agentId, input.exists);
+      await this.claim(identity, "workspace", snapshot.workspaceId, input.exists, signal);
+    if (snapshot.agentId)
+      await this.claim(identity, "agent", snapshot.agentId, input.exists, signal);
   }
 
   private async claim(
@@ -261,6 +381,7 @@ export class CreationService {
     kind: "workspace" | "agent",
     id: string,
     exists: CreationInput["exists"],
+    signal: AbortSignal,
   ): Promise<void> {
     const file = join(this.directory, `${digest([kind, id])}.claim`);
     const owner = await readOptional(file);
@@ -268,7 +389,9 @@ export class CreationService {
       if (owner !== identity) throw new Error(`${kind}_id_conflict`);
       return;
     }
+    signal.throwIfAborted();
     if (await exists(kind, id)) throw new Error(`${kind}_id_conflict`);
+    signal.throwIfAborted();
     await writeFile(file, identity, { flag: "wx", mode: 0o600 });
   }
   private observe(identity: string, observer: Observer): () => void {
@@ -309,7 +432,10 @@ export class CreationService {
     // Serialize now: the runner mutates the record after queueing this write.
     const contents = JSON.stringify(record, null, 2);
     return this.accessReceipt(identity, () =>
-      writeFileAtomic(join(this.directory, `${identity}.json`), contents),
+      (this.options.writeReceipt ?? writeFileAtomic)(
+        join(this.directory, `${identity}.json`),
+        contents,
+      ),
     );
   }
   private read(identity: string): Promise<Record | null> {

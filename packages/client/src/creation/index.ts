@@ -46,6 +46,7 @@ interface Operation {
   modern: boolean;
   recovering: boolean;
   stopObserving?: () => void;
+  timer?: ReturnType<typeof setTimeout>;
 }
 
 /** Client-owned observation and compatibility. UI callbacks never advance creation. */
@@ -152,6 +153,15 @@ export class CreationClient {
       recovering: false,
     };
     this.operations.set(identity, operation);
+    // This deadline spans requests, disconnects, and observation. A receipt can outlive the CLI.
+    operation.timer = setTimeout(() => {
+      this.fail(
+        operation,
+        new Error(
+          `Creation ${kind}/${key} timed out after 240000ms. Check its receipt before retrying.`,
+        ),
+      );
+    }, 240_000);
     if (operation.modern) void this.submit(operation);
     else
       void legacy(operation).then(
@@ -223,6 +233,7 @@ export class CreationClient {
   private finish(operation: Operation, result: CreationResult): void {
     if (operation.settled) return;
     operation.settled = true;
+    clearTimeout(operation.timer);
     operation.stopObserving?.();
     operation.resolve(result);
     operation.observers.clear();
@@ -231,6 +242,7 @@ export class CreationClient {
   private fail(operation: Operation, error: unknown): void {
     if (operation.settled) return;
     operation.settled = true;
+    clearTimeout(operation.timer);
     operation.stopObserving?.();
     operation.reject(error instanceof Error ? error : new Error(String(error)));
     operation.observers.clear();

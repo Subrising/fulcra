@@ -1,14 +1,15 @@
 import pino from "pino";
 import { createHash } from "node:crypto";
-import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import type {
   AgentSnapshotPayload,
   CreationSnapshot,
   WorkspaceDescriptorPayload,
 } from "@getpaseo/protocol/messages";
+import { writeFileAtomic } from "../atomic-file.js";
 import { CreationService, type CreationInput } from "./index.js";
 
 const silentLogger = pino({ level: "silent" });
@@ -321,4 +322,151 @@ test("observer failures are logged without failing creation", async () => {
       err: expect.objectContaining({ message: "delivery failed" }),
     }),
   );
+});
+
+test("a blocked workspace fails within its deadline and cannot start an agent after late completion", async () => {
+  const f = await fixture();
+  const gate = deferred();
+  const service = new CreationService(f.directory, silentLogger, undefined, undefined, {
+    timeoutMs: 20,
+  });
+  const result = await service.create({
+    ...f.input,
+    provision: async () => {
+      await gate.promise;
+      return { workspace };
+    },
+  });
+  expect(result).toMatchObject({
+    phase: "failed",
+    failedStage: "workspace",
+    outcomeUnknown: true,
+    errorCode: "creation_timeout",
+  });
+  gate.resolve();
+  expect(await service.create(f.input)).toEqual(result);
+  expect(f.calls).toEqual([]);
+});
+
+test("boot recovery fails old in-flight receipts without replaying resources or changing claims", async () => {
+  const f = await fixture();
+  const gate = deferred();
+  const entered = deferred();
+  const original = f.service.create({
+    ...f.input,
+    provision: async () => {
+      entered.resolve();
+      await gate.promise;
+      return { workspace };
+    },
+  });
+  await entered.promise;
+  // Copy an interrupted daemon's durable receipts into a new home.
+  const recovered = await mkdtemp(join(tmpdir(), "creation-boot-"));
+  directories.push(recovered);
+  await cp(f.directory, recovered, { recursive: true });
+  const service = new CreationService(recovered, silentLogger);
+  await service.initialize();
+  const files = await readdir(recovered);
+  const records = await Promise.all(
+    files
+      .filter((name) => name.endsWith(".json"))
+      .map(async (name) => JSON.parse(await readFile(join(recovered, name), "utf8"))),
+  );
+  expect(records).toEqual([
+    expect.objectContaining({
+      inFlight: "workspace",
+      snapshot: expect.objectContaining({
+        phase: "failed",
+        failedStage: "workspace",
+        outcomeUnknown: true,
+      }),
+    }),
+  ]);
+  expect(await service.create(f.input)).toMatchObject({ phase: "failed", outcomeUnknown: true });
+  gate.resolve();
+  f.provider.resolve();
+  await original;
+});
+
+test("a blocked admission releases the queue and a late claim cannot start work", async () => {
+  const f = await fixture();
+  const gate = deferred();
+  const service = new CreationService(f.directory, silentLogger, undefined, undefined, {
+    admissionTimeoutMs: 20,
+  });
+  await expect(
+    service.create({
+      ...f.input,
+      exists: async () => {
+        await gate.promise;
+        return false;
+      },
+    }),
+  ).rejects.toThrow("timed out");
+  f.provider.resolve();
+  const second = await service.create({
+    ...f.input,
+    key: "independent",
+    workspaceId: "wks_1111111111111111",
+    agentId: undefined,
+  });
+  expect(second.phase).toBe("completed");
+  gate.resolve();
+  expect(f.calls).toEqual(["workspace", "agent", "prompt"]);
+});
+
+test("a late agent readiness callback cannot change a timed-out receipt or start a prompt", async () => {
+  const f = await fixture();
+  const service = new CreationService(f.directory, silentLogger, undefined, undefined, {
+    timeoutMs: 20,
+  });
+  const result = await service.create(f.input);
+  expect(result).toMatchObject({
+    phase: "failed",
+    failedStage: "agent",
+    outcomeUnknown: true,
+    errorCode: "creation_timeout",
+  });
+  f.provider.resolve();
+  expect(await service.create(f.input)).toEqual(result);
+  expect(f.calls).toEqual(["workspace", "agent"]);
+});
+
+test("stalled receipt storage returns an unknown failure and cannot start a late prompt", async () => {
+  const f = await fixture();
+  const gate = deferred();
+  const entered = deferred();
+  const service = new CreationService(f.directory, silentLogger, undefined, undefined, {
+    timeoutMs: 20,
+    receiptTimeoutMs: 20,
+    writeReceipt: async (file, contents) => {
+      if (JSON.parse(String(contents)).snapshot.phase === "agent_ready") {
+        entered.resolve();
+        await gate.promise;
+      }
+      await writeFileAtomic(file, contents);
+    },
+  });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  f.provider.resolve();
+  const result = service.create(f.input);
+  try {
+    await entered.promise;
+    await vi.advanceTimersByTimeAsync(40);
+    expect(await result).toMatchObject({
+      phase: "failed",
+      outcomeUnknown: true,
+      errorCode: "creation_receipt_timeout",
+    });
+    gate.resolve();
+    const observation = await service.subscribe("workspace", f.input.key, () => {});
+    observation.unsubscribe();
+    expect(observation.snapshot?.phase).toBe("failed");
+    expect(f.calls).toEqual(["workspace", "agent"]);
+  } finally {
+    gate.resolve();
+    vi.useRealTimers();
+    await result;
+  }
 });
