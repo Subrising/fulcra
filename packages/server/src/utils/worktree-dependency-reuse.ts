@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  chmodSync,
   closeSync,
   copyFileSync,
   existsSync,
@@ -10,6 +11,7 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -173,22 +175,45 @@ function linkDirectory(target: string, path: string): void {
   symlinkSync(target, path, process.platform === "win32" ? "junction" : "dir");
 }
 
+// npm marks bin files executable at install time. A linked worktree skips npm, so its own
+// workspace bin files keep the mode from git; mark them as npm does.
+function markWorkspaceBinExecutable(binLink: string, worktreePath: string): void {
+  let target: string;
+  try {
+    target = realpathSync(binLink);
+  } catch {
+    return;
+  }
+  const fromRoot = relative(realpathSync(worktreePath), target);
+  if (fromRoot.startsWith("..") || isAbsolute(fromRoot) || isInsideNodeModules(fromRoot)) {
+    return;
+  }
+  chmodSync(target, statSync(target).mode | 0o111);
+}
+
 // Bin entries are relative links (macOS, Linux) or shim files that use their own folder
 // (Windows). A copy of each entry resolves inside this worktree, so workspace bins work.
-function copyBinEntries(sourceDir: string, targetDir: string): void {
+function copyBinEntries(sourceDir: string, targetDir: string, worktreePath: string): void {
   mkdirSync(targetDir, { recursive: true });
   for (const entry of readdirSync(sourceDir, { withFileTypes: true })) {
     const source = join(sourceDir, entry.name);
     const target = join(targetDir, entry.name);
     if (entry.isSymbolicLink()) {
       symlinkSync(readlinkSync(source), target);
+      markWorkspaceBinExecutable(target, worktreePath);
     } else if (entry.isFile()) {
       copyFileSync(source, target);
     }
   }
 }
 
-function linkEntries(sourceDir: string, targetDir: string): void {
+interface BinFolder {
+  source: string;
+  target: string;
+}
+
+// Bin folders are returned, not made: they come after the workspace links they point to.
+function linkEntries(sourceDir: string, targetDir: string, binFolders: BinFolder[]): void {
   mkdirSync(targetDir, { recursive: true });
   for (const entry of readdirSync(sourceDir, { withFileTypes: true })) {
     if (PER_COPY_ENTRIES.has(entry.name)) {
@@ -197,9 +222,9 @@ function linkEntries(sourceDir: string, targetDir: string): void {
     const source = join(sourceDir, entry.name);
     const target = join(targetDir, entry.name);
     if (entry.name === ".bin" && entry.isDirectory()) {
-      copyBinEntries(source, target);
+      binFolders.push({ source, target });
     } else if (entry.isDirectory() && entry.name.startsWith("@")) {
-      linkEntries(source, target);
+      linkEntries(source, target, binFolders);
     } else if (entry.isDirectory() || entry.isSymbolicLink()) {
       linkDirectory(source, target);
     } else if (entry.isFile()) {
@@ -232,13 +257,17 @@ export function linkCachedDependencies(worktreePath: string, entry: DependencyCa
   if (manifest.nodeModulesDirs.some((dir) => existsSync(join(worktreePath, dir)))) {
     return false;
   }
+  const binFolders: BinFolder[] = [];
   for (const dir of manifest.nodeModulesDirs) {
-    linkEntries(join(entry.dir, dir), join(worktreePath, dir));
+    linkEntries(join(entry.dir, dir), join(worktreePath, dir), binFolders);
   }
   for (const link of manifest.projectLinks) {
     const path = join(worktreePath, link.path);
     mkdirSync(dirname(path), { recursive: true });
     linkDirectory(join(worktreePath, link.target), path);
+  }
+  for (const bin of binFolders) {
+    copyBinEntries(bin.source, bin.target, worktreePath);
   }
   recordReference(worktreePath, entry, manifest.nodeModulesDirs[0]!);
   return true;
