@@ -896,6 +896,39 @@ posixTest(
   },
 );
 
+posixTest(
+  "one failed durable write does not fail every later send; the ledger recovers and reports health",
+  async () => {
+    const { directory } = await fixture();
+    const warnings: string[] = [];
+    const requests = new MessageReceipts(directory, Date.now, undefined, {
+      warn: (message) => warnings.push(message),
+    });
+    await requests.enqueue({ ...queued(), messageId: "first" });
+    expect(requests.health()).toMatchObject({ healthy: true, lastError: null });
+    await chmod(directory, 0o500);
+    try {
+      await expect(requests.enqueue({ ...queued(), messageId: "blocked" })).rejects.toThrow();
+      expect(requests.health()).toMatchObject({ healthy: false });
+      expect(requests.health().lastError).toMatch(/EACCES|EPERM/);
+      await expect(
+        requests.enqueue({ ...queued(), messageId: "still-blocked" }),
+      ).rejects.toMatchObject({
+        message: "agent_receipt_durability_unavailable",
+        cause: expect.anything(),
+      });
+    } finally {
+      await chmod(directory, 0o700);
+    }
+    expect(await requests.enqueue({ ...queued(), messageId: "after-fault" })).toMatchObject({
+      state: "queued",
+    });
+    expect(requests.health()).toMatchObject({ healthy: true, recoveries: 1 });
+    expect(warnings.filter((m) => m.includes("unhealthy"))).toHaveLength(1);
+    requests.stop();
+  },
+);
+
 test("hourly pruning runs without sends and its timer does not keep the process alive", async () => {
   const { directory } = await fixture();
   const requests = new MessageReceipts(directory);

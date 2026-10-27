@@ -177,6 +177,14 @@ interface SendMessageInput {
 }
 
 /** Owns message delivery receipts; creation is owned by CreationService. */
+function describeError(error: unknown): string {
+  const cause =
+    error instanceof Error && error.cause ? ` (cause: ${describeError(error.cause)})` : "";
+  const code = (error as { code?: unknown })?.code;
+  const text = error instanceof Error ? error.message : String(error);
+  return `${typeof code === "string" ? `${code}: ` : ""}${text}${cause}`;
+}
+
 export class MessageReceipts {
   private readonly contentDebits = new Map<string, NativeArtifactContentDebit>();
   private artifactStore?: NativeArtifactStore;
@@ -188,6 +196,9 @@ export class MessageReceipts {
   private recovered = false;
   private pendingOperations = 0;
   private unhealthy = false;
+  private unhealthySince: number | null = null;
+  private lastError: string | null = null;
+  private recoveries = 0;
   private expiryTimer?: ReturnType<typeof setTimeout>;
   private watermark = 0;
   private readonly evidenceClaims = new Map<string, NativeEvidenceClaim>();
@@ -228,13 +239,55 @@ export class MessageReceipts {
     const result = this.tail
       .catch(() => undefined)
       .then(() => {
-        if (this.unhealthy) throw new Error("agent_receipt_durability_unavailable");
-        return operation();
+        return this.ensureHealthy().then(operation);
       });
     this.tail = result;
     return result.finally(() => {
       this.pendingOperations--;
     });
+  }
+
+  /** Latch the ledger shut after a failed durable write. The first error is logged with its cause. */
+  private markUnhealthy(error: unknown): void {
+    this.lastError = describeError(error);
+    if (this.unhealthy) return;
+    this.unhealthy = true;
+    this.unhealthySince = this.now();
+    this.warn(
+      `Native receipt ledger unhealthy; sends fail until a durable write succeeds: ${this.lastError}`,
+    );
+  }
+
+  /** A failed write must not outlive the fault: a good durable probe write clears the latch. */
+  private async ensureHealthy(): Promise<void> {
+    if (!this.unhealthy) return;
+    const probe = path.join(this.directory, ".health-probe");
+    try {
+      await writeJsonFileDurable(probe, { probe: this.now() });
+      await unlink(probe).catch(() => undefined);
+    } catch (error) {
+      this.lastError = describeError(error);
+      throw new Error("agent_receipt_durability_unavailable", { cause: error });
+    }
+    this.unhealthy = false;
+    this.unhealthySince = null;
+    this.recoveries++;
+    this.warn("Native receipt ledger recovered after a good durable write");
+  }
+
+  /** Health signal for the host: false while the ledger refuses sends. */
+  health(): {
+    healthy: boolean;
+    since: number | null;
+    lastError: string | null;
+    recoveries: number;
+  } {
+    return {
+      healthy: !this.unhealthy,
+      since: this.unhealthySince,
+      lastError: this.lastError,
+      recoveries: this.recoveries,
+    };
   }
 
   private recoverEvidence(file: string, receipt: z.infer<typeof ReceiptSchema>): void {
@@ -471,7 +524,7 @@ export class MessageReceipts {
       requireEffect?.(); // After every durability await, immediately before memory publication.
     } catch (error) {
       if (!allowPreCommitRefusal || !(error instanceof AtomicWritePreCommitGuardError))
-        this.unhealthy = true;
+        this.markUnhealthy(error);
       throw error;
     }
     this.records.set(key, receipt);
@@ -504,8 +557,8 @@ export class MessageReceipts {
             return;
           }
           await this.expire(now);
-        }).catch(() => {
-          this.unhealthy = true;
+        }).catch((error) => {
+          this.markUnhealthy(error);
         });
       },
       Math.max(1, next - this.now()),
@@ -525,8 +578,8 @@ export class MessageReceipts {
     await this.serial(async () => {
       await this.initialize(undefined, true);
       await this.expire(this.clock());
-    }).catch(() => {
-      this.unhealthy = true;
+    }).catch((error) => {
+      this.markUnhealthy(error);
     });
   }
 
@@ -900,8 +953,8 @@ export class MessageReceipts {
         }
         input.authorize();
         onReady(sealed.agentId);
-      }).catch(() => {
-        this.unhealthy = true;
+      }).catch((error) => {
+        this.markUnhealthy(error);
       });
     }, delay);
     timer.unref();
@@ -934,7 +987,7 @@ export class MessageReceipts {
         await writeJsonFileDurable(path.join(this.directory, `${key}.json`), snapshot, authorize);
         authorize();
       } catch (error) {
-        this.unhealthy = true;
+        this.markUnhealthy(error);
         throw error;
       }
       this.evidenceClaims.set(key, snapshot);
@@ -979,7 +1032,7 @@ export class MessageReceipts {
         await writeJsonFileDurable(path.join(this.directory, `${key}.json`), snapshot, authorize);
         authorize();
       } catch (error) {
-        this.unhealthy = true;
+        this.markUnhealthy(error);
         throw error;
       }
       this.evidenceClaims.delete(key);
@@ -1064,7 +1117,7 @@ export class MessageReceipts {
         this.managedArtifacts.set(key, record);
         return record;
       } catch (error) {
-        this.unhealthy = true;
+        this.markUnhealthy(error);
         throw error;
       }
     });
@@ -1163,7 +1216,7 @@ export class MessageReceipts {
         });
         return bindReportPublication(output, check);
       } catch (error) {
-        this.unhealthy = true;
+        this.markUnhealthy(error);
         throw error;
       }
     });
