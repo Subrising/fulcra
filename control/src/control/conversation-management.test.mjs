@@ -158,7 +158,7 @@ test("the conversation workflow writes end-to-end through the management route; 
   assert.match(row.inputDigest, /^[a-f0-9]{64}$/);
 });
 
-// Well-formed inputs for the 9 verbs (the controller's own schemas).
+// Well-formed inputs for the 10 verbs (the controller's own schemas).
 const VALID = {
   create: { messageId: randomUUID(), taskId: T, provider: "codex", title: "Acceptance" },
   "management-prepare": {
@@ -185,11 +185,17 @@ const VALID = {
   "task-allowance-set": { taskId: T, expectedRevision: 1, maxInstructions: 6, reason },
   handback: { sessionId: S, reason: "Acceptance handback", expectedGeneration: 1 },
   observe: S,
+  "operator-native-queue": {
+    sessionId: S,
+    messageId: randomUUID(),
+    text: "Acceptance queued instruction",
+    expectedGeneration: 1,
+  },
 };
 
-test("the allowlist is exactly the 9 verbs; each is delivered to the controller exactly as sent, with the call's principal", async () => {
+test("the allowlist is exactly the 10 verbs; each is delivered to the controller exactly as sent, with the call's principal", async () => {
   assert.deepEqual([...OPERATOR_INVOKE_METHODS].sort(), Object.keys(VALID).sort());
-  assert.equal(OPERATOR_INVOKE_METHODS.length, 9);
+  assert.equal(OPERATOR_INVOKE_METHODS.length, 10);
   for (const method of OPERATOR_INVOKE_METHODS) {
     const seen = [];
     const reply = await pluginRpc(

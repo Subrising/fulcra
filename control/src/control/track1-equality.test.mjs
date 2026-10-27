@@ -112,7 +112,7 @@ for (const [seed, intents] of SEEDS)
 test("history: the planner uses the new indexes instead of scanning deliveries", (t) => {
   const g = journal(t, 42, 900);
   const src = fs.readFileSync(new URL("./controller.mjs", import.meta.url), "utf8"),
-    at = src.indexOf("return this.store.db.prepare(`SELECT id,session,kind,state FROM (");
+    at = src.indexOf("`SELECT id,session,kind,state FROM (");
   const sql = src.slice(src.indexOf("`", at) + 1, src.indexOf("`)", at));
   const plan = g.store.db
     .prepare("EXPLAIN QUERY PLAN " + sql)

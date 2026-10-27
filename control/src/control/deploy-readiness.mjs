@@ -45,8 +45,10 @@ export const DAEMON_SECRET = portable
 // DEPLOYMENT-DECISION.md §2: "Window A needs roughly 360 MB transiently to install a 180 MB image."
 export const BOOT_DISK_MB = 360;
 export const GUARD_PATH = "src/control/admission-guard.mjs";
-// Where the released modules actually live: the same `base` deploy-admission.mjs uses (release-paths.mjs).
-export const ADMISSION_BASE_DIR = releasePaths().admissionBase;
+// Where the released modules actually live: the same `base` deploy-admission.mjs uses (release-paths.mjs). Read when a
+// check runs, not at import: an installation without config/runtime.json can still load this module, and the
+// check then fails closed (every released module reads as missing).
+const admissionBaseDir = () => releasePaths().admissionBase;
 export const GO = "GO",
   NOGO = "NO-GO";
 
@@ -442,7 +444,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     const out = {};
     for (const name of Object.keys(baseline)) {
       try {
-        const bytes = fs.readFileSync(ADMISSION_BASE_DIR + name);
+        const bytes = fs.readFileSync(admissionBaseDir() + name);
         out[name] = createHash("sha256").update(bytes).digest("hex");
         carriesGuard[name] = bytes.includes("orcaAdmissionGuard");
       } catch {

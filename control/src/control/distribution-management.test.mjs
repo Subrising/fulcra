@@ -19,7 +19,7 @@ test("actual distribution status bridge satisfies the host Promise contract and 
     pathToFileURL(path.join(product, "packages/server/dist/server/server/plugins/management.js"))
   );
   await mock.module(new URL("../config.mjs", import.meta.url).href, {
-    namedExports: { firstRun: () => {}, loadConfig: () => ({ home }) },
+    namedExports: { firstRun: () => ({ defaults: {} }), loadConfig: () => ({ home }) },
   });
   await mock.module(new URL("./child-supervisor.mjs", import.meta.url).href, {
     namedExports: {

@@ -598,7 +598,17 @@ export default function contribute(
   );
   const stopPool: unknown =
     typeof server.before === "function"
-      ? server.before("agent.session_open", sessionOpenHook({ root: poolRoot }) as any)
+      ? server.before(
+          "agent.session_open",
+          sessionOpenHook({
+            root: poolRoot,
+            // The pool has already stored the notice; the credit-warnings watcher sends it. This only leaves a trace.
+            onRisk: (risk: { accountId?: string; session?: string }) =>
+              console.warn(
+                `[accounts] paid account served a session while a subscription was free: account=${risk.accountId} session=${risk.session}`,
+              ),
+          }) as any,
+        )
       : undefined;
   // W1 x W2: a switch continues the running session on the chosen account through the controller's fenced
   // session-takeover (owner/lead-authorised; it writes the assignment and the one history record).

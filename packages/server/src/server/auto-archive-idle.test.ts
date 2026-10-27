@@ -54,6 +54,17 @@ describe("pickAutoArchive closed sessions", () => {
     const recent = record("a", { updatedAt: new Date(NOW - 2 * HOUR).toISOString() });
     expect(pickAutoArchive(input([recent]))).toEqual([]);
   });
+  test("an unloaded idle session left by a restart is closed and due after 24 h (FU-498)", () => {
+    const reopened = record("a", { lastStatus: "idle" });
+    const cutOff = record("b", {
+      lastStatus: "idle",
+      interruptedTurn: { previousStatus: "running", detectedAt: "x", bootId: "y" },
+    } as Partial<StoredAgentRecord>);
+    expect(pickAutoArchive(input([reopened, cutOff]))).toEqual([
+      { id: "a", reason: "closed-idle", lastUserMessageAt: null },
+    ]);
+    expect(pickAutoArchive(input([reopened], { lifecycleOf: () => "idle" }))).toEqual([]);
+  });
   test("0 hours turns the closed rule off", () => {
     expect(pickAutoArchive(input([record("a")], { closedAfterHours: 0 }))).toEqual([]);
   });

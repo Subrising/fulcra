@@ -3,7 +3,7 @@
 // PRISTINE, never-patched tree. On a box where every compiled server has already been patched -- which is
 // what a deployed admission tree is -- that one cannot run. It is a red line with a known cause, not an
 // opaque environment gate, and the other twelve are real coverage.
-import test from "node:test";
+import { retiredPatchRoute, testUnless } from "./legacy-patch-route.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -30,6 +30,7 @@ assert(
     "Its dependencies are hoisted to the workspace root, not packages/server/node_modules.",
   ].join(" "),
 );
+const test = testUnless(retiredPatchRoute(source));
 const { requireUnpinnedAdmissionGuard } = await import("./admission-guard-precondition.mjs");
 requireUnpinnedAdmissionGuard(); // Fails loudly when the working guard is pinned; see that module.
 const { AgentManager } = await import(

@@ -1,5 +1,6 @@
 // H7 item 4 (G18): the seat sweep re-establishes a seat's TEAM with it, under the seat's own gate.
 import fs from "node:fs";
+import { flat } from "./source-text.mjs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -176,7 +177,7 @@ test("sweep candidates: seats first, then their manager workers and the sessions
   assert.equal(ownedBySeat(f.db, r), false);
 });
 test("repinSeat passes owned to the gate (static)", () => {
-  const src = fs.readFileSync(new URL("./controller.mjs", import.meta.url), "utf8");
+  const src = flat(fs.readFileSync(new URL("./controller.mjs", import.meta.url), "utf8"));
   assert.match(
     src,
     /const facts = \{ seated: Boolean\(this\.bindings\?\.seatedRow\(id\)\), owned: ownedBySeat\(this\.store\.db, id\),/,
