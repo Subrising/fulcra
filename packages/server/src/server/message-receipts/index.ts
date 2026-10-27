@@ -179,8 +179,18 @@ interface SendMessageInput {
 /** Owns message delivery receipts; creation is owned by CreationService. */
 // Operating-system I/O failures (EACCES, ENOSPC, EIO...) can clear; a revoked guard or a corrupt record cannot.
 function isIoError(error: unknown): boolean {
-  const code = (error as { code?: unknown } | null)?.code;
-  return typeof code === "string" && /^E[A-Z0-9]+$/.test(code);
+  for (let e = error, depth = 0; e && depth < 5; e = (e as { cause?: unknown }).cause, depth++) {
+    const code = (e as { code?: unknown }).code;
+    if (typeof code === "string") return /^E[A-Z0-9]+$/.test(code);
+  }
+  return false;
+}
+
+// Raised while the ledger is already closed. It is a symptom, never a new cause, so it must not reclassify the latch.
+class DurabilityUnavailableError extends Error {
+  constructor(options?: { cause?: unknown }) {
+    super("agent_receipt_durability_unavailable", options);
+  }
 }
 
 function describeError(error: unknown): string {
@@ -247,7 +257,8 @@ export class MessageReceipts {
     const result = this.tail
       .catch(() => undefined)
       .then(() => {
-        return this.ensureHealthy().then(operation);
+        // The healthy path stays synchronous: callers and timers depend on this ordering.
+        return this.unhealthy ? this.ensureHealthy().then(operation) : operation();
       });
     this.tail = result;
     return result.finally(() => {
@@ -257,6 +268,7 @@ export class MessageReceipts {
 
   /** Latch the ledger shut after a failed durable write. The first error is logged with its cause. */
   private markUnhealthy(error: unknown): void {
+    if (error instanceof DurabilityUnavailableError) return;
     this.lastError = describeError(error);
     if (!isIoError(error)) this.recoverable = false;
     if (this.unhealthy) return;
@@ -287,7 +299,7 @@ export class MessageReceipts {
   private async ensureHealthy(): Promise<void> {
     if (!this.unhealthy) return;
     if (!this.recoverable)
-      throw new Error("agent_receipt_durability_unavailable", {
+      throw new DurabilityUnavailableError({
         cause: new Error(this.lastError ?? "latched by a non-I/O failure"),
       });
     const probe = path.join(this.directory, ".health-probe");
@@ -300,7 +312,7 @@ export class MessageReceipts {
       await this.initialize();
     } catch (error) {
       this.lastError = describeError(error);
-      throw new Error("agent_receipt_durability_unavailable", { cause: error });
+      throw new DurabilityUnavailableError({ cause: error });
     }
     this.unhealthy = false;
     this.unhealthySince = null;

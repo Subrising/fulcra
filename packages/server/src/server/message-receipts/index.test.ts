@@ -917,6 +917,8 @@ posixTest(
         message: "agent_receipt_durability_unavailable",
         cause: expect.anything(),
       });
+      // A background pass that trips on the closed ledger must not turn the fault permanent.
+      await requests.prepareArchiveObservation();
     } finally {
       await chmod(directory, 0o700);
     }
