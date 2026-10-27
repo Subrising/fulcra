@@ -38,9 +38,11 @@ async function expectBottomSheetOpen(page: Page) {
 async function closeBottomSheetWithBackdrop(page: Page) {
   const backdrop = bottomSheetBackdrop(page);
   // The backdrop fills the screen before the sheet finishes presenting.
-  await bottomSheetHandle(page).click({ trial: true });
-  await backdrop.click({ position: { x: MOBILE_VIEWPORT.width / 2, y: 24 } });
-  await expect(backdrop).toHaveCount(0);
+  await expect(async () => {
+    await bottomSheetHandle(page).click({ trial: true, timeout: 2_000 });
+    await backdrop.click({ position: { x: MOBILE_VIEWPORT.width / 2, y: 24 }, timeout: 2_000 });
+    await expect(backdrop).toHaveCount(0, { timeout: 1_500 });
+  }).toPass({ timeout: 15_000 });
 }
 
 async function openTabSwitcher(page: Page) {
@@ -61,9 +63,18 @@ async function dismissStackedModelPickerWithBackdrop(page: Page) {
     .getByRole("button", { name: /Select model/ })
     .click();
   await expect(page.getByTestId("agent-controls-model-browser-sheet")).toBeVisible();
-  await bottomSheetHandle(page).click({ trial: true });
-  await bottomSheetBackdrop(page).click({ position: { x: MOBILE_VIEWPORT.width / 2, y: 24 } });
-  await expect(page.getByTestId("agent-controls-model-browser-sheet")).not.toBeVisible();
+  // A backdrop click that lands while the sheet still presents is swallowed or intercepted by
+  // the tab strip behind it, so press again until the sheet leaves.
+  await expect(async () => {
+    await bottomSheetHandle(page).click({ trial: true, timeout: 2_000 });
+    await bottomSheetBackdrop(page).click({
+      position: { x: MOBILE_VIEWPORT.width / 2, y: 24 },
+      timeout: 2_000,
+    });
+    await expect(page.getByTestId("agent-controls-model-browser-sheet")).not.toBeVisible({
+      timeout: 1_500,
+    });
+  }).toPass({ timeout: 15_000 });
   await expect(page.getByTestId("agent-controls-model-sheet")).toBeVisible();
   await expect(page.getByTestId("agent-controls-settings-list")).toBeVisible();
 }

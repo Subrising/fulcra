@@ -10,6 +10,18 @@ export function bindGuardHome(text, home) {
     "const HOME = process.env.ORCA_ADMISSION_HOME ?? '/path/to/unconfigured/controller';";
   return replaceOnce(text, original, `const HOME = ${JSON.stringify(home)};`);
 }
+// automatic-permission.mjs imports the plugin's git helper by package name. A staged copy lives beside the guard
+// (under the controller home in the portable layout), where no node_modules reaches that name, so the import is
+// pinned to the product's own file.
+export const PLUGIN_GIT_IMPORT =
+  'import { execGitCommandSync } from "@getpaseo/plugin/server/git";';
+export function bindPluginGit(text, gitFileUrl) {
+  return replaceOnce(
+    text,
+    PLUGIN_GIT_IMPORT,
+    `import { execGitCommandSync } from ${JSON.stringify(gitFileUrl)};`,
+  );
+}
 // The one module every Claude Agent SDK process is started from, and its patch. permission-overlay.py applies the
 // same text (patch_deny_module); the boundary test proves both routes produce identical bytes.
 export const CLAUDE_QUERY_MODULE = "agent/providers/claude/query.js";
