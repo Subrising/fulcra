@@ -1,5 +1,5 @@
 import { mkdtemp, rm, readFile, writeFile, readdir, utimes, chmod } from "node:fs/promises";
-import { readdirSync, readFileSync } from "node:fs";
+import { promises as fsPromises, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
@@ -1029,6 +1029,44 @@ posixTest(
       state: "delivered",
     });
     expect(dispatch).toHaveBeenCalledTimes(1);
+    requests.stop();
+  },
+);
+
+posixTest(
+  "a refusal that fails to write after the swap is settled again by the next rebuild",
+  async () => {
+    const { directory } = await fixture();
+    const requests = new MessageReceipts(directory, Date.now, undefined, { warn: () => {} });
+    const dispatching = () =>
+      readdirSync(directory).some(
+        (name) =>
+          /^[a-f0-9]{64}\.json$/.test(name) &&
+          JSON.parse(readFileSync(path.join(directory, name), "utf8")).state === "dispatching",
+      );
+    await requests.enqueue({
+      ...queued(),
+      messageId: "stuck",
+      authorize: () => {
+        if (dispatching()) throw new Error("ownership revoked");
+      },
+    });
+    const dispatch = vi.fn(async () => "turn");
+    await expect(requests.dispatchNext("target", () => true, dispatch)).rejects.toThrow();
+    // The probe write renames once; the refusal write renames second, and fails once.
+    const real = fsPromises.rename;
+    let renames = 0;
+    const spy = vi.spyOn(fsPromises, "rename").mockImplementation(async (...args) => {
+      if (++renames === 2) throw Object.assign(new Error("disk error"), { code: "EIO" });
+      return real(...args);
+    });
+    try {
+      await expect(requests.enqueue({ ...queued(), messageId: "first" })).rejects.toThrow();
+    } finally {
+      spy.mockRestore();
+    }
+    await requests.enqueue({ ...queued(), messageId: "second" });
+    expect((await receiptFile(directory, "stuck")).record.state).toBe("refused");
     requests.stop();
   },
 );

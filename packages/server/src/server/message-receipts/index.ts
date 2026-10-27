@@ -223,6 +223,7 @@ export class MessageReceipts {
   private unhealthySince: number | null = null;
   private lastError: string | null = null;
   private recoveries = 0;
+  private readonly marked = new WeakSet<object>();
   // False once a non-I/O failure (a revoked guard, a corrupt record) latched the ledger: only a restart clears that.
   private recoverable = true;
   private expiryTimer?: ReturnType<typeof setTimeout>;
@@ -277,6 +278,11 @@ export class MessageReceipts {
   /** Latch the ledger shut after a failed durable write. The first error is logged with its cause. */
   private markUnhealthy(error: unknown, diskAhead = false): void {
     if (error instanceof DurabilityUnavailableError) return;
+    // One failure is marked once: a caller re-marking the error it rethrew must not change the verdict.
+    if (typeof error === "object" && error !== null) {
+      if (this.marked.has(error)) return;
+      this.marked.add(error);
+    }
     this.lastError = describeError(error);
     // A guard failing after the rename leaves disk ahead of memory; the disk rebuild repairs exactly that.
     if (!diskAhead && !isIoError(error)) this.recoverable = false;
@@ -367,8 +373,11 @@ export class MessageReceipts {
       if (!memory) continue;
       // Disk says dispatching but memory still says queued: the guard failed after the rename and dispatch() never
       // ran, so no effect can have happened. Refuse it; a stuck dispatching receipt would block the agent.
-      if (memory.state === "queued" && disk.state === "dispatching") refuse.push([key, disk]);
-      else if (memory.state !== disk.state) changed.push([key, disk]);
+      if (memory.state === "queued" && disk.state === "dispatching") {
+        refuse.push([key, disk]);
+        // Memory stays queued until the refusal is durable: if that write fails, the next rebuild settles it again.
+        records.set(key, memory);
+      } else if (memory.state !== disk.state) changed.push([key, disk]);
       // Same state, different content (a refused collection merge): memory is what was admitted. Put it back.
       else if (canonicalJson(memory) !== canonicalJson(disk)) rollback.push([key, memory, disk]);
     }

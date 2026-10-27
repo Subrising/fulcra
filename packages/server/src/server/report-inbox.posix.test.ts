@@ -3,7 +3,7 @@ import { checkSessionArchive } from "../../../cli/src/commands/check/checks.js";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, realpath, readdir, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
-import { promises as fsPromises, readdirSync, readFileSync } from "node:fs";
+import { existsSync, promises as fsPromises, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { parseControllerCommand } from "../../../../control/orca-organization/shared/command-parser.mjs";
 import { NativeReportRegistry } from "./report-registry.js";
@@ -305,6 +305,42 @@ test("a guard failing after a collection merge rename rolls the merge back and a
       false,
     );
     expect(onDisk()).toBe(true);
+  } finally {
+    vi.useRealTimers();
+    await f.cleanup();
+  }
+});
+
+test("a guard failing after the collection seal rename does not latch the ledger for good", async () => {
+  const f = await fixture();
+  vi.useFakeTimers();
+  const receiptsDirectory = path.join(f.directory, "receipts");
+  const sealed = () =>
+    existsSync(receiptsDirectory) &&
+    readdirSync(receiptsDirectory)
+      .filter((name) => /^[a-f0-9]{64}\.json$/.test(name))
+      .map((name) => readFileSync(path.join(receiptsDirectory, name), "utf8"))
+      .some((text) => text.includes(f.events[0]!.id) && !text.includes("collectingUntil"));
+  const factory = (batch: NativeReportBatch, messageId: string): NativeQueuedMessage => ({
+    agentId: f.prime.agentId,
+    messageId,
+    request: "Native report metadata is available in supervisor_inbox.",
+    principal: { parent: f.prime, parentEpoch: f.primeReceipt.epoch },
+    boot: f.prime.boot,
+    attachmentBytes: 0,
+    reportBatch: batch,
+    authorize: () => {
+      requireNativeReportBatch(batch);
+      if (sealed()) throw new Error("ownership revoked");
+    },
+    canDispatch: () => true,
+  });
+  try {
+    await f.receipts.collectReport(f.batch, factory, vi.fn());
+    await vi.advanceTimersByTimeAsync(2000);
+    await vi.waitFor(() => expect(f.receipts.health().healthy).toBe(false));
+    await f.receipts.prepareArchiveObservation();
+    expect(f.receipts.health().healthy).toBe(true);
   } finally {
     vi.useRealTimers();
     await f.cleanup();
