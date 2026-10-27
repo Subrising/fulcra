@@ -2,6 +2,7 @@
 // sibling beside it, with its one package import pinned to the product's file (a staged copy has no node_modules).
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { bindPluginGit } from "./native-release-hooks.mjs";
 import { productPluginGit } from "./stage-native-turn.mjs";
 export const GUARD_SIBLING = "automatic-permission.mjs";
@@ -10,6 +11,10 @@ export function guardSiblingBytes(controlDir, productRoot) {
   const pluginGit = productPluginGit(productRoot);
   return Buffer.from(pluginGit ? bindPluginGit(text, pluginGit) : text);
 }
+const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+// The folder a release stages into is named by the guard and its sibling together, so a release that changes only the
+// sibling gets a new folder and never meets the old one's bytes.
+export const guardFolderHash = (guard, sibling) => digest(digest(guard) + ":" + digest(sibling));
 // Writes the sibling beside the staged guard file. An existing copy must match byte for byte.
 export function writeGuardSibling(guardFile, bytes) {
   const file = path.join(path.dirname(guardFile), GUARD_SIBLING);

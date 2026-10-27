@@ -1,6 +1,6 @@
 import { execGitCommandSync } from "@getpaseo/plugin/server/git";
 import { bindGuardHome } from "./native-release-hooks.mjs";
-import { guardSiblingBytes, writeGuardSibling } from "./guard-sibling.mjs";
+import { guardFolderHash, guardSiblingBytes, writeGuardSibling } from "./guard-sibling.mjs";
 import { localJson } from "../local-machine.mjs";
 import fs from "node:fs";
 import path from "node:path";
@@ -90,8 +90,9 @@ const guard = Buffer.from(
     bindGuardHome(fs.readFileSync(path.join(directory, "admission-guard.mjs"), "utf8"), home),
   ),
   guardHash = digest(guard);
-const destination = `${home}/admission/${guardHash}/admission-guard.mjs`;
 const guardSibling = guardSiblingBytes(directory, path.resolve(root, ".."));
+const destination = `${home}/admission/${guardFolderHash(guard, guardSibling)}/admission-guard.mjs`;
+const siblingDestination = path.join(path.dirname(destination), "automatic-permission.mjs");
 const replacements = {
   "../session.js": [
     [
@@ -176,6 +177,8 @@ const manifest = {
   before: expected,
   after: Object.fromEntries(Object.entries(staged).map(([name, text]) => [name, digest(text)])),
   guard: { path: destination, sha256: guardHash },
+  // Verified at activation with the guard: a changed or missing sibling stops the native admission.
+  files: { [siblingDestination]: digest(guardSibling) },
 };
 fs.writeFileSync(path.join(output, "manifest.json"), JSON.stringify(manifest, null, 2));
 if (process.argv[2] === "--apply") {
