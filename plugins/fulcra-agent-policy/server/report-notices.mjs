@@ -1,8 +1,9 @@
-export const REPORT_UP_SNIPPET_CHARS = 600;
+// A finish notice carries the whole result, so the lead does not spend a turn reading the log. Only runaway output is cut.
+export const REPORT_UP_SNIPPET_CHARS = 20_000;
 export const PERMISSION_COMMAND_CHARS = 200;
 export const COALESCE_WINDOW_MS = 5 * 60 * 1000;
 export const COMBINED_LIST_LIMIT = 20;
-export const COMBINED_SNIPPET_CHARS = 300;
+export const COMBINED_SNIPPET_CHARS = 20_000;
 export const NUDGE_LIST_LIMIT = 8;
 export const UNKNOWN_RESET_MS = 15 * 60 * 1000;
 export const MAX_HELD_REPORTS = 20;
