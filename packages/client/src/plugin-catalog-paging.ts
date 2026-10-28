@@ -2,6 +2,7 @@ import { fromByteArray, toByteArray } from "base64-js";
 import { canonicalJson } from "@getpaseo/protocol/trusted-input";
 import {
   PLUGIN_CATALOG_CHUNK_BYTES,
+  PLUGIN_CATALOG_CLOCK_SKEW_MS,
   PLUGIN_CATALOG_SNAPSHOT_TTL_MS,
   PluginCatalogPageResponseSchema,
   PluginCatalogBundleGetResponseSchema,
@@ -37,8 +38,9 @@ export async function readPagedPluginCatalog(reader: CatalogPagingReader) {
     reader.assertCurrent();
     if (
       snapshot &&
-      (snapshot.expiresAt <= Date.now() ||
-        snapshot.expiresAt > Date.now() + PLUGIN_CATALOG_SNAPSHOT_TTL_MS)
+      (snapshot.expiresAt + PLUGIN_CATALOG_CLOCK_SKEW_MS <= Date.now() ||
+        snapshot.expiresAt >
+          Date.now() + PLUGIN_CATALOG_SNAPSHOT_TTL_MS + PLUGIN_CATALOG_CLOCK_SKEW_MS)
     )
       throw new Error("Plugin catalog read refused: expired");
   };
@@ -96,7 +98,12 @@ export async function readPagedPluginCatalog(reader: CatalogPagingReader) {
     await readEntries();
     if (!snapshot) throw new Error("Plugin catalog unavailable");
     const manifest = encoder.encode(
-      canonicalJson({ version: 1, revision: snapshot.revision, entries, trust: snapshot.trust }),
+      canonicalJson({
+        version: 1,
+        revision: snapshot.revision,
+        entries,
+        trust: snapshot.trust,
+      }),
     );
     if (
       manifest.byteLength > 256 * 1024 ||
