@@ -8,6 +8,7 @@ import type { SessionOutboundMessage } from "@getpaseo/protocol/messages";
 import { TrustedPlugins } from "./plugins/trusted.js";
 import { AgentManager, type ManagedAgent } from "./agent/agent-manager.js";
 import { AgentStorage } from "./agent/agent-storage.js";
+import { agentLoadInProgress, ensureAgentLoaded } from "./agent/agent-loading.js";
 import { Session } from "./session.js";
 import { MessageReceipts } from "./message-receipts/index.js";
 import { heldSendsFor } from "./held-sends.js";
@@ -430,6 +431,139 @@ test("an owner can queue the first input for a stored receiver without a provide
   );
   await vi.waitFor(() => expect(f.prompts).toEqual(["first owner input"]));
 });
+
+test("registered receiver hydration does not block another receiver's queue", async () => {
+  const f = await fixture();
+  const saved = (await f.storage.get(f.target.id))!;
+  await f.host.daemon(() => f.manager.closeAgent(f.target.id));
+  await f.storage.upsert({ ...saved, lastStatus: "idle" });
+  let release!: () => void;
+  let entered!: () => void;
+  const loading = new Promise<void>((resolve) => (release = resolve));
+  const ready = new Promise<void>((resolve) => (entered = resolve));
+  const hydrate = f.manager.hydrateTimelineFromProvider.bind(f.manager);
+  vi.spyOn(f.manager, "hydrateTimelineFromProvider").mockImplementation(async (...args) => {
+    if (args[0] === f.target.id) {
+      entered();
+      await loading;
+    }
+    return hydrate(...args);
+  });
+  const independentLoad = f.host.daemon(() =>
+    ensureAgentLoaded(f.target.id, {
+      agentManager: f.manager,
+      agentStorage: f.storage,
+      logger: f.logger,
+    }),
+  );
+  await ready;
+  expect(f.manager.getAgent(f.target.id)?.id).toBe(f.target.id);
+  expect(agentLoadInProgress(f.target.id)).toBe(true);
+  let admitted = false;
+  let warm: Promise<boolean> | undefined;
+  try {
+    await f.send("pending hydration input", undefined, false, randomUUID(), true);
+    warm = f.queue
+      .enqueue(f.sender.id, { text: "warm hydration input", messageId: randomUUID() })
+      .then(() => (admitted = true));
+    await vi.waitFor(() => expect(admitted).toBe(true));
+    await vi.waitFor(() => expect(f.prompts).toContain("warm hydration input"));
+    expect(f.prompts).not.toContain("pending hydration input");
+  } finally {
+    release();
+    await Promise.all([independentLoad, warm]);
+  }
+  await vi.waitFor(() => expect(f.prompts).toContain("pending hydration input"));
+  expect(agentLoadInProgress(f.target.id)).toBe(false);
+});
+
+test.each(["present", "absent", "unknown"] as const)(
+  "cold uncertain recovery (%s) does not block another receiver or repeat proven input",
+  async (outcome) => {
+    const f = await fixture();
+    const saved = (await f.storage.get(f.target.id))!;
+    const messageId = randomUUID();
+    f.busy.add(f.target.id);
+    await f.send("uncertain input", f.sender.id, false, messageId);
+    await f.queue.close();
+    const records = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
+    Object.assign(records[0], {
+      state: "dispatching",
+      nativeReceipt: true,
+      batchId: messageId,
+      runtimeInstanceId: f.target.instanceId,
+    });
+    if (outcome === "unknown") {
+      records.push({
+        id: randomUUID(),
+        agentId: f.target.id,
+        sessionId: saved.persistence!.sessionId,
+        localServerId: null,
+        request: { text: "future input", messageId: randomUUID() },
+        state: "queued",
+        resumeAt: Date.now() + 3_600_000,
+      });
+    }
+    await writeFile(f.storage.heldMessagesPath, JSON.stringify(records));
+    const restored = new QueuedAgentMessages({
+      agentManager: f.manager,
+      agentStorage: f.storage,
+      logger: f.logger,
+    });
+    cleanup.push(() => restored.close());
+    // The observer sees the old writer stop. An absent native receipt may then be retried once.
+    await f.host.daemon(() => f.manager.closeAgent(f.target.id));
+    await f.storage.upsert({ ...saved, lastStatus: "idle" });
+    f.busy.delete(f.target.id);
+    let release!: () => void;
+    let entered!: () => void;
+    const loading = new Promise<void>((resolve) => (release = resolve));
+    const ready = new Promise<void>((resolve) => (entered = resolve));
+    const resume = f.manager.resumeAgentFromPersistence.bind(f.manager);
+    vi.spyOn(f.manager, "resumeAgentFromPersistence").mockImplementation(async (...args) => {
+      entered();
+      await loading;
+      const receiver = await resume(...args);
+      receiver.session!.getInputReceipt = async () => outcome;
+      return receiver;
+    });
+    await restored.start();
+    await ready;
+    let admitted = false;
+    const warm = restored
+      .enqueue(f.sender.id, { text: "warm recovery input", messageId: randomUUID() })
+      .then(() => (admitted = true));
+    try {
+      await vi.waitFor(() => expect(admitted).toBe(true));
+      await vi.waitFor(() => expect(f.prompts).toContain("warm recovery input"));
+      expect(f.prompts).not.toContain("uncertain input");
+    } finally {
+      release();
+      await warm;
+    }
+    await vi.waitFor(async () => {
+      const savedRecords = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
+      expect(
+        savedRecords.find(
+          (record: { request: { messageId: string } }) => record.request.messageId === messageId,
+        ).state,
+      ).toBe(outcome === "unknown" ? "uncertain" : "delivered");
+      if (outcome === "unknown")
+        expect(
+          savedRecords.find(
+            (record: { request: { text: string } }) => record.request.text === "future input",
+          ),
+        ).toMatchObject({
+          state: "queued",
+          request: { text: "future input" },
+        });
+    });
+    expect(f.prompts.filter((prompt) => prompt === "uncertain input")).toHaveLength(
+      outcome === "absent" ? 1 : 0,
+    );
+    expect(f.prompts).not.toContain("future input");
+  },
+);
 
 test("three queued agent messages start one combined turn and retain each receipt", async () => {
   const f = await fixture();

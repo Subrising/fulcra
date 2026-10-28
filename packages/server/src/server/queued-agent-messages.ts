@@ -19,7 +19,7 @@ import {
 } from "./agent/agent-prompt.js";
 import { buildAgentPrompt } from "./agent/prompt-attachments.js";
 import { FINAL_INPUT_CHECK } from "./agent/agent-sdk-types.js";
-import { ensureAgentLoaded } from "./agent/agent-loading.js";
+import { agentLoadInProgress, ensureAgentLoaded } from "./agent/agent-loading.js";
 import {
   createFinalInputCheck,
   assertFinalInputCheck,
@@ -518,14 +518,21 @@ export class QueuedAgentMessages {
     this.draining.add(agentId);
     const { agentManager, agentStorage } = this.deps;
     const waiting = this.records.filter((r) => r.agentId === agentId && r.state === "queued");
-    const first = waiting[0];
-    const target = agentManager.getAgent(agentId) ?? agentStorage.getCached(agentId);
+    const live = agentManager.getAgent(agentId);
+    const recovery = this.records.find(
+      (record) =>
+        record.agentId === agentId &&
+        record.state === "uncertain" &&
+        (record.nativeReceipt || live),
+    );
+    const first = waiting[0] ?? recovery;
+    const target = live ?? agentStorage.getCached(agentId);
     // Restore a cold receiver outside the shared queue lock. Admission for other chats must keep working.
     let preparation: Promise<void> | undefined;
     if (
       first &&
-      !agentManager.getAgent(agentId) &&
-      waiting.every((record) => (record.resumeAt ?? 0) <= Date.now()) &&
+      (!live || agentLoadInProgress(agentId)) &&
+      (recovery || waiting.every((record) => (record.resumeAt ?? 0) <= Date.now())) &&
       !noticePaused(
         agentStorage.noticePausePath,
         target,
@@ -715,7 +722,7 @@ export class QueuedAgentMessages {
   private async drain(agentId: string, preparation?: Promise<void>): Promise<void> {
     await this.load();
     const { agentManager } = this.deps;
-    await this.reconcileUncertain(agentId);
+    await this.reconcileUncertain(agentId, preparation);
     if (this.stopped || (await this.refuseClosedReceiver(agentId))) return;
     if (agentManager.hasInFlightRun(agentId)) return;
     if (await this.holdPausedDelivery(agentId)) return;
@@ -895,7 +902,7 @@ export class QueuedAgentMessages {
         return;
       }
       this.batchFailed(agentId, eligible, error);
-      await this.reconcileUncertain(agentId);
+      await this.reconcileUncertain(agentId, preparation);
       const uncertain = eligible.filter((record) => record.state === "uncertain");
       if (!uncertain.length) this.attempts.delete(attemptId);
       await this.tellUncertain(uncertain);
@@ -904,13 +911,13 @@ export class QueuedAgentMessages {
     }
   }
 
-  private async reconcileUncertain(agentId: string): Promise<void> {
+  private async reconcileUncertain(agentId: string, preparation?: Promise<void>): Promise<void> {
     const uncertain = this.records.filter(
       (record) => record.agentId === agentId && record.state === "uncertain",
     );
     if (!uncertain.length) return;
     const manager = this.deps.agentManager;
-    const receiver = await this.uncertainReceiver(agentId, uncertain);
+    const receiver = await this.uncertainReceiver(agentId, uncertain, preparation);
     if (!receiver) return;
     let submitted: Set<string>;
     try {
@@ -941,8 +948,10 @@ export class QueuedAgentMessages {
   private async uncertainReceiver(
     agentId: string,
     uncertain: Record[],
+    preparation?: Promise<void>,
   ): Promise<ManagedAgent | null> {
     try {
+      if (preparation) await preparation;
       const { agentManager, agentStorage } = this.deps;
       let receiver = agentManager.getAgent(agentId);
       if (!receiver && !uncertain.some((record) => record.nativeReceipt)) {
