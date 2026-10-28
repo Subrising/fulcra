@@ -365,6 +365,8 @@ export class QueuedAgentMessages {
         if (this.stopped || this.unhealthy)
           return finish(new Error("The message queue needs host recovery"));
         if (record.state === "delivered") return finish(undefined, record.batchId!);
+        // Cold recovery runs outside the shared lock. Its saved state is not the final receipt yet.
+        if (record.state === "uncertain" && this.draining.has(agentId)) return;
         if (["refused", "uncertain"].includes(record.state))
           finish(new Error(record.reason ?? `Message delivery ${record.state}`));
       };
@@ -557,6 +559,7 @@ export class QueuedAgentMessages {
       .finally(() => {
         this.pendingDrains.delete(work);
         this.draining.delete(agentId);
+        for (const listener of this.deliveryListeners) listener();
         if (this.rekick.delete(agentId)) this.kick(agentId);
       });
     this.pendingDrains.add(work);

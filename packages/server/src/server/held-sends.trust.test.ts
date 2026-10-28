@@ -529,6 +529,13 @@ test.each(["present", "absent", "unknown"] as const)(
     });
     await restored.start();
     await ready;
+    let deliveryResult: string | undefined;
+    const delivery = restored
+      .waitForDelivery(f.target.id, messageId, new AbortController().signal)
+      .then(
+        () => (deliveryResult = "delivered"),
+        (error: Error) => (deliveryResult = error.message),
+      );
     let admitted = false;
     const warm = restored
       .enqueue(f.sender.id, { text: "warm recovery input", messageId: randomUUID() })
@@ -536,11 +543,22 @@ test.each(["present", "absent", "unknown"] as const)(
     try {
       await vi.waitFor(() => expect(admitted).toBe(true));
       await vi.waitFor(() => expect(f.prompts).toContain("warm recovery input"));
+      expect(deliveryResult).toBeUndefined();
+      if (outcome === "unknown") {
+        const abort = new AbortController();
+        const cancelled = restored.waitForDelivery(f.target.id, messageId, abort.signal);
+        const rejected = expect(cancelled).rejects.toThrow(/abort/i);
+        abort.abort();
+        await rejected;
+      }
       expect(f.prompts).not.toContain("uncertain input");
     } finally {
       release();
       await warm;
     }
+    await delivery;
+    if (outcome === "unknown") expect(deliveryResult).toContain("uncertain");
+    else expect(deliveryResult).toBe("delivered");
     await vi.waitFor(async () => {
       const savedRecords = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
       expect(
