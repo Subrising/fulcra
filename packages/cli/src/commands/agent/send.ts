@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { type Command } from "commander";
 import type { PaseoAgentSendOptions } from "@getpaseo/client";
 import { collectMultiple } from "../../utils/command-options.js";
@@ -339,17 +339,49 @@ function sendOptions(
   };
 }
 
+/** How long the same agent send keeps one message ID, so a retry is delivered once. */
+const SAME_SEND_WINDOW_MS = 10 * 60_000;
+
+/**
+ * An agent that sees "Delivery is unknown" usually runs the same send again. The same sender, receiver, text and
+ * images in one 10-minute window give the same message ID, and the daemon's message receipt drops the copy.
+ */
+function sameSendMessageId(input: {
+  senderId: string;
+  agentId: string;
+  prompt: string;
+  images?: string[];
+}): string {
+  const hex = createHash("sha256")
+    .update(
+      JSON.stringify([
+        input.senderId,
+        input.agentId,
+        input.prompt,
+        input.images ?? [],
+        Math.floor(Date.now() / SAME_SEND_WINDOW_MS),
+      ]),
+    )
+    .digest("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
 function completionPolicy(
   options: AgentSendOptions,
   sender: ReturnType<typeof resolveSender>,
   agentId: string,
+  prompt: string,
 ) {
   const remote = Boolean(sender && /^[a-f0-9-]{36}@[a-z0-9_-]+$/i.test(agentId));
-  return {
-    background: options.wait === false || remote,
-    remote,
-    messageId: options.wait === false && !remote ? undefined : randomUUID(),
-  };
+  const background = options.wait === false && !remote;
+  let messageId: string | undefined = randomUUID();
+  if (background)
+    messageId = sender
+      ? sameSendMessageId({ senderId: sender.agentId, agentId, prompt, images: options.image })
+      : undefined;
+  // Only a background agent send has an ID that the same command reproduces on a retry.
+  const retryId = background && sender ? messageId : undefined;
+  return { background: options.wait === false || remote, remote, messageId, retryId };
 }
 
 async function routeMissingSend(
@@ -414,9 +446,11 @@ function withSourceCheck(
   };
 }
 
-function throwSendFailure(error: unknown): never {
+function throwSendFailure(error: unknown, sameSendId?: string): never {
   if (error && typeof error === "object" && "code" in error) throw error;
-  const message = error instanceof Error ? error.message : String(error);
+  let message = error instanceof Error ? error.message : String(error);
+  if (sameSendId && message.includes("Delivery is unknown"))
+    message += ` Running the same command again within 10 minutes reuses message ID ${sameSendId}, so the receiver gets it once.`;
   throw {
     code: "SEND_FAILED",
     message: `Failed to send message: ${message}`,
@@ -556,7 +590,7 @@ export async function runSendCommand(
     // Send the message
     let deliveryNote: string | undefined;
     let deliveryState: "held" | undefined;
-    const policy = completionPolicy(options, sender, agentIdArg);
+    const policy = completionPolicy(options, sender, agentIdArg, promptInput);
     const completionMessageId = policy.messageId;
     await client.sendAgentMessage(agentIdArg, promptInput, {
       ...sendOptions(options, sender, images, (note, state) => {
@@ -604,7 +638,7 @@ export async function runSendCommand(
   } catch (err) {
     const routed = await routeMissingSend(err, client, agentIdArg, promptInput, sender, options);
     if (routed) return { type: "single", data: routed, schema: agentSendSchema };
-    throwSendFailure(err);
+    throwSendFailure(err, completionPolicy(options, sender, agentIdArg, promptInput).retryId);
   } finally {
     await client.close().catch(() => {});
   }

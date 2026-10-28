@@ -469,8 +469,12 @@ export async function userScrollsTimelineToHistoryStart(page: Page): Promise<voi
 
 export async function userNavigatesTimelineToHistoryStartWithKeyboard(page: Page): Promise<void> {
   const scroll = page.locator('[data-testid="agent-chat-scroll"]:visible').first();
-  await scroll.focus();
-  await returnTimelineToSettledHistoryStart(page, () => page.keyboard.press("Home"));
+  // Focus can move to the composer or a re-rendered row while pages load, so a Home press that
+  // follows would go nowhere and the traversal would wait for the test timeout.
+  await returnTimelineToSettledHistoryStart(page, async () => {
+    await scroll.focus();
+    await page.keyboard.press("Home");
+  });
 }
 
 async function returnTimelineToSettledHistoryStart(

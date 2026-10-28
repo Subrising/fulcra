@@ -820,7 +820,6 @@ export class ReportUpService {
     let notice = await storage.getFinishNotice(input.agentId);
     if (!notice) return false;
     this.finishOwners.delete(input.agentId);
-    let recorded = false;
     if (
       notice.status === "armed" &&
       input.startedAt !== undefined &&
@@ -836,9 +835,9 @@ export class ReportUpService {
         `${input.agentId}:${input.startedAt}`,
         input.failed ? "errored" : "finished",
       );
-      recorded = true;
     }
-    if (recorded && notice && (await this.alreadyReportedSinceArming(input, notice))) return true;
+    // The manager can mark the notice pending at turn end before this runs, so the skip does not depend on `recorded`.
+    if (notice && (await this.alreadyReportedSinceArming(input, notice))) return true;
     if (notice?.status === "pending")
       await this.deliverOwnedFinish(input.agentId, notice, false, input.lastAssistant);
     return true;

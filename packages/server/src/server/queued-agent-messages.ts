@@ -39,6 +39,9 @@ import {
 } from "./reporting-lines.js";
 import { tellSenderUndelivered } from "./undelivered-notice.js";
 
+/** How long a delivered message still counts as the same message when its sender sends it again. */
+const IDENTICAL_RESEND_MS = 10 * 60_000;
+
 const RequestSchema = SendAgentMessageRequestSchema.pick({
   text: true,
   images: true,
@@ -252,6 +255,13 @@ export class QueuedAgentMessages {
           return;
         }
       }
+      if (this.identicalResend(agentId, body)) {
+        this.deps.logger.info(
+          { agentId, sender: body.sender?.agentId },
+          "Identical resend not queued: the first copy is waiting or was just delivered",
+        );
+        return;
+      }
       if (Buffer.byteLength(JSON.stringify(body)) > 256 * 1024)
         throw new Error("Queued message exceeds 256 KiB");
       if (
@@ -293,6 +303,30 @@ export class QueuedAgentMessages {
       await this.save();
     });
     this.kick(agentId);
+  }
+
+  /**
+   * A sender whose send timed out ("Delivery is unknown") often sends the same text again with a new message ID.
+   * The first copy is usually already queued, so the receiver got both. The same text from the same chat is one
+   * message while the first copy waits, or for IDENTICAL_RESEND_MS after it was delivered.
+   */
+  private identicalResend(agentId: string, body: z.infer<typeof RequestSchema>): boolean {
+    const sender = body.sender?.agentId;
+    if (!sender || body.pauseNotice || body.hostLinkMessageId) return false;
+    const content = JSON.stringify([body.text, body.images ?? null, body.attachments ?? null]);
+    const since = Date.now() - IDENTICAL_RESEND_MS;
+    return this.records.some(
+      (r) =>
+        r.agentId === agentId &&
+        r.request.sender?.agentId === sender &&
+        (["queued", "dispatching"].includes(r.state) ||
+          (r.state === "delivered" && (r.settledAt ?? Date.now()) >= since)) &&
+        JSON.stringify([
+          r.request.text,
+          r.request.images ?? null,
+          r.request.attachments ?? null,
+        ]) === content,
+    );
   }
 
   /** A queue receipt identifies the batch that accepted this message, including rebuilt batches. */

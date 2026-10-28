@@ -407,12 +407,21 @@ describe("report-up", () => {
     expect(relayed[0]!.text).toContain(`Worker Builder (${WORKER}) finished a turn`);
   });
 
-  test("a long last message is cut to the snippet length", async () => {
+  test("a long result reaches the lead in full, so the lead does not read the log", async () => {
+    const full = `DONE ${"x".repeat(5_000)} END`;
+    const f = fixture([lead, { ...worker(), lastMessage: full }]);
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered[0]!.prompt).toContain(full);
+  });
+
+  test("only a runaway last message is cut at the guard length", async () => {
     const long = `DONE ${"x".repeat(REPORT_UP_SNIPPET_CHARS + 50)}`;
     const f = fixture([lead, { ...worker(), lastMessage: long }]);
     f.turn(WORKER);
     await f.settle();
     expect(f.delivered[0]!.prompt).toContain("…");
+    expect(f.delivered[0]!.prompt).toContain(`read the rest with: fulcra logs ${WORKER}`);
     expect(f.delivered[0]!.prompt).not.toContain("x".repeat(REPORT_UP_SNIPPET_CHARS + 1));
   });
 
@@ -3289,6 +3298,22 @@ describe("FU-424 a lost finish notice reaches the lead once", () => {
       }
     },
   );
+
+  test("FU-519 a notice the manager already marked pending is skipped after a direct report", async () => {
+    resetAgentMessageLogForTests();
+    const f = await ownedFixture({ notice: { status: "pending" } });
+    try {
+      f.runTurn(WORKER, () => noteAgentMessageDelivered(WORKER, LEAD));
+      await until(async () =>
+        expect(await f.notice()).toMatchObject({ status: "delivered", deliveredBy: "report-up" }),
+      );
+      await quiet();
+      expect(f.delivered).toEqual([]);
+    } finally {
+      f.service.stop();
+      resetAgentMessageLogForTests();
+    }
+  });
 
   test("FU-427 a turn that ends without a send still sends one finish notice", async () => {
     resetAgentMessageLogForTests();

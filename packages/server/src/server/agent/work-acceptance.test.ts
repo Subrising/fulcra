@@ -33,7 +33,10 @@ afterEach(async () => {
 
 function home(): string {
   const dir = mkdtempSync(join(tmpdir(), "work-acceptance-"));
-  cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+  // A store write that is still in flight recreates files while the directory is removed (ENOTEMPTY).
+  cleanups.push(() =>
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }),
+  );
   return dir;
 }
 
