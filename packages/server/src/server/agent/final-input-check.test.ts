@@ -31,6 +31,23 @@ test("a handoff timeout revokes a delayed transport check before recovery can re
   }
 });
 
+test("a longer handoff wait lets a waking session take its input after 30 s", async () => {
+  vi.useFakeTimers();
+  try {
+    const handle = createFinalInputCheck(() => undefined);
+    const outcome = waitForFinalInputHandoff(handle, 120_000).then(
+      () => "handed off",
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(31_000);
+    commitFinalInputCheck(handle);
+    recordFinalInputHandoff(handle);
+    expect(await outcome).toBe("handed off");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 test("early/repeated refusal checks do not consume; concrete handoff commits once", async () => {
   let allowed = true,
     checks = 0,

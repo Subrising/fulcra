@@ -537,7 +537,8 @@ export interface SetupFinishNotificationParams {
 
 type FinishNotificationReason = "finished" | "errored" | "needs permission" | "was closed";
 
-const FINISH_NOTIFICATION_MESSAGE_LIMIT = 4000;
+// The whole result goes to the caller; only runaway output is cut.
+const FINISH_NOTIFICATION_MESSAGE_LIMIT = 20_000;
 
 interface FinishNotificationBodyInput {
   childAgentId: string;

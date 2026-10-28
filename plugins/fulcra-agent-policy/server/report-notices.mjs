@@ -1,8 +1,9 @@
-export const REPORT_UP_SNIPPET_CHARS = 600;
+// A finish notice carries the whole result, so the lead does not spend a turn reading the log. Only runaway output is cut.
+export const REPORT_UP_SNIPPET_CHARS = 20_000;
 export const PERMISSION_COMMAND_CHARS = 200;
 export const COALESCE_WINDOW_MS = 5 * 60 * 1000;
 export const COMBINED_LIST_LIMIT = 20;
-export const COMBINED_SNIPPET_CHARS = 300;
+export const COMBINED_SNIPPET_CHARS = 20_000;
 export const NUDGE_LIST_LIMIT = 8;
 export const UNKNOWN_RESET_MS = 15 * 60 * 1000;
 export const MAX_HELD_REPORTS = 20;
@@ -102,7 +103,9 @@ export function formatCombinedNotice(items) {
   const line = (item) => {
     const text = (item.lastMessage ?? "").trim();
     const snippet =
-      text.length > COMBINED_SNIPPET_CHARS ? `${text.slice(0, COMBINED_SNIPPET_CHARS)}…` : text;
+      text.length > COMBINED_SNIPPET_CHARS
+        ? `${text.slice(0, COMBINED_SNIPPET_CHARS)}…${logPointer(item.worker.id, text.length)}`
+        : text;
     return `- Worker ${titleOf(item.worker)} (${item.worker.id}): ${snippet || "(no message)"}\n${formatSessionSpend(item.worker.sessionCost)}`;
   };
   const shown = items.slice(0, COMBINED_LIST_LIMIT).map(line);
@@ -126,10 +129,16 @@ export function formatSessionSpend(cost) {
 export function formatWorkerFinish(text, cost) {
   return `${formatSessionSpend(cost)}\n${text}`;
 }
+/** Only runaway output is cut; the notice then says where the rest is. */
+function logPointer(id, length) {
+  return `\n[cut at ${REPORT_UP_SNIPPET_CHARS} of ${length} characters; read the rest with: fulcra logs ${id}]`;
+}
 export function formatReportUpNotice(input) {
   const text = (input.lastMessage ?? "").trim();
   const snippet =
-    text.length > REPORT_UP_SNIPPET_CHARS ? `${text.slice(0, REPORT_UP_SNIPPET_CHARS)}…` : text;
+    text.length > REPORT_UP_SNIPPET_CHARS
+      ? `${text.slice(0, REPORT_UP_SNIPPET_CHARS)}…${logPointer(input.worker.id, text.length)}`
+      : text;
   const verb = input.failed ? "ended a turn with an error" : "finished a turn";
   return `Worker ${titleOf(input.worker)} (${input.worker.id}) ${verb}: ${snippet || "(no message)"}\n${formatSessionSpend(input.worker.sessionCost)}`;
 }

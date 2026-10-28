@@ -92,6 +92,7 @@ describe("agent queue and steer", () => {
         sender: { agentId: "sender" },
         queue: true,
         onDelivery: expect.any(Function),
+        messageId: expect.any(String),
       });
     },
   );
@@ -106,10 +107,26 @@ describe("agent queue and steer", () => {
       sender: { agentId: "sender" },
       activeTurnBehavior: "steer",
       onDelivery: expect.any(Function),
+      messageId: expect.any(String),
     });
     expect(result.data.message).toBe(
       "Native steering is unavailable. Message queued for the end of the turn.",
     );
+  });
+  it("reuses one message ID when an agent runs the same send again (a retry after an unknown delivery)", async () => {
+    senderStamp.mockReturnValue({ agentId: "sender" });
+    client.sendAgentMessage.mockRejectedValueOnce(
+      new Error("Send timed out after 15 seconds. Delivery is unknown."),
+    );
+    await expect(parsedSend(["target", "same report", "--no-wait"])).rejects.toMatchObject({
+      message: expect.stringContaining("Running the same command again"),
+    });
+    await parsedSend(["target", "same report", "--no-wait"]);
+    await parsedSend(["target", "another report", "--no-wait"]);
+    const ids = client.sendAgentMessage.mock.calls.map((call) => call[2].messageId);
+    expect(ids[0]).toEqual(expect.any(String));
+    expect(ids[1]).toBe(ids[0]);
+    expect(ids[2]).not.toBe(ids[0]);
   });
   it("refuses conflicting modes before connecting", async () => {
     await expect(parsedSend(["target", "draft", "--queue", "--steer"])).rejects.toMatchObject({
@@ -514,6 +531,7 @@ describe("send reporting lines", () => {
       sender: { agentId: "lead-1" },
       queue: true,
       onDelivery: expect.any(Function),
+      messageId: expect.any(String),
     });
     await parsedSend(["target", "hello", "--no-wait"]);
     expect(client.sendAgentMessage).toHaveBeenLastCalledWith("target", "hello", {

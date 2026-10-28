@@ -394,9 +394,20 @@ test("finish notifications are sent with a paseo-notify message id", async () =>
   for (const [, messageId] of toCaller) expect(messageId).toMatch(/^paseo-notify:[0-9a-f-]{36}$/);
 });
 
-test("finish notifications truncate oversized child responses", async () => {
+test("finish notifications carry a long child response in full", async () => {
+  const full = "DONE " + "x".repeat(6_000) + " END";
+  const scenario = createFinishNotificationScenario({ childLastAssistantMessage: full });
+
+  scenario.startWatchingChild();
+  const parentPrompt = await scenario.finishChildAndReadParentPrompt();
+
+  expect(parentPrompt).toContain(full);
+  expect(parentPrompt).not.toContain("[truncated");
+});
+
+test("finish notifications truncate runaway child responses", async () => {
   // FU-492: a plain finished turn notifies only with a result line.
-  const included = "DONE " + "x".repeat(3995);
+  const included = "DONE " + "x".repeat(19_995);
   const omitted = "TAIL-MARKER".repeat(50);
   const scenario = createFinishNotificationScenario({
     childLastAssistantMessage: included + omitted,
