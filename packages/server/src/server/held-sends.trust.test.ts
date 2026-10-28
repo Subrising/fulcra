@@ -299,6 +299,27 @@ test("startup holds accepted messages until session restoration is complete", as
   ]);
 });
 
+test("an identical resend after an unknown delivery is queued once (one message per send)", async () => {
+  const f = await fixture();
+  const queue = new QueuedAgentMessages({
+    agentManager: f.manager,
+    agentStorage: f.storage,
+    logger: f.logger,
+    deferStart: true,
+  });
+  cleanup.push(() => queue.close());
+  await queue.enqueue(f.target.id, { text: "item e", sender: { agentId: f.sender.id } });
+  await queue.enqueue(f.target.id, { text: "item e", sender: { agentId: f.sender.id } });
+  await queue.enqueue(f.target.id, { text: "another", sender: { agentId: f.sender.id } });
+  expect(queue.pending(f.target.id)).toBe(2);
+  await queue.start();
+  await queue.start();
+  await queue.close();
+  expect(f.prompts).toEqual([
+    `Message 1 from ${f.sender.id}:\nitem e\n\nMessage 2 from ${f.sender.id}:\nanother`,
+  ]);
+});
+
 test("queued messages survive a queue restart and still start one turn", async () => {
   const f = await fixture();
   f.busy.add(f.target.id);

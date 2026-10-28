@@ -12,11 +12,11 @@ export interface PendingFinish {
 export interface LedgerItem {
   id: string;
 }
-export declare const REPORT_UP_SNIPPET_CHARS = 600;
+export declare const REPORT_UP_SNIPPET_CHARS = 20000;
 export declare const PERMISSION_COMMAND_CHARS = 200;
 export declare const COALESCE_WINDOW_MS: number;
 export declare const COMBINED_LIST_LIMIT = 20;
-export declare const COMBINED_SNIPPET_CHARS = 300;
+export declare const COMBINED_SNIPPET_CHARS = 20000;
 export declare const NUDGE_LIST_LIMIT = 8;
 export interface LimitedChat {
   kind: string;
