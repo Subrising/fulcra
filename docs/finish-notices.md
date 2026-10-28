@@ -3,6 +3,8 @@
 Parent sends request one finish notice by default. This applies to CLI sends, native steering, and MCP prompts.
 Several messages in one turn share one notice. Queued messages form one combined turn and produce one notice.
 A notice marked `delivered` covers its earlier turn only.
+A child that delivered a message to its parent after the notice was armed gets no finish notice for that turn.
+A finish notice carries the whole final message. Only output over 20,000 characters is cut, with a pointer to `fulcra logs`.
 An idle worker can start another task while its earlier result waits for its busy parent.
 Each result keeps its own saved notice and message text until delivery.
 The native report inbox requires separate enrollment. Ordinary parent sends do not require that inbox.
@@ -48,6 +50,8 @@ Do not edit saved session records to create a notice.
 
 App sends have a 15 second reply limit. A timeout reports that delivery is unknown.
 Retain the message ID and check the chat before sending again. A delayed queue commit can still finish.
+The same text from the same chat is queued once while the first copy waits, and for 10 minutes after it is delivered.
+An agent `--no-wait` send gets one message ID for the same sender, receiver, text and images within 10 minutes. Running the same command again after "Delivery is unknown" reuses that ID, and the receipt drops the copy.
 Queue files sync before admission. Removing that sync can lose an acknowledged message after a crash.
 
 ## Verification

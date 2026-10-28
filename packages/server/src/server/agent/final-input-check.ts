@@ -125,7 +125,12 @@ export function finalInputFailure(handle: object | undefined): unknown {
 export function hasFinalInputHandoff(handle: object | undefined): boolean {
   return Boolean(handle && checks.get(handle)?.handoffConfirmed());
 }
-export function waitForFinalInputHandoff(handle: object): Promise<void> {
+/** How long a send waits for the provider to take its input before the check is revoked. */
+export const FINAL_INPUT_HANDOFF_MS = 30_000;
+export function waitForFinalInputHandoff(
+  handle: object,
+  timeoutMs = FINAL_INPUT_HANDOFF_MS,
+): Promise<void> {
   const state = checks.get(handle);
   if (!state) return Promise.reject(new Error("Private final input check unavailable"));
   return new Promise((resolve, reject) => {
@@ -134,7 +139,7 @@ export function waitForFinalInputHandoff(handle: object): Promise<void> {
       const error = new FinalInputHandoffTimeoutError();
       failFinalInputHandoff(handle, error);
       reject(error);
-    }, 30000);
+    }, timeoutMs);
     state.promise.then(
       () => {
         clearTimeout(timer);

@@ -2,12 +2,19 @@ import { loadAgentPolicy } from "./policy.js";
 import type { PolicyHooks } from "../../../../../plugins/fulcra-agent-policy/index.host.mjs";
 import type { Logger } from "pino";
 import { FINAL_INPUT_CHECK } from "../agent/agent-sdk-types.js";
-import { createFinalInputCheck, waitForFinalInputHandoff } from "../agent/final-input-check.js";
+import {
+  createFinalInputCheck,
+  FINAL_INPUT_HANDOFF_MS,
+  waitForFinalInputHandoff,
+} from "../agent/final-input-check.js";
 import { ensureUnarchivedAgentLoaded } from "../agent/agent-loading.js";
 import type { AgentManager } from "../agent/agent-manager.js";
 import type { AgentStorage } from "../agent/agent-storage.js";
 import type { DaemonConfigStore } from "../daemon-config-store.js";
 import { LIMIT_RESUME_OPT_OUT_LABEL, LimitResumeService } from "./service.js";
+
+/** The handoff wait for a resume that must first wake a sleeping session. */
+const SLEEPING_RESUME_HANDOFF_MS = 120_000;
 
 /** Starts auto-resume for this host: listens to agent events, keeps the durable queue, resumes at reset. */
 export function startLimitResume(input: {
@@ -76,6 +83,11 @@ export function startLimitResume(input: {
           throw new Error("Unscoped limit resume refused");
       };
       checkCurrent();
+      // A session that slept through the reset starts its provider process first. A wake of 30.5 s was seen,
+      // past the default handoff wait; the queue entry was cancelled and the late wake was refused.
+      const handoffMs = agentManager.isAgentSleeping(agentId)
+        ? SLEEPING_RESUME_HANDOFF_MS
+        : FINAL_INPUT_HANDOFF_MS;
       const finalCheck = createFinalInputCheck(checkCurrent, consume);
       // Refusal checks repeat after provider preparation; only the concrete native send consumes.
       void agentManager
@@ -83,7 +95,7 @@ export function startLimitResume(input: {
         .catch((error: unknown) => {
           logger.warn({ err: error, agentId }, "Auto-resume turn failed");
         });
-      await waitForFinalInputHandoff(finalCheck);
+      await waitForFinalInputHandoff(finalCheck, handoffMs);
     },
     onError: (error) => logger.warn({ err: error }, "Auto-resume step failed"),
     onSkip: (agentId, reason) =>
