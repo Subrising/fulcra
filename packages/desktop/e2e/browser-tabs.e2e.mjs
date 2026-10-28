@@ -426,23 +426,34 @@ async function readViewport(client, browserId) {
 }
 
 async function clickGuestElement(page, client, browserId, selector) {
-  const evaluated = await callBrowserTool(client, "browser_evaluate", {
-    browserId,
-    function: `() => {
-      const element = document.querySelector(${JSON.stringify(selector)});
-      if (!(element instanceof HTMLElement)) return null;
-      const rect = element.getBoundingClientRect();
-      return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-    }`,
-  });
-  const elementRect = JSON.parse(evaluated.resultJson);
-  assert(elementRect, `Guest element ${selector} was unavailable`);
-  await page.locator(`[data-paseo-browser-id="${browserId}"]`).click({
-    position: {
-      x: elementRect.x + elementRect.width / 2,
-      y: elementRect.y + elementRect.height / 2,
-    },
-  });
+  const target = page.locator(`[data-paseo-browser-id="${browserId}"]`);
+  // The guest rect is read before the click lands. While the guest is still laying out, or the
+  // device size is applying, the element can sit outside the pane, and a click at that offset hits
+  // the sidebar next to the webview. Read again until the center is inside the webview.
+  let point = null;
+  for (let attempt = 0; attempt < 40 && !point; attempt += 1) {
+    const evaluated = await callBrowserTool(client, "browser_evaluate", {
+      browserId,
+      function: `() => {
+        const element = document.querySelector(${JSON.stringify(selector)});
+        if (!(element instanceof HTMLElement)) return null;
+        const rect = element.getBoundingClientRect();
+        return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+      }`,
+    });
+    const elementRect = JSON.parse(evaluated.resultJson);
+    assert(elementRect, `Guest element ${selector} was unavailable`);
+    const box = await target.boundingBox();
+    const x = elementRect.x + elementRect.width / 2;
+    const y = elementRect.y + elementRect.height / 2;
+    if (box && x >= 0 && y >= 0 && x <= box.width && y <= box.height) {
+      point = { x, y };
+    } else {
+      await page.waitForTimeout(100);
+    }
+  }
+  assert(point, `Guest element ${selector} stayed outside the visible webview`);
+  await target.click({ position: point });
 }
 
 async function selectDeviceSize(page, label) {

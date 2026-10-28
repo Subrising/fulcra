@@ -71,14 +71,17 @@ async function readHelpHostVersion(page: Page, serverId: string): Promise<string
   await page.getByTestId("sidebar-help").click();
   const row = page.getByTestId(`sidebar-help-host-version-${serverId}`);
   await expect(row).toBeVisible();
+  // The row mounts before the host's version arrives, so wait for text instead of reading it once.
+  await expect(row).toHaveText(/v\d/);
   const text = await row.innerText();
   await page.keyboard.press("Escape");
   return text;
 }
 
 async function expectHelpHostVersion(page: Page, serverId: string, version: string): Promise<void> {
-  const text = await readHelpHostVersion(page, serverId);
-  expect(text).toContain(`v${version}`);
+  await expect
+    .poll(() => readHelpHostVersion(page, serverId), { timeout: 30_000 })
+    .toContain(`v${version}`);
 }
 
 async function openHostPage(page: Page, host: RestartableHostDaemon): Promise<void> {

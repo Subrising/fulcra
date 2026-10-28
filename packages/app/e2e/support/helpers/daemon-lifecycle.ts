@@ -24,8 +24,10 @@ export async function restartDaemonInSettings(page: Page) {
 }
 
 export async function expectDaemonRestartComplete(page: Page) {
+  // The Restart button leaves the page while the host is offline. Replacement worker start and the
+  // client's reconnect backoff both stretch on a loaded runner, so 30 s was too tight.
   await expect(page.getByRole("button", { name: "Restart", exact: true })).toBeEnabled({
-    timeout: 30_000,
+    timeout: 60_000,
   });
 }
 
