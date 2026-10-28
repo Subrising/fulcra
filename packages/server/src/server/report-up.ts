@@ -846,7 +846,6 @@ export class ReportUpService {
     let notice = await storage.getFinishNotice(input.agentId);
     if (!notice) return false;
     this.finishOwners.delete(input.agentId);
-    let recorded = false;
     if (
       notice.status === "armed" &&
       input.startedAt !== undefined &&
@@ -862,9 +861,9 @@ export class ReportUpService {
         `${input.agentId}:${input.startedAt}`,
         input.failed ? "errored" : "finished",
       );
-      recorded = true;
     }
-    if (recorded && notice && (await this.alreadyReportedSinceArming(input, notice))) return true;
+    // The manager can mark the notice pending at turn end before this runs, so the skip does not depend on `recorded`.
+    if (notice && (await this.alreadyReportedSinceArming(input, notice))) return true;
     if (notice?.status !== "pending") return true;
     const held = notice;
     const urgent =
@@ -877,9 +876,8 @@ export class ReportUpService {
     if (
       this.holdForColdLead(held.parentId, urgent, () => {
         this.coldHeldFinishes.delete(held.messageId);
-        void this.deliverColdHeldFinish(input.agentId, held, input.lastAssistant).catch(
-          (err: unknown) =>
-            this.deps.logger.warn({ err, childId: input.agentId }, "Held finish notice failed"),
+        void this.deliverColdHeldFinish(input, held).catch((err: unknown) =>
+          this.deps.logger.warn({ err, childId: input.agentId }, "Held finish notice failed"),
         );
       })
     ) {
@@ -892,35 +890,13 @@ export class ReportUpService {
 
   /**
    * FU-434: a finish notice held for a cold lead goes out when the hold ends, unless it was settled meanwhile or the
-   * worker delivered a message to the lead since the notice was armed (the FU-519 rule, checked again here).
+   * worker delivered a message to the lead during the hold (the FU-519 rule, checked again here).
    */
-  private async deliverColdHeldFinish(
-    childId: string,
-    held: FinishNotice,
-    observedLast: string | null | undefined,
-  ): Promise<void> {
-    const notice = await this.deps.agentStorage.getFinishNotice(childId);
+  private async deliverColdHeldFinish(input: ReportTurnEnd, held: FinishNotice): Promise<void> {
+    const notice = await this.deps.agentStorage.getFinishNotice(input.agentId);
     if (!notice || notice.messageId !== held.messageId || notice.status !== "pending") return;
-    const sentAt = lastAgentMessageDeliveredAt(childId, notice.parentId);
-    if (
-      notice.reason === "finished" &&
-      notice.armedAt !== undefined &&
-      sentAt !== null &&
-      sentAt >= notice.armedAt
-    ) {
-      await this.deps.agentStorage.settleFinishNotice(
-        childId,
-        notice.messageId,
-        "delivered",
-        "report-up",
-      );
-      this.deps.logger.info(
-        { childId, parentId: notice.parentId },
-        "Finish notice skipped: already reported during the cold-lead hold",
-      );
-      return;
-    }
-    await this.deliverOwnedFinish(childId, notice, false, observedLast ?? undefined);
+    if (await this.alreadyReportedSinceArming(input, notice)) return;
+    await this.deliverOwnedFinish(input.agentId, notice, false, input.lastAssistant);
   }
 
   /** FU-483: true (and logged) when a finished turn has no result line for the lead. */
