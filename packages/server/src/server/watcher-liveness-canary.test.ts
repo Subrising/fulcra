@@ -41,8 +41,8 @@ test("rewrites the canary until the watcher reports it, then removes it", async 
   const verification = canary.verify();
   // The first write is "lost": the watcher reports only after a rewrite changed the file.
   await expect
-    .poll(async () => (await readFile(canary.path, "utf8").catch(() => "")).includes("canary 1"))
-    .toBe(true);
+    .poll(async () => readFile(canary.path, "utf8").catch(() => ""))
+    .toMatch(/^paseo watcher liveness canary [1-9]\d*\n$/);
   canary.filterEvents([{ path: canary.path, type: "update" }]);
 
   await expect(verification).resolves.toBeUndefined();
