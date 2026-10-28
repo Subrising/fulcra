@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   PROVIDER_CAPABILITIES,
   ProviderEventSchema,
@@ -13,7 +13,7 @@ import {
   type ProviderLaunch,
   type ProviderPersistence,
 } from "@getpaseo/plugin/server/provider";
-import { signalPlan } from "./internal/signals.js";
+import { signalProcess, signalPlan } from "./internal/signals.js";
 import { createAntigravityProvider } from "./provider.js";
 
 const temporary: string[] = [];
@@ -688,6 +688,26 @@ describe("process signal plans", () => {
       });
     },
   );
+});
+
+describe("process signal delivery", () => {
+  const killGroup = (defunct: boolean) => () =>
+    signalProcess({ platform: "linux", pid: 123, signal: "SIGKILL" }, () =>
+      Promise.resolve(defunct),
+    );
+  afterEach(() => vi.restoreAllMocks());
+  beforeEach(() => {
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+    });
+  });
+
+  it("ignores EPERM only when the group leader is defunct", async () => {
+    await expect(killGroup(true)()).resolves.toBeUndefined();
+  });
+  it("rethrows EPERM when the group leader is still live", async () => {
+    await expect(killGroup(false)()).rejects.toThrow(/EPERM/);
+  });
 });
 
 describe("image prompts", () => {

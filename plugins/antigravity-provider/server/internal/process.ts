@@ -157,17 +157,20 @@ export function startDriver(options: DriverOptions): Driver {
         return;
       }
       if (reason === "close") child.stdin.end();
-      else signalGroup(child, "SIGINT");
-      const terminate = setTimeout(() => signalGroup(child, "SIGTERM"), 1000);
-      const kill = setTimeout(() => signalGroup(child, "SIGKILL"), 2000);
+      else await signalGroup(child, "SIGINT");
+      // The final awaited SIGKILL reports a real signal failure.
+      const terminate = setTimeout(() => void signalGroup(child, "SIGTERM")?.catch(ignore), 1000);
+      const kill = setTimeout(() => void signalGroup(child, "SIGKILL")?.catch(ignore), 2000);
       await exited;
       clearTimeout(terminate);
       clearTimeout(kill);
       // A tool can keep running after its CLI leader exits.
-      signalGroup(child, "SIGKILL");
+      await signalGroup(child, "SIGKILL");
     },
   };
 }
+
+function ignore(): void {}
 
 function signalGroup(
   child: ChildProcessWithoutNullStreams,
