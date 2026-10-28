@@ -131,6 +131,19 @@ interface PendingFinish {
   lastMessage: string | null;
 }
 
+/** FU-434: a lead idle this long has lost its prompt cache, so a wake rewrites its whole context. */
+export const COLD_LEAD_AFTER_MS = 55 * 60_000;
+/** FU-434: the longest a cold lead's non-urgent notices wait, so that they reach it as one wake. */
+export const COLD_LEAD_HOLD_MS = 10 * 60_000;
+// A result the lead must act on goes at once, also to a cold lead. DONE and plain finish notices can wait.
+const URGENT_RESULT_LINE = /^[ \t]*(?:\*\*|__|`)?(?:BLOCKED|DECISION|QUESTION|RISK)\b/m;
+
+/** The cold-lead hold of one lead: its notices go out together at `until` or at the first urgent notice. */
+interface ColdHold {
+  until: number;
+  waiting: Array<() => void>;
+}
+
 /** The message id prefix of an idle-lead nudge; it starts with the notice prefix, so it counts as a notice too. */
 export const NUDGE_MESSAGE_PREFIX = `${FINISH_NOTIFICATION_MESSAGE_PREFIX}idle-nudge:`;
 
@@ -301,6 +314,11 @@ interface NudgeState {
   deferred?: boolean;
 }
 
+/** FU-434: a final message the lead must act on now. An unreadable message counts as urgent. */
+function urgentResult(lastMessage: string | null | undefined): boolean {
+  return lastMessage === null || lastMessage === undefined || URGENT_RESULT_LINE.test(lastMessage);
+}
+
 export class ReportUpService {
   private readonly idleTurns: IdleTurnRecovery;
   private readonly observer: import("../../../../plugins/fulcra-agent-policy/server/report-observer.mjs").ReportUpObserver;
@@ -324,6 +342,9 @@ export class ReportUpService {
   private ledgerWatcher?: LedgerDirectoryWatch;
   private ledgerDebounce?: ReturnType<typeof setTimeout>;
   private readonly nudgeDeliveredAt = new Map<string, number>();
+  private readonly coldHolds = new Map<string, ColdHold>();
+  /** FU-434: finish notices (message ids) that wait in a cold hold; the idle sweep leaves them to the hold. */
+  private readonly coldHeldFinishes = new Set<string>();
 
   private readonly deps: ReportUpDeps;
 
@@ -352,6 +373,8 @@ export class ReportUpService {
       isSystemInjectedEnvelope,
       onStarted: (id) => {
         this.finishOwners.delete(id);
+        // A lead that starts a turn is warm again: its held notices join that turn now.
+        this.releaseColdHold(id);
         const worker = deps.agentManager.getAgent(id);
         if (worker) deps.routing?.begin(worker);
       },
@@ -547,7 +570,8 @@ export class ReportUpService {
   private async retryStoredFinish(childId: string, notice: FinishNotice): Promise<void> {
     if (!durableFinish(notice)) return;
     if (notice.status === "unknown") await this.resolveUnknownFinish(childId, notice);
-    else if (notice.status === "pending") await this.deliverOwnedFinish(childId, notice, false);
+    else if (notice.status === "pending" && !this.coldHeldFinishes.has(notice.messageId))
+      await this.deliverOwnedFinish(childId, notice, false);
   }
 
   /** A busy lead gets the retry from its next idle sweep. */
@@ -637,6 +661,8 @@ export class ReportUpService {
     this.nudging.clear();
     this.finishRetryAttempts.clear();
     this.finishRetryTimers.clear();
+    this.coldHolds.clear();
+    this.coldHeldFinishes.clear();
     for (const timer of this.timers) clearTimeout(timer);
     this.timers.clear();
     this.finishOwners.clear();
@@ -838,9 +864,39 @@ export class ReportUpService {
     }
     // The manager can mark the notice pending at turn end before this runs, so the skip does not depend on `recorded`.
     if (notice && (await this.alreadyReportedSinceArming(input, notice))) return true;
-    if (notice?.status === "pending")
-      await this.deliverOwnedFinish(input.agentId, notice, false, input.lastAssistant);
+    if (notice?.status !== "pending") return true;
+    const held = notice;
+    const urgent =
+      held.reason !== "finished" ||
+      urgentResult(
+        input.lastAssistant === undefined
+          ? await this.deps.agentManager.getLastAssistantMessage(input.agentId).catch(() => null)
+          : input.lastAssistant,
+      );
+    if (
+      this.holdForColdLead(held.parentId, urgent, () => {
+        this.coldHeldFinishes.delete(held.messageId);
+        void this.deliverColdHeldFinish(input, held).catch((err: unknown) =>
+          this.deps.logger.warn({ err, childId: input.agentId }, "Held finish notice failed"),
+        );
+      })
+    ) {
+      this.coldHeldFinishes.add(held.messageId);
+      return true;
+    }
+    await this.deliverOwnedFinish(input.agentId, held, false, input.lastAssistant);
     return true;
+  }
+
+  /**
+   * FU-434: a finish notice held for a cold lead goes out when the hold ends, unless it was settled meanwhile or the
+   * worker delivered a message to the lead during the hold (the FU-519 rule, checked again here).
+   */
+  private async deliverColdHeldFinish(input: ReportTurnEnd, held: FinishNotice): Promise<void> {
+    const notice = await this.deps.agentStorage.getFinishNotice(input.agentId);
+    if (!notice || notice.messageId !== held.messageId || notice.status !== "pending") return;
+    if (await this.alreadyReportedSinceArming(input, notice)) return;
+    await this.deliverOwnedFinish(input.agentId, notice, false, input.lastAssistant);
   }
 
   /** FU-483: true (and logged) when a finished turn has no result line for the lead. */
@@ -2059,8 +2115,20 @@ export class ReportUpService {
     );
     list.push(item);
     this.pendingFinished.set(leadId, list);
-    if (this.flushing.has(leadId)) return;
+    const urgent = urgentResult(item.lastMessage);
+    if (this.flushing.has(leadId)) {
+      if (urgent) this.releaseColdHold(leadId);
+      return;
+    }
     this.flushing.add(leadId);
+    if (
+      this.holdForColdLead(leadId, urgent, () => {
+        void this.flushFinished(leadId).catch((err: unknown) =>
+          this.deps.logger.warn({ err, leadId }, "Report-up flush failed"),
+        );
+      })
+    )
+      return;
     const wait = Math.max(
       0,
       (this.lastFinishedAt.get(leadId) ?? 0) + COALESCE_WINDOW_MS - this.now(),
@@ -2078,6 +2146,50 @@ export class ReportUpService {
         this.deps.logger.warn({ err, leadId }, "Report-up flush failed"),
       );
     }, wait);
+  }
+
+  /** FU-434: a lead idle past its cache lifetime. A lead with no known activity time counts as warm. */
+  private leadCold(leadId: string): boolean {
+    const lead = this.deps.agentManager.getAgent(leadId);
+    if (!lead || lead.lifecycle !== "idle" || !(lead.updatedAt instanceof Date)) return false;
+    return this.now() - lead.updatedAt.getTime() >= COLD_LEAD_AFTER_MS;
+  }
+
+  /**
+   * FU-434: true when `send` waits in the lead's cold hold. The first non-urgent notice to a cold lead starts a hold
+   * of COLD_LEAD_HOLD_MS; later notices join it. An urgent notice releases the hold and is sent now. For one hold
+   * time after a release, new notices go at once: the lead is waking, and a new hold would only delay them.
+   */
+  private holdForColdLead(leadId: string, urgent: boolean, send: () => void): boolean {
+    const now = this.now();
+    let hold = this.coldHolds.get(leadId);
+    if (hold && now >= hold.until + COLD_LEAD_HOLD_MS) {
+      this.coldHolds.delete(leadId);
+      hold = undefined;
+    }
+    if (hold && now < hold.until) {
+      if (urgent) {
+        this.releaseColdHold(leadId);
+        return false;
+      }
+      hold.waiting.push(send);
+      return true;
+    }
+    if (hold || urgent || !this.leadCold(leadId)) return false;
+    this.coldHolds.set(leadId, { until: now + COLD_LEAD_HOLD_MS, waiting: [send] });
+    this.deps.logger.info(
+      { lead: leadId, holdMs: COLD_LEAD_HOLD_MS },
+      "Report-up held: the lead is cold",
+    );
+    this.schedule(() => this.releaseColdHold(leadId), COLD_LEAD_HOLD_MS);
+    return true;
+  }
+
+  private releaseColdHold(leadId: string): void {
+    const hold = this.coldHolds.get(leadId);
+    if (!hold?.waiting.length) return;
+    hold.until = Math.min(hold.until, this.now());
+    for (const send of hold.waiting.splice(0)) send();
   }
 
   private takePending(leadId: string): PendingFinish[] {

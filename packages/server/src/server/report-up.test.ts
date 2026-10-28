@@ -10,6 +10,8 @@ import { AgentStorage, type FinishNotice } from "./agent/agent-storage.js";
 import { createTestLogger } from "../test-utils/test-logger.js";
 import {
   COALESCE_WINDOW_MS,
+  COLD_LEAD_AFTER_MS,
+  COLD_LEAD_HOLD_MS,
   COMBINED_LIST_LIMIT,
   FINISH_RETRY_BASE_MS,
   NUDGE_MESSAGE_PREFIX,
@@ -45,6 +47,8 @@ interface FakeChat {
   lastMessage?: string;
   cwd?: string;
   lifecycle?: string;
+  /** FU-434: the lead's last activity; idle past COLD_LEAD_AFTER_MS makes it cold. */
+  updatedAt?: Date;
   archivedAt?: string;
   backgroundWork?: { count: number };
   costRecords?: import("./agent/session-cost.js").SessionCostRecords;
@@ -363,6 +367,55 @@ describe("report-up", () => {
     f.timers[0]!.run();
     await f.settle();
     expect(f.delivered.map((notice) => notice.leadId)).toEqual([LEAD, LEAD]);
+  });
+
+  test("FU-434 a cold lead gets its DONE notices together after the hold, in one wake", async () => {
+    const now = Date.now();
+    const cold = { ...lead, updatedAt: new Date(now - COLD_LEAD_AFTER_MS) };
+    const other = { ...worker(), id: "33333333-3333-4333-8333-333333333333", title: "Tester" };
+    other.lastMessage = "DONE review passes.";
+    const first = { ...worker(), lastMessage: "DONE tests pass." };
+    const f = fixture([cold, first, other], { now });
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+    expect(f.timers.map((timer) => timer.ms)).toEqual([COLD_LEAD_HOLD_MS]);
+    f.clock.now += 5 * 60_000;
+    f.turn(other.id);
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+    f.clock.now += 5 * 60_000;
+    f.timers[0]!.run();
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.prompt).toContain("DONE tests pass.");
+    expect(f.delivered[0]!.prompt).toContain("DONE review passes.");
+  });
+
+  test("FU-434 a BLOCKED notice releases a cold lead's held notices at once", async () => {
+    const now = Date.now();
+    const cold = { ...lead, updatedAt: new Date(now - COLD_LEAD_AFTER_MS) };
+    const other = { ...worker(), id: "33333333-3333-4333-8333-333333333333", title: "Tester" };
+    other.lastMessage = "BLOCKED: the test account is gone.";
+    const first = { ...worker(), lastMessage: "DONE tests pass." };
+    const f = fixture([cold, first, other], { now });
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+    f.turn(other.id);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.prompt).toContain("DONE tests pass.");
+    expect(f.delivered[0]!.prompt).toContain("BLOCKED: the test account is gone.");
+  });
+
+  test("FU-434 a lead active within its cache lifetime gets a DONE notice at once", async () => {
+    const now = Date.now();
+    const warm = { ...lead, updatedAt: new Date(now - COLD_LEAD_AFTER_MS + 60_000) };
+    const f = fixture([warm, { ...worker(), lastMessage: "DONE tests pass." }], { now });
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
   });
 
   test("nothing when turned off, when a new turn starts at once, or when the lead is on another computer", async () => {
@@ -3025,12 +3078,23 @@ describe("FU-424 a lost finish notice reaches the lead once", () => {
     /** FU-439: the worker's final message; default is a DONE line. */
     lastMessage?: string;
     logLines?: string[];
+    /** FU-434: the lead's last activity. */
+    leadUpdatedAt?: Date;
   }) {
     const root = mkdtempSync(join(tmpdir(), "fu424-"));
     roots.push(root);
     const storage = new AgentStorage(join(root, "agents"), createTestLogger());
     const chats = new Map<string, FakeChat>([
-      [LEAD, { id: LEAD, title: "Lead", labels: {}, lifecycle: input.leadLifecycle ?? "idle" }],
+      [
+        LEAD,
+        {
+          id: LEAD,
+          title: "Lead",
+          labels: {},
+          lifecycle: input.leadLifecycle ?? "idle",
+          ...(input.leadUpdatedAt ? { updatedAt: input.leadUpdatedAt } : {}),
+        },
+      ],
       [
         WORKER,
         {
@@ -3141,8 +3205,12 @@ describe("FU-424 a lost finish notice reaches the lead once", () => {
           type: "agent_state",
           agent: { ...chats.get(agentId)!, lifecycle: "idle" },
         } as unknown as AgentManagerEvent),
+      coldHolds: () => timers.filter((timer) => timer.ms === COLD_LEAD_HOLD_MS).length,
+      runColdHold: () => timers.find((timer) => timer.ms === COLD_LEAD_HOLD_MS)!.run(),
       retryDelays: () =>
-        timers.filter((timer) => timer.ms >= FINISH_RETRY_BASE_MS).map((timer) => timer.ms),
+        timers
+          .filter((timer) => timer.ms >= FINISH_RETRY_BASE_MS && timer.ms !== COLD_LEAD_HOLD_MS)
+          .map((timer) => timer.ms),
       runRetries: () => {
         for (const timer of timers.splice(0)) timer.run();
       },
@@ -3298,6 +3366,52 @@ describe("FU-424 a lost finish notice reaches the lead once", () => {
       }
     },
   );
+
+  test("FU-434 an armed finish notice to a cold lead waits for the hold, then goes once", async () => {
+    resetAgentMessageLogForTests();
+    const f = await ownedFixture({
+      notice: { status: "armed" },
+      leadUpdatedAt: new Date(Date.now() - COLD_LEAD_AFTER_MS),
+    });
+    try {
+      f.runTurn(WORKER);
+      await until(() => expect(f.coldHolds()).toBe(1));
+      await quiet();
+      expect(f.delivered).toEqual([]);
+      expect(await f.notice()).toMatchObject({ status: "pending" });
+      // The lead's idle sweep leaves the held notice to the hold.
+      f.idle(LEAD);
+      await quiet();
+      expect(f.delivered).toEqual([]);
+      f.runColdHold();
+      await until(async () => expect(await f.notice()).toMatchObject({ status: "delivered" }));
+      expect(f.delivered).toEqual([{ leadId: LEAD, messageId: MESSAGE_ID }]);
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  test("FU-434 a held finish notice is dropped when the worker messaged the lead during the hold", async () => {
+    resetAgentMessageLogForTests();
+    const f = await ownedFixture({
+      notice: { status: "armed" },
+      leadUpdatedAt: new Date(Date.now() - COLD_LEAD_AFTER_MS),
+    });
+    try {
+      f.runTurn(WORKER);
+      await until(() => expect(f.coldHolds()).toBe(1));
+      noteAgentMessageDelivered(WORKER, LEAD, Date.now() + 1);
+      f.runColdHold();
+      await until(async () =>
+        expect(await f.notice()).toMatchObject({ status: "delivered", deliveredBy: "report-up" }),
+      );
+      await quiet();
+      expect(f.delivered).toEqual([]);
+    } finally {
+      f.service.stop();
+      resetAgentMessageLogForTests();
+    }
+  });
 
   test("FU-519 a notice the manager already marked pending is skipped after a direct report", async () => {
     resetAgentMessageLogForTests();

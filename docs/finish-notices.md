@@ -30,6 +30,13 @@ Any other end of turn is held: the notice stays armed and no parent turn starts.
 A delivery notice (queued, delivered, accepted) never starts a parent turn.
 The rule is in `packages/server/src/server/finish-notice-filter.ts`.
 
+A parent that has been idle for 55 minutes has lost its prompt cache, so a wake rewrites its whole context.
+Its DONE and plain finish notices wait up to 10 minutes and then reach it in one wake.
+BLOCKED, DECISION, QUESTION, RISK, errors, stops and permission requests end the wait at once.
+A turn that the parent starts also ends the wait.
+A held notice is not sent if the child messaged the parent after the notice was armed.
+The hold is in `holdForColdLead` in `packages/server/src/server/report-up.ts`.
+
 Use `fulcra send <child> --prompt-file task.txt --no-wait` on the parent host.
 Use `--steer` to join the current turn when the provider supports steering.
 Use `--no-notify-on-finish` to opt out for that message.
