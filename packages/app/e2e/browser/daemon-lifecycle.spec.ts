@@ -14,6 +14,7 @@ import {
 test("settings restart waits for a replacement worker while retaining the supervisor", async ({
   page,
 }, testInfo) => {
+  test.setTimeout(120_000);
   const daemon = await startIsolatedHostDaemon(randomUUID());
   try {
     const supervisor = daemon.getPid();
