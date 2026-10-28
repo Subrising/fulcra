@@ -115,6 +115,7 @@ export class QueuedAgentMessages {
   private unhealthy = false;
   private readonly deliveryListeners = new Set<() => void>();
   private readonly draining = new Set<string>();
+  private readonly pendingDrains = new Set<Promise<void>>();
   private readonly rekick = new Set<string>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly attempts = new Map<string, object>();
@@ -234,11 +235,33 @@ export class QueuedAgentMessages {
       if (["queued", "dispatching", "uncertain"].includes(record.state)) this.kick(record.agentId);
   }
 
+  private async admissionReceiver(agentId: string, expectedSessionId?: string | null) {
+    const target =
+      this.deps.agentManager.getAgent(agentId) ?? (await this.deps.agentStorage.get(agentId));
+    if (
+      !target ||
+      target.archivedAt ||
+      ("lifecycle" in target ? target.lifecycle : target.lastStatus) === "closed"
+    )
+      throw Object.assign(new Error(closedReceiverReason(target)), {
+        code: "QUEUED_RECEIVER_CLOSED",
+      });
+    if (
+      expectedSessionId !== undefined &&
+      (target.persistence?.sessionId ?? null) !== expectedSessionId
+    )
+      throw Object.assign(new Error("The receiver session changed"), {
+        code: "QUEUED_RECEIVER_CHANGED",
+      });
+    return target;
+  }
+
   async enqueue(
     agentId: string,
     request: z.infer<typeof RequestSchema>,
     localServerId?: string,
     resumeAt?: number,
+    expectedSessionId?: string | null,
   ): Promise<void> {
     if (!this.active && !this.deps.deferStart) await this.start();
     await this.serial(async () => {
@@ -270,16 +293,7 @@ export class QueuedAgentMessages {
         ).length >= MAX_HELD_PER_TARGET
       )
         throw new HeldQueueFullError(agentId);
-      const target =
-        this.deps.agentManager.getAgent(agentId) ?? (await this.deps.agentStorage.get(agentId));
-      if (
-        !target ||
-        target.archivedAt ||
-        ("lifecycle" in target ? target.lifecycle : target.lastStatus) === "closed"
-      )
-        throw Object.assign(new Error(closedReceiverReason(target)), {
-          code: "QUEUED_RECEIVER_CLOSED",
-        });
+      const target = await this.admissionReceiver(agentId, expectedSessionId);
       this.records = this.records
         .filter((r) => ["queued", "dispatching"].includes(r.state))
         .concat(
@@ -392,6 +406,7 @@ export class QueuedAgentMessages {
     this.unsubscribe();
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
+    await Promise.all(this.pendingDrains);
     await this.tail;
   }
 
@@ -501,14 +516,43 @@ export class QueuedAgentMessages {
       return;
     }
     this.draining.add(agentId);
-    void this.serial(() => this.drain(agentId))
+    const { agentManager, agentStorage } = this.deps;
+    const waiting = this.records.filter((r) => r.agentId === agentId && r.state === "queued");
+    const first = waiting[0];
+    const target = agentManager.getAgent(agentId) ?? agentStorage.getCached(agentId);
+    // Restore a cold receiver outside the shared queue lock. Admission for other chats must keep working.
+    let preparation: Promise<void> | undefined;
+    if (
+      first &&
+      !agentManager.getAgent(agentId) &&
+      waiting.every((record) => (record.resumeAt ?? 0) <= Date.now()) &&
+      !noticePaused(
+        agentStorage.noticePausePath,
+        target,
+        (id) => agentManager.getAgent(id) ?? agentStorage.getCached(id),
+      )
+    ) {
+      const restore = () => loadQueuedReceiver(this.deps, agentId, first.sessionId);
+      preparation = first.request.sender
+        ? agentManager.trustedPlugins.agentInput(restore)
+        : agentManager.trustedPlugins.rpc(undefined, restore);
+    }
+    // Warm dispatch keeps its synchronous place in the serial queue.
+    const dispatch = preparation
+      ? preparation
+          .catch(() => undefined)
+          .then(() => this.serial(() => this.drain(agentId, preparation)))
+      : this.serial(() => this.drain(agentId));
+    const work = dispatch
       .catch((error) => {
         this.deps.logger.warn({ err: error, agentId }, "Queued agent delivery failed");
       })
       .finally(() => {
+        this.pendingDrains.delete(work);
         this.draining.delete(agentId);
         if (this.rekick.delete(agentId)) this.kick(agentId);
       });
+    this.pendingDrains.add(work);
   }
 
   private schedule(agentId: string, resumeAt: number): void {
@@ -668,7 +712,7 @@ export class QueuedAgentMessages {
     return false;
   }
 
-  private async drain(agentId: string): Promise<void> {
+  private async drain(agentId: string, preparation?: Promise<void>): Promise<void> {
     await this.load();
     const { agentManager } = this.deps;
     await this.reconcileUncertain(agentId);
@@ -708,7 +752,7 @@ export class QueuedAgentMessages {
       if (this.pending(agentId)) setTimeout(() => this.kick(agentId), 0).unref?.();
       return;
     }
-    await this.dispatchBatch(agentId, eligible, batchId, lineChecks);
+    await this.dispatchBatch(agentId, eligible, batchId, lineChecks, preparation);
     await this.save();
   }
 
@@ -717,6 +761,7 @@ export class QueuedAgentMessages {
     eligible: Record[],
     batchId: string,
     lineChecks: Map<Record, () => string | null>,
+    preparation?: Promise<void>,
   ): Promise<void> {
     const { agentManager, logger } = this.deps;
     const attemptId = `${agentId}:${batchId}`;
@@ -742,7 +787,8 @@ export class QueuedAgentMessages {
       await asSource(async () => {
         if (this.stopped || agentManager.hasInFlightRun(agentId))
           throw new SteerUnavailableError(agentId);
-        await loadQueuedReceiver(this.deps, agentId, eligible[0]!.sessionId);
+        if (preparation) await preparation;
+        else await loadQueuedReceiver(this.deps, agentId, eligible[0]!.sessionId);
         const check = queuedReceiverCheck(
           agentManager,
           agentId,

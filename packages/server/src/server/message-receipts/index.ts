@@ -1959,7 +1959,7 @@ export class MessageReceipts {
   private async sendOnce(key: string, input: SendMessageInput): Promise<void> {
     const file = path.join(this.directory, `${key}.json`);
     const fingerprint = digest(input.request);
-    const shouldSend = await this.serial(async () => {
+    const checkExisting = async () => {
       await this.initialize();
       const existing = await readReceipt(file);
       if (existing) {
@@ -1969,7 +1969,14 @@ export class MessageReceipts {
         throw new Error("agent_request_outcome_unknown");
       }
       await this.requireCapacity();
-      await input.prepare?.();
+      return true;
+    };
+    if (!(await this.serial(checkExisting))) return;
+    // Receiver restore can take longer than a send deadline. It must not hold the host receipt lock.
+    // The per-key pending chain still fences retries. Recheck the ledger after preparation yields.
+    await input.prepare?.();
+    const shouldSend = await this.serial(async () => {
+      if (!(await checkExisting())) return false;
       await writeJsonFileAtomic(file, { fingerprint, agentId: input.agentId, state: "pending" });
       this.diskCount++;
       this.warnCapacity();

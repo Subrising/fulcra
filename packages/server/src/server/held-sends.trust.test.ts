@@ -190,6 +190,247 @@ async function fixture(
   };
 }
 
+test.each(["owner", "agent"])(
+  "a queued %s send saves its receipt before a cold receiver finishes loading",
+  async (source) => {
+    const f = await fixture();
+    const saved = (await f.storage.get(f.target.id))!;
+    await f.host.daemon(() => f.manager.closeAgent(f.target.id));
+    await f.storage.upsert({ ...saved, lastStatus: "idle" });
+    expect(f.manager.getAgent(f.target.id)).toBeNull();
+    let release!: () => void;
+    const loading = new Promise<void>((resolve) => (release = resolve));
+    const resume = f.manager.resumeAgentFromPersistence.bind(f.manager);
+    vi.spyOn(f.manager, "resumeAgentFromPersistence").mockImplementation(async (...args) => {
+      await loading;
+      return resume(...args);
+    });
+    const messageId = randomUUID();
+    const sending = f.send(
+      "cold queued input",
+      source === "agent" ? f.sender.id : undefined,
+      false,
+      messageId,
+      source === "owner",
+    );
+    try {
+      await vi.waitFor(() =>
+        expect(f.messages).toContainEqual(
+          expect.objectContaining({
+            type: "send_agent_message_response",
+            payload: expect.objectContaining({ accepted: true }),
+          }),
+        ),
+      );
+      const records = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
+      expect(records).toContainEqual(
+        expect.objectContaining({
+          request: expect.objectContaining({ messageId, text: "cold queued input" }),
+          sessionId: saved.persistence!.sessionId,
+        }),
+      );
+      expect(f.prompts).toEqual([]);
+    } finally {
+      release();
+      await sending;
+    }
+    await vi.waitFor(() => expect(f.prompts).toEqual(["cold queued input"]));
+    await f.send(
+      "cold queued input",
+      source === "agent" ? f.sender.id : undefined,
+      false,
+      messageId,
+      source === "owner",
+    );
+    await f.queue.start();
+    expect(f.prompts).toEqual(["cold queued input"]);
+  },
+);
+
+test("a cold queue dispatch does not block admission and delivery for a warm receiver", async () => {
+  const f = await fixture();
+  const saved = (await f.storage.get(f.target.id))!;
+  await f.host.daemon(() => f.manager.closeAgent(f.target.id));
+  await f.storage.upsert({ ...saved, lastStatus: "idle" });
+  let release!: () => void;
+  let entered!: () => void;
+  const loading = new Promise<void>((resolve) => (release = resolve));
+  const ready = new Promise<void>((resolve) => (entered = resolve));
+  const resume = f.manager.resumeAgentFromPersistence.bind(f.manager);
+  vi.spyOn(f.manager, "resumeAgentFromPersistence").mockImplementation(async (...args) => {
+    entered();
+    await loading;
+    return resume(...args);
+  });
+  await f.send("cold input", undefined, false, randomUUID(), true);
+  await ready;
+  let admitted = false;
+  const warm = f.queue
+    .enqueue(f.sender.id, { text: "warm input", messageId: randomUUID() })
+    .then(() => (admitted = true));
+  try {
+    await vi.waitFor(() => expect(admitted).toBe(true));
+    await vi.waitFor(() => expect(f.prompts).toEqual(["warm input"]));
+  } finally {
+    release();
+    await warm;
+  }
+  await vi.waitFor(() => expect(f.prompts).toEqual(["warm input", "cold input"]));
+});
+
+test("queue close waits for a cold receiver load and withdraws its input", async () => {
+  const f = await fixture();
+  const saved = (await f.storage.get(f.target.id))!;
+  await f.host.daemon(() => f.manager.closeAgent(f.target.id));
+  await f.storage.upsert({ ...saved, lastStatus: "idle" });
+  let release!: () => void;
+  let entered!: () => void;
+  const loading = new Promise<void>((resolve) => (release = resolve));
+  const ready = new Promise<void>((resolve) => (entered = resolve));
+  const resume = f.manager.resumeAgentFromPersistence.bind(f.manager);
+  vi.spyOn(f.manager, "resumeAgentFromPersistence").mockImplementation(async (...args) => {
+    entered();
+    await loading;
+    return resume(...args);
+  });
+  await f.send("withdraw on close", undefined, false, randomUUID(), true);
+  await ready;
+  let closed = false;
+  const closing = f.queue.close().then(() => (closed = true));
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(closed).toBe(false);
+  } finally {
+    release();
+    await closing;
+  }
+  expect(f.prompts).toEqual([]);
+});
+
+test("a failed cold receiver load is recorded without a second resume attempt", async () => {
+  const f = await fixture();
+  const saved = (await f.storage.get(f.target.id))!;
+  await f.host.daemon(() => f.manager.closeAgent(f.target.id));
+  await f.storage.upsert({ ...saved, lastStatus: "idle" });
+  const resume = vi
+    .spyOn(f.manager, "resumeAgentFromPersistence")
+    .mockRejectedValue(new Error("receiver load failed"));
+  await f.send("saved failed load", undefined, false, randomUUID(), true);
+  await vi.waitFor(async () => {
+    const records = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        state: "uncertain",
+        reason: expect.stringContaining("receiver load failed"),
+      }),
+    );
+  });
+  expect(resume).toHaveBeenCalledTimes(1);
+  expect(f.prompts).toEqual([]);
+});
+
+test("a paused cold receiver stays unloaded until notices resume", async () => {
+  const f = await fixture();
+  const saved = (await f.storage.get(f.target.id))!;
+  await f.host.daemon(() => f.manager.closeAgent(f.target.id));
+  await f.storage.upsert({ ...saved, lastStatus: "idle" });
+  const resume = vi.spyOn(f.manager, "resumeAgentFromPersistence");
+  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+  await f.send("paused cold input", undefined, false, randomUUID(), true);
+  await f.queue.start();
+  expect(resume).not.toHaveBeenCalled();
+  expect(f.prompts).toEqual([]);
+  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: [] }));
+  await vi.waitFor(() => expect(f.prompts).toEqual(["paused cold input"]));
+});
+
+test("a cold queued send cannot enter a replacement provider session", async () => {
+  const f = await fixture();
+  const saved = (await f.storage.get(f.target.id))!;
+  await f.host.daemon(() => f.manager.closeAgent(f.target.id));
+  await f.storage.upsert({ ...saved, lastStatus: "idle" });
+  let release!: () => void;
+  let entered!: () => void;
+  const loading = new Promise<void>((resolve) => (release = resolve));
+  const ready = new Promise<void>((resolve) => (entered = resolve));
+  const resume = f.manager.resumeAgentFromPersistence.bind(f.manager);
+  vi.spyOn(f.manager, "resumeAgentFromPersistence").mockImplementation(async (...args) => {
+    entered();
+    await loading;
+    return resume(...args);
+  });
+  await f.send("old session input", undefined, false, randomUUID(), true);
+  await ready;
+  try {
+    await f.storage.upsert({
+      ...saved,
+      lastStatus: "idle",
+      persistence: { ...saved.persistence!, sessionId: randomUUID() },
+    });
+  } finally {
+    release();
+  }
+  await vi.waitFor(async () => {
+    const records = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
+    expect(records).toContainEqual(
+      expect.objectContaining({ state: "refused", reason: "The receiver session changed" }),
+    );
+  });
+  expect(f.prompts).toEqual([]);
+});
+
+test.each(["owner", "agent"])(
+  "a queued %s send refuses a session change before durable admission",
+  async (source) => {
+    const f = await fixture();
+    const saved = (await f.storage.get(f.target.id))!;
+    await f.host.daemon(() => f.manager.closeAgent(f.target.id));
+    await f.storage.upsert({ ...saved, lastStatus: "idle" });
+    const enqueue = f.queue.enqueue.bind(f.queue);
+    vi.spyOn(f.queue, "enqueue").mockImplementationOnce(async (...args) => {
+      await f.storage.upsert({
+        ...saved,
+        lastStatus: "idle",
+        persistence: { ...saved.persistence!, sessionId: randomUUID() },
+      });
+      return enqueue(...args);
+    });
+    await f.send(
+      "original receiver only",
+      source === "agent" ? f.sender.id : undefined,
+      false,
+      randomUUID(),
+      source === "owner",
+    );
+    expect(f.messages).toContainEqual(
+      expect.objectContaining({
+        type: "send_agent_message_response",
+        payload: expect.objectContaining({
+          accepted: false,
+          error: "The receiver session changed",
+        }),
+      }),
+    );
+    expect(f.pending()).toBe(0);
+    expect(f.prompts).toEqual([]);
+  },
+);
+
+test("an owner can queue the first input for a stored receiver without a provider handle", async () => {
+  const f = await fixture();
+  const saved = (await f.storage.get(f.target.id))!;
+  await f.host.daemon(() => f.manager.closeAgent(f.target.id));
+  await f.storage.upsert({ ...saved, persistence: undefined, lastStatus: "idle" });
+  await f.send("first owner input", undefined, false, randomUUID(), true);
+  expect(f.messages).toContainEqual(
+    expect.objectContaining({
+      type: "send_agent_message_response",
+      payload: expect.objectContaining({ accepted: true }),
+    }),
+  );
+  await vi.waitFor(() => expect(f.prompts).toEqual(["first owner input"]));
+});
+
 test("three queued agent messages start one combined turn and retain each receipt", async () => {
   const f = await fixture();
   f.busy.add(f.target.id);
