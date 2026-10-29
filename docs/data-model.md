@@ -368,6 +368,33 @@ Environment variables override `config.json`:
 after changing `config.json`. Environment changes require a daemon restart; the launch environment
 remains authoritative during reload.
 
+The daemon watches and background-fetches only workspaces that have a live agent (not archived,
+not closed), a running workspace script, or a checkout that a connected client opened (the 16 most
+recent per client). Other workspaces have no watcher, no fetch and no poll; a client that opens
+one gets its status on demand and then keeps it observed.
+
+Background fetch is a per-host setting. It is on by default, once every 10 minutes per repository:
+
+```json
+{
+  "daemon": {
+    "git": {
+      "backgroundFetch": true,
+      "backgroundFetchIntervalMs": 600000
+    }
+  }
+}
+```
+
+| Environment variable                     | Setting                                                  |
+| ---------------------------------------- | -------------------------------------------------------- |
+| `PASEO_GIT_BACKGROUND_FETCH`             | `backgroundFetch` (`off`/`0`/`false` or `on`/`1`/`true`) |
+| `PASEO_GIT_BACKGROUND_FETCH_INTERVAL_MS` | `backgroundFetchIntervalMs` (minimum 60000)              |
+
+The environment wins over `config.json`. Both are read at daemon start; change them and restart the
+daemon. A daemon older than 0.2.38 rejects the two `config.json` keys, so a host that may roll back
+sets the environment variable in its daemon profile instead.
+
 `agents.metadataGeneration.providers` controls the preferred structured-generation fallback order for daemon-side metadata tasks such as commit messages, PR text, branch names, and generated agent titles. Entries are tried first in the configured order, then Paseo falls through to dynamically discovered defaults and finally the current selection when available.
 
 Local speech model ids are intentionally narrow: STT uses `parakeet-tdt-0.6b-v2-int8`, TTS uses `kokoro-en-v0_19`, and turn detection uses the bundled Silero VAD model.
