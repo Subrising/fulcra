@@ -24,6 +24,7 @@ import { collectMultiple } from "../../utils/command-options.js";
 import { resolveProviderAndModel } from "../../utils/provider-model.js";
 import { buildWorkspaceSource } from "../workspace/create.js";
 import { ACCOUNT_REQUEST_ENV, resolveRunAccount } from "../account.js";
+import { readPromptFile } from "../../utils/prompt-file.js";
 import { buildRunToolOptions } from "./mcp-options.js";
 
 export { resolveProviderAndModel } from "../../utils/provider-model.js";
@@ -32,7 +33,11 @@ export function addRunOptions(cmd: Command): Command {
   return (
     cmd
       .description("Create and start an agent with a task")
-      .argument("<prompt>", "The task/prompt for the agent")
+      .argument("[prompt]", "The task/prompt for the agent")
+      .option(
+        "--prompt-file <path>",
+        "Read the prompt from a UTF-8 file, or from standard input when the path is - (multi-line prompts on Windows)",
+      )
       .option("-d, --background", "Run in background")
       // COMPAT(detachRunFlag): --detach used to mean background execution, not
       // ownership transfer. Added in v0.2.0; remove after 2027-01-17.
@@ -131,6 +136,7 @@ export const agentRunSchema: OutputSchema<AgentRunResult> = {
 };
 
 export interface AgentRunOptions extends CommandOptions {
+  promptFile?: string;
   background?: boolean;
   detach?: boolean;
   title?: string;
@@ -412,7 +418,7 @@ function validateRunOptions(prompt: string, options: AgentRunOptions, outputSche
     throw {
       code: "MISSING_PROMPT",
       message: "A prompt is required",
-      details: "Usage: paseo agent run [options] <prompt>",
+      details: "Usage: paseo agent run [options] <prompt> | --prompt-file <path>",
     } satisfies CommandError;
   }
 
@@ -644,11 +650,28 @@ async function resolveRunWorkspace(
   return { id: result.workspace.id, cwd: result.workspace.workspaceDirectory ?? cwd };
 }
 
+/** The prompt comes from the argument or from --prompt-file, never both. */
+export async function resolveRunPrompt(
+  promptArgument: string | undefined,
+  promptFile: string | undefined,
+): Promise<string> {
+  const file = promptFile?.trim();
+  if (file && promptArgument?.trim()) {
+    const error: CommandError = {
+      code: "CONFLICTING_PROMPT_INPUT",
+      message: "Provide exactly one of the prompt argument or --prompt-file",
+    };
+    throw error;
+  }
+  return file ? await readPromptFile(file) : (promptArgument ?? "");
+}
+
 export async function runRunCommand(
-  prompt: string,
+  promptArgument: string | undefined,
   options: AgentRunOptions,
   _command: Command,
 ): Promise<SingleResult<AgentRunResult>> {
+  const prompt = await resolveRunPrompt(promptArgument, options.promptFile);
   const outputSchema = options.outputSchema ? loadOutputSchema(options.outputSchema) : undefined;
 
   validateRunOptions(prompt, options, outputSchema);

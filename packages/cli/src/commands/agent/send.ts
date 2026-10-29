@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { type Command } from "commander";
 import type { PaseoAgentSendOptions } from "@getpaseo/client";
+import { readPromptFile } from "../../utils/prompt-file.js";
 import { collectMultiple } from "../../utils/command-options.js";
 import { connectToDaemon } from "../../utils/client.js";
 import type {
@@ -9,7 +10,6 @@ import type {
   OutputSchema,
   CommandError,
 } from "../../output/index.js";
-import { readFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import { listAccounts, switchAccountSession } from "../account.js";
 import { resolveSender, assertSenderDaemon } from "../../utils/send-sender.js";
@@ -189,18 +189,7 @@ async function resolvePromptInput(options: {
     throw error;
   }
 
-  try {
-    return await readFile(resolve(promptFilePath), "utf8");
-  } catch (err) {
-    if (err && typeof err === "object" && "code" in err) throw err;
-    const message = err instanceof Error ? err.message : String(err);
-    const error: CommandError = {
-      code: "PROMPT_FILE_READ_ERROR",
-      message: `Failed to read prompt file: ${promptFilePath}`,
-      details: message,
-    };
-    throw error;
-  }
+  return await readPromptFile(promptFilePath);
 }
 
 type SendWaitState = Awaited<
