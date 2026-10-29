@@ -207,6 +207,7 @@ import { resolvePaseoToolPolicy } from "./agent/paseo-tool-policy.js";
 import { BrowserToolsBroker } from "./browser-tools/broker.js";
 import { DaemonConfigBrowserToolsPolicy } from "./browser-tools/policy.js";
 import { WorkspaceGitServiceImpl } from "./workspace-git-service.js";
+import type { BackgroundGitFetchConfig } from "./git-background-fetch-config.js";
 import { resolveWorkspaceIdForPath } from "./resolve-workspace-id-for-path.js";
 import {
   archiveByScope,
@@ -470,6 +471,7 @@ export interface PaseoDaemonConfig {
     maxProcessesPerSecond: number;
     maxProcessConcurrency: number;
   };
+  gitBackgroundFetch?: BackgroundGitFetchConfig;
   autoArchiveAfterMerge?: boolean;
   explainDailyLimit?: number;
   notificationMode?: "all" | "primes" | "off";
@@ -1134,6 +1136,7 @@ export async function createPaseoDaemon(
     logger,
     paseoHome: config.paseoHome,
     worktreesRoot: config.worktreesRoot,
+    backgroundFetch: config.gitBackgroundFetch,
     deps: {
       forgeOverrides: { github },
     },

@@ -94,6 +94,7 @@ import type {
   ProviderUsage,
 } from "@getpaseo/protocol/messages";
 import { relative } from "node:path";
+import { GitObservationDemand } from "./session/workspace-git-observer/git-observation-demand.js";
 import { isAbsolute } from "node:path";
 import { CreationService } from "./creation/index.js";
 import type { CreationSnapshot, AgentCreateRequest } from "@getpaseo/protocol/messages";
@@ -407,6 +408,8 @@ const LEGACY_PROVIDER_IDS = new Set(["claude", "codex", "opencode"]);
 const MIN_VERSION_ALL_PROVIDERS = "0.1.45";
 const TIMELINE_TURN_PAGE_DEFAULT = 100;
 const TIMELINE_TURN_PAGE_MAX = 500;
+const GIT_OBSERVATION_RECONCILE_DELAY_MS = 250;
+
 function errorToFriendlyMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
@@ -946,6 +949,8 @@ export class Session {
   private readonly workspaceSetupSnapshots: Map<string, WorkspaceSetupSnapshot>;
   private readonly workspaceSetupRuntime: WorkspaceSetupRuntime;
   private readonly workspaceGitObserver: WorkspaceGitObserverService;
+  private readonly gitObservationDemand: GitObservationDemand;
+  private gitObservationReconcileTimer: NodeJS.Timeout | null = null;
   private readonly workspaceDirectory: WorkspaceDirectory;
   private readonly voiceSessions: VoiceSessions;
   private readonly checkoutSession: CheckoutSession;
@@ -1120,6 +1125,13 @@ export class Session {
       worktreesRoot: this.worktreesRoot,
       logger: this.sessionLogger,
     });
+    this.gitObservationDemand = new GitObservationDemand(
+      () => this.agentManager.listAgents(),
+      (workspaceId) =>
+        this.scriptRuntimeStore
+          ?.listForWorkspace(workspaceId)
+          .some((entry) => entry.lifecycle === "running") ?? false,
+    );
     this.workspaceGitObserver = createWorkspaceGitObserverService({
       workspaceGitService: this.workspaceGitService,
       emitWorkspaceUpdateForCwd: (cwd) => this.emitWorkspaceUpdateForCwd(cwd),
@@ -1584,6 +1596,15 @@ export class Session {
   async syncWorkspaceGitObserverForWorkspace(workspace: PersistedWorkspaceRecord): Promise<void> {
     if (this.workspaceUpdatesSubscriptions.size === 0 && !this.wantsEvent("checkout_status_update"))
       return;
+    if (
+      !this.gitObservationDemand.isDemanded({
+        id: workspace.workspaceId,
+        workspaceDirectory: workspace.cwd,
+      })
+    ) {
+      this.workspaceGitObserver.removeForWorkspaceId(workspace.workspaceId);
+      return;
+    }
     const descriptor = await this.describeWorkspaceRecord(workspace);
     const demanded = [...this.workspaceUpdatesSubscriptions.values()].some((subscription) =>
       this.matchesWorkspaceFilter({ workspace: descriptor, filter: subscription.filter }),
@@ -2125,6 +2146,9 @@ export class Session {
         }
 
         if (event.type === "agent_state") {
+          if (this.gitObservationDemand.noteAgentState(event.agent)) {
+            this.scheduleGitObservationReconcile();
+          }
           this.sessionLogger.trace(
             {
               agentId: event.agent.id,
@@ -4049,6 +4073,8 @@ export class Session {
   private dispatchCheckoutMessage(msg: SessionInboundMessage): Promise<void> | undefined {
     switch (msg.type) {
       case "checkout_status_request":
+        if (this.gitObservationDemand.noteOpenedCwd(msg.cwd))
+          this.scheduleGitObservationReconcile();
         return this.checkoutSession.handleStatusRequest(msg);
       case "checkout.commits.list.request":
         return this.checkoutSession.handleCommitsListRequest(msg);
@@ -8185,6 +8211,8 @@ export class Session {
     return { snapshotByWorkspaceId };
   }
 
+  // FU-590: observe only workspaces with a live agent, a running script or a checkout this client
+  // opened. Every other workspace has no watcher, no background fetch and no poll.
   private async reconcileWorkspaceGitObservers(): Promise<void> {
     const all = this.wantsEvent("checkout_status_update")
       ? await this.workspaceDirectory.listObservationTargets()
@@ -8195,8 +8223,21 @@ export class Session {
       ),
     );
     this.workspaceGitObserver.reconcileObservers(
-      this.wantsEvent("checkout_status_update") ? [...entries, ...all] : entries,
+      this.gitObservationDemand.filter(
+        this.wantsEvent("checkout_status_update") ? [...entries, ...all] : entries,
+      ),
     );
+  }
+
+  private scheduleGitObservationReconcile(): void {
+    if (this.gitObservationReconcileTimer) return;
+    this.gitObservationReconcileTimer = setTimeout(() => {
+      this.gitObservationReconcileTimer = null;
+      void this.reconcileWorkspaceGitObservers().catch((error) => {
+        this.sessionLogger.warn({ err: error }, "Failed to reconcile workspace git observers");
+      });
+    }, GIT_OBSERVATION_RECONCILE_DELAY_MS);
+    this.gitObservationReconcileTimer.unref?.();
   }
 
   private seedWorkspaceSubscriptionSnapshot(
@@ -10923,6 +10964,10 @@ export class Session {
 
     this.checkoutSession.cleanup();
 
+    if (this.gitObservationReconcileTimer) {
+      clearTimeout(this.gitObservationReconcileTimer);
+      this.gitObservationReconcileTimer = null;
+    }
     this.workspaceGitObserver.dispose();
   }
 }
