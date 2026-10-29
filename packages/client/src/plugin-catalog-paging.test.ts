@@ -3,6 +3,7 @@ import { fromByteArray } from "base64-js";
 import { expect, test, vi } from "vitest";
 import { canonicalJson } from "@getpaseo/protocol/trusted-input";
 import { readPagedPluginCatalog, type CatalogPagingReader } from "./plugin-catalog-paging";
+import { PLUGIN_CATALOG_CLOCK_SKEW_MS } from "@getpaseo/protocol/plugin-catalog-paging";
 import type { PluginCatalogPageResponse } from "@getpaseo/protocol/plugin-catalog-paging";
 
 const id = "00000000-0000-4000-8000-000000000001";
@@ -11,10 +12,17 @@ const hash = async (bytes: Uint8Array) => createHash("sha256").update(bytes).dig
 type Page = Extract<PluginCatalogPageResponse["payload"], { status: "ok" }>;
 async function fixture(script = "α😀export default {};") {
   const bytes = new TextEncoder().encode(script);
-  const trust = { trustedHost: { contract: "1.1" as const, boot: "boot" }, trustedPlugins: [] };
+  const trust = {
+    trustedHost: { contract: "1.1" as const, boot: "boot" },
+    trustedPlugins: [],
+  };
   const entry = {
     id: "example",
-    bundle: { reference: id, sha256: await hash(bytes), byteLength: bytes.byteLength },
+    bundle: {
+      reference: id,
+      sha256: await hash(bytes),
+      byteLength: bytes.byteLength,
+    },
   };
   const manifestHash = await hash(
     new TextEncoder().encode(canonicalJson({ version: 1, revision, entries: [entry], trust })),
@@ -107,7 +115,7 @@ test("held crypto cancellation discards an otherwise valid manifest without read
 });
 test("expired pages refuse without bundle reads", async () => {
   const { reader, page } = await fixture();
-  page.expiresAt = Date.now() - 1;
+  page.expiresAt = Date.now() - PLUGIN_CATALOG_CLOCK_SKEW_MS - 1;
   await expect(readPagedPluginCatalog(reader)).rejects.toThrow("expired");
   expect(reader.chunk).not.toHaveBeenCalled();
 });
@@ -137,4 +145,25 @@ test("repeated cursor or duplicate entry refuses before scripts", async () => {
   page.nextCursor = revision;
   await expect(readPagedPluginCatalog(reader)).rejects.toThrow("Duplicate");
   expect(reader.chunk).not.toHaveBeenCalled();
+});
+test.each([
+  ["50 ms behind the host", -50],
+  ["5 s behind the host", -5000],
+  ["50 ms ahead of the host", 50],
+  ["5 s ahead of the host", 5000],
+])("catalog read tolerates a client clock %s", async (_name, offset) => {
+  const { reader, page } = await fixture();
+  // Host clock is real time; the client clock is shifted by `offset`.
+  page.expiresAt = Date.now() + 30000;
+  vi.useFakeTimers({ now: Date.now() + offset, toFake: ["Date"] });
+  try {
+    await expect(readPagedPluginCatalog(reader)).resolves.toBeDefined();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+test("catalog read still refuses a snapshot far beyond the host TTL", async () => {
+  const { reader, page } = await fixture();
+  page.expiresAt = Date.now() + 30000 + PLUGIN_CATALOG_CLOCK_SKEW_MS + 1000;
+  await expect(readPagedPluginCatalog(reader)).rejects.toThrow("expired");
 });

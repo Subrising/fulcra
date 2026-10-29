@@ -6,6 +6,8 @@ export const PLUGIN_CATALOG_PAGE_BYTES = 64 * 1024;
 export const PLUGIN_CATALOG_CHUNK_BYTES = 64 * 1024;
 export const PLUGIN_CATALOG_REPLY_BYTES = 128 * 1024;
 export const PLUGIN_CATALOG_SNAPSHOT_TTL_MS = 30_000;
+/** Allowed clock difference between host and client when checking a snapshot's absolute expiry. */
+export const PLUGIN_CATALOG_CLOCK_SKEW_MS = 10_000;
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 const correlation = z.string().min(1).max(200);
 export const PluginCatalogTrustSchema = z
