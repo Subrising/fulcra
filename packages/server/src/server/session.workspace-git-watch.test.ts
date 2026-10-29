@@ -120,6 +120,14 @@ function createWorkspaceRuntimeSnapshot(
   };
 }
 
+interface TestAgent {
+  id: string;
+  cwd: string;
+  workspaceId: string | null;
+  archivedAt: string | null;
+  lifecycle: string;
+}
+
 function createSessionForWorkspaceGitWatchTests(options?: {
   onBranchChanged?: (
     workspaceId: string,
@@ -128,8 +136,10 @@ function createSessionForWorkspaceGitWatchTests(options?: {
   ) => void;
   serviceProxy?: ServiceProxySubsystem;
   scriptRuntimeStore?: WorkspaceScriptRuntimeStore;
+  agents?: TestAgent[];
 }): {
   session: Session;
+  emitAgentState: (agent: TestAgent) => void;
   emitted: Array<{ type: string; payload: unknown }>;
   projects: Map<string, ReturnType<typeof createPersistedProjectRecord>>;
   workspaces: Map<string, ReturnType<typeof createPersistedWorkspaceRecord>>;
@@ -164,6 +174,7 @@ function createSessionForWorkspaceGitWatchTests(options?: {
     warn: vi.fn(),
     error: vi.fn(),
   };
+  let agentListener: ((event: unknown) => void) | null = null;
   const workspaceGitService = {
     ...createNoopWorkspaceGitService(),
     registerWorkspace: vi.fn((params: { cwd: string }, listener: WorkspaceGitListener) => {
@@ -200,8 +211,11 @@ function createSessionForWorkspaceGitWatchTests(options?: {
     paseoHome: "/tmp/paseo-test",
     agentManager: createStub<SessionOptions["agentManager"]>(
       withTrustedSurface({
-        subscribe: () => () => {},
-        listAgents: () => [],
+        subscribe: (listener: (event: unknown) => void) => {
+          agentListener = listener;
+          return () => {};
+        },
+        listAgents: () => options?.agents ?? [],
         listProviderSubagentActivity: () => [],
         getAgent: () => null,
       }),
@@ -278,6 +292,7 @@ function createSessionForWorkspaceGitWatchTests(options?: {
 
   return {
     session,
+    emitAgentState: (agent) => agentListener?.({ type: "agent_state", agent }),
     emitted,
     projects,
     workspaces,
@@ -570,6 +585,87 @@ describe("workspace git watch targets", () => {
     syncGitObserver(session, REPO_CWD, "ws-10");
     expect(subscriptions).toHaveLength(2);
 
+    await session.cleanup();
+  });
+
+  test("observes only workspaces with a live agent or an opened checkout (FU-590)", async () => {
+    const IDLE_CWD = path.resolve("/tmp/idle-repo");
+    const { session, projects, workspaces, workspaceGitService } =
+      createSessionForWorkspaceGitWatchTests({
+        agents: [
+          { id: "a1", cwd: REPO_CWD, workspaceId: "ws-live", archivedAt: null, lifecycle: "idle" },
+        ],
+      });
+    seedGitWorkspace({
+      projects,
+      workspaces,
+      projectId: "proj-1",
+      workspaceId: "ws-live",
+      cwd: REPO_CWD,
+      name: "live",
+    });
+    seedGitWorkspace({
+      projects,
+      workspaces,
+      projectId: "proj-2",
+      workspaceId: "ws-idle",
+      cwd: IDLE_CWD,
+      name: "idle",
+    });
+
+    await session.handleMessage({
+      type: "session.events.set_subscription.request",
+      requestId: "events",
+      events: ["checkout_status_update"],
+    });
+
+    const watched = () =>
+      workspaceGitService.registerWorkspace.mock.calls.map(
+        (call) => (call[0] as { cwd: string }).cwd,
+      );
+    expect(watched()).toEqual([REPO_CWD]);
+
+    // A client opens the idle checkout: it gets status at once and stays observed while open.
+    await session.handleMessage({
+      type: "checkout_status_request",
+      requestId: "open",
+      cwd: IDLE_CWD,
+    });
+    expect(workspaceGitService.getSnapshot).toHaveBeenCalledWith(IDLE_CWD);
+    await vi.waitFor(() => expect(watched()).toEqual([REPO_CWD, IDLE_CWD]));
+
+    await session.cleanup();
+  });
+
+  test("an agent archived while its workspace is watched releases the watch (FU-590)", async () => {
+    const agent = {
+      id: "a1",
+      cwd: REPO_CWD,
+      workspaceId: "ws-live",
+      archivedAt: null as string | null,
+      lifecycle: "idle",
+    };
+    const { session, projects, workspaces, subscriptions, emitAgentState } =
+      createSessionForWorkspaceGitWatchTests({ agents: [agent] });
+    seedGitWorkspace({
+      projects,
+      workspaces,
+      projectId: "proj-1",
+      workspaceId: "ws-live",
+      cwd: REPO_CWD,
+      name: "live",
+    });
+
+    await session.handleMessage({
+      type: "session.events.set_subscription.request",
+      requestId: "events",
+      events: ["checkout_status_update"],
+    });
+    expect(subscriptions).toHaveLength(1);
+
+    emitAgentState({ ...agent, archivedAt: "2026-10-30T00:00:00.000Z" });
+
+    await vi.waitFor(() => expect(subscriptions[0]?.unsubscribe).toHaveBeenCalledTimes(1));
     await session.cleanup();
   });
 

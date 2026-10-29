@@ -26,6 +26,7 @@ import { resolveSpeechConfig } from "./speech/speech-config-resolver.js";
 import type { RequestedSpeechProviders } from "./speech/speech-types.js";
 import { mergeHostnames, parseHostnamesEnv, type HostnamesConfig } from "./hostnames.js";
 import { resolveGitProcessPolicy } from "../utils/git-process-scheduler.js";
+import { resolveBackgroundGitFetchConfig } from "./git-background-fetch-config.js";
 
 export {
   loadPersistedConfig,
@@ -631,6 +632,7 @@ export function resolveConfigFromPersisted(
     mcpInjectLabels,
     browserToolsEnabled,
     git: resolveGitProcessConfig(env, persisted),
+    gitBackgroundFetch: resolveBackgroundGitFetchConfig({ env, persisted: persisted.daemon?.git }),
     autoArchiveAfterMerge,
     explainDailyLimit,
     notificationMode: persistedSettings.notificationMode,
@@ -794,6 +796,10 @@ function resolveCoreDaemonOverridePaths(
     parsePositiveGitOverride(env.PASEO_GIT_MAX_PROCESS_CONCURRENCY ?? env.PASEO_GIT_CONCURRENCY)
   ) {
     paths.push("daemon.git.maxProcessConcurrency");
+  }
+  if (env.PASEO_GIT_BACKGROUND_FETCH !== undefined) paths.push("daemon.git.backgroundFetch");
+  if (env.PASEO_GIT_BACKGROUND_FETCH_INTERVAL_MS !== undefined) {
+    paths.push("daemon.git.backgroundFetchIntervalMs");
   }
   if (env.PASEO_APP_BASE_URL !== undefined) paths.push("app.baseUrl");
   if (env.PASEO_PASSWORD?.trim()) paths.push("daemon.auth.password");

@@ -85,9 +85,20 @@ import {
 } from "./file-observer/index.js";
 import { checkoutLiteFromGitSnapshot } from "./workspace-registry-model.js";
 import { createWatcherLivenessCanary } from "./watcher-liveness-canary.js";
+import {
+  DEFAULT_BACKGROUND_GIT_FETCH_CONFIG,
+  type BackgroundGitFetchConfig,
+} from "./git-background-fetch-config.js";
+
+export {
+  DEFAULT_BACKGROUND_GIT_FETCH_CONFIG,
+  DEFAULT_BACKGROUND_GIT_FETCH_INTERVAL_MS,
+  MIN_BACKGROUND_GIT_FETCH_INTERVAL_MS,
+  resolveBackgroundGitFetchConfig,
+  type BackgroundGitFetchConfig,
+} from "./git-background-fetch-config.js";
 
 const WORKSPACE_GIT_WATCH_DEBOUNCE_MS = 1_000;
-const BACKGROUND_GIT_FETCH_INTERVAL_MS = 180_000;
 const FETCH_METADATA_ECHO_TTL_MS = 5_000;
 export const WORKSPACE_GIT_OBSERVATION_REENSURE_INTERVAL_MS = 60_000;
 const FORGE_PR_STATUS_POLL_FAST_INTERVAL_MS = 20_000;
@@ -414,6 +425,7 @@ interface WorkspaceGitServiceOptions {
   paseoHome: string;
   worktreesRoot?: string;
   fileObserver?: FileObserver;
+  backgroundFetch?: BackgroundGitFetchConfig;
   deps?: Partial<WorkspaceGitServiceDependencies>;
 }
 
@@ -657,8 +669,10 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
   >({ max: WORKSPACE_GIT_AUXILIARY_CACHE_MAX });
   private readonly checkoutDiffCache = new CheckoutDiffCache(() => this.deps.now().getTime());
   private watcherErrorCallbackCount = 0;
+  private readonly backgroundFetch: BackgroundGitFetchConfig;
   constructor(options: WorkspaceGitServiceOptions) {
     this.logger = options.logger.child({ module: "workspace-git-service" });
+    this.backgroundFetch = options.backgroundFetch ?? DEFAULT_BACKGROUND_GIT_FETCH_CONFIG;
     this.paseoHome = options.paseoHome;
     this.worktreesRoot = options.worktreesRoot;
     this.fileObserver = options.fileObserver ?? createFileObserver();
@@ -2213,7 +2227,8 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
         (candidate): candidate is WorkspaceGitTarget =>
           candidate !== undefined && this.isActiveObservedWorkspaceTarget(candidate),
       );
-    if (!fetchWorkspaceTarget) {
+    // FU-590: a host can turn background fetch off (see git-background-fetch-config.ts).
+    if (!fetchWorkspaceTarget || !this.backgroundFetch.enabled) {
       return;
     }
     repoTarget.cwd = fetchWorkspaceTarget.cwd;
@@ -2230,7 +2245,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     }
     repoTarget.intervalId = setInterval(() => {
       void this.runRepoFetch(repoTarget);
-    }, BACKGROUND_GIT_FETCH_INTERVAL_MS);
+    }, this.backgroundFetch.intervalMs);
     void this.runRepoFetch(repoTarget);
   }
 
