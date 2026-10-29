@@ -43,15 +43,12 @@ describe("compactDelivered", () => {
     expect(r.compact).toBeUndefined();
     expect(r.request.text).toBe("a long report");
   });
-  test.each(["queued", "dispatching", "uncertain", "refused"])(
-    "never compacts %s",
-    (state) => {
-      const r = record(state, now - 60 * 60_000);
-      compactDelivered(r, now);
-      expect(r.compact).toBeUndefined();
-      expect(r.request.text).toBe("a long report");
-    }
-  );
+  test.each(["queued", "dispatching", "uncertain", "refused"])("never compacts %s", (state) => {
+    const r = record(state, now - 60 * 60_000);
+    compactDelivered(r, now);
+    expect(r.compact).toBeUndefined();
+    expect(r.request.text).toBe("a long report");
+  });
 });
 
 describe("enqueue against a compacted record", () => {
@@ -65,7 +62,11 @@ describe("enqueue against a compacted record", () => {
     const q = new QueuedAgentMessages({
       deferStart: true,
       agentManager: { listAgents: () => [], subscribe: () => () => {}, getAgent: () => agent },
-      agentStorage: { heldMessagesPath, noticePausePath: join(dir, "pause"), get: async () => agent },
+      agentStorage: {
+        heldMessagesPath,
+        noticePausePath: join(dir, "pause"),
+        get: async () => agent,
+      },
       logger: { info: () => {}, warn: () => {}, error: () => {} },
     } as never);
     return { q, heldMessagesPath };

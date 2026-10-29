@@ -304,8 +304,7 @@ export class QueuedAgentMessages {
           const same = existing.compact
             ? !existing.requestHash || existing.requestHash === requestHashOf(body)
             : JSON.stringify(existing.request) === JSON.stringify(body);
-          if (!same)
-            throw new Error("Message ID content changed");
+          if (!same) throw new Error("Message ID content changed");
           return;
         }
       }
