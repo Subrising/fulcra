@@ -1,5 +1,6 @@
 import { expect, test, vi } from "vitest";
 import {
+  FINAL_INPUT_HANDOFF_MS,
   createFinalInputCheck,
   hasFinalInputHandoff,
   assertFinalInputCheck,
@@ -20,12 +21,44 @@ test("a handoff timeout revokes a delayed transport check before recovery can re
       },
     );
     const outcome = waitForFinalInputHandoff(handle).catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(FINAL_INPUT_HANDOFF_MS);
     expect(await outcome).toMatchObject({ message: "Final notice handoff timed out" });
     expect(() => commitFinalInputCheck(handle)).toThrow("Final notice handoff timed out");
     expect(sent).toBe(0);
     recordFinalInputHandoff(handle);
     expect(hasFinalInputHandoff(handle)).toBe(false);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("the default handoff wait lets a slow provider take its input after 45 s", async () => {
+  vi.useFakeTimers();
+  try {
+    const handle = createFinalInputCheck(() => undefined);
+    const outcome = waitForFinalInputHandoff(handle).then(
+      () => "handed off",
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(45_000);
+    commitFinalInputCheck(handle);
+    recordFinalInputHandoff(handle);
+    expect(await outcome).toBe("handed off");
+    expect(hasFinalInputHandoff(handle)).toBe(true);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a dead handoff still fails at the default limit, not before", async () => {
+  vi.useFakeTimers();
+  try {
+    const handle = createFinalInputCheck(() => undefined);
+    const outcome = waitForFinalInputHandoff(handle).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(FINAL_INPUT_HANDOFF_MS - 1);
+    expect(hasFinalInputHandoff(handle)).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await outcome).toMatchObject({ message: "Final notice handoff timed out" });
   } finally {
     vi.useRealTimers();
   }
