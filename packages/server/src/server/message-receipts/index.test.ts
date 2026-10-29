@@ -39,6 +39,43 @@ test("message retries survive reconstruction without submitting twice", async ()
   expect(deliveries).toBe(2);
 });
 
+test("a slow receiver preparation does not block another receiver or duplicate the first send", async () => {
+  const { requests } = await fixture();
+  let release!: () => void;
+  let entered!: () => void;
+  const ready = new Promise<void>((resolve) => (entered = resolve));
+  const preparation = new Promise<void>((resolve) => (release = resolve));
+  const slowSend = vi.fn(async () => {});
+  const slow = {
+    agentId: "cold",
+    messageId: "first",
+    request: { text: "cold input" },
+    prepare: async () => {
+      entered();
+      await preparation;
+    },
+    send: slowSend,
+  };
+  const first = requests.send(slow);
+  await ready;
+  const retry = requests.send(slow);
+  const fastSend = vi.fn(async () => {});
+  const fast = requests.send({
+    agentId: "warm",
+    messageId: "second",
+    request: { text: "warm input" },
+    send: fastSend,
+  });
+  try {
+    await vi.waitFor(() => expect(fastSend).toHaveBeenCalledTimes(1));
+    expect(slowSend).not.toHaveBeenCalled();
+  } finally {
+    release();
+    await Promise.all([first, retry, fast]);
+  }
+  expect(slowSend).toHaveBeenCalledTimes(1);
+});
+
 test("ambiguous provider delivery is never blindly replayed after restart", async () => {
   const { requests, directory } = await fixture();
   let deliveries = 0;

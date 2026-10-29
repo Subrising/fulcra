@@ -9938,6 +9938,7 @@ export class Session {
     agentId: string,
     prompt: ReturnType<typeof buildAgentPrompt>,
     deliveryNote: (note: string, state?: "held") => void,
+    expectedSessionId?: string | null,
   ): () => Promise<void> {
     const checkSendActive = captureSendRequestCheck();
     // FULCRA(orchestration): The owner, 10 Oct: "human messages should steer". Nothing changes for an idle target.
@@ -10102,13 +10103,36 @@ export class Session {
           },
           this.localServerId,
           resumeAt,
+          expectedSessionId,
         );
         return;
       }
       const busy = this.agentManager.hasInFlightRun(agentId);
       if (msg.queue) {
         if (msg.inputProvenance !== undefined) throw new ProvenanceRefusedError();
-        holdOwnerMessage();
+        const queue = queuedAgentMessagesFor({
+          agentManager: this.agentManager,
+          agentStorage: this.agentStorage,
+          logger: this.sessionLogger,
+        });
+        const messageId = msg.messageId ?? randomUUID();
+        await queue.enqueue(
+          agentId,
+          {
+            text: msg.text,
+            images: msg.images,
+            attachments: msg.attachments,
+            messageId,
+          },
+          undefined,
+          undefined,
+          expectedSessionId,
+        );
+        void queue
+          .waitForDelivery(agentId, messageId, new AbortController().signal)
+          .catch((error) => {
+            this.handleAgentRunError(agentId, error, "Failed to deliver held message");
+          });
         deliveryNote("Message queued for the end of the turn.");
         return;
       }
@@ -10189,7 +10213,7 @@ export class Session {
     msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
     agentId: string,
   ): Promise<string | null | undefined> {
-    if (!msg.sender) return undefined;
+    if (!msg.sender && !msg.queue) return undefined;
     const target = this.agentManager.getAgent(agentId) ?? (await this.agentStorage.get(agentId));
     if (
       !target ||
@@ -10521,13 +10545,33 @@ export class Session {
       );
       let deliveryNote: string | undefined;
       let deliveryState: "held" | undefined;
-      const queuedSessionId = await this.queuedMessageSessionId(msg, agentId);
-      const send = this.agentMessageSender(msg, agentId, prompt, (note, state) => {
-        deliveryNote = note;
-        deliveryState = state;
-      });
+      let queuedSessionId = await this.queuedMessageSessionId(msg, agentId);
+      const send = () =>
+        this.agentMessageSender(
+          msg,
+          agentId,
+          prompt,
+          (note, state) => {
+            deliveryNote = note;
+            deliveryState = state;
+          },
+          queuedSessionId,
+        )();
       await this.sendAgentMessageWithReceipt(msg, agentId, prompt, send, async () => {
-        await this.prepareAgentMessage(agentId, msg.text, queuedSessionId);
+        // Queue admission saves the receiver's durable session identity. History loads at dispatch.
+        // Direct input still prepares the receiver before capturing its live session identity.
+        if (
+          (msg.sender ? msg.activeTurnBehavior === "steer" : !msg.queue) ||
+          queuedSessionId === null
+        ) {
+          await this.prepareAgentMessage(
+            agentId,
+            msg.text,
+            msg.sender ? queuedSessionId : undefined,
+          );
+          if (!msg.sender && msg.queue && queuedSessionId === null)
+            queuedSessionId = await this.queuedMessageSessionId(msg, agentId);
+        }
         assertSendRequestActive();
       });
 

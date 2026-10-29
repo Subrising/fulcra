@@ -19,6 +19,11 @@ interface PendingAgentInitialization {
 
 const pendingAgentInitializations = new Map<string, PendingAgentInitialization>();
 
+/** Registration can finish while history hydration is still pending. */
+export function agentLoadInProgress(agentId: string): boolean {
+  return pendingAgentInitializations.has(agentId);
+}
+
 export type AgentLoaderManager = Pick<
   AgentManager,
   | "createAgent"
