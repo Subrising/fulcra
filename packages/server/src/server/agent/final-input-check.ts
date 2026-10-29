@@ -125,8 +125,12 @@ export function finalInputFailure(handle: object | undefined): unknown {
 export function hasFinalInputHandoff(handle: object | undefined): boolean {
   return Boolean(handle && checks.get(handle)?.handoffConfirmed());
 }
-/** How long a send waits for the provider to take its input before the check is revoked. */
-export const FINAL_INPUT_HANDOFF_MS = 30_000;
+/**
+ * How long a send waits for the provider to take its input before the check is revoked. A loaded host with a
+ * long session history took over 30 s (31.4 s seen for an 18k-item timeline); a dead handoff still fails and
+ * revokes the check, so a late transport cannot send twice.
+ */
+export const FINAL_INPUT_HANDOFF_MS = 120_000;
 export function waitForFinalInputHandoff(
   handle: object,
   timeoutMs = FINAL_INPUT_HANDOFF_MS,
