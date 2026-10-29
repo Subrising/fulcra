@@ -9,10 +9,14 @@ import type {
   PullRequestStatusResult,
 } from "../utils/checkout-git.js";
 import {
+  DEFAULT_BACKGROUND_GIT_FETCH_INTERVAL_MS,
+  MIN_BACKGROUND_GIT_FETCH_INTERVAL_MS,
   WORKSPACE_GIT_OBSERVATION_SETUP_CONCURRENCY,
   WORKSPACE_GIT_REFRESH_CONCURRENCY,
   WORKSPACE_GIT_WATCHER_SUBSCRIBE_TIMEOUT_MS,
   WorkspaceGitServiceImpl,
+  resolveBackgroundGitFetchConfig,
+  type BackgroundGitFetchConfig,
   type WorkspaceGitRuntimeSnapshot,
 } from "./workspace-git-service.js";
 
@@ -302,7 +306,10 @@ function buildDefaultTestServiceDeps() {
   };
 }
 
-function createService(options?: CreateServiceTestOptions) {
+function createService(
+  options?: CreateServiceTestOptions,
+  backgroundFetch?: BackgroundGitFetchConfig,
+) {
   const deps = { ...buildDefaultTestServiceDeps(), ...options };
   deps.getCheckoutWorktreeState =
     options?.getCheckoutWorktreeState ??
@@ -319,6 +326,7 @@ function createService(options?: CreateServiceTestOptions) {
   return new WorkspaceGitServiceImpl({
     logger: createLogger() as unknown as pino.Logger,
     paseoHome: "/tmp/paseo-test",
+    backgroundFetch,
     deps,
   });
 }
@@ -907,13 +915,70 @@ describe("WorkspaceGitServiceImpl", () => {
       expect(getCheckoutRefDerivedState).toHaveBeenCalledTimes(2);
     });
 
-    await vi.advanceTimersByTimeAsync(180_000);
+    await vi.advanceTimersByTimeAsync(DEFAULT_BACKGROUND_GIT_FETCH_INTERVAL_MS);
     await flushPromises();
 
     expect(runGitFetch).toHaveBeenCalledTimes(2);
 
     first.unsubscribe();
     second.unsubscribe();
+    service.dispose();
+  });
+
+  test("background fetch off: an observed repository with origin is never fetched (FU-590)", async () => {
+    const runGitFetch = vi.fn(async () => ({ changes: [], error: null }));
+    const service = createService(
+      {
+        getCheckoutSnapshotFacts: vi.fn(async (cwd: string) => ({
+          ...createCheckoutSnapshotFacts(cwd),
+          gitCommonDir: join(REPO_CWD, ".git"),
+          absoluteGitDir: join(REPO_CWD, ".git"),
+        })),
+        resolveAbsoluteGitDir: vi.fn(async () => join(REPO_CWD, ".git")),
+        hasOriginRemote: vi.fn(async () => true),
+        runGitFetch,
+      },
+      { enabled: false, intervalMs: DEFAULT_BACKGROUND_GIT_FETCH_INTERVAL_MS },
+    );
+    const subscription = service.registerWorkspace({ cwd: REPO_CWD }, vi.fn());
+    await vi.waitFor(() => {
+      expect(service.getMetrics().repositoryTargetCount).toBe(1);
+      expect(service.getMetrics().workspaceRefreshInFlightCount).toBe(0);
+    });
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_BACKGROUND_GIT_FETCH_INTERVAL_MS * 2);
+    await flushPromises();
+
+    expect(runGitFetch).not.toHaveBeenCalled();
+    subscription.unsubscribe();
+    service.dispose();
+  });
+
+  test("background fetch uses the configured interval (FU-590)", async () => {
+    const runGitFetch = vi.fn(async () => ({ changes: [], error: null }));
+    const intervalMs = 120_000;
+    const service = createService(
+      {
+        getCheckoutSnapshotFacts: vi.fn(async (cwd: string) => ({
+          ...createCheckoutSnapshotFacts(cwd),
+          gitCommonDir: join(REPO_CWD, ".git"),
+          absoluteGitDir: join(REPO_CWD, ".git"),
+        })),
+        resolveAbsoluteGitDir: vi.fn(async () => join(REPO_CWD, ".git")),
+        hasOriginRemote: vi.fn(async () => true),
+        runGitFetch,
+      },
+      { enabled: true, intervalMs },
+    );
+    const subscription = service.registerWorkspace({ cwd: REPO_CWD }, vi.fn());
+    await vi.waitFor(() => expect(runGitFetch).toHaveBeenCalledTimes(1));
+
+    await vi.advanceTimersByTimeAsync(intervalMs - 1_000);
+    expect(runGitFetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() => expect(runGitFetch).toHaveBeenCalledTimes(2));
+
+    subscription.unsubscribe();
     service.dispose();
   });
 
@@ -955,7 +1020,7 @@ describe("WorkspaceGitServiceImpl", () => {
     });
     getCheckoutSnapshotFacts.mockClear();
 
-    await vi.advanceTimersByTimeAsync(180_000);
+    await vi.advanceTimersByTimeAsync(DEFAULT_BACKGROUND_GIT_FETCH_INTERVAL_MS);
     await vi.waitFor(() => {
       expect(runGitFetch).toHaveBeenCalledTimes(2);
     });
@@ -1436,5 +1501,53 @@ describe("WorkspaceGitServiceImpl", () => {
     expect(getCheckoutDiff).toHaveBeenCalledTimes(CACHE_MAX + OVERFLOW + 1);
 
     service.dispose();
+  });
+});
+
+describe("resolveBackgroundGitFetchConfig (FU-590)", () => {
+  test("defaults to fetch on every 10 minutes", () => {
+    expect(resolveBackgroundGitFetchConfig({ env: {} })).toEqual({
+      enabled: true,
+      intervalMs: 600_000,
+    });
+  });
+
+  test("reads the persisted daemon.git keys", () => {
+    expect(
+      resolveBackgroundGitFetchConfig({
+        env: {},
+        persisted: { backgroundFetch: false, backgroundFetchIntervalMs: 900_000 },
+      }),
+    ).toEqual({ enabled: false, intervalMs: 900_000 });
+  });
+
+  test("the environment wins over the persisted config", () => {
+    expect(
+      resolveBackgroundGitFetchConfig({
+        env: {
+          PASEO_GIT_BACKGROUND_FETCH: "off",
+          PASEO_GIT_BACKGROUND_FETCH_INTERVAL_MS: "300000",
+        },
+        persisted: { backgroundFetch: true, backgroundFetchIntervalMs: 900_000 },
+      }),
+    ).toEqual({ enabled: false, intervalMs: 300_000 });
+    expect(
+      resolveBackgroundGitFetchConfig({
+        env: { PASEO_GIT_BACKGROUND_FETCH: "ON" },
+        persisted: { backgroundFetch: false },
+      }).enabled,
+    ).toBe(true);
+  });
+
+  test("ignores bad values and clamps a short interval to the minimum", () => {
+    expect(
+      resolveBackgroundGitFetchConfig({
+        env: { PASEO_GIT_BACKGROUND_FETCH: "maybe", PASEO_GIT_BACKGROUND_FETCH_INTERVAL_MS: "abc" },
+      }),
+    ).toEqual({ enabled: true, intervalMs: 600_000 });
+    expect(
+      resolveBackgroundGitFetchConfig({ env: { PASEO_GIT_BACKGROUND_FETCH_INTERVAL_MS: "1000" } })
+        .intervalMs,
+    ).toBe(MIN_BACKGROUND_GIT_FETCH_INTERVAL_MS);
   });
 });

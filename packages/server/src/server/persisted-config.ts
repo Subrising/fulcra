@@ -263,6 +263,10 @@ export const PersistedConfigSchema = z
           .object({
             maxProcessesPerSecond: z.number().int().positive().optional(),
             maxProcessConcurrency: z.number().int().positive().optional(),
+            // FU-590: per-host background fetch. Read at daemon start. An older daemon rejects these keys,
+            // so a host that may roll back sets PASEO_GIT_BACKGROUND_FETCH in its profile instead.
+            backgroundFetch: z.boolean().optional(),
+            backgroundFetchIntervalMs: z.number().int().positive().optional(),
           })
           .strict()
           .optional(),

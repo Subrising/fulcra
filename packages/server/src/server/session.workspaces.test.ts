@@ -7407,6 +7407,13 @@ test("workspace mutation handling does not let a delayed upsert recreate an arch
   });
   session.emitWorkspaceUpdatesForWorkspaceIds = async () => {};
 
+  // FU-590: only a workspace with live work or an open checkout is observed. This test covers
+  // the race, not that scope, so the client opens the checkout first.
+  await session.handleMessage({
+    type: "checkout_status_request",
+    requestId: "open-repo",
+    cwd: REPO_CWD,
+  });
   await session.handleMessage({
     type: "fetch_workspaces_request",
     requestId: "req-fetch-workspaces-subscribe",
@@ -7718,6 +7725,18 @@ test("workspace mutation handling drops queued observer sync after session clean
     }),
   });
 
+  // FU-590: only a workspace with live work or an open checkout is observed. This test covers
+  // the race, not that scope, so the client opens the checkout first.
+  await session.handleMessage({
+    type: "checkout_status_request",
+    requestId: "open-repo",
+    cwd: REPO_CWD,
+  });
+  await session.handleMessage({
+    type: "checkout_status_request",
+    requestId: "open-queued",
+    cwd: "/tmp/repo/queued",
+  });
   await session.handleMessage({
     type: "fetch_workspaces_request",
     requestId: "req-fetch-workspaces-cleanup-subscribe",
