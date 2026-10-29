@@ -4186,6 +4186,9 @@ export class Session {
       case "open_in_editor_request":
         return this.handleLegacyOpenInEditorRequest(msg);
       case "open_project_request":
+        // FU-590: a project the client opens stays under git observation.
+        if (this.gitObservationDemand.noteOpenedCwd(msg.cwd))
+          this.scheduleGitObservationReconcile();
         return this.handleOpenProjectRequest(msg);
       case "project.add.request":
         return this.handleProjectAddRequest(msg);
