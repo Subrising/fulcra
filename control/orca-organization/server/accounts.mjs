@@ -613,8 +613,11 @@ function assignInStore(s, sessionId, provider, now, except = [], usage = {}) {
     heldState === "ok" && !leaveApi && !isApiAccount(held) && overCap(held)
       ? choose(s, provider, now, [held.id, ...except], usage)
       : null;
-  const moveOffCap = capTarget && !isApiAccount(capTarget) && !overCap(capTarget) ? capTarget : null;
-  let a = moveOffCap ?? (heldState === "ok" && !leaveApi ? held : choose(s, provider, now, except, usage));
+  const moveOffCap =
+    capTarget && !isApiAccount(capTarget) && !overCap(capTarget) ? capTarget : null;
+  let a =
+    moveOffCap ??
+    (heldState === "ok" && !leaveApi ? held : choose(s, provider, now, except, usage));
   let allLimited = false;
   if (!a) {
     a =

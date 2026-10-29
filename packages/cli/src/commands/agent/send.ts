@@ -10,7 +10,8 @@ import type {
   OutputSchema,
   CommandError,
 } from "../../output/index.js";
-import { extname, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { extname } from "node:path";
 import { listAccounts, switchAccountSession } from "../account.js";
 import { resolveSender, assertSenderDaemon } from "../../utils/send-sender.js";
 import { readSendRoute, sshSend, readRemoteSendHost } from "../../utils/send-route.js";

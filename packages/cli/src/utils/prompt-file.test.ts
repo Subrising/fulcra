@@ -6,7 +6,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PROMPT_FROM_STDIN, readPromptFile } from "./prompt-file.js";
 
 // A brief with the parts cmd.exe mangles on a command line: line breaks, quotes, % and ! and carets.
-const HARD_BRIEF = 'Line one\r\nSay "hello" and \'bye\'\n100% of %PATH% and ^caret & pipe | !bang!\n\nLast line';
+const HARD_BRIEF =
+  "Line one\r\nSay \"hello\" and 'bye'\n100% of %PATH% and ^caret & pipe | !bang!\n\nLast line";
 
 describe("readPromptFile", () => {
   let dir: string;
