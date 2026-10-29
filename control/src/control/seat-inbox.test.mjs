@@ -23,14 +23,12 @@ requireUnpinnedAdmissionGuard();
 const P = (n) => `22222222-2222-4222-8222-${String(n).padStart(12, "0")}`;
 const T = (n) => `33333333-3333-4333-8333-${String(n).padStart(12, "0")}`;
 const OP = "test-operator";
-// src/control/admission-guard.mjs at bbc624cf9, the commit option H was designed and approved against.
-// release/h2-controller: the guard changes in this host release, but only by C2 (8991a310, review GO). E21's point
-// is unchanged -- option H adds nothing to the pinned guard -- so the pin is exactly the C2-reviewed bytes.
-// P1 host release (prime S-2, CONTRACTS §3.6 rule 3): the guard gains the controller-home deny, so this
-// tripwire moves from 95ded800… to exactly the P1 guard (c3f23a52…, R-F-A1: deny at the Claude launch choke
-// point, replacing 66109873…). H7 item 5 then adds exactly one branch, admitQuestionAnswer (a seat's journaled answer to a
-// pending question), so it moves again, from c3f23a52… to c06c0b45…. Any other edit still fails.
-const GUARD_AT_BBC624CF9 = "c06c0b45bc22d87cc94a3b48fdb2ba0ed4c56f31fa9523fbd5f2c3c0573e2f35";
+// src/control/admission-guard.mjs as shipped in Fulcra 0.2.5 (main 6ebc34f4), the guard option H is checked against.
+// E21's point is unchanged: option H adds nothing to the pinned guard, so this tripwire fails on any other edit.
+// Re-pinned 29 Oct 2026 after the review of 28 Oct. The owner accepted three guard changes made since the last pin
+// (H7 item 5, c06c0b45): account-switch admits a human-held seat with one matching pending delivery; auto-mode and
+// Codex full access admit any tool; the controller home can come from ORCA_ADMISSION_HOME.
+const ADMISSION_GUARD_PIN = "0c3d2bbef1345eab35212ef2d9a617290bc096fdfc610d4b445a43902d593587";
 
 async function seated(t) {
   const rotated = new Set();
@@ -244,25 +242,16 @@ const row = (f, id) =>
   f.store.db.prepare("SELECT * FROM role_channel_messages WHERE messageId=?").get(id);
 const act = (f, id) => f.store.db.prepare("SELECT * FROM seat_operator_acts WHERE id=?").get(id);
 
-// OPEN (FU-506): this tripwire last moved at H7 item 5. The guard has changed in later releases (0.2.5, and the format
-// pass that rewrote its quotes and layout), and the pin was not moved with them. Re-pinning is a review decision, not a
-// test fix: a reviewer who accepts the current guard replaces GUARD_AT_BBC624CF9 and removes this todo.
-test(
-  "E21: the pinned admission guard is byte-identical to bbc624cf9 -- option H is not a host release",
-  {
-    todo: "the pin predates the 0.2.5 guard and the format pass; a reviewer must re-pin it",
-  },
-  () => {
-    const now = createHash("sha256")
-      .update(fs.readFileSync(new URL("./admission-guard.mjs", import.meta.url)))
-      .digest("hex");
-    assert.equal(
-      now,
-      GUARD_AT_BBC624CF9,
-      "admission-guard.mjs changed: that is a host release and is outside option H",
-    );
-  },
-);
+test("E21: the pinned admission guard is the Fulcra 0.2.5 guard -- option H is not a host release", () => {
+  const now = createHash("sha256")
+    .update(fs.readFileSync(new URL("./admission-guard.mjs", import.meta.url)))
+    .digest("hex");
+  assert.equal(
+    now,
+    ADMISSION_GUARD_PIN,
+    "admission-guard.mjs changed: that is a host release and is outside option H",
+  );
+});
 
 test("E1 E19 E13 E14: a hold is prime-only, human-only, journaled, and never moves the seat revision", async (t) => {
   const f = await seated(t);
