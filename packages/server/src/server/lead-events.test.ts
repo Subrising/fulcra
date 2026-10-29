@@ -7,6 +7,7 @@ import {
   eventDispatcherEnabled,
   LeadEventDispatcher,
   LEAD_EVENT_KINDS,
+  MAX_DIGEST_PER_SESSION,
   leadEventsPath,
   readLeadEvents,
   withLeadEvent,
@@ -153,5 +154,35 @@ describe("deterministic lead events", () => {
     expect(currentLeadEvent("plugin")).toBe("other");
     expect(currentLeadEvent("plugin", () => {})).toBe("queued_delivery");
     expect(currentLeadEvent(undefined)).toBe("other");
+  });
+});
+
+describe("lead event history cap", () => {
+  test("keeps only the newest digest entries and the recent reported sources", () => {
+    const f = fixture();
+    const now = 40 * 24 * 60 * 60 * 1000;
+    const clock = new LeadEventDispatcher({
+      home: f.home,
+      enabled: () => true,
+      now: () => now,
+      onError: (error) => f.errors.push(error),
+    });
+    for (let i = 0; i < MAX_DIGEST_PER_SESSION + 5; i++)
+      clock.suppress("lead-1", { eventId: `e-${i}`, sourceId: "w", kind: "delivery_receipt" });
+    clock.noteReport("lead-1", "fresh");
+    const state = readLeadEvents(f.home);
+    state.sessions["lead-1"]!.reported["stale"] = 1;
+    writeFileSync(leadEventsPath(f.home), JSON.stringify(state));
+    const reloaded = new LeadEventDispatcher({
+      home: f.home,
+      now: () => now,
+      onError: (error) => f.errors.push(error),
+    });
+    reloaded.noteReport("lead-1", "fresh-2");
+    const session = readLeadEvents(f.home).sessions["lead-1"]!;
+    expect(session.digest).toHaveLength(MAX_DIGEST_PER_SESSION);
+    expect(session.digest.at(-1)?.eventId).toBe(`e-${MAX_DIGEST_PER_SESSION + 4}`);
+    expect(Object.keys(session.reported).sort()).toEqual(["fresh", "fresh-2"]);
+    expect(f.errors).toEqual([]);
   });
 });
