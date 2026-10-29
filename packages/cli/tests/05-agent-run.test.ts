@@ -64,7 +64,8 @@ try {
     assert(result.stdout.includes("--cwd"), "help should mention --cwd option");
     assert(result.stdout.includes("--output-schema"), "help should mention --output-schema option");
     assert(result.stdout.includes("--host"), "help should mention --host option");
-    assert(result.stdout.includes("<prompt>"), "help should mention prompt argument");
+    assert(result.stdout.includes("[prompt]"), "help should mention prompt argument");
+    assert(result.stdout.includes("--prompt-file"), "help should mention --prompt-file option");
     assert(!result.stdout.includes("--ui"), "help should not mention removed --ui option");
     console.log("✓ run --help shows options\n");
   }
