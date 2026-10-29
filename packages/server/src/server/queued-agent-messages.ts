@@ -3,7 +3,7 @@ import { watch, type FSWatcher } from "node:fs";
 import { dirname, basename } from "node:path";
 import { noticePaused, noticePauseVersion, NoticePausedError } from "./notice-pause.js";
 import { leadEventsFor, withLeadEvent } from "./lead-events.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { DIRECT_LINK_LABEL, MAIN_ASSISTANT_ROLE } from "@getpaseo/protocol/agent-labels";
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
@@ -74,15 +74,25 @@ const RecordSchema = z.object({
   settledAt: z.number().finite().positive().optional(),
   /** The payload was dropped after delivery. The IDs stay so a resent message ID is still refused. */
   compact: z.literal(true).optional(),
+  /** sha256 of the whole request and of its text, images and attachments, kept when the payload is dropped. */
+  requestHash: z.string().optional(),
+  contentHash: z.string().optional(),
 });
 type Record = z.infer<typeof RecordSchema>;
 type InputReceipt = "present" | "absent" | "unknown";
 const SETTLED_RECORD_MS = 24 * 60 * 60 * 1000;
 
+const sha = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const requestHashOf = (request: z.infer<typeof RequestSchema>) => sha(request);
+const contentHashOf = (request: z.infer<typeof RequestSchema>) =>
+  sha([request.text, request.images ?? null, request.attachments ?? null]);
+
 /** Drop the payload of a delivered record once the identical-resend window has passed. */
 export function compactDelivered(record: Record, now: number): void {
   if (record.state !== "delivered" || record.compact) return;
   if ((record.settledAt ?? now) > now - IDENTICAL_RESEND_MS) return;
+  record.requestHash = requestHashOf(record.request);
+  record.contentHash = contentHashOf(record.request);
   record.request = {
     text: "",
     ...(record.request.messageId ? { messageId: record.request.messageId } : {}),
@@ -290,7 +300,11 @@ export class QueuedAgentMessages {
           (r) => r.agentId === agentId && r.request.messageId === body.messageId,
         );
         if (existing) {
-          if (!existing.compact && JSON.stringify(existing.request) !== JSON.stringify(body))
+          // A compact record without hashes (older file) cannot compare, so it accepts the resend.
+          const same = existing.compact
+            ? !existing.requestHash || existing.requestHash === requestHashOf(body)
+            : JSON.stringify(existing.request) === JSON.stringify(body);
+          if (!same)
             throw new Error("Message ID content changed");
           return;
         }
@@ -344,7 +358,7 @@ export class QueuedAgentMessages {
   private identicalResend(agentId: string, body: z.infer<typeof RequestSchema>): boolean {
     const sender = body.sender?.agentId;
     if (!sender || body.pauseNotice || body.hostLinkMessageId) return false;
-    const content = JSON.stringify([body.text, body.images ?? null, body.attachments ?? null]);
+    const content = contentHashOf(body);
     const since = Date.now() - IDENTICAL_RESEND_MS;
     return this.records.some(
       (r) =>
@@ -352,11 +366,7 @@ export class QueuedAgentMessages {
         r.request.sender?.agentId === sender &&
         (["queued", "dispatching"].includes(r.state) ||
           (r.state === "delivered" && (r.settledAt ?? Date.now()) >= since)) &&
-        JSON.stringify([
-          r.request.text,
-          r.request.images ?? null,
-          r.request.attachments ?? null,
-        ]) === content,
+        (r.contentHash ?? contentHashOf(r.request)) === content,
     );
   }
 
