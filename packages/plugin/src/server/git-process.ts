@@ -62,6 +62,30 @@ export function waitForGitChildSlot(): Promise<void> {
 function wakeSlotWaiters(): void {
   while (slotWaiters.length > 0 && children.size < GIT_CHILD_LIMIT) slotWaiters.shift()!();
 }
+const RETAINED_SLOT_CHECK_MS = 5_000;
+/** Call only after the child closed. A probe sends no signal. */
+function ownedTreeGone(child: ChildProcess): boolean {
+  // The guardian's Job Object kills every descendant when the guardian exits.
+  if (!child.pid || process.platform === "win32") return true;
+  try {
+    process.kill(-child.pid, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ESRCH";
+  }
+}
+/** A failed tree cleanup keeps its slot only while its owned tree lives (FU-569). */
+function releaseWhenTreeGone(child: ChildProcess): void {
+  if (!ownedTreeGone(child)) {
+    setTimeout(() => releaseWhenTreeGone(child), RETAINED_SLOT_CHECK_MS).unref();
+    return;
+  }
+  releaseSlot(child);
+}
+function releaseSlot(child: ChildProcess): void {
+  children.delete(child);
+  wakeSlotWaiters();
+}
 const liveGroups = (runtime.liveGroups ??= new Set<number>());
 if (!runtime.exitCleanupRegistered) {
   runtime.exitCleanupRegistered = true;
@@ -271,13 +295,13 @@ export function spawnGitProcess(args: string[], options: SpawnOptions = {}): Chi
   child.once("close", () => {
     clearTimeout(timer);
     options.signal?.removeEventListener("abort", abort);
-    // A failed tree cleanup keeps its slot. Do not admit an unbounded series of leaks.
+    // A failed tree cleanup keeps its slot until the tree is gone. Do not admit an unbounded series of leaks.
     void (termination.get(child) ?? Promise.resolve())
       .then(
-        () => !cleanupFailed && children.delete(child),
+        () => !cleanupFailed,
         () => false,
       )
-      .then(wakeSlotWaiters);
+      .then((cleaned) => (cleaned ? releaseSlot(child) : releaseWhenTreeGone(child)));
   });
   return child;
 }

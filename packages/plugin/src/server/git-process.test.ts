@@ -157,6 +157,35 @@ test("global child cap refuses excess work and recovers after children close", a
   expect((await execGitCommand(["status", "--porcelain"], { cwd })).stdout).toBe("");
 });
 
+test.skipIf(process.platform === "win32")(
+  "a failed tree cleanup frees its slot once the owned group is gone",
+  async () => {
+    const cwd = await repo();
+    const kill = process.kill.bind(process);
+    // Every cleanup signal fails, as when ps times out on a loaded host. Probes still work.
+    vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (signal === 0) return kill(pid, 0);
+      throw Object.assign(new Error("Operation not permitted"), { code: "EPERM" });
+    });
+    const children = Array.from({ length: GIT_CHILD_LIMIT }, () =>
+      spawnGitProcess(["hash-object", "--stdin"], { cwd, stdio: "pipe", timeout: 50 }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await Promise.all(
+      children.map(
+        (child) =>
+          new Promise<void>((resolve) => {
+            child.once("close", () => resolve());
+            child.stdin!.end();
+          }),
+      ),
+    );
+    vi.restoreAllMocks();
+    const next = await vi.waitFor(() => spawnGitProcess(["status", "--porcelain"], { cwd }));
+    await new Promise((resolve) => next.once("close", resolve));
+  },
+);
+
 test("execGitCommand waits for a free slot instead of failing when the cap is full", async () => {
   const cwd = await repo();
   const children = Array.from({ length: GIT_CHILD_LIMIT }, () =>
