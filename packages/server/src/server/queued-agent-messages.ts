@@ -72,10 +72,24 @@ const RecordSchema = z.object({
   uncertaintyReported: z.boolean().optional(),
   /** When the record reached delivered or refused. Settled records leave the file a day later. */
   settledAt: z.number().finite().positive().optional(),
+  /** The payload was dropped after delivery. The IDs stay so a resent message ID is still refused. */
+  compact: z.literal(true).optional(),
 });
 type Record = z.infer<typeof RecordSchema>;
 type InputReceipt = "present" | "absent" | "unknown";
 const SETTLED_RECORD_MS = 24 * 60 * 60 * 1000;
+
+/** Drop the payload of a delivered record once the identical-resend window has passed. */
+export function compactDelivered(record: Record, now: number): void {
+  if (record.state !== "delivered" || record.compact) return;
+  if ((record.settledAt ?? now) > now - IDENTICAL_RESEND_MS) return;
+  record.request = {
+    text: "",
+    ...(record.request.messageId ? { messageId: record.request.messageId } : {}),
+    ...(record.request.sender ? { sender: record.request.sender } : {}),
+  };
+  record.compact = true;
+}
 
 function settled(record: Record): boolean {
   return record.state === "delivered" || record.state === "refused";
@@ -166,7 +180,10 @@ export class QueuedAgentMessages {
   private async save(): Promise<void> {
     try {
       const now = Date.now();
-      for (const record of this.records) if (settled(record)) record.settledAt ??= now;
+      for (const record of this.records) {
+        if (settled(record)) record.settledAt ??= now;
+        compactDelivered(record, now);
+      }
       this.records = this.records.filter(
         (record) => !settled(record) || record.settledAt! > now - SETTLED_RECORD_MS,
       );
@@ -273,7 +290,7 @@ export class QueuedAgentMessages {
           (r) => r.agentId === agentId && r.request.messageId === body.messageId,
         );
         if (existing) {
-          if (JSON.stringify(existing.request) !== JSON.stringify(body))
+          if (!existing.compact && JSON.stringify(existing.request) !== JSON.stringify(body))
             throw new Error("Message ID content changed");
           return;
         }

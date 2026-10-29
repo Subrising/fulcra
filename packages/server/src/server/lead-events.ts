@@ -33,6 +33,10 @@ const sessionSchema = z.object({
 });
 const stateSchema = z.object({ v: z.literal(1), sessions: z.record(idSchema, sessionSchema) });
 export type LeadEventState = z.infer<typeof stateSchema>;
+/** Each save rewrites the whole file, so the history it keeps has a fixed size. */
+export const MAX_DIGEST_PER_SESSION = 50;
+export const MAX_REPORTED_PER_SESSION = 256;
+export const REPORTED_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 export interface DispatchEvent {
   eventId: string;
   sourceId: string;
@@ -133,7 +137,22 @@ export class LeadEventDispatcher {
       reported: {},
     });
   }
+  /** Drop the oldest history first: digest by count, reported sources by age and count. */
+  private prune(): void {
+    const cutoff = (this.deps.now?.() ?? Date.now()) - REPORTED_MAX_AGE_MS;
+    for (const session of Object.values(this.state.sessions)) {
+      if (session.digest.length > MAX_DIGEST_PER_SESSION)
+        session.digest = session.digest.slice(-MAX_DIGEST_PER_SESSION);
+      const kept = Object.entries(session.reported)
+        .filter(([, at]) => at >= cutoff)
+        .sort((a, b) => a[1] - b[1])
+        .slice(-MAX_REPORTED_PER_SESSION);
+      if (kept.length !== Object.keys(session.reported).length)
+        session.reported = Object.fromEntries(kept);
+    }
+  }
   private save(): void {
+    this.prune();
     writePrivateFileAtomicSync(leadEventsPath(this.deps.home), JSON.stringify(this.state), {
       durable: process.platform !== "win32",
     });
