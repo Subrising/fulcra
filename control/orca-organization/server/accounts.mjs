@@ -606,7 +606,15 @@ function assignInStore(s, sessionId, provider, now, except = [], usage = {}) {
   // A session on an API account leaves it as soon as a subscription account is free (FU-430), so it stops paying.
   const leaveApi =
     heldState === "ok" && isApiAccount(held) && freeSubscription(s, provider, now, except, usage);
-  let a = heldState === "ok" && !leaveApi ? held : choose(s, provider, now, except, usage);
+  // FU-585: a held subscription account at or over the weekly cap gives way, at launch or resume, to another account with
+  // room (the same rule choose() applies to a new session). Never to an API account. With none, the session stays.
+  const overCap = (x) => (usage[x.id] ?? 0) >= WEEKLY_LAUNCH_CAP_PCT;
+  const capTarget =
+    heldState === "ok" && !leaveApi && !isApiAccount(held) && overCap(held)
+      ? choose(s, provider, now, [held.id, ...except], usage)
+      : null;
+  const moveOffCap = capTarget && !isApiAccount(capTarget) && !overCap(capTarget) ? capTarget : null;
+  let a = moveOffCap ?? (heldState === "ok" && !leaveApi ? held : choose(s, provider, now, except, usage));
   let allLimited = false;
   if (!a) {
     a =
