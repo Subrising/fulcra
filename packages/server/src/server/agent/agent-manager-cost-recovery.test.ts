@@ -32,6 +32,7 @@ interface CostRecovery {
   costRecoveryDrains: Map<string, Promise<void>>;
   costResultsInFlight: Map<string, number>;
   persistSnapshot(agent: unknown): Promise<void>;
+  setCostWarning(agent: unknown, warning?: string): void;
 }
 
 function row(agentId: string, accountId: string, index: number): PendingSessionCost {
@@ -53,6 +54,7 @@ async function fixture(root?: string, account?: string) {
   const accountId = account ?? randomUUID();
   const outboxFile = path.join(home, "pending-costs.json");
   const commits: string[] = [];
+  let billing: Promise<unknown> = Promise.resolve();
   let hold: ((entry: PendingSessionCost) => Promise<void>) | undefined;
   const storage = new AgentStorage(path.join(home, "agents"), createTestLogger());
   const manager = new AgentManager({
@@ -65,14 +67,20 @@ async function fixture(root?: string, account?: string) {
       before: async (hook: string, request: PendingSessionCost) => {
         if (hook !== "agent.cost_commit") return request;
         await hold?.(request);
+        // One billing write at a time: on Windows the store lock can refuse a contended open with
+        // EPERM, and these tests are about recovery, not that lock.
+        const write = billing.then(() =>
+          recordAccountCost(home, {
+            id: `turn:${request.agentId}:${request.turnId}`,
+            accountId: request.accountId,
+            sessionId: request.agentId,
+            costUsd: request.costUsd,
+            at: request.at,
+          }),
+        );
+        billing = write.catch(() => undefined);
+        await write;
         commits.push(pendingCostKey(request));
-        await recordAccountCost(home, {
-          id: `turn:${request.agentId}:${request.turnId}`,
-          accountId: request.accountId,
-          sessionId: request.agentId,
-          costUsd: request.costUsd,
-          at: request.at,
-        });
         return { ...request, costCommitted: true };
       },
     } as unknown as AgentManagerOptions["pluginLifecycle"],
@@ -359,6 +367,45 @@ test("a crash after the commit but before the snapshot write replays without a s
     expect(await restarted.pending()).toEqual([]);
     await restarted.close();
   } finally {
+    await rm(f.home, { recursive: true, force: true });
+  }
+});
+
+test("a warning set after a background run built its row list survives that run (FU-596)", async () => {
+  const f = await fixture();
+  try {
+    const trigger = await f.session();
+    const b = await f.session();
+    b.live.costRecords = { cursors: {}, turns: {} };
+    const gate = Promise.withResolvers<void>();
+    const hung = Promise.withResolvers<void>();
+    f.hold(async (entry) => {
+      if (entry.agentId !== b.id || entry.turnId !== "turn-1") return;
+      hung.resolve();
+      await gate.promise;
+    });
+    await f.seed([row(b.id, f.accountId, 1), row(b.id, f.accountId, 2)]);
+    await f.internal.recoverCostAccounting(trigger.live);
+    await hung.promise;
+
+    // A new result of B fails both its outbox write and its billing commit, and finishes.
+    const warning = "Billing write failed. Cost is saved; Accounting recovery is pending.";
+    b.live.costRecords = {
+      ...b.live.costRecords!,
+      turns: { "turn-9": { accountId: f.accountId, amountUsd: 5, at: "2026-10-30T01:00:00.000Z" } },
+    };
+    f.internal.setCostWarning(b.live, warning);
+    gate.resolve();
+    await f.internal.flushTasks({ includeAgentRegistrations: false });
+    expect(f.manager.getAgent(b.id)?.costRecords?.billingWarning).toBe(warning);
+
+    // The next start rebuilds the lost turn from the warning and bills it.
+    await f.internal.recoverCostAccounting(b.live);
+    await f.internal.flushTasks({ includeAgentRegistrations: false });
+    expect(f.calls()).toContain(`turn:${b.id}:turn-9`);
+    expect(f.manager.getAgent(b.id)?.costRecords?.billingWarning).toBeUndefined();
+  } finally {
+    await f.close();
     await rm(f.home, { recursive: true, force: true });
   }
 });
