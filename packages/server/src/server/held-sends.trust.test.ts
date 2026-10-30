@@ -342,7 +342,8 @@ test("a paused cold receiver stays unloaded until notices resume", async () => {
   expect(resume).not.toHaveBeenCalled();
   expect(f.prompts).toEqual([]);
   await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: [] }));
-  await vi.waitFor(() => expect(f.prompts).toEqual(["paused cold input"]));
+  // The resume arrives through a file watch event; on a loaded host it can take about one second.
+  await vi.waitFor(() => expect(f.prompts).toEqual(["paused cold input"]), { timeout: 5_000 });
 });
 
 test("a cold queued send cannot enter a replacement provider session", async () => {
