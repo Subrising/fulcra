@@ -11,6 +11,8 @@ import { finishNoticeWanted } from "./finish-notice-filter.js";
 
 export const IDLE_TURN_PROMPT = "check your background job output now and finish in the foreground";
 
+const WAITING_LINE = /^[ \t]*(?:\*\*|__|`)?WAITING\b/m;
+
 /** Only the latest turn counts. A result from an older turn cannot close current work. */
 export function unfinishedIdleTurn(
   items: readonly AgentTimelineItem[],
@@ -18,6 +20,9 @@ export function unfinishedIdleTurn(
   const start = items.findLastIndex((item) => item.type === "user_message");
   const turn = items.slice(start + 1);
   if (turn.some((item) => item.type === "assistant_message" && finishNoticeWanted(item.text)))
+    return null;
+  // A deliberate "WAITING <job>" line means the session waits for a job or worker event on purpose.
+  if (turn.some((item) => item.type === "assistant_message" && WAITING_LINE.test(item.text)))
     return null;
   const last = turn.findLast(
     (item) =>
@@ -76,7 +81,15 @@ export class IdleTurnRecovery {
     try {
       await this.continueOne(id);
     } catch (error) {
-      this.deps.logger.warn({ err: error, agentId: id }, "Idle turn continuation refused");
+      // FU-611: a safety refusal is a deliberate decision, not a failure. It must not wake the parent.
+      if (error instanceof FinalInputWithdrawnError) {
+        this.deps.logger.info(
+          { agentId: id, reason: error.reason },
+          "Idle turn continuation withdrawn by safety check",
+        );
+        return true;
+      }
+      this.deps.logger.warn({ err: error, agentId: id }, "Idle turn continuation failed");
       await this.deps.blocked(id, "the unfinished idle turn could not be continued safely");
     }
     return true;
@@ -85,7 +98,8 @@ export class IdleTurnRecovery {
   private async continueOne(id: string): Promise<void> {
     const { agentManager: manager } = this.deps;
     const live = manager.getAgent(id);
-    if (!live || manager.hasInFlightRun(id)) throw new Error("Session is busy or missing");
+    if (!live || manager.hasInFlightRun(id))
+      throw new FinalInputWithdrawnError("Idle turn recovery refused", "session busy or missing");
     const cutAt = live.lastUserMessageAt?.toISOString() ?? null;
     const instanceId = live.instanceId;
     const check = () => {
