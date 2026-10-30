@@ -10132,13 +10132,13 @@ export class Session {
         } else {
           // "Delivered now" must not show while saved usage-limit holds keep this receiver's queue waiting.
           const heldUntil = await senderQueue.limitHoldUntil(agentId);
-          deliveryNote(
-            heldUntil
-              ? `accepted; held: the receiver's queue waits for a usage-limit reset at ${new Date(heldUntil).toISOString()}`
-              : this.agentManager.hasInFlightRun(agentId)
-                ? "accepted; delivered after the current turn"
-                : "accepted; delivered now",
-          );
+          if (heldUntil)
+            deliveryNote(
+              `accepted; held: the receiver's queue waits for a usage-limit reset at ${new Date(heldUntil).toISOString()}`,
+            );
+          else if (this.agentManager.hasInFlightRun(agentId))
+            deliveryNote("accepted; delivered after the current turn");
+          else deliveryNote("accepted; delivered now");
         }
         await senderQueue.enqueue(
           agentId,

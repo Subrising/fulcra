@@ -450,7 +450,11 @@ export class QueuedAgentMessages {
     if (!this.initialized || this.stopped) return;
     let released = 0;
     for (const record of this.records)
-      if (record.agentId === agentId && record.state === "queued" && record.resumeAt !== undefined) {
+      if (
+        record.agentId === agentId &&
+        record.state === "queued" &&
+        record.resumeAt !== undefined
+      ) {
         delete record.resumeAt;
         record.reason = undefined;
         released++;
