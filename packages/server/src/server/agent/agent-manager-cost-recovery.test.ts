@@ -11,6 +11,7 @@ import { createTestLogger } from "../../test-utils/test-logger.js";
 import { createTestAgentClients } from "../test-utils/fake-agent-client.js";
 import { AgentManager, type AgentManagerOptions } from "./agent-manager.js";
 import { AgentStorage } from "./agent-storage.js";
+import type { SessionCostRecords } from "./session-cost.js";
 import {
   pendingCostKey,
   SessionCostOutbox,
@@ -20,9 +21,17 @@ import {
 interface CostRecovery {
   recoverCostAccounting(agent: unknown): Promise<void>;
   flushTasks(options: { includeAgentRegistrations: boolean }): Promise<void>;
-  agents: Map<string, { session: { usageCredential?: () => { accountId: string } } }>;
+  agents: Map<
+    string,
+    {
+      session: { usageCredential?: () => { accountId: string } };
+      costRecords?: SessionCostRecords;
+    }
+  >;
   costOutbox: SessionCostOutbox;
   costRecoveryDrains: Map<string, Promise<void>>;
+  costResultsInFlight: Map<string, number>;
+  persistSnapshot(agent: unknown): Promise<void>;
 }
 
 function row(agentId: string, accountId: string, index: number): PendingSessionCost {
@@ -228,6 +237,128 @@ test("a failed commit keeps that row and later rows, and removes earlier rows in
     );
   } finally {
     await f.close();
+    await rm(f.home, { recursive: true, force: true });
+  }
+});
+
+test("a background run that already holds a session's row with a hung commit does not hold its turn start", async () => {
+  const f = await fixture();
+  try {
+    const main = await f.session();
+    const other = await f.session();
+    const gate = Promise.withResolvers<void>();
+    const hung = Promise.withResolvers<void>();
+    f.hold(async (entry) => {
+      if (entry.agentId !== "creator") return;
+      hung.resolve();
+      await gate.promise;
+    });
+    const creator = Array.from({ length: 24 }, (_, index) => row("creator", f.accountId, index));
+    // The main row comes first, so the background run commits it and then hangs in the same batch.
+    await f.seed([row(main.id, f.accountId, 1), ...creator]);
+    await f.internal.recoverCostAccounting(other.live);
+    await hung.promise;
+    expect(f.commits).toEqual([pendingCostKey(row(main.id, f.accountId, 1))]);
+
+    await f.internal.recoverCostAccounting(main.live);
+    expect(f.calls()).toEqual([`turn:${main.id}:turn-1`]);
+    expect(f.manager.getAgent(main.id)?.costRecords?.turns["turn-1"]).toBeDefined();
+    expect(((await f.pending()) as PendingSessionCost[]).map((entry) => entry.agentId)).toEqual(
+      creator.map(() => "creator"),
+    );
+
+    gate.resolve();
+    await f.internal.flushTasks({ includeAgentRegistrations: false });
+    expect(f.calls()).toHaveLength(25);
+    expect(await f.pending()).toEqual([]);
+  } finally {
+    await f.close();
+    await rm(f.home, { recursive: true, force: true });
+  }
+});
+
+test("a row that always fails does not stop the rows of other sessions", async () => {
+  const f = await fixture();
+  try {
+    const trigger = await f.session();
+    f.hold(async (entry) => {
+      if (entry.agentId === "broken") throw new Error("test billing failure");
+    });
+    const broken = [row("broken", f.accountId, 1), row("broken", f.accountId, 2)];
+    const healthy = Array.from({ length: 30 }, (_, index) => row("healthy", f.accountId, index));
+    await f.seed([...broken, ...healthy]);
+    await f.internal.recoverCostAccounting(trigger.live);
+    await f.internal.flushTasks({ includeAgentRegistrations: false });
+    expect(f.calls()).toHaveLength(30);
+    // The failed row stops only the later row of its own session.
+    expect(f.commits.filter((key) => key.includes("broken"))).toEqual([]);
+    expect(await f.pending()).toEqual(broken);
+  } finally {
+    await f.close();
+    await rm(f.home, { recursive: true, force: true });
+  }
+});
+
+test("the billing warning stays while a row or a cost result of that session is unrecovered", async () => {
+  const f = await fixture();
+  try {
+    const warning = "Billing write failed. Cost is saved; Accounting recovery is pending.";
+    const withRow = await f.session();
+    const inFlight = await f.session();
+    for (const session of [withRow, inFlight])
+      session.live.costRecords = { cursors: {}, turns: {}, billingWarning: warning };
+    await f.seed([
+      row(withRow.id, f.accountId, 1),
+      // A row on another account is not recovered by this start.
+      row(withRow.id, randomUUID(), 2),
+      row(inFlight.id, f.accountId, 1),
+    ]);
+    f.internal.costResultsInFlight.set(inFlight.id, 1);
+    await f.internal.recoverCostAccounting(withRow.live);
+    await f.internal.recoverCostAccounting(inFlight.live);
+    expect(f.manager.getAgent(withRow.id)?.costRecords?.billingWarning).toBe(warning);
+    expect(f.manager.getAgent(inFlight.id)?.costRecords?.billingWarning).toBe(warning);
+
+    f.internal.costResultsInFlight.delete(inFlight.id);
+    await f.seed([row(withRow.id, randomUUID(), 2), row(inFlight.id, f.accountId, 2)]);
+    f.internal.costOutbox = new SessionCostOutbox(f.outboxFile);
+    await f.internal.recoverCostAccounting(inFlight.live);
+    expect(f.manager.getAgent(inFlight.id)?.costRecords?.billingWarning).toBeUndefined();
+  } finally {
+    await f.close();
+    await rm(f.home, { recursive: true, force: true });
+  }
+});
+
+test("a crash after the commit but before the snapshot write replays without a second charge", async () => {
+  const f = await fixture();
+  try {
+    const main = await f.session();
+    const entries = Array.from({ length: 3 }, (_, index) => row(main.id, f.accountId, index + 1));
+    await f.seed(entries);
+    const snapshot = vi
+      .spyOn(f.internal, "persistSnapshot")
+      .mockRejectedValue(new Error("test crash before snapshot"));
+    await f.internal.recoverCostAccounting(main.live);
+    snapshot.mockRestore();
+    expect(f.calls()).toHaveLength(3);
+    expect(await f.pending()).toHaveLength(3);
+    await f.close();
+
+    const restarted = await fixture(f.home, f.accountId);
+    const other = await restarted.session();
+    await restarted.internal.recoverCostAccounting(other.live);
+    await restarted.internal.flushTasks({ includeAgentRegistrations: false });
+    expect(restarted.commits).toHaveLength(3);
+    expect(f.calls().toSorted()).toEqual(
+      entries.map((entry) => `turn:${main.id}:${entry.turnId}`).toSorted(),
+    );
+    expect(Object.keys((await restarted.storage.get(main.id))?.costRecords?.turns ?? {})).toEqual(
+      entries.map((entry) => entry.turnId),
+    );
+    expect(await restarted.pending()).toEqual([]);
+    await restarted.close();
+  } finally {
     await rm(f.home, { recursive: true, force: true });
   }
 });
