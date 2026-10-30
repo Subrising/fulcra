@@ -7,6 +7,8 @@ import {
   evaluateMemoryGuard,
   formatMemoryGuardRefusal,
   parseDarwinSwapUsedPercent,
+  parseDarwinVmStatAvailableBytes,
+  parseWarnAllowAvailableGB,
   parseLinuxMeminfo,
   readHostMemory,
   type HostMemoryReading,
@@ -326,4 +328,84 @@ test("refusal text includes free memory when known", () => {
   );
   expect(text).toContain("this windows pc");
   expect(text).toContain("Free memory: 1.5 GB.");
+});
+
+describe("FU-609 warn allowed when enough memory is available", () => {
+  const withAvailable = (level: HostMemoryReading["level"], gb: number | null) => ({
+    ...darwin(level, 92),
+    availableBytes: gb === null ? null : gb * GB,
+  });
+  const allow4 = { ...DEFAULT_MEMORY_GUARD_SETTINGS, warnAllowAvailableGB: 4 };
+
+  test("warn with enough available memory allows", () => {
+    expect(evaluateMemoryGuard(withAvailable("warn", 4.4), allow4).decision).toBe("allow");
+    expect(evaluateMemoryGuard(withAvailable("warn", 4), allow4).decision).toBe("allow");
+  });
+
+  test("warn with too little or unknown available memory refuses", () => {
+    expect(evaluateMemoryGuard(withAvailable("warn", 3.9), allow4)).toEqual({
+      decision: "refuse",
+      reasons: ["pressure warn"],
+    });
+    expect(evaluateMemoryGuard(withAvailable("warn", null), allow4).decision).toBe("refuse");
+  });
+
+  test("critical always refuses", () => {
+    expect(evaluateMemoryGuard(withAvailable("critical", 20), allow4).decision).toBe("refuse");
+  });
+
+  test("unset keeps today's behaviour", () => {
+    expect(
+      evaluateMemoryGuard(withAvailable("warn", 20), DEFAULT_MEMORY_GUARD_SETTINGS).decision,
+    ).toBe("refuse");
+  });
+
+  test("a full swap disk still refuses an allowed warn", () => {
+    const full = { ...withAvailable("warn", 20), swapDiskFreeBytes: 5 * GB };
+    expect(evaluateMemoryGuard(full, allow4).reasons).toEqual(["swap disk 5.0 GB free"]);
+  });
+
+  test("parseDarwinVmStatAvailableBytes sums free, inactive and speculative pages", () => {
+    const out = [
+      "Mach Virtual Memory Statistics: (page size of 16384 bytes)",
+      "Pages free:                               5795.",
+      "Pages active:                           200000.",
+      "Pages inactive:                         254400.",
+      "Pages speculative:                       25660.",
+    ].join("\n");
+    expect(parseDarwinVmStatAvailableBytes(out)).toBe((5795 + 254400 + 25660) * 16384);
+    expect(parseDarwinVmStatAvailableBytes("garbage")).toBeNull();
+    expect(parseDarwinVmStatAvailableBytes("page size of 4096 bytes\nPages free: 1.")).toBeNull();
+  });
+
+  test("parseWarnAllowAvailableGB accepts numbers and ignores bad text", () => {
+    expect(parseWarnAllowAvailableGB("4")).toBe(4);
+    expect(parseWarnAllowAvailableGB(" 2.5 ")).toBe(2.5);
+    expect(parseWarnAllowAvailableGB(undefined)).toBeUndefined();
+    expect(parseWarnAllowAvailableGB("")).toBeUndefined();
+    expect(parseWarnAllowAvailableGB("-1")).toBeUndefined();
+    expect(parseWarnAllowAvailableGB("lots")).toBeUndefined();
+  });
+
+  test("readHostMemory reads available memory from vm_stat on macOS and MemAvailable on Linux", async () => {
+    const vmStat =
+      "page size of 16384 bytes\nPages free: 100.\nPages inactive: 200.\nPages speculative: 300.\n";
+    const mac = await readHostMemory({
+      platform: "darwin",
+      timeoutMs: 50,
+      exec: async (file) => (file === "vm_stat" ? vmStat : "2\n"),
+      freeDiskBytes: async () => 100 * GB,
+    });
+    expect(mac.level).toBe("warn");
+    expect(mac.availableBytes).toBe(600 * 16384);
+    const linux = await readHostMemory({
+      platform: "linux",
+      timeoutMs: 50,
+      readText: async (path) =>
+        path.endsWith("meminfo")
+          ? "MemTotal: 16000000 kB\nMemAvailable: 8000000 kB\n"
+          : "some avg10=30.00\n",
+    });
+    expect(linux.availableBytes).toBe(8000000 * 1024);
+  });
 });

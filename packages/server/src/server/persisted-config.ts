@@ -278,6 +278,9 @@ export const PersistedConfigSchema = z
             swapUsedPercent: z.number().min(1).max(100).optional(),
             freeMemoryPercent: z.number().min(1).max(100).optional(),
             swapDiskFreeGB: z.number().min(0).max(1000).optional(),
+            // FU-609: a warn reading allows a start when this much memory is available. An older daemon rejects
+            // this key, so a host that may roll back sets PASEO_MEMORY_WARN_ALLOW_AVAILABLE_GB instead.
+            warnAllowAvailableGB: z.number().min(0).max(1000).optional(),
           })
           .strict()
           .optional(),

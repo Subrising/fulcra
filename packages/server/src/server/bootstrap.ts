@@ -6,6 +6,7 @@ import {
   createAgentStartMemoryGuard,
   DEFAULT_MEMORY_GUARD_SETTINGS,
   type MemoryGuardSettings,
+  parseWarnAllowAvailableGB,
 } from "./host-memory-guard.js";
 import { startSyncIoMeter } from "./sync-io-meter.js";
 import { checkNativeReportOriginPublication, requireNativeReportOrigin } from "./report-origin.js";
@@ -1204,6 +1205,15 @@ export async function createPaseoDaemon(
       settings: () => ({
         ...DEFAULT_MEMORY_GUARD_SETTINGS,
         ...config.memoryGuard,
+        // PASEO_MEMORY_WARN_ALLOW_AVAILABLE_GB wins over daemon.memoryGuard.warnAllowAvailableGB.
+        ...(parseWarnAllowAvailableGB(process.env.PASEO_MEMORY_WARN_ALLOW_AVAILABLE_GB) !==
+        undefined
+          ? {
+              warnAllowAvailableGB: parseWarnAllowAvailableGB(
+                process.env.PASEO_MEMORY_WARN_ALLOW_AVAILABLE_GB,
+              ),
+            }
+          : {}),
         // PASEO_MEMORY_GUARD=off turns the guard off. The test setup uses it: a test must not depend on the memory of
         // the machine that runs it.
         ...(process.env.PASEO_MEMORY_GUARD === "off" ? { enabled: false } : {}),
