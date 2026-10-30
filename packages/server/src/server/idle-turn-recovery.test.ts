@@ -1,7 +1,11 @@
 import { expect, test, vi } from "vitest";
 import type { AgentManager } from "./agent/agent-manager.js";
 import { FINAL_INPUT_CHECK, type AgentTimelineItem } from "./agent/agent-sdk-types.js";
-import { assertFinalInputCheck, recordFinalInputHandoff } from "./agent/final-input-check.js";
+import {
+  assertFinalInputCheck,
+  failFinalInputHandoff,
+  recordFinalInputHandoff,
+} from "./agent/final-input-check.js";
 import { createTestLogger } from "../test-utils/test-logger.js";
 import { IDLE_TURN_PROMPT, IdleTurnRecovery, unfinishedIdleTurn } from "./idle-turn-recovery.js";
 
@@ -31,6 +35,9 @@ test("unfinishedIdleTurn detects tool or waiting endings and excludes current-tu
     retried: false,
   });
   expect(unfinishedIdleTurn([])).toBeNull();
+  // FU-611: a deliberate WAITING line is not an unfinished turn, also when a tool call follows.
+  expect(unfinishedIdleTurn([user(), text("WAITING for the worker job q123"), tool])).toBeNull();
+  expect(unfinishedIdleTurn([user(), text("**WAITING** q123")])).toBeNull();
 });
 
 function fixture() {
@@ -100,7 +107,7 @@ test("handle continues once, ignores duplicate endings, and retains the retry fe
   expect(f.blocked.mock.calls[0]![1]).toContain("after one automatic continuation");
 });
 
-test("continueOne withdraws at the final write when input safety changes during provider preparation", async () => {
+test("continueOne withdraws at the final write when input safety changes during provider preparation, without a BLOCKED notice", async () => {
   for (const change of [
     "message",
     "instance",
@@ -143,8 +150,29 @@ test("continueOne withdraws at the final write when input safety changes during 
       recordFinalInputHandoff(options[FINAL_INPUT_CHECK]);
       return {} as never;
     });
-    await new IdleTurnRecovery(f.deps).handle("worker");
-    expect(f.blocked).toHaveBeenCalledTimes(1);
-    expect(f.blocked.mock.calls[0]![1]).toContain("could not be continued safely");
+    expect(await new IdleTurnRecovery(f.deps).handle("worker")).toBe(true);
+    expect(f.blocked).not.toHaveBeenCalled();
   }
+});
+
+test("FU-611: an idle lead whose continuation the safety check refuses gets no BLOCKED notice", async () => {
+  for (const ending of [tool, text("I will wait for the worker to finish the job.")]) {
+    const f = fixture();
+    f.setItems([user(), ending]);
+    f.setAllowed(false);
+    expect(await new IdleTurnRecovery(f.deps).handle("worker")).toBe(true);
+    expect(f.manager.runAgent).not.toHaveBeenCalled();
+    expect(f.blocked).not.toHaveBeenCalled();
+  }
+});
+
+test("FU-611: a real failure of an allowed continuation still sends BLOCKED", async () => {
+  const f = fixture();
+  f.manager.runAgent.mockImplementation(async (_id, _prompt, options) => {
+    failFinalInputHandoff(options[FINAL_INPUT_CHECK], new Error("transport closed"));
+    return {} as never;
+  });
+  await new IdleTurnRecovery(f.deps).handle("worker");
+  expect(f.blocked).toHaveBeenCalledTimes(1);
+  expect(f.blocked.mock.calls[0]![1]).toContain("could not be continued safely");
 });
