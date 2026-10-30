@@ -167,6 +167,8 @@ export class QueuedAgentMessages {
           ["turn_completed", "turn_failed", "turn_canceled"].includes(event.event.type)
         )
           id = event.agentId;
+        else if (event.type === "agent_stream" && event.event.type === "turn_started")
+          this.releaseLimitHolds(event.agentId);
         if (id) {
           this.kick(id);
           // A prior result must settle before the next task takes its saved notice slot.
@@ -425,6 +427,42 @@ export class QueuedAgentMessages {
 
   pending(agentId: string): number {
     return this.records.filter((r) => r.agentId === agentId && r.state === "queued").length;
+  }
+
+  /** The saved usage-limit hold on this receiver's queue, while it is still in the future. */
+  async limitHoldUntil(agentId: string): Promise<number | null> {
+    await this.serial(() => this.load());
+    const until = Math.max(
+      0,
+      ...this.records
+        .filter((r) => r.agentId === agentId && r.state === "queued")
+        .map((r) => r.resumeAt ?? 0),
+    );
+    return until > Date.now() ? until : null;
+  }
+
+  /**
+   * A new turn clears the in-memory limit stop (AutomaticInputLimits). The saved resumeAt must clear with it:
+   * after an account switch the old reset time no longer applies, and drain() holds every queued message behind it.
+   * If the receiver is still limited, the next delivery attempt sets a new resumeAt.
+   */
+  private releaseLimitHolds(agentId: string): void {
+    if (!this.initialized || this.stopped) return;
+    let released = 0;
+    for (const record of this.records)
+      if (record.agentId === agentId && record.state === "queued" && record.resumeAt !== undefined) {
+        delete record.resumeAt;
+        record.reason = undefined;
+        released++;
+      }
+    if (!released) return;
+    const timer = this.timers.get(agentId);
+    if (timer) clearTimeout(timer);
+    this.timers.delete(agentId);
+    this.deps.logger.info({ agentId, released }, "New turn released saved usage-limit holds");
+    void this.serial(() => this.save()).catch((error) => {
+      this.deps.logger.warn({ err: error, agentId }, "Saving released usage-limit holds failed");
+    });
   }
 
   async close(): Promise<void> {
