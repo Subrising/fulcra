@@ -5,7 +5,11 @@ import {
   computerUseFromLabels,
   restoreComputerUseDecisions,
 } from "./providers/codex/computer-use.js";
-import { SessionCostOutbox, type PendingSessionCost } from "./session-cost-outbox.js";
+import {
+  pendingCostKey,
+  SessionCostOutbox,
+  type PendingSessionCost,
+} from "./session-cost-outbox.js";
 import { recordSessionCost, sessionCost, type SessionCostRecords } from "./session-cost.js";
 import { queuedAgentMessagesFor } from "../queued-agent-messages.js";
 import { heldSendsFor } from "../held-sends.js";
@@ -267,6 +271,8 @@ const RELOAD_SESSION_CLOSE_TIMEOUT_MS = 3_000;
 const INTERRUPT_SESSION_TIMEOUT_MS = 2_000;
 const IMPORTABLE_SESSION_LIST_TIMEOUT_MS = 90_000;
 const FAILED_MCP_CLOSE_ERROR = "MCP refresh failed; explicit close recovery required";
+/** Pending cost rows per checkpoint: one outbox write and one snapshot write per owner (FU-595). */
+const COST_RECOVERY_BATCH = 25;
 const STORED_AGENT_CAPABILITIES: AgentCapabilityFlags = {
   supportsStreaming: false,
   supportsSessionPersistence: true,
@@ -2312,6 +2318,11 @@ export class AgentManager {
   private readonly automaticInputLimits: AutomaticInputLimits;
   private readonly costOutbox: SessionCostOutbox;
   private readonly costScopes = new WeakMap<AgentSession, string>();
+  /** Sessions whose turn start recovers their own cost rows (FU-595). */
+  private readonly ownCostRecoveries = new Map<string, Promise<void>>();
+  /** Sessions with a cost result between its record and its outbox and billing writes. */
+  private readonly costResultsInFlight = new Map<string, number>();
+  private readonly costRecoveryDrains = new Map<string, Promise<void>>();
 
   constructor(options: AgentManagerOptions) {
     this.costOutbox = new SessionCostOutbox(options.costOutboxFile);
@@ -6435,46 +6446,99 @@ export class AgentManager {
     return agent.session.usageCredential?.()?.accountId ?? null;
   }
 
-  private async recoverPendingCost(entry: PendingSessionCost): Promise<void> {
+  /**
+   * FU-595: commit rows, then write one checkpoint: owner snapshots first, then one outbox write.
+   * A crash before the outbox write replays committed rows; the billing hook skips a known cost ID.
+   * A failed row stops only the later rows of its own session. Returns the sessions with a failed row.
+   */
+  private async recoverPendingCosts(
+    entries: readonly PendingSessionCost[],
+    skip?: (entry: PendingSessionCost) => boolean,
+  ): Promise<Set<string>> {
+    const failed = new Set<string>();
+    if (entries.length === 0) return failed;
     if (!this.pluginLifecycle) throw new Error("Cost billing is unavailable");
-    const committed = await this.pluginLifecycle.before("agent.cost_commit", entry);
-    if (committed.costCommitted !== true) throw new Error("API cost billing is unavailable");
-    const live = this.agents.get(entry.agentId);
-    const stored = this.registry?.getCached(entry.agentId);
-    const records = structuredClone(
-      live?.costRecords ?? stored?.costRecords ?? { cursors: {}, turns: {} },
-    );
-    records.turns[entry.turnId] ??= {
-      accountId: entry.accountId,
-      amountUsd: entry.costUsd,
-      at: entry.at,
-    };
-    if (entry.revision >= (records.revision ?? 0)) {
-      records.cursors = { ...records.cursors, ...entry.cursors };
-      records.revision = entry.revision;
+    const done: PendingSessionCost[] = [];
+    for (const entry of entries) {
+      if (failed.has(entry.agentId)) continue;
+      // A row in a stale list may already be recovered.
+      if (!(await this.costOutbox.has(entry)) || skip?.(entry)) continue;
+      try {
+        const committed = await this.pluginLifecycle.before("agent.cost_commit", entry);
+        if (committed.costCommitted !== true) throw new Error("API cost billing is unavailable");
+        done.push(entry);
+      } catch (error) {
+        failed.add(entry.agentId);
+        this.logger.warn(
+          { agentId: entry.agentId, turnId: entry.turnId, err: error },
+          "Pending cost commit failed; retained for recovery",
+        );
+      }
     }
-    delete records.billingWarning;
-    if (live) {
-      live.costRecords = records;
-      await this.persistSnapshot(live);
-    } else if (stored) await this.registry!.upsert({ ...stored, costRecords: records });
-    await this.costOutbox.remove(entry);
+    await this.checkpointRecoveredCosts(done, failed);
+    return failed;
   }
 
-  private async pendingApiCosts(accountId: string) {
+  /** Owner snapshots first, then one outbox write. Rows leave the outbox only after both commits. */
+  private async checkpointRecoveredCosts(
+    done: readonly PendingSessionCost[],
+    failed: ReadonlySet<string>,
+  ): Promise<void> {
+    if (done.length === 0) return;
+    const doneKeys = new Set(done.map(pendingCostKey));
+    // The warning is the only record of a cost whose outbox and billing writes both failed.
+    const unrecovered = new Set(
+      (await this.costOutbox.pending())
+        .filter((entry) => !doneKeys.has(pendingCostKey(entry)))
+        .map((entry) => entry.agentId),
+    );
+    const byAgent = new Map<string, PendingSessionCost[]>();
+    for (const entry of done)
+      byAgent.set(entry.agentId, [...(byAgent.get(entry.agentId) ?? []), entry]);
+    for (const [agentId, rows] of byAgent) {
+      const live = this.agents.get(agentId);
+      const stored = this.registry?.getCached(agentId);
+      const records = structuredClone(
+        live?.costRecords ?? stored?.costRecords ?? { cursors: {}, turns: {} },
+      );
+      for (const entry of rows) {
+        records.turns[entry.turnId] ??= {
+          accountId: entry.accountId,
+          amountUsd: entry.costUsd,
+          at: entry.at,
+        };
+        if (entry.revision >= (records.revision ?? 0)) {
+          records.cursors = { ...records.cursors, ...entry.cursors };
+          records.revision = entry.revision;
+        }
+      }
+      const pending =
+        failed.has(agentId) || unrecovered.has(agentId) || this.costResultsInFlight.has(agentId);
+      if (!pending) delete records.billingWarning;
+      if (live) {
+        live.costRecords = records;
+        await this.persistSnapshot(live);
+      } else if (stored) await this.registry!.upsert({ ...stored, costRecords: records });
+    }
+    await this.costOutbox.removeMany(done);
+  }
+
+  /** Outbox rows of one account, or of one session on that account. */
+  private async pendingApiCosts(accountId: string, agentId?: string) {
     const entries = await this.costOutbox.pending();
-    const seen = new Set(entries.map((entry) => JSON.stringify([entry.agentId, entry.turnId])));
+    const seen = new Set(entries.map(pendingCostKey));
     const records = new Map(
       this.registry?.listCached().map((row) => [row.id, row.costRecords]) ?? [],
     );
     for (const live of this.agents.values()) records.set(live.id, live.costRecords);
-    for (const [agentId, cost] of records) {
-      if (!cost?.billingWarning) continue;
+    const missing: PendingSessionCost[] = [];
+    for (const [id, cost] of records) {
+      if (!cost?.billingWarning || (agentId !== undefined && id !== agentId)) continue;
       for (const [turnId, row] of Object.entries(cost.turns)) {
-        const key = JSON.stringify([agentId, turnId]);
+        const key = pendingCostKey({ agentId: id, turnId });
         if (row.accountId !== accountId || seen.has(key)) continue;
-        const entry: PendingSessionCost = {
-          agentId,
+        missing.push({
+          agentId: id,
           provider: "claude",
           accountId,
           turnId,
@@ -6482,21 +6546,81 @@ export class AgentManager {
           at: row.at,
           cursors: cost.cursors,
           revision: cost.revision ?? Object.keys(cost.turns).length,
-        };
-        await this.costOutbox.put(entry);
-        entries.push(entry);
+        });
         seen.add(key);
       }
     }
-    return entries.filter((entry) => entry.accountId === accountId);
+    await this.costOutbox.putMany(missing);
+    entries.push(...missing);
+    return entries.filter(
+      (entry) =>
+        entry.accountId === accountId && (agentId === undefined || entry.agentId === agentId),
+    );
   }
 
+  /**
+   * A turn start recovers its own rows itself; concurrent starts of one session share the run.
+   * It never waits for a background batch: a row that a background run already committed is
+   * committed again, and the billing hook skips the known cost ID.
+   */
+  private recoverOwnCosts(agentId: string, accountId: string): Promise<void> {
+    const running = this.ownCostRecoveries.get(agentId);
+    if (running) return running;
+    const run = (async () => {
+      try {
+        const entries = await this.pendingApiCosts(accountId, agentId);
+        for (let start = 0; start < entries.length; start += COST_RECOVERY_BATCH) {
+          const failed = await this.recoverPendingCosts(
+            entries.slice(start, start + COST_RECOVERY_BATCH),
+          );
+          if (failed.size > 0) throw new Error("Cost recovery remains pending");
+        }
+      } finally {
+        this.ownCostRecoveries.delete(agentId);
+      }
+    })();
+    this.ownCostRecoveries.set(agentId, run);
+    return run;
+  }
+
+  /** One background run per account. Concurrent callers share it. */
+  private drainAccountCosts(accountId: string): Promise<void> {
+    const running = this.costRecoveryDrains.get(accountId);
+    if (running) return running;
+    const drain = (async () => {
+      try {
+        const entries = await this.pendingApiCosts(accountId);
+        const failed = new Set<string>();
+        // A session with a turn start in progress recovers its own rows.
+        const skip = (entry: PendingSessionCost) =>
+          failed.has(entry.agentId) || this.ownCostRecoveries.has(entry.agentId);
+        for (let start = 0; start < entries.length; start += COST_RECOVERY_BATCH) {
+          const batch = entries.slice(start, start + COST_RECOVERY_BATCH);
+          for (const agentId of await this.recoverPendingCosts(batch, skip)) failed.add(agentId);
+        }
+      } catch (error) {
+        this.logger.warn({ accountId, err: error }, "Account cost recovery remains pending");
+      } finally {
+        this.costRecoveryDrains.delete(accountId);
+      }
+    })();
+    this.costRecoveryDrains.set(accountId, drain);
+    this.trackBackgroundTask(drain);
+    return drain;
+  }
+
+  /**
+   * FU-595: a turn waits only for rows of its own session. Rows of other sessions on the account
+   * drain in the background, so old costs of one session cannot hold every chat on the account.
+   */
   private async recoverCostAccounting(agent: ActiveManagedAgent): Promise<void> {
     try {
       const accountId = this.sessionCostAccount(agent);
-      if (accountId && this.pluginLifecycle)
-        for (const entry of await this.pendingApiCosts(accountId))
-          await this.recoverPendingCost(entry);
+      if (accountId && this.pluginLifecycle) {
+        const own = this.recoverOwnCosts(agent.id, accountId);
+        void this.drainAccountCosts(accountId);
+        await own;
+      }
       await this.refreshSessionCost(agent.id);
     } catch {
       this.setCostWarning(agent, "Cost reporting is incomplete. Recovery will retry.");
@@ -9185,7 +9309,25 @@ export class AgentManager {
     }
   }
 
-  private async recordCostResult(
+  private recordCostResult(
+    agent: ActiveManagedAgent,
+    event: AgentStreamEvent,
+    eventTurnId: string | undefined,
+    fromHistory: boolean | undefined,
+  ): Promise<void> {
+    // An event with no cost keeps its short path: extra awaits here delay the turn's idle state.
+    if (!("usage" in event) || !event.usage)
+      return this.writeCostResult(agent, event, eventTurnId, fromHistory);
+    // A recovery checkpoint keeps the warning while this result is not yet written.
+    this.costResultsInFlight.set(agent.id, (this.costResultsInFlight.get(agent.id) ?? 0) + 1);
+    return this.writeCostResult(agent, event, eventTurnId, fromHistory).finally(() => {
+      const left = (this.costResultsInFlight.get(agent.id) ?? 1) - 1;
+      if (left > 0) this.costResultsInFlight.set(agent.id, left);
+      else this.costResultsInFlight.delete(agent.id);
+    });
+  }
+
+  private async writeCostResult(
     agent: ActiveManagedAgent,
     event: AgentStreamEvent,
     eventTurnId: string | undefined,
