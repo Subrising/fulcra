@@ -376,6 +376,44 @@ test("an unenrolled chat whose host reconnect refuses: the switch rolls back and
   assert.equal(readAccounts(w.root).assignments[w.id].accountId, w.a.id);
 });
 
+test("FU-585: a session the host does not hold is loaded, then switched; a failed load says what is wrong", async (t) => {
+  const w = await world(t, "claude", { enrolled: false });
+  const recover = w.control.native.recover;
+  let loads = 0,
+    resident = false;
+  w.control.native.recover = async (id) =>
+    resident ? recover(id) : { outcome: "refused", reason: "not_resident" };
+  w.control.native.reload = async () => {
+    loads++;
+    resident = true;
+  };
+  const ok = await takeOverSession(w.id, w.b.id, { control: w.control });
+  assert.equal(ok.ok, true);
+  assert.equal(loads, 1);
+  assert.equal(readAccounts(w.root).assignments[w.id].accountId, w.b.id);
+  // The load itself fails: the switch rolls back, and the message names the real cause, not "active turn".
+  const w2 = await world(t, "claude", { enrolled: false });
+  w2.control.native.recover = async () => ({ outcome: "refused", reason: "not_resident" });
+  w2.control.native.reload = async () => {
+    throw Error("host down");
+  };
+  const r = await takeOverSession(w2.id, w2.b.id, { control: w2.control });
+  assert.equal(r.ok, false);
+  assert.match(r.message, /after a restart/);
+  assert.doesNotMatch(r.message, /active turn/);
+  assert.equal(readAccounts(w2.root).assignments[w2.id].accountId, w2.a.id);
+  // A busy refusal keeps its own message and never reloads.
+  const w3 = await world(t, "claude", { enrolled: false });
+  let reloaded = false;
+  w3.control.native.recover = async () => ({ outcome: "refused", reason: "busy" });
+  w3.control.native.reload = async () => {
+    reloaded = true;
+  };
+  const b = await takeOverSession(w3.id, w3.b.id, { control: w3.control });
+  assert.match(b.message, /active turn/);
+  assert.equal(reloaded, false);
+});
+
 test("a dormant session switches quietly with its native id, history and control intact", async (t) => {
   const w = await world(t);
   w.status("closed");

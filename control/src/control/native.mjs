@@ -268,6 +268,12 @@ export async function connectNative({ daemon, issueProvenance, getHandshakeBoot 
       verifyActivation();
       return { outcome: r.outcome, reason: r.reason ?? null };
     },
+    // FU-585: load a session the host does not hold (after a restart), as `fulcra agent reload <id>` does. Not a restore.
+    reload: async (id) => {
+      verifyActivation();
+      await daemon.refreshAgent(id);
+      verifyActivation();
+    },
     contextRotationState: (id) => daemon.getAgentMcpRefreshState(id),
     rotateContext: (request) => daemon.rotateAgentContext(request),
     compactionTail: async (id, cursor) => {

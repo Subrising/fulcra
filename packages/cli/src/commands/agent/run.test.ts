@@ -7,6 +7,7 @@ import { DaemonConnectionError } from "@getpaseo/client/internal/daemon-client";
 import {
   addRunOptions,
   resolveExistingRunWorkspace,
+  resolveRunPrompt,
   resolveRunCallerAgentId,
   runRunCommand,
   type AgentRunOptions,
@@ -375,5 +376,35 @@ describe("explicit run cwd workspace precedence", () => {
     expect(client.createAgent).not.toHaveBeenCalled();
     expectOnlyDirectoryLookup(client);
     expect(client.close).toHaveBeenCalledOnce();
+  });
+});
+
+describe("resolveRunPrompt", () => {
+  it("returns the argument when no file is given", async () => {
+    await expect(resolveRunPrompt("do it", undefined)).resolves.toBe("do it");
+  });
+
+  it("reads a multi-line prompt with quotes and percent signs from --prompt-file", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "run-prompt-"));
+    const file = join(dir, "brief.md");
+    const brief = 'Line 1\r\nSay "hi" 100% %PATH%\nLine 3';
+    writeFileSync(file, brief);
+    try {
+      await expect(resolveRunPrompt(undefined, file)).resolves.toBe(brief);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses both an argument and a file", async () => {
+    await expect(resolveRunPrompt("x", "brief.md")).rejects.toMatchObject({
+      code: "CONFLICTING_PROMPT_INPUT",
+    });
+  });
+
+  it("reports a missing prompt file", async () => {
+    await expect(resolveRunPrompt(undefined, "/nonexistent/brief.md")).rejects.toMatchObject({
+      code: "PROMPT_FILE_READ_ERROR",
+    });
   });
 });
