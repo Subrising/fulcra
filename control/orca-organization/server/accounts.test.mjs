@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -34,6 +35,8 @@ import {
   paidWhileFree,
   pendingRiskNotices,
   markRiskNoticeSent,
+  withStoreLock,
+  lockHeld,
 } from "./accounts.mjs";
 import { markAccountRevoked, accountStatus } from "./accounts.mjs";
 
@@ -1578,3 +1581,33 @@ test(
     assert.equal(JSON.stringify(readAccounts(root)).includes(key), false);
   },
 );
+
+// FU-597: a contended lock open on Windows can fail with EPERM or EBUSY while another writer deletes the lock.
+test("the store lock waits on a Windows EPERM or EBUSY open and keeps EPERM fatal elsewhere", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "acct-lock-"));
+  const platform = Object.getOwnPropertyDescriptor(process, "platform");
+  const writeFile = fsp.writeFile;
+  let refusals = [];
+  t.mock.method(fsp, "writeFile", async (file, ...rest) => {
+    const code = String(file).endsWith(".lock") ? refusals.shift() : undefined;
+    if (code) throw Object.assign(new Error(`${code}: test lock refusal`), { code });
+    return writeFile.call(fsp, file, ...rest);
+  });
+  try {
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    refusals = ["EPERM", "EBUSY"];
+    assert.equal(await withStoreLock(root, async () => "ran"), "ran");
+    assert.deepEqual(refusals, []);
+    Object.defineProperty(process, "platform", { ...platform, value: "linux" });
+    refusals = ["EPERM"];
+    await assert.rejects(
+      withStoreLock(root, async () => "ran"),
+      { code: "EPERM" },
+    );
+    assert.equal(lockHeld("EEXIST", "linux"), true);
+    assert.equal(lockHeld("EBUSY", "darwin"), false);
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

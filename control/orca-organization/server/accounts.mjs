@@ -193,6 +193,11 @@ export async function update(root, fn) {
     return out;
   });
 }
+// FU-597: on Windows, opening a lock file that another writer is deleting fails with EPERM or EBUSY, not
+// EEXIST. Both mean "held"; elsewhere EPERM is a real permission error.
+export function lockHeld(code, platform = process.platform) {
+  return code === "EEXIST" || (platform === "win32" && (code === "EPERM" || code === "EBUSY"));
+}
 export async function withStoreLock(root, fn) {
   const dir = accountsDir(root);
   await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
@@ -202,7 +207,7 @@ export async function withStoreLock(root, fn) {
       await fsp.writeFile(lock, String(process.pid), { flag: "wx", mode: 0o600 });
       break;
     } catch (e) {
-      if (e.code !== "EEXIST") throw e;
+      if (!lockHeld(e.code)) throw e;
       try {
         if (Date.now() - (await fsp.stat(lock)).mtimeMs > LOCK_STALE_MS) {
           await fsp.rm(lock, { force: true });
