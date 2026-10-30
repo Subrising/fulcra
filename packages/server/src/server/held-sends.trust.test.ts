@@ -342,7 +342,8 @@ test("a paused cold receiver stays unloaded until notices resume", async () => {
   expect(resume).not.toHaveBeenCalled();
   expect(f.prompts).toEqual([]);
   await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: [] }));
-  await vi.waitFor(() => expect(f.prompts).toEqual(["paused cold input"]));
+  // The resume arrives through a file watch event; on a loaded host it can take about one second.
+  await vi.waitFor(() => expect(f.prompts).toEqual(["paused cold input"]), { timeout: 5_000 });
 });
 
 test("a cold queued send cannot enter a replacement provider session", async () => {
@@ -1065,6 +1066,37 @@ test("steering a limited receiver queues the message and reports the reset polic
     state: "queued",
     resumeAt: resumeAt,
   });
+});
+
+test("a new turn releases saved usage-limit holds and delivers the held messages", async () => {
+  const f = await fixture();
+  f.limitReceiver(Date.now() + 14 * 60 * 60_000);
+  await f.send("held behind an old reset", f.sender.id, true);
+  expect(f.pending()).toBe(1);
+  expect(f.prompts).toEqual([]);
+  // The receiver moved to a working account: a human turn starts and clears the in-memory stop.
+  await f.send("continue from the app");
+  await vi.waitFor(() =>
+    expect(f.prompts).toEqual(["continue from the app", "held behind an old reset"]),
+  );
+  await f.queue.close();
+  const saved = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
+  expect(saved[0]).toMatchObject({ state: "delivered" });
+  expect(saved[0].resumeAt).toBeUndefined();
+});
+
+test("an agent send to a receiver held by a saved usage-limit reset never reports delivered now", async () => {
+  const f = await fixture();
+  const resumeAt = f.limitReceiver(Date.now() + 14 * 60 * 60_000);
+  await f.send("first, held", f.sender.id, true);
+  await f.send("second", f.sender.id);
+  expect(f.messages.findLast((m) => m.type === "send_agent_message_response")).toMatchObject({
+    payload: {
+      accepted: true,
+      deliveryNote: `accepted; held: the receiver's queue waits for a usage-limit reset at ${new Date(resumeAt).toISOString()}`,
+    },
+  });
+  expect(f.prompts).toEqual([]);
 });
 
 test("a human can still start a limited receiver", async () => {
