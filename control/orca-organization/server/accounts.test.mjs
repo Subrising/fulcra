@@ -107,11 +107,13 @@ test("a new session stays off an account at 90% of its weekly limit while anothe
   // Spread would pick Personal (no sessions), but it is past 90%: Work, though it is busier.
   assert.equal((await assign(root, S(2), "claude", T0)).account.id, work.id);
   assert.equal((await assign(root, S(3), "claude", T0)).account.id, work.id);
-  // A session already on Personal keeps it: no automatic switch.
+  // A session on Personal keeps it while Personal is under the cap (a resume never moves it for another reason).
   writeUsage(root, { [work.id]: week(40), [personal.id]: week(20) });
   assert.equal((await assign(root, S(4), "claude", T0)).account.id, personal.id);
+  // FU-585: past the cap, its next launch or resume moves it to the account with room.
   writeUsage(root, { [work.id]: week(40), [personal.id]: week(95) });
-  assert.equal((await assign(root, S(4), "claude", T0 + 5)).account.id, personal.id);
+  assert.equal((await assign(root, S(4), "claude", T0 + 5)).account.id, work.id);
+  assert.equal(readAccounts(root).rotations.at(-1).reason, "launch");
   // The default account is held back too while another is below the cap.
   await setDefaultAccount(root, "claude", personal.id);
   assert.equal((await assign(root, S(5), "claude", T0)).account.id, work.id);
@@ -122,6 +124,28 @@ test("a new session stays off an account at 90% of its weekly limit while anothe
   writeUsage(root, { [work.id]: week(40), [personal.id]: week(99, T0 - 1) });
   assert.deepEqual(readUsage(root, T0), { [work.id]: 40 });
   assert.equal((await assign(root, S(7), "claude", T0)).account.id, personal.id); // default, back under the cap
+});
+test("FU-585: a held account over the weekly cap moves to a free one with room; it stays when none has room", async () => {
+  const root = scratch();
+  const work = await addAccount(root, { provider: "claude", name: "Work" }, T0),
+    personal = await addAccount(root, { provider: "claude", name: "Personal" }, T0 + 1);
+  await setAccount(root, personal.id, { priority: 1 });
+  await setAccount(root, work.id, { priority: 2 });
+  assert.equal((await assign(root, S(1), "claude", T0)).account.id, personal.id);
+  // The held account is at exactly 90%: moved. The target has room.
+  writeUsage(root, { [work.id]: week(10), [personal.id]: week(90) });
+  assert.equal((await assign(root, S(1), "claude", T0 + 1)).account.id, work.id);
+  assert.equal(readAccounts(root).assignments[S(1)].accountId, work.id);
+  // Every account over the cap: the session stays on its own account (nothing to move to).
+  writeUsage(root, { [work.id]: week(96), [personal.id]: week(99) });
+  assert.equal((await assign(root, S(1), "claude", T0 + 2)).account.id, work.id);
+  // Under the cap: stays.
+  writeUsage(root, { [work.id]: week(50), [personal.id]: week(10) });
+  assert.equal((await assign(root, S(1), "claude", T0 + 3)).account.id, work.id);
+  // The only other account is limited: no move, the session stays on its capped account.
+  writeUsage(root, { [work.id]: week(95), [personal.id]: week(10) });
+  await setAccount(root, personal.id, { enabled: false });
+  assert.equal((await assign(root, S(1), "claude", T0 + 4)).account.id, work.id);
 });
 test("the launch hook applies the weekly cap to a new pooled launch", async () => {
   const root = scratch();

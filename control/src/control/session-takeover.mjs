@@ -179,7 +179,19 @@ export async function takeOverSession(
           });
         // No credential or new prompt is sent here. The daemon reruns session_open,
         // checks its own busy/authority fence, and resumes the saved persistence handle.
-        const result = await control.native.recover(sessionId);
+        let result = await control.native.recover(sessionId);
+        // FU-585: after a host restart the session is not resident, so the host refuses the in-place restart. Load it
+        // (the same step as `fulcra agent reload <id>`), then ask again once.
+        if (
+          result?.outcome === "refused" &&
+          result.reason === "not_resident" &&
+          typeof control.native.reload === "function" &&
+          (await control.native.reload(sessionId).then(
+            () => true,
+            () => false,
+          ))
+        )
+          result = await control.native.recover(sessionId);
         if (result?.outcome !== "refreshed") {
           if (
             !unresolved &&
@@ -187,7 +199,9 @@ export async function takeOverSession(
           ) {
             await rollback();
             const reply = refused(
-              "The host could not switch this session; finish any active turn and try again",
+              result?.reason === "not_resident"
+                ? "The host could not load this session after a restart; run fulcra agent reload <id> and try again"
+                : "The host could not switch this session; finish any active turn and try again",
             );
             control.store.finish(eventId, "refused", reply);
             return reply;
