@@ -1,6 +1,6 @@
 import { writeFileSync } from "node:fs";
 import { afterEach, expect, test, vi } from "vitest";
-import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -330,18 +330,25 @@ test("a failed cold receiver load is recorded without a second resume attempt", 
   expect(f.prompts).toEqual([]);
 });
 
+/** The queue reads the policy file while a test writes it. Write beside it and rename so a read never sees half a file. */
+async function writePause(path: string, policy: unknown): Promise<void> {
+  const temp = `${path}.${randomUUID()}.tmp`;
+  await writeFile(temp, JSON.stringify(policy));
+  await rename(temp, path);
+}
+
 test("a paused cold receiver stays unloaded until notices resume", async () => {
   const f = await fixture();
   const saved = (await f.storage.get(f.target.id))!;
   await f.host.daemon(() => f.manager.closeAgent(f.target.id));
   await f.storage.upsert({ ...saved, lastStatus: "idle" });
   const resume = vi.spyOn(f.manager, "resumeAgentFromPersistence");
-  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+  await writePause(f.storage.noticePausePath, { pausedProviders: ["claude"] });
   await f.send("paused cold input", undefined, false, randomUUID(), true);
   await f.queue.start();
   expect(resume).not.toHaveBeenCalled();
   expect(f.prompts).toEqual([]);
-  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: [] }));
+  await writePause(f.storage.noticePausePath, { pausedProviders: [] });
   await vi.waitFor(() => expect(f.prompts).toEqual(["paused cold input"]));
 });
 
@@ -1479,14 +1486,14 @@ test.each([false, true])(
 
 test("paused Claude owner notices persist and resume in one owner turn", async () => {
   const f = await fixture("claude");
-  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+  await writePause(f.storage.noticePausePath, { pausedProviders: ["claude"] });
   await f.send("PC job one ended");
   await f.send("PC job two ended");
   expect(f.prompts).toEqual([]);
   expect(f.pending()).toBe(2);
   const records = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
   expect(records.map((r: { state: string }) => r.state)).toEqual(["queued", "queued"]);
-  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: [] }));
+  await writePause(f.storage.noticePausePath, { pausedProviders: [] });
   await vi.waitFor(() => expect(f.prompts).toHaveLength(1));
   expect(f.prompts[0]).toBe(
     "Message 1 from owner:\nPC job one ended\n\nMessage 2 from owner:\nPC job two ended",
@@ -1496,7 +1503,7 @@ test("paused Claude owner notices persist and resume in one owner turn", async (
 
 test("a Claude pause leaves Codex notices active", async () => {
   const f = await fixture("codex");
-  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+  await writePause(f.storage.noticePausePath, { pausedProviders: ["claude"] });
   await f.send("PC job ended");
   await vi.waitFor(() => expect(f.prompts).toEqual(["PC job ended"]));
 });
@@ -1513,11 +1520,11 @@ test("the pause exception uses the complete session ID", async () => {
 
 test("paused agent notices keep their sender and combine after resume", async () => {
   const f = await fixture("claude");
-  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+  await writePause(f.storage.noticePausePath, { pausedProviders: ["claude"] });
   await f.send("one", f.sender.id);
   await f.send("two", f.sender.id);
   expect(f.prompts).toEqual([]);
-  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: [] }));
+  await writePause(f.storage.noticePausePath, { pausedProviders: [] });
   await vi.waitFor(() => expect(f.prompts).toHaveLength(1));
   expect(new Set(f.sourcesFor())).toEqual(new Set(["agent"]));
 });
@@ -1537,7 +1544,7 @@ test("malformed pause policy starts no turn", async () => {
 
 test("paused owner notices survive a queue restart", async () => {
   const f = await fixture("claude");
-  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+  await writePause(f.storage.noticePausePath, { pausedProviders: ["claude"] });
   await f.send("saved one");
   await f.send("saved two");
   await f.queue.close();
@@ -1549,7 +1556,7 @@ test("paused owner notices survive a queue restart", async () => {
   cleanup.push(() => restored.close());
   await restored.start();
   expect(f.prompts).toEqual([]);
-  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: [] }));
+  await writePause(f.storage.noticePausePath, { pausedProviders: [] });
   await vi.waitFor(() => expect(f.prompts).toHaveLength(1));
 });
 
@@ -1558,7 +1565,7 @@ test("an owner notice that reaches loading during pause activation is saved", as
   const get = f.storage.get.bind(f.storage);
   vi.spyOn(f.storage, "get").mockImplementationOnce(async (id) => {
     const record = await get(id);
-    await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+    await writePause(f.storage.noticePausePath, { pausedProviders: ["claude"] });
     return record;
   });
   await f.send("racing PC completion");
@@ -1570,7 +1577,7 @@ test("a delivered message ID is not queued again during a pause", async () => {
   const f = await fixture("claude");
   await f.send("completed notice", undefined, false, "same-notice");
   await vi.waitFor(() => expect(f.prompts).toHaveLength(1));
-  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+  await writePause(f.storage.noticePausePath, { pausedProviders: ["claude"] });
   await f.send("completed notice", undefined, false, "same-notice");
   await f.send("new notice", undefined, false, "new-notice");
   expect(f.pending()).toBe(1);
@@ -1586,12 +1593,12 @@ test("paused notices combine within each original sender", async () => {
   cleanup.push(async () => {
     await f.host.daemon(() => f.manager.closeAgent(peer.id));
   });
-  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+  await writePause(f.storage.noticePausePath, { pausedProviders: ["claude"] });
   await f.send("first A", f.sender.id);
   await f.send("only B", peer.id);
   await f.send("second A", f.sender.id);
   expect(f.prompts).toEqual([]);
-  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: [] }));
+  await writePause(f.storage.noticePausePath, { pausedProviders: [] });
   await vi.waitFor(() => expect(f.prompts).toHaveLength(2));
   expect(f.prompts[0]).toBe(
     `Message 1 from ${f.sender.id}:\nfirst A\n\nMessage 2 from ${f.sender.id}:\nsecond A`,
@@ -1601,7 +1608,7 @@ test("paused notices combine within each original sender", async () => {
 
 test("paused plugin sessions cannot become owner notices without a wire token", async () => {
   const f = await fixture("claude");
-  await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+  await writePause(f.storage.noticePausePath, { pausedProviders: ["claude"] });
   f.asPlugin();
   await f.send("retain the delegated operation");
   expect(f.pending()).toBe(0);
@@ -1670,7 +1677,7 @@ test.each([false, true])(
   "archive refusal precedes a provider pause (agent sender: %s)",
   async (agentSender) => {
     const f = await fixture("claude");
-    await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+    await writePause(f.storage.noticePausePath, { pausedProviders: ["claude"] });
     await f.host.daemon(() => f.manager.archiveAgent(f.target.id));
     const before = await f.storage.get(f.target.id);
     await f.send("Do not restore or queue", agentSender ? f.sender.id : undefined);
@@ -1695,8 +1702,7 @@ test.each([
     const f = await fixture();
     await f.host.daemon(() => f.manager.closeAgent(f.target.id));
     expect((await f.storage.get(f.target.id))?.lastStatus).toBe("closed");
-    if (paused)
-      await writeFile(f.storage.noticePausePath, JSON.stringify({ pausedProviders: ["claude"] }));
+    if (paused) await writePause(f.storage.noticePausePath, { pausedProviders: ["claude"] });
     const before = await f.storage.get(f.target.id);
     await f.send("Do not queue", undefined, false, undefined, queueOwner);
     expect(f.messages.findLast((m) => m.type === "send_agent_message_response")).toMatchObject({
