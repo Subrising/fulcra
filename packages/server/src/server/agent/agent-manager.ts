@@ -2322,6 +2322,8 @@ export class AgentManager {
   private readonly ownCostRecoveries = new Map<string, Promise<void>>();
   /** Sessions with a cost result between its record and its outbox and billing writes. */
   private readonly costResultsInFlight = new Map<string, number>();
+  /** Counts each billing warning per session. A row list covers only warnings set before it. */
+  private readonly costWarningCounts = new Map<string, number>();
   private readonly costRecoveryDrains = new Map<string, Promise<void>>();
 
   constructor(options: AgentManagerOptions) {
@@ -6453,6 +6455,7 @@ export class AgentManager {
    */
   private async recoverPendingCosts(
     entries: readonly PendingSessionCost[],
+    warnings: ReadonlyMap<string, number>,
     skip?: (entry: PendingSessionCost) => boolean,
   ): Promise<Set<string>> {
     const failed = new Set<string>();
@@ -6475,14 +6478,31 @@ export class AgentManager {
         );
       }
     }
-    await this.checkpointRecoveredCosts(done, failed);
+    await this.checkpointRecoveredCosts(done, failed, warnings);
     return failed;
+  }
+
+  /** True while a cost of this session may still be unbilled, so its warning must stay. */
+  private costWarningPending(
+    agentId: string,
+    failed: ReadonlySet<string>,
+    unrecovered: ReadonlySet<string>,
+    warnings: ReadonlyMap<string, number>,
+  ): boolean {
+    return (
+      failed.has(agentId) ||
+      unrecovered.has(agentId) ||
+      this.costResultsInFlight.has(agentId) ||
+      // FU-596: a warning set after the row list was built marks a turn this list does not hold.
+      (this.costWarningCounts.get(agentId) ?? 0) !== (warnings.get(agentId) ?? 0)
+    );
   }
 
   /** Owner snapshots first, then one outbox write. Rows leave the outbox only after both commits. */
   private async checkpointRecoveredCosts(
     done: readonly PendingSessionCost[],
     failed: ReadonlySet<string>,
+    warnings: ReadonlyMap<string, number>,
   ): Promise<void> {
     if (done.length === 0) return;
     const doneKeys = new Set(done.map(pendingCostKey));
@@ -6512,9 +6532,8 @@ export class AgentManager {
           records.revision = entry.revision;
         }
       }
-      const pending =
-        failed.has(agentId) || unrecovered.has(agentId) || this.costResultsInFlight.has(agentId);
-      if (!pending) delete records.billingWarning;
+      if (!this.costWarningPending(agentId, failed, unrecovered, warnings))
+        delete records.billingWarning;
       if (live) {
         live.costRecords = records;
         await this.persistSnapshot(live);
@@ -6568,10 +6587,12 @@ export class AgentManager {
     if (running) return running;
     const run = (async () => {
       try {
+        const warnings = new Map(this.costWarningCounts);
         const entries = await this.pendingApiCosts(accountId, agentId);
         for (let start = 0; start < entries.length; start += COST_RECOVERY_BATCH) {
           const failed = await this.recoverPendingCosts(
             entries.slice(start, start + COST_RECOVERY_BATCH),
+            warnings,
           );
           if (failed.size > 0) throw new Error("Cost recovery remains pending");
         }
@@ -6589,6 +6610,7 @@ export class AgentManager {
     if (running) return running;
     const drain = (async () => {
       try {
+        const warnings = new Map(this.costWarningCounts);
         const entries = await this.pendingApiCosts(accountId);
         const failed = new Set<string>();
         // A session with a turn start in progress recovers its own rows.
@@ -6596,7 +6618,8 @@ export class AgentManager {
           failed.has(entry.agentId) || this.ownCostRecoveries.has(entry.agentId);
         for (let start = 0; start < entries.length; start += COST_RECOVERY_BATCH) {
           const batch = entries.slice(start, start + COST_RECOVERY_BATCH);
-          for (const agentId of await this.recoverPendingCosts(batch, skip)) failed.add(agentId);
+          for (const agentId of await this.recoverPendingCosts(batch, warnings, skip))
+            failed.add(agentId);
         }
       } catch (error) {
         this.logger.warn({ accountId, err: error }, "Account cost recovery remains pending");
@@ -9290,6 +9313,8 @@ export class AgentManager {
   }
 
   private setCostWarning(agent: ActiveManagedAgent, warning?: string): void {
+    if (warning)
+      this.costWarningCounts.set(agent.id, (this.costWarningCounts.get(agent.id) ?? 0) + 1);
     if (!agent.costRecords) return;
     const records = { ...agent.costRecords };
     if (warning) records.billingWarning = warning;
