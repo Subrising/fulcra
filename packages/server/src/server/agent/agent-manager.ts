@@ -9309,21 +9309,22 @@ export class AgentManager {
     }
   }
 
-  private async recordCostResult(
+  private recordCostResult(
     agent: ActiveManagedAgent,
     event: AgentStreamEvent,
     eventTurnId: string | undefined,
     fromHistory: boolean | undefined,
   ): Promise<void> {
+    // An event with no cost keeps its short path: extra awaits here delay the turn's idle state.
+    if (!("usage" in event) || !event.usage)
+      return this.writeCostResult(agent, event, eventTurnId, fromHistory);
     // A recovery checkpoint keeps the warning while this result is not yet written.
     this.costResultsInFlight.set(agent.id, (this.costResultsInFlight.get(agent.id) ?? 0) + 1);
-    try {
-      await this.writeCostResult(agent, event, eventTurnId, fromHistory);
-    } finally {
+    return this.writeCostResult(agent, event, eventTurnId, fromHistory).finally(() => {
       const left = (this.costResultsInFlight.get(agent.id) ?? 1) - 1;
       if (left > 0) this.costResultsInFlight.set(agent.id, left);
       else this.costResultsInFlight.delete(agent.id);
-    }
+    });
   }
 
   private async writeCostResult(
