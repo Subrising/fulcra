@@ -3,7 +3,6 @@ import { OfferStore } from "./pairing/offer-store.js";
 import { DeviceRegistry } from "./pairing/device-registry.js";
 import { RelayDeviceGate } from "./pairing/relay-device-gate.js";
 import type pino from "pino";
-import type { KeyPair } from "@getpaseo/relay/e2ee";
 import type { ExternalSocketMetadata } from "./websocket-server.js";
 import {
   startRelayTransport,
@@ -26,7 +25,6 @@ interface RelayRuntimeOptions {
   logger: pino.Logger;
   attachSocket(ws: RelaySocketLike, metadata?: ExternalSocketMetadata): Promise<void>;
   serverId: string;
-  daemonKeyPair: KeyPair;
   startTransport?: typeof startRelayTransport;
 }
 
@@ -55,11 +53,14 @@ export function createRelayRuntime(options: RelayRuntimeOptions): RelayRuntime {
       relayEndpoint: config.endpoint,
       relayUseTls: config.useTls,
       serverId: options.serverId,
+<<<<<<< HEAD
       daemonKeyPair: options.daemonKeyPair,
       deviceGate: new RelayDeviceGate(
         new OfferStore(options.paseoHome),
         new DeviceRegistry(options.paseoHome),
       ),
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.13.1
     });
   }
 

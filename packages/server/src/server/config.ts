@@ -278,6 +278,7 @@ interface ResolveRelayInput {
 interface ResolvedRelay {
   enabled: boolean;
   enabledMutable: boolean;
+  requireProtectedSecurity: boolean;
   endpoint: string;
   publicEndpoint: string;
   useTls: boolean;
@@ -300,17 +301,40 @@ function resolveTlsFromEnv(
   return persistedValue ?? fallback;
 }
 
+function resolveRelayEndpoints(input: ResolveRelayInput): {
+  endpoint: string;
+  publicEndpoint: string;
+} {
+  const endpoint =
+    input.env.PASEO_RELAY_ENDPOINT ??
+    input.persisted.daemon?.relay?.endpoint ??
+    DEFAULT_RELAY_ENDPOINT;
+  const publicEndpoint =
+    input.env.PASEO_RELAY_PUBLIC_ENDPOINT ??
+    input.persisted.daemon?.relay?.publicEndpoint ??
+    endpoint;
+  return { endpoint, publicEndpoint };
+}
+
 function resolveRelayConfig(input: ResolveRelayInput): ResolvedRelay {
   const environmentEnabled = parseBooleanEnv(input.env.PASEO_RELAY_ENABLED);
   const persistedRelay = input.persisted.daemon?.relay;
   // COMPAT(relayOptInDefault): daemons whose startup config omitted this field
   // retain relay-on removal semantics until 2027-01-31. Modern homes use false.
   const enabled =
+<<<<<<< HEAD
     input.cliRelayEnabled ?? environmentEnabled ?? persistedRelay?.enabled ?? input.enabledFallback;
   const endpoint =
     input.env.PASEO_RELAY_ENDPOINT ?? persistedRelay?.endpoint ?? DEFAULT_RELAY_ENDPOINT;
   const publicEndpoint =
     input.env.PASEO_RELAY_PUBLIC_ENDPOINT ?? persistedRelay?.publicEndpoint ?? endpoint;
+=======
+    input.cliRelayEnabled ??
+    environmentEnabled ??
+    input.persisted.daemon?.relay?.enabled ??
+    input.enabledFallback;
+  const { endpoint, publicEndpoint } = resolveRelayEndpoints(input);
+>>>>>>> refs/remotes/upstream/tags/v0.13.1
   const useTls =
     input.cliRelayUseTls ??
     resolveTlsFromEnv(
@@ -328,6 +352,7 @@ function resolveRelayConfig(input: ResolveRelayInput): ResolvedRelay {
   return {
     enabled,
     enabledMutable: input.cliRelayEnabled === undefined && environmentEnabled === undefined,
+    requireProtectedSecurity: input.persisted.daemon?.relay?.requireProtectedSecurity ?? false,
     endpoint,
     publicEndpoint,
     useTls,
@@ -667,6 +692,7 @@ export function resolveConfigFromPersisted(
     agentClients: {},
     relayEnabled: relay.enabled,
     relayEnabledMutable: relay.enabledMutable,
+    relayRequireProtectedSecurity: relay.requireProtectedSecurity,
     relayEndpoint: relay.endpoint,
     relayPublicEndpoint: relay.publicEndpoint,
     relayUseTls: relay.useTls,

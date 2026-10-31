@@ -16,7 +16,10 @@ import {
 import { useProvidersSnapshot } from "@/hooks/use-providers-snapshot";
 import { SPACING, type Theme } from "@/styles/theme";
 import { settingsStyles } from "@/styles/settings";
+<<<<<<< HEAD
 import { touchTargetStyles } from "@/hooks/use-touch-targets";
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.13.1
 
 interface ProviderCatalogListProps {
   serverId: string;
@@ -74,12 +77,21 @@ function CatalogTile({ entry, width, installing, onInstall }: CatalogTileProps) 
         )}
       </View>
       <View style={styles.details}>
+<<<<<<< HEAD
         <Text style={styles.name}>{entry.title}</Text>
+=======
+        <Text style={styles.name} numberOfLines={1}>
+          {entry.title}
+        </Text>
+>>>>>>> refs/remotes/upstream/tags/v0.13.1
         <View style={styles.metaRow}>
           {/* The catalog is the ACP registry, so every entry it offers is an ACP provider. */}
           <StatusBadge label={t("providerCatalog.types.acp")} size="xs" />
           <ExternalLink
+<<<<<<< HEAD
             style={touchTargetStyles.icon}
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.13.1
             href={entry.installLink}
             label={t("providerCatalog.actions.installInstructions")}
             accessibilityLabel={t("providerCatalog.actions.installInstructionsFor", {

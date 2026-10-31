@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 // FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
 import {
   controllerPluginIdFromTrustedReports,
@@ -5,6 +6,10 @@ import {
   reportedControllerPluginId,
 } from "@getpaseo/protocol/bundled-controller";
 import { isPluginBundleTrusted, PLUGIN_TRUST_EXPLANATION } from "./bundle-trust";
+=======
+import { PluginTranslationRuntime } from "@getpaseo/plugin/client/host";
+import { i18n } from "@/i18n/i18next";
+>>>>>>> refs/remotes/upstream/tags/v0.13.1
 import type { AudioEngine } from "@/audio";
 import { useMemo, useSyncExternalStore } from "react";
 import { QueryClient } from "@tanstack/react-query";
@@ -60,6 +65,7 @@ export class PluginRegistry {
 
   constructor(
     private readonly dependencies: {
+      localeSource: import("@getpaseo/plugin/client/host").PluginLocaleSource;
       version: string | null;
       createRuntime: typeof createPluginClientRuntime;
     },
@@ -209,6 +215,8 @@ export class PluginRegistry {
         const client = options.client;
         installation = {
           lifetime: new AbortController(),
+          locale: this.dependencies.localeSource.getLocale(),
+          i18n: new PluginTranslationRuntime(this.dependencies.localeSource),
           paseo: createPaseoApi(client),
           invoke: (method, input) =>
             // L46: never send a Command Centre read the relay cannot authenticate; say why instead.
@@ -225,6 +233,7 @@ export class PluginRegistry {
           settingsScreens: [],
           sidebarItems: { header: [], footer: [] },
           legacySidebarItems: [],
+          filePanels: [],
           workspacePanels: [],
           commandCenterItems: [],
           clientSlashCommands: [],
@@ -233,6 +242,7 @@ export class PluginRegistry {
           timelineTransformers: [],
           timelineRenderers: [],
         };
+<<<<<<< HEAD
         if (entry.id !== options.replacePluginId) {
           this.reconnectState.restore(
             serverId,
@@ -246,6 +256,13 @@ export class PluginRegistry {
           installation,
           options.audio ?? SILENT_AUDIO,
         );
+=======
+        const unsubscribeTranslations = installation.i18n.subscribe(() => this.publish());
+        installation.lifetime.signal.addEventListener("abort", unsubscribeTranslations, {
+          once: true,
+        });
+        const runtime = this.dependencies.createRuntime(installation, options.audio);
+>>>>>>> refs/remotes/upstream/tags/v0.13.1
         const evaluated = runPluginClientBundle(entry.id, entry.clientBundle, runtime, () =>
           this.publish(),
         );
@@ -279,6 +296,7 @@ export class PluginRegistry {
         return [installation];
       } catch (error) {
         installation?.lifetime.abort();
+        installation?.i18n.dispose();
         void installation?.paseo
           .dispose()
           .catch((failure) => console.warn(`[Plugins] API cleanup failed for ${key}`, failure));
@@ -295,8 +313,18 @@ export class PluginRegistry {
     }
     this.reconnectState.removeHost(serverId);
     this.byHost.set(serverId, installed);
+<<<<<<< HEAD
     this.catalogSettled.add(serverId);
     this.publish();
+=======
+    if (
+      installed.length !== catalog.length ||
+      installed.length !== previous.length ||
+      installed.some((plugin, index) => plugin !== previous[index])
+    ) {
+      this.publish();
+    }
+>>>>>>> refs/remotes/upstream/tags/v0.13.1
     const installedTimelineBundles = installed
       .filter((plugin) => plugin.timelineTransformers.length > 0)
       .map((plugin) => `${plugin.id}\0${plugin.clientBundle}`);
@@ -368,6 +396,7 @@ export class PluginRegistry {
     if (this.disposed.has(plugin)) return;
     this.disposed.add(plugin);
     plugin.lifetime.abort();
+    plugin.i18n.dispose();
     plugin.queryClient.clear();
     try {
       void Promise.resolve(plugin.cleanup()).catch((error) => {
@@ -382,6 +411,9 @@ export class PluginRegistry {
     this.untrustedSnapshot = [...this.untrusted.values()];
     this.snapshot = [...this.byHost.values()]
       .flat()
+      // A new presentation snapshot invalidates label selectors without replacing the installation lifetime.
+      // eslint-disable-next-line no-map-spread
+      .map((plugin) => ({ ...plugin, locale: plugin.i18n.locale }))
       .sort((left, right) =>
         `${left.serverId}/${left.id}`.localeCompare(`${right.serverId}/${right.id}`),
       );
@@ -392,6 +424,15 @@ export class PluginRegistry {
 const SILENT_AUDIO: Pick<AudioEngine, "play"> = { play: async () => 0 };
 
 export const pluginRegistry = new PluginRegistry({
+  localeSource: {
+    getLocale: () => i18n.resolvedLanguage ?? i18n.language,
+    subscribe: (listener) => {
+      i18n.on("languageChanged", listener);
+      return () => {
+        i18n.off("languageChanged", listener);
+      };
+    },
+  },
   version: resolveAppVersion(),
   createRuntime: createPluginClientRuntime,
 });

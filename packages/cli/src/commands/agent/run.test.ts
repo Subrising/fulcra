@@ -4,12 +4,17 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Command } from "commander";
 import { DaemonConnectionError } from "@getpaseo/client/internal/daemon-client";
+import { resolveCallerAgentId as resolveRunCallerAgentId } from "../../utils/caller-agent.js";
 import {
   addRunOptions,
   resolveExistingRunWorkspace,
+<<<<<<< HEAD
   resolveRunPrompt,
   resolveRunCallerAgentId,
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.13.1
   runRunCommand,
+  waitsForFinish,
   type AgentRunOptions,
 } from "./run";
 
@@ -30,6 +35,15 @@ function daemonWithAgents(...agentIds: string[]) {
   };
 }
 
+describe("run wait policy", () => {
+  it("waits by default and stops waiting on --no-wait or a legacy alias", () => {
+    expect(waitsForFinish({})).toBe(true);
+    expect(waitsForFinish({ wait: false })).toBe(false);
+    expect(waitsForFinish({ background: true })).toBe(false);
+    expect(waitsForFinish({ detach: true })).toBe(false);
+  });
+});
+
 describe("managed agent caller context", () => {
   it("uses a trimmed PASEO_AGENT_ID when the target daemon runs that agent", async () => {
     await expect(
@@ -47,17 +61,20 @@ describe("managed agent caller context", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("fails instead of dropping the caller when the lookup loses its connection", async () => {
-    const disconnectedDaemon = {
-      async fetchAgent(): Promise<never> {
-        throw new DaemonConnectionError("Connection lost before message could be sent");
-      },
-    };
+  it.each(["DAEMON_CONNECTION_LOST", "DAEMON_REQUEST_TIMEOUT"] as const)(
+    "preserves %s instead of dropping the caller",
+    async (code) => {
+      const disconnectedDaemon = {
+        async fetchAgent(): Promise<never> {
+          throw new DaemonConnectionError("Caller lookup transport failed", code);
+        },
+      };
 
-    await expect(
-      resolveRunCallerAgentId(disconnectedDaemon, { PASEO_AGENT_ID: "parent-agent" }),
-    ).rejects.toBeInstanceOf(DaemonConnectionError);
-  });
+      await expect(
+        resolveRunCallerAgentId(disconnectedDaemon, { PASEO_AGENT_ID: "parent-agent" }),
+      ).rejects.toBeInstanceOf(DaemonConnectionError);
+    },
+  );
 
   it("omits blank caller ids", async () => {
     await expect(

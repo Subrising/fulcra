@@ -11,7 +11,10 @@ import {
 } from "react-native";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { useIsCompactFormFactor } from "@/constants/layout";
+<<<<<<< HEAD
 import { touchTargetStyles } from "@/hooks/use-touch-targets";
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.13.1
 import { useToast } from "@/contexts/toast-api-context";
 import { settingsStyles } from "@/styles/settings";
 import { useHostRuntimeIsConnected } from "@/runtime/host-runtime";
@@ -330,7 +333,11 @@ export function ProvidersSection({ serverId }: ProvidersSectionProps) {
   const isConnected = useHostRuntimeIsConnected(serverId);
   const supportsHopliteProvider = useHostFeature(serverId, "hopliteProvider");
   const supportsProviderRemoval = useHostFeature(serverId, "providerRemoval");
+<<<<<<< HEAD
   const { entries, isLoading, isRefreshing, refresh } = useProvidersSnapshot(serverId);
+=======
+  const { entries, isLoading, refresh } = useProvidersSnapshot(serverId);
+>>>>>>> refs/remotes/upstream/tags/v0.13.1
   const { config, patchConfig } = useDaemonConfig(serverId);
   const openProviderSettings = useProviderSettingsStore((state) => state.open);
   const [pendingProviderId, setPendingProviderId] = useState<string | null>(null);
@@ -424,6 +431,7 @@ export function ProvidersSection({ serverId }: ProvidersSectionProps) {
       }
     },
     [installingProviderId, patchConfig, refresh, supportsHopliteProvider, toast],
+<<<<<<< HEAD
   );
 
   // FULCRA(model-refresh): asks the host to read each provider's models again, so a model that a
@@ -450,6 +458,8 @@ export function ProvidersSection({ serverId }: ProvidersSectionProps) {
         </Button>
       ) : undefined,
     [handleRefreshModels, hasServer, isConnected, isRefreshing, t],
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.13.1
   );
 
   return (

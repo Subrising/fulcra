@@ -318,7 +318,11 @@ test("createPaseoApi borrows daemon capabilities without exposing connection own
     "config",
     "credentials",
     "dispose",
+<<<<<<< HEAD
     "notifications",
+=======
+    "hosts",
+>>>>>>> refs/remotes/upstream/tags/v0.13.1
     "observeEvents",
     "projects",
     "providers",
@@ -740,6 +744,61 @@ test("plugin-shaped PR workspace create and agent create use the existing daemon
   const agent = await agentPromise;
   expect(agent.workspaceId).toBe("workspace_fresh");
   expect(agent.cwd).toBe("/repo/sdk");
+  await client.close();
+});
+
+test("agents.create forwards internal on the request, outside the agent config", async () => {
+  const { client, ws } = await connectClient({
+    providerUsageList: true,
+    providersSnapshotCwd: true,
+    ownedSubscriptions: true,
+    backgroundWorkspaces: true,
+  });
+
+  const createPromise = client.agents.create({
+    config: { provider: "codex/gpt-5.4" },
+    cwd: "/repo/sdk",
+    title: "Summary helper",
+    background: true,
+    autoArchive: true,
+  });
+  const request = parseSentSessionMessage(ws.sent.at(-1));
+  expect(request).toMatchObject({
+    type: "create_agent_request",
+    config: { provider: "codex", model: "gpt-5.4", cwd: "/repo/sdk", title: "Summary helper" },
+    background: true,
+    autoArchive: true,
+  });
+  expect(request.config).not.toHaveProperty("internal");
+  ws.message(
+    sessionMessage({
+      type: "status",
+      payload: {
+        status: "agent_created",
+        requestId: request.requestId,
+        agentId: "agent_helper",
+        agent: createAgent({ id: "agent_helper" }),
+      },
+    }),
+  );
+
+  const agent = await createPromise;
+  expect(agent.id).toBe("agent_helper");
+  await client.close();
+});
+
+test("agents.create with internal fails before sending on a host without internal agents", async () => {
+  const { client, ws } = await connectClient();
+  const sentBefore = ws.sent.length;
+
+  await expect(
+    client.agents.create({
+      config: { provider: "codex/gpt-5.4" },
+      cwd: "/repo/sdk",
+      background: true,
+    }),
+  ).rejects.toThrow("Update the host to use background workspaces.");
+  expect(ws.sent).toHaveLength(sentBefore);
   await client.close();
 });
 
@@ -1754,6 +1813,7 @@ test("canceled timeline handles and captured state are collectible while their A
   expect(result.stdout).toContain('"phase":"API alive"');
 }, 20000);
 
+<<<<<<< HEAD
 test("quiet MCP refresh gates old hosts and correlates state and adoption outcomes", async () => {
   const old = await connectClient({});
   const sent = old.ws.sent.length;
@@ -1904,4 +1964,39 @@ test("observation-only usage public facade rejects old hosts and conflicting ref
     client.providers.listUsage({ observationOnly: true, refresh: true }),
   ).rejects.toThrow("generating refresh");
   expect(ws.sent.length).toBe(frames);
+=======
+test("qualified parents preserve foreign identity without resolving an equal local agent ID", async () => {
+  const { client, ws } = await connectClient();
+  const localParent = client.agents.ref("same-parent");
+  expect(localParent.address).toEqual({ serverId: "srv_sdk_test", agentId: "same-parent" });
+  const creating = client.agents.create({
+    config: { provider: "codex/gpt-5.4" },
+    cwd: "/repo/sdk",
+    parent: { serverId: "srv_parent_elsewhere", agentId: "same-parent" },
+    labels: { task: "preserved" },
+  });
+  const request = parseSentSessionMessage(ws.sent.at(-1));
+  expect(request).not.toHaveProperty("callerAgentId");
+  expect(request).toMatchObject({
+    labels: {
+      task: "preserved",
+      "paseo.parent-agent-id": "same-parent",
+      "paseo.parent-server-id": "srv_parent_elsewhere",
+    },
+  });
+  ws.message(
+    sessionMessage({
+      type: "status",
+      payload: {
+        status: "agent_created",
+        requestId: request.requestId,
+        agentId: "agent_sdk",
+        agent: createAgent(),
+      },
+    }),
+  );
+  await creating;
+  await client.close();
+  expect(localParent.address).toEqual({ serverId: "srv_sdk_test", agentId: "same-parent" });
+>>>>>>> refs/remotes/upstream/tags/v0.13.1
 });
