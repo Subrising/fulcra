@@ -9,7 +9,7 @@
     "radius": {
       "repo": "radius-project/radius",
       "kind": "pin",
-      "version": "0.60.2",
+      "version": "0.61.1",
       "role": "Radius application definitions are mapped into the architecture-map fixtures and the default-off planning surface. No Radius code ships."
     },
     "archify": {
