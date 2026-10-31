@@ -35,6 +35,9 @@ interface CostRecovery {
   setCostWarning(agent: unknown, warning?: string): void;
 }
 
+// Recovery ignores rows older than about a day, so the rows are dated from now. A fixed date broke these tests at midnight UTC on 31 Oct 2026.
+const BASE_AT_MS = Date.now();
+
 function row(agentId: string, accountId: string, index: number): PendingSessionCost {
   return {
     agentId,
@@ -42,7 +45,7 @@ function row(agentId: string, accountId: string, index: number): PendingSessionC
     accountId,
     turnId: `turn-${index}`,
     costUsd: 1,
-    at: "2026-10-30T00:00:00.000Z",
+    at: new Date(BASE_AT_MS).toISOString(),
     cursors: { native: index },
     revision: index,
   };
@@ -392,7 +395,13 @@ test("a warning set after a background run built its row list survives that run 
     const warning = "Billing write failed. Cost is saved; Accounting recovery is pending.";
     b.live.costRecords = {
       ...b.live.costRecords!,
-      turns: { "turn-9": { accountId: f.accountId, amountUsd: 5, at: "2026-10-30T01:00:00.000Z" } },
+      turns: {
+        "turn-9": {
+          accountId: f.accountId,
+          amountUsd: 5,
+          at: new Date(BASE_AT_MS + 3_600_000).toISOString(),
+        },
+      },
     };
     f.internal.setCostWarning(b.live, warning);
     gate.resolve();
