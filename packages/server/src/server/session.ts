@@ -10120,21 +10120,27 @@ export class Session {
       if (sender) {
         if (msg.inputProvenance !== undefined) throw new ProvenanceRefusedError();
         let resumeAt: number | undefined;
+        const senderQueue = queuedAgentMessagesFor({
+          agentManager: this.agentManager,
+          agentStorage: this.agentStorage,
+          logger: this.sessionLogger,
+        });
         if (msg.activeTurnBehavior === "steer") {
           const result = await tryAgentSteer();
           if (result.delivered) return;
           resumeAt = result.resumeAt;
-        } else
-          deliveryNote(
-            this.agentManager.hasInFlightRun(agentId)
-              ? "accepted; delivered after the current turn"
-              : "accepted; delivered now",
-          );
-        await queuedAgentMessagesFor({
-          agentManager: this.agentManager,
-          agentStorage: this.agentStorage,
-          logger: this.sessionLogger,
-        }).enqueue(
+        } else {
+          // "Delivered now" must not show while saved usage-limit holds keep this receiver's queue waiting.
+          const heldUntil = await senderQueue.limitHoldUntil(agentId);
+          if (heldUntil)
+            deliveryNote(
+              `accepted; held: the receiver's queue waits for a usage-limit reset at ${new Date(heldUntil).toISOString()}`,
+            );
+          else if (this.agentManager.hasInFlightRun(agentId))
+            deliveryNote("accepted; delivered after the current turn");
+          else deliveryNote("accepted; delivered now");
+        }
+        await senderQueue.enqueue(
           agentId,
           {
             text: msg.text,
