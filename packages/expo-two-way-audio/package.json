@@ -1,6 +1,10 @@
 {
   "name": "@getpaseo/expo-two-way-audio",
+<<<<<<< HEAD
   "version": "0.11.4",
+=======
+  "version": "0.14.0",
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
   "description": "Native module for two way audio streaming",
   "keywords": [
     "ExpoTwoWayAudio",
@@ -33,7 +37,6 @@
   "devDependencies": {
     "@types/jest": "^29.5.14",
     "@types/react": "^18.0.25",
-    "expo-module-scripts": "^5.0.8",
     "expo-modules-core": "^2.0.4"
   },
   "peerDependencies": {

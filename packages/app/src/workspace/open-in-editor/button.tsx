@@ -34,6 +34,7 @@ import { extraMutedIconColorMapping } from "@/components/ui/icon-button-chrome";
 interface WorkspaceOpenInEditorButtonProps {
   serverId: string;
   cwd: string;
+  projectId: string | null;
   activeFile?: WorkspaceFileLocation | null;
   hideLabels?: boolean;
 }
@@ -84,6 +85,7 @@ function OpenTargetMenuItem({ target, isPreferred, onSelect }: OpenTargetMenuIte
 export function WorkspaceOpenInEditorButton({
   serverId,
   cwd,
+  projectId,
   activeFile,
   hideLabels,
 }: WorkspaceOpenInEditorButtonProps) {
@@ -93,10 +95,11 @@ export function WorkspaceOpenInEditorButton({
   const touch = useTouchTargets();
   const isConnected = useHostRuntimeIsConnected(serverId);
   const isLocalDaemon = useIsLocalDaemon(serverId);
-  const { preferredEditorId, updatePreferredEditor } = usePreferredEditor();
+  const { preferredEditorId, updatePreferredEditor } = usePreferredEditor({ serverId, projectId });
   const { targets: desktopOpenTargets, isAvailable: isDesktopOpenAvailable } =
     useDesktopOpenTargets({
       isLocalExecution: isLocalDaemon,
+      workspacePath: cwd,
     });
 
   const resolvedFile = useMemo(
@@ -188,9 +191,11 @@ export function WorkspaceOpenInEditorButton({
 
   const handleSelectTarget = useCallback(
     (target: OpenTarget) => {
-      void updatePreferredEditor(target.id).catch(() => undefined);
+      void updatePreferredEditor(target.id).catch((error: unknown) => {
+        toast.error(error instanceof Error ? error.message : t("common.errors.unableToSave"));
+      });
     },
-    [updatePreferredEditor],
+    [updatePreferredEditor, toast, t],
   );
 
   const primaryPressableStyle = useCallback(

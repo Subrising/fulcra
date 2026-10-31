@@ -1,22 +1,25 @@
+import { useRetainedPullRequestData } from "./pull-request/data";
+import {
+  pullRequestPanelPresentation,
+  usePullRequestPanelDescriptor,
+} from "./pull-request/descriptor";
 import { Text, View } from "react-native";
+<<<<<<< HEAD
 import { GitPullRequest } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import invariant from "tiny-invariant";
 import { ArchitectureEntry } from "./architecture-entry";
 import { formatPrTabLabel } from "@/git/pull-request-panel";
+=======
+import { useTranslation } from "react-i18next";
+import invariant from "tiny-invariant";
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
 import { usePaneContext } from "@/panels/pane-context";
-import { definePanel, type PanelPresentation } from "@/panels/panel-registry";
-import { PullRequestContent, usePullRequestData } from "@/panels/pull-request";
+import { definePanel } from "@/panels/panel-registry";
+import { PullRequestContent } from "@/panels/pull-request";
 import { useWorkspaceDirectory } from "@/stores/session-store-hooks";
 
-const ThemedGitPullRequest = withUnistyles(GitPullRequest);
-const pullRequestPanelPresentation = {
-  label: (t) => t("panels.pullRequest.label"),
-  subtitle: (t) => t("panels.pullRequest.subtitle"),
-  tooltip: (t) => t("panels.pullRequest.label"),
-  icon: ThemedGitPullRequest,
-} satisfies PanelPresentation;
 const CENTERED_PADDED_STYLE = {
   flex: 1,
   alignItems: "center",
@@ -24,33 +27,12 @@ const CENTERED_PADDED_STYLE = {
   padding: 16,
 } as const;
 
-function usePullRequestPanelDescriptor(
-  _target: { kind: "pull_request" },
-  context: { serverId: string; workspaceId: string },
-) {
-  const { t } = useTranslation();
-  const cwd = useWorkspaceDirectory(context.serverId, context.workspaceId) ?? "";
-  const prPane = usePullRequestData({ serverId: context.serverId, cwd, timelineEnabled: false });
-  const label =
-    prPane.prNumber === null
-      ? pullRequestPanelPresentation.label(t)
-      : formatPrTabLabel(prPane.prNumber);
-  return {
-    label,
-    subtitle: pullRequestPanelPresentation.subtitle(t),
-    tooltip: label,
-    titleState: prPane.isLoading ? ("loading" as const) : ("ready" as const),
-    icon: pullRequestPanelPresentation.icon,
-    statusBucket: null,
-  };
-}
-
 function PullRequestPanel() {
   const { t } = useTranslation();
   const { serverId, workspaceId, target } = usePaneContext();
   const cwd = useWorkspaceDirectory(serverId, workspaceId) ?? "";
   invariant(target.kind === "pull_request", "PullRequestPanel requires pull_request target");
-  const prPane = usePullRequestData({ serverId, cwd });
+  const prPane = useRetainedPullRequestData({ serverId, cwd }, "content");
   if (!cwd) {
     return (
       <View style={CENTERED_PADDED_STYLE}>

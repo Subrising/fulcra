@@ -44,8 +44,12 @@ server:
 desktop:
   - "packages/desktop/**"
   - "packages/app/src/desktop/**"
+<<<<<<< HEAD
   - "packages/app/src/device/plugin-device.electron.ts"
   - "packages/app/src/plugins/bundle-trust-policy.electron.ts"
+=======
+  - "packages/app/src/**/*.electron.{ts,tsx}"
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
   - "packages/server/src/server/browser-tools/**"
   - "packages/app/e2e/support/**"
   - "packages/app/*config.{cjs,js,ts}"

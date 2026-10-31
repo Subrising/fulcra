@@ -470,10 +470,14 @@ export function wrapSessionProvider(provider: AgentProvider, inner: AgentSession
     describePersistence: () => mapPersistenceHandle(provider, inner.describePersistence()),
     interrupt: () => inner.interrupt(),
     close: () => inner.close(),
+<<<<<<< HEAD
     // FU-362: idle sleep reaches the real session through derived providers too.
     sleep: inner.sleep?.bind(inner),
     isSleeping: inner.isSleeping?.bind(inner),
     hasBackgroundWork: inner.hasBackgroundWork?.bind(inner),
+=======
+    canStopRuntime: inner.canStopRuntime?.bind(inner),
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
     listCommands: inner.listCommands?.bind(inner),
     setModel: inner.setModel?.bind(inner),
     setThinkingOption: inner.setThinkingOption?.bind(inner),

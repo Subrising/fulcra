@@ -1,7 +1,7 @@
 import { createOrganizationNavigation } from "./organization-navigation";
 import type { IntakeDraft } from "../../../../control/orca-organization/shared/intake-draft";
 import { router, useLocalSearchParams } from "expo-router";
-import type { PluginScreenParams, PluginScreenProps } from "@getpaseo/plugin/client";
+import type { PluginIcon, PluginScreenParams, PluginScreenProps } from "@getpaseo/plugin/client";
 import type { PluginTheme } from "@getpaseo/plugin";
 import { X } from "lucide-react-native";
 import { useCallback, useMemo, type ComponentType } from "react";
@@ -10,15 +10,17 @@ import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { HeaderIconBadge } from "@/components/headers/header-icon-badge";
 import { SidebarMenuToggle } from "@/components/headers/menu-header";
 import { HeaderToggleButton } from "@/components/headers/header-toggle-button";
+import { CompactHeader } from "@/components/headers/compact-header";
 import { ScreenHeader } from "@/components/headers/screen-header";
 import { ScreenTitle } from "@/components/headers/screen-title";
 import { HostFilter } from "@/components/hosts/host-filter";
+import type { HostPickerHost } from "@/components/hosts/host-picker";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useHostRuntimeClient, useHosts, useHostRuntimeSnapshot } from "@/runtime/host-runtime";
 import type { Theme } from "@/styles/theme";
 import type { ShortcutKey } from "@/utils/format-shortcut";
 import { usePluginHostNavigation } from "./host-navigation";
-import { resolvePluginIcon } from "./icons";
+import { PluginIconView } from "./icons";
 import { toPluginTheme } from "./theme";
 import {
   pluginRegistry,
@@ -58,14 +60,8 @@ function routeParam(value: string | string[] | undefined): string {
   return typeof value === "string" ? value : "";
 }
 
-function PluginHeaderIcon({
-  Icon,
-  color = "",
-}: {
-  Icon: ReturnType<typeof resolvePluginIcon>;
-  color?: string;
-}) {
-  return <Icon size={16} color={color} />;
+function PluginHeaderIcon({ icon, color = "" }: { icon: PluginIcon; color?: string }) {
+  return <PluginIconView icon={icon} size={16} color={color} />;
 }
 
 const ThemedPluginHeaderIcon = withUnistyles(PluginHeaderIcon);
@@ -115,19 +111,14 @@ function PluginHostFilter({
   pluginId,
   identity,
   params,
-  serverIds,
+  hosts,
 }: {
   serverId: string;
   pluginId: string;
   identity: PluginSurfaceContributionIdentity;
   params: PluginScreenParams;
-  serverIds: string[];
+  hosts: HostPickerHost[];
 }) {
-  const allHosts = useHosts();
-  const hosts = useMemo(
-    () => allHosts.filter((host) => serverIds.includes(host.serverId)),
-    [allHosts, serverIds],
-  );
   const selectHost = useCallback(
     (nextServerId: string) => {
       // A legacy row remembers its own host; a screen's host carries to all the plugin's items.
@@ -141,9 +132,6 @@ function PluginHostFilter({
     },
     [identity, params, pluginId],
   );
-  const show = serverIds.length > 1 && hosts.length > 1;
-  if (!show) return null;
-
   return (
     <HostFilter
       hosts={hosts}
@@ -186,6 +174,7 @@ export function PluginSurfaceScreen() {
     [identity, plugin],
   );
   const hostLabel = hosts.find((host) => host.serverId === serverId)?.label ?? serverId;
+<<<<<<< HEAD
   const contributionServerIds = useMemo(
     () =>
       identity ? getPluginSurfaceContributionServerIds(installations, pluginId, identity) : [],
@@ -203,6 +192,23 @@ export function PluginSurfaceScreen() {
     return resolved === surface.id ? surfaceIdTitle(surface.id) : resolved;
   }, [params, pluginId, serverId, sidebarItem, surface]);
   const Icon = sidebarItem ? resolvePluginIcon(sidebarItem.icon) : null;
+=======
+  // The hosts this contribution is installed on; the filter shows when there is a choice.
+  const filterHosts = useMemo(() => {
+    if (!identity) return [];
+    const serverIds = getPluginSurfaceContributionServerIds(installations, pluginId, identity);
+    return hosts.filter((candidate) => serverIds.includes(candidate.serverId));
+  }, [hosts, identity, installations, pluginId]);
+  const title = useMemo(() => {
+    if (surface && plugin)
+      return resolvePluginScreenTitle(surface, sidebarItem, params, (text) =>
+        plugin.i18n.resolve(text, plugin.locale),
+      );
+    if (sidebarItem && plugin) return plugin.i18n.resolve(sidebarItem.title, plugin.locale);
+    return pluginId || "Plugin";
+  }, [params, plugin, pluginId, sidebarItem, surface]);
+  const icon = sidebarItem?.icon ?? null;
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
   const close = useCallback(() => {
     if (router.canGoBack()) router.back();
     else router.replace(`/h/${encodeURIComponent(serverId)}`);
@@ -212,30 +218,39 @@ export function PluginSurfaceScreen() {
   const headerLeft = useMemo(
     () => (
       <>
+<<<<<<< HEAD
         {/* FU-62: the host home is this screen; like a workspace it needs the menu to reach the sidebar. */}
         <SidebarMenuToggle />
         {Icon ? (
+=======
+        {icon ? (
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
           <HeaderIconBadge>
-            <ThemedPluginHeaderIcon Icon={Icon} uniProps={mutedColorMapping} />
+            <ThemedPluginHeaderIcon icon={icon} uniProps={mutedColorMapping} />
           </HeaderIconBadge>
         ) : null}
         <ScreenTitle testID="plugin-surface-title">{title}</ScreenTitle>
       </>
     ),
-    [Icon, title],
+    [icon, title],
+  );
+  const hostFilter = useMemo(
+    () =>
+      identity && filterHosts.length > 1 ? (
+        <PluginHostFilter
+          serverId={serverId}
+          pluginId={pluginId}
+          identity={identity}
+          params={params}
+          hosts={filterHosts}
+        />
+      ) : null,
+    [filterHosts, identity, params, pluginId, serverId],
   );
   const headerRight = useMemo(
     () => (
       <>
-        {identity ? (
-          <PluginHostFilter
-            serverId={serverId}
-            pluginId={pluginId}
-            identity={identity}
-            params={params}
-            serverIds={contributionServerIds}
-          />
-        ) : null}
+        {hostFilter}
         <HeaderToggleButton
           accessibilityLabel="Close plugin"
           onPress={close}
@@ -248,12 +263,22 @@ export function PluginSurfaceScreen() {
         </HeaderToggleButton>
       </>
     ),
-    [close, contributionServerIds, identity, params, pluginId, serverId],
+    [close, hostFilter],
   );
 
   return (
     <View style={styles.screen}>
-      <ScreenHeader left={headerLeft} right={headerRight} />
+      {compact ? (
+        <CompactHeader
+          navigation="back"
+          onBack={close}
+          title={title}
+          titleTestID="plugin-surface-title"
+          actions={hostFilter}
+        />
+      ) : (
+        <ScreenHeader left={headerLeft} right={headerRight} />
+      )}
       <View style={styles.body}>
         {connectionError && (
           <View>

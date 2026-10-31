@@ -49,15 +49,28 @@ export function findClaudeModel(
   return getClaudeModels().find((model) => model.id === normalizedModelId);
 }
 
+<<<<<<< HEAD
 /**
  * The Claude catalog: the models Claude Code reported (runtimeModels) overlaid with the manifest, or the
  * manifest alone when there is no report (the probe failed or timed out). Models named in Claude
  * settings.json are appended either way.
  */
+=======
+export function getClaudeContextWindowMaxTokens(
+  modelId: string | null | undefined,
+): number | undefined {
+  if (modelId?.trim().toLowerCase().endsWith("[1m]")) {
+    return 1_000_000;
+  }
+  return findClaudeModel(modelId)?.contextWindowMaxTokens;
+}
+
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
 export async function getClaudeModelsWithSettings(
   logger: Logger,
   configDir: string,
   claudeCodeVersion?: string,
+<<<<<<< HEAD
   runtimeModels?: readonly ClaudeRuntimeModel[] | null,
   signal?: AbortSignal,
 ): Promise<AgentModelDefinition[]> {
@@ -68,6 +81,12 @@ export async function getClaudeModelsWithSettings(
     : manifestModels;
   const settingsModels = await readClaudeSettingsModels(logger, configDir, signal);
   signal?.throwIfAborted();
+=======
+  discoveredModelIds: ReadonlySet<string> = new Set(),
+): Promise<AgentModelDefinition[]> {
+  const hardcodedModels = getClaudeManifestModels(claudeCodeVersion, discoveredModelIds);
+  const settingsModels = await readClaudeSettingsModels(logger, configDir);
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
   if (settingsModels.length === 0) {
     return baseModels;
   }
@@ -83,7 +102,10 @@ export async function getClaudeModelsWithSettings(
       }
       continue;
     }
-    models.push(model);
+    const manifestModel = getClaudeModels(claudeCodeVersion).find(
+      (candidate) => candidate.id === model.id,
+    );
+    models.push({ ...manifestModel, ...model });
   }
 
   return models;

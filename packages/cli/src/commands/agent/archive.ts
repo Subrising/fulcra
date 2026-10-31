@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { connectToDaemon, resolveAgentId } from "../../utils/client.js";
+import { fetchAllAgents } from "../../utils/agent-directory.js";
 import type {
   CommandOptions,
   SingleResult,
@@ -83,10 +84,16 @@ export async function runArchiveCommand(
   const client = await connectToDaemon({ target: options.daemonTarget });
 
   try {
+<<<<<<< HEAD
     if (client.getLastServerInfoMessage()?.features?.agentArchiveSafety !== true)
       throw new Error("Update the host to use safe agent archive.");
     const agent = await findAgentToArchive(client, agentIdArg);
     if (!agent) {
+=======
+    const agents = await fetchAllAgents(client, { filter: { includeArchived: true } });
+    const agentId = resolveAgentId(agentIdArg, agents);
+    if (!agentId) {
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
       const error: CommandError = {
         code: "AGENT_NOT_FOUND",
         message: `Agent not found: ${agentIdArg}`,

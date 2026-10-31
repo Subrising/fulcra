@@ -14,8 +14,8 @@ const MATERIALIZED_PNG_PATH_PATTERN =
   /paseo-attachments(?:-[^\\/]+)?[\\/](?:[^\\/]+[\\/])?[0-9a-f]{64}\.png$/;
 
 interface ClaudeImageTestSession {
-  translateMessageToEvents(message: SDKMessage): AgentStreamEvent[];
-  convertHistoryEntry(entry: unknown): AgentTimelineItem[];
+  translateMessageToEvents(message: SDKMessage): Promise<AgentStreamEvent[]>;
+  convertHistoryEntry(entry: unknown): Promise<AgentTimelineItem[]>;
 }
 
 async function createSession(): Promise<ClaudeImageTestSession> {
@@ -141,11 +141,11 @@ function imageMessages(items: AgentTimelineItem[]): string[] {
   return items
     .filter((item) => item.type === "assistant_message")
     .map((item) => (item as { text: string }).text)
-    .filter((text) => text.startsWith("!["));
+    .filter((text) => text.trimStart().startsWith("!["));
 }
 
 function markdownImageSource(markdown: string): string {
-  const match = markdown.match(/^!\[[^\]]*]\((.*)\)$/);
+  const match = markdown.trim().match(/^!\[[^\]]*]\((.*)\)$/);
   if (!match) {
     throw new Error(`Expected markdown image, got: ${markdown}`);
   }
@@ -160,7 +160,11 @@ describe("Claude tool_result image rendering", () => {
     async () => {
       const session = await createSession();
 
+<<<<<<< HEAD
       const events = session.translateMessageToEvents(imageToolResultUserMessage());
+=======
+    const events = await session.translateMessageToEvents(imageToolResultUserMessage());
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
 
       const timelineItems = events
         .filter((event) => event.type === "timeline")
@@ -187,7 +191,11 @@ describe("Claude tool_result image rendering", () => {
     async () => {
       const session = await createSession();
 
+<<<<<<< HEAD
       const items = session.convertHistoryEntry(imageToolResultHistoryEntry());
+=======
+    const items = await session.convertHistoryEntry(imageToolResultHistoryEntry());
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
 
       const [imageMessage, ...extraImages] = imageMessages(items);
       expect(extraImages).toEqual([]);
@@ -211,7 +219,11 @@ describe("Claude tool_result image rendering", () => {
     async () => {
       const session = await createSession();
 
+<<<<<<< HEAD
       const events = session.translateMessageToEvents(erroredImageToolResultUserMessage());
+=======
+    const events = await session.translateMessageToEvents(erroredImageToolResultUserMessage());
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
 
       const timelineItems = events
         .filter((event) => event.type === "timeline")
@@ -238,7 +250,11 @@ describe("Claude tool_result image rendering", () => {
     async () => {
       const session = await createSession();
 
+<<<<<<< HEAD
       const events = session.translateMessageToEvents(multiImageToolResultUserMessage());
+=======
+    const events = await session.translateMessageToEvents(multiImageToolResultUserMessage());
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
 
       const timelineItems = events
         .filter((event) => event.type === "timeline")

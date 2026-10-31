@@ -12,14 +12,20 @@ export const HEADER_INNER_HEIGHT_MOBILE = 56;
 export const WORKSPACE_SECONDARY_HEADER_HEIGHT = 36;
 export const HEADER_TOP_PADDING_MOBILE = 8;
 
-export const COMPACT_FORM_FACTOR_WIDTH = 500;
+// Measured composer width; independent of the window's compact/wide breakpoint.
+export const COMPACT_CONTENT_WIDTH = 500;
 
+<<<<<<< HEAD
 // A phone held sideways is wide enough for the "md" breakpoint but too short for the
 // desktop shell. Below this height an "md" width on a touch screen still gets the compact layout.
 export const COMPACT_FORM_FACTOR_MAX_HEIGHT = 500;
 
 // Settings uses the canonical desktop list + detail layout. Its sidebar and
 // detail target must fit together before it can share width with app navigation.
+=======
+// Settings navigation can shrink below its preferred width to preserve the detail
+// minimum. Both targets must fit before Settings shares width with app navigation.
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
 export const SETTINGS_DESKTOP_SIDEBAR_WIDTH = 320;
 export const SETTINGS_DESKTOP_DETAIL_MIN_WIDTH = 400;
 export const SETTINGS_DESKTOP_SPLIT_MIN_WIDTH =
@@ -38,12 +44,18 @@ export {
   getIsElectronMac as getIsElectronRuntimeMac,
 } from "./platform";
 
+/** Below md (600 points), sidebars overlay the workspace; wider layouts can dock them. */
+export function isCompactBreakpoint(breakpoint: string | undefined): boolean {
+  return breakpoint === "xs" || breakpoint === "sm";
+}
+
 /**
  * Reactive hook — re-renders the component when the breakpoint changes.
  * Always use this instead of reading UnistylesRuntime.breakpoint directly.
  */
 export function useIsCompactFormFactor(): boolean {
   const { rt } = useUnistyles();
+<<<<<<< HEAD
   const finePointer = useHasFinePointer();
   return isCompactFormFactor(rt.breakpoint, rt.screen.height, isNative || !finePointer);
 }
@@ -58,6 +70,9 @@ export function isCompactFormFactor(
     return true;
   }
   return touch && breakpoint === "md" && height < COMPACT_FORM_FACTOR_MAX_HEIGHT;
+=======
+  return isCompactBreakpoint(rt.breakpoint);
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
 }
 
 // SplitContainer relies on dnd-kit and DOM-backed accessibility helpers.

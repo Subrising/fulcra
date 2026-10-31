@@ -113,6 +113,7 @@ export const Upload = StubIcon;
 export const Wrench = StubIcon;
 export const X = StubIcon;
 export const XCircle = StubIcon;
+<<<<<<< HEAD
 
 export const AlertCircle = StubIcon;
 export const AlignJustify = StubIcon;
@@ -209,3 +210,10 @@ export const ZoomIn = StubIcon;
 export const ZoomOut = StubIcon;
 export const Users = StubIcon;
 export const SendHorizontal = StubIcon;
+=======
+export const Code = StubIcon;
+export const Maximize2 = StubIcon;
+export const Workflow = StubIcon;
+export const ZoomIn = StubIcon;
+export const ZoomOut = StubIcon;
+>>>>>>> refs/remotes/upstream/tags/v0.14.0

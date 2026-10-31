@@ -9,11 +9,16 @@ import type pino from "pino";
 import { getSherpaOnnxModelSpec, type SherpaOnnxModelId } from "./model-catalog.js";
 import { spawnProcess } from "../../../../../utils/spawn.js";
 
+export type SherpaOnnxModelInstallProgress =
+  | { phase: "downloading"; receivedBytes: number; totalBytes: number }
+  | { phase: "extracting" };
+
 export interface EnsureSherpaOnnxModelOptions {
   modelsDir: string;
   modelId: SherpaOnnxModelId;
   logger: pino.Logger;
   signal?: AbortSignal;
+  onProgress?: (progress: SherpaOnnxModelInstallProgress) => void;
 }
 
 export function getSherpaOnnxModelDir(modelsDir: string, modelId: SherpaOnnxModelId): string {
@@ -42,7 +47,9 @@ async function hasRequiredFiles(modelDir: string, requiredFiles: string[]): Prom
 interface DownloadToFileOptions {
   url: string;
   outputPath: string;
+  expectedBytes: number;
   signal?: AbortSignal;
+  onProgress?: (receivedBytes: number, totalBytes: number) => void;
 }
 
 async function downloadToFile(options: DownloadToFileOptions): Promise<void> {
@@ -61,6 +68,13 @@ async function downloadToFile(options: DownloadToFileOptions): Promise<void> {
   // The fetch ReadableStream type is slightly different from what Readable.fromWeb expects
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const nodeStream = Readable.fromWeb(res.body as any);
+  const contentLength = Number(res.headers.get("content-length"));
+  const totalBytes = contentLength > 0 ? contentLength : options.expectedBytes;
+  let receivedBytes = 0;
+  nodeStream.on("data", (chunk: Buffer) => {
+    receivedBytes += chunk.length;
+    options.onProgress?.(receivedBytes, totalBytes);
+  });
 
   try {
     await pipeline(nodeStream, createWriteStream(tmpPath), { signal: options.signal });
@@ -159,9 +173,13 @@ export async function ensureSherpaOnnxModel(
       await downloadToFile({
         url: spec.archiveUrl,
         outputPath: archivePath,
+        expectedBytes: spec.downloadSizeBytes,
         signal: options.signal,
+        onProgress: (receivedBytes, totalBytes) =>
+          options.onProgress?.({ phase: "downloading", receivedBytes, totalBytes }),
       });
     }
+    options.onProgress?.({ phase: "extracting" });
 
     logger.info(
       {
@@ -215,6 +233,16 @@ export async function ensureSherpaOnnxModel(
     logger.error({ err: error }, "Model download failed");
     throw error;
   }
+}
+
+export async function deleteSherpaOnnxModel(
+  modelsDir: string,
+  modelId: SherpaOnnxModelId,
+): Promise<void> {
+  const { modelDir, archivePath, extractionDir } = getSherpaOnnxModelPaths(modelsDir, modelId);
+  await rm(modelDir, { recursive: true, force: true });
+  await rm(archivePath, { force: true });
+  await rm(extractionDir, { recursive: true, force: true });
 }
 
 export async function ensureSherpaOnnxModels(options: {

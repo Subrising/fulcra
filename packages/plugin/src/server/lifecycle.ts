@@ -1,3 +1,4 @@
+import type { AgentToolDefinition } from "./agent-tools.js";
 import type {
   AgentPermissionRequest,
   AgentPermissionResponse,
@@ -38,7 +39,11 @@ export interface PluginSessionOpenRequest {
   cwd: string;
   reason: "create" | "resume" | "refresh" | "import";
   purpose: "interactive" | "history";
+  readonly title: string | null;
+  readonly labels: Readonly<Record<string, string>>;
+  tools: AgentToolDefinition[];
   env: Record<string, string>;
+  mcpServers: NonNullable<AgentSessionConfig["mcpServers"]>;
 }
 
 export type PluginTurnOutcome =
@@ -58,7 +63,14 @@ export interface PluginLifecycleEvents {
     /** Host monotonic order for observations in the same millisecond. */
     observedOrder?: string;
     outcome: PluginTurnOutcome;
+<<<<<<< HEAD
     usage?: AgentUsage;
+=======
+    /**
+     * @deprecated Always empty. Fetch history on demand with
+     * context.paseo.agents.ref(agent.id).timeline.refetch({ direction: "tail", limit: 20 }).
+     */
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
     timeline: readonly AgentTimelineItem[];
   };
   "agent.permission_requested": { agent: PluginHookAgent; request: AgentPermissionRequest };

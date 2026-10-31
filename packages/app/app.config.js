@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const pkg = require("./package.json");
 const withAndroidAsyncStorageSize = require("./plugins/with-android-async-storage-size");
+const withAndroidOptionalCamera = require("./plugins/with-android-optional-camera");
 const withAndroidProfileable = require("./plugins/with-android-profileable");
 const withFdroidAutolinking = require("./plugins/with-fdroid-autolinking");
 const withPasteInput = require("./plugins/with-paste-input");
@@ -9,9 +10,14 @@ const withPersonalDeviceIos = require("./plugins/with-personal-device-ios");
 const withAndroidScroll = require("./modules/paseo-scroll/app.plugin");
 const { getNativeReleaseVersion } = require("./native-release-version");
 const appVariant = process.env.APP_VARIANT ?? "production";
+<<<<<<< HEAD
 const isPrivatePreview = appVariant === "private-preview";
 const isPersonalDeviceIos = process.env.ORCA_IOS_PERSONAL_DEVICE === "1";
 const isFdroidBuild = isPrivatePreview || process.env.PASEO_FDROID_BUILD === "1";
+=======
+const isFdroidBuild = process.env.PASEO_FDROID_BUILD === "1";
+const isWatchdogBuild = process.env.PASEO_WATCHDOG_BUILD === "1";
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
 const isProfileBuild = process.env.PASEO_PROFILE_BUILD === "1";
 
 const buildProfile = isFdroidBuild
@@ -161,6 +167,7 @@ export default {
       withAndroidScroll,
       [withAndroidAsyncStorageSize, 64],
       ...buildProfile.cameraPlugins,
+      withAndroidOptionalCamera,
       [
         "expo-image-picker",
         {
@@ -192,6 +199,7 @@ export default {
       [
         "expo-build-properties",
         {
+          ios: { enableSceneSupport: true },
           android: {
             minSdkVersion: 29,
             kotlinVersion: "2.1.20",
@@ -201,8 +209,12 @@ export default {
         },
       ],
       ...buildProfile.fdroidPlugins,
+<<<<<<< HEAD
       ...(isProfileBuild ? [withAndroidProfileable] : []),
       ...(isPersonalDeviceIos ? [withPersonalDeviceIos] : []),
+=======
+      ...(isProfileBuild || isWatchdogBuild ? [withAndroidProfileable] : []),
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
     ],
     experiments: {
       typedRoutes: true,
@@ -212,6 +224,9 @@ export default {
     extra: {
       fdroidBuild: isFdroidBuild,
       profileBuild: isProfileBuild,
+      watchdogBuild: isWatchdogBuild,
+      diagnosticRevision: process.env.PASEO_DIAGNOSTIC_REVISION,
+      diagnosticBuildTime: process.env.PASEO_DIAGNOSTIC_BUILD_TIME,
       router: {},
     },
   },

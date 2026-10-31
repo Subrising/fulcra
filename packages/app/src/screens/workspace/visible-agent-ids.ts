@@ -17,15 +17,27 @@ export function selectVisibleAgentIds(input: {
   tabs: WorkspaceTab[];
   routeFocused: boolean;
   focusedPaneOnly: boolean;
+  explorerPaneId?: string | null;
+  explorerVisible?: boolean;
 }): string[] {
   if (!input.routeFocused || !input.layout) {
     return [];
   }
   const panes = input.focusedPaneOnly
-    ? collectAllPanes(input.layout.root).filter((pane) => pane.id === input.layout?.focusedPaneId)
+    ? collectAllPanes(input.layout.root).filter(
+        (pane) =>
+          pane.id === input.layout?.focusedPaneId ||
+          (input.explorerVisible !== false && pane.id === input.explorerPaneId),
+      )
     : collectAllPanes(input.layout.root);
 
+  const targets = panes.flatMap((pane) => {
+    const target = deriveWorkspacePaneState({ pane, tabs: input.tabs }).activeTab?.descriptor
+      .target;
+    return target ? [target] : [];
+  });
   return [
+<<<<<<< HEAD
     ...new Set(
       panes.flatMap((pane) => {
         const target = deriveWorkspacePaneState({ pane, tabs: input.tabs }).activeTab?.descriptor
@@ -34,6 +46,9 @@ export function selectVisibleAgentIds(input: {
         return agentId ? [agentId] : [];
       }),
     ),
+=======
+    ...new Set(targets.flatMap((target) => (target.kind === "agent" ? [target.agentId] : []))),
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
   ].sort();
 }
 
@@ -42,6 +57,8 @@ export function useVisibleAgentIds(input: {
   tabs: WorkspaceTab[];
   routeFocused: boolean;
   focusedPaneOnly: boolean;
+  explorerPaneId?: string | null;
+  explorerVisible?: boolean;
 }): string[] {
   const nextAgentIds = selectVisibleAgentIds(input);
   const stableAgentIds = useRef<string[]>([]);

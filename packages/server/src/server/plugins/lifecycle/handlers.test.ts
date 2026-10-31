@@ -93,12 +93,17 @@ test("session-open hooks reject changes to session identity instead of silently 
         reason: "resume",
         purpose: "interactive",
         env: {},
+        title: null,
+        labels: {},
+        tools: [],
+        mcpServers: {},
       },
       paseo,
     ),
   ).rejects.toThrow("agent.session_open hooks can only change env");
 });
 
+<<<<<<< HEAD
 test("agent.create hooks receive the creation's labels and can fill an absent model from them", async () => {
   const hooks = new PluginHookHandlers(() => {});
   hooks.before("agent.create", ({ request }) => {
@@ -168,3 +173,33 @@ test("billing receipts can confirm a write but cannot change its cost", async ()
     /cannot change/,
   );
 });
+=======
+test.each([{ title: "Changed" }, { labels: { changed: "true" } }])(
+  "session-open targeting metadata is read-only: %j",
+  async (patch) => {
+    const hooks = new PluginHookHandlers(() => {});
+    hooks.before("agent.session_open", ({ request }) => ({ ...request, ...patch }));
+    await expect(
+      hooks.invoke(
+        "operation",
+        "before",
+        "agent.session_open",
+        {
+          agentId: "agent",
+          workspaceId: null,
+          provider: "codex",
+          cwd: "/project",
+          title: "Original",
+          labels: {},
+          tools: [],
+          mcpServers: {},
+          env: {},
+          reason: "create",
+          purpose: "interactive",
+        },
+        paseo,
+      ),
+    ).rejects.toThrow("agent.session_open hooks can only change env, tools, and mcpServers");
+  },
+);
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
