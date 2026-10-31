@@ -15,6 +15,11 @@ export interface HostMemoryReading {
   /** Free physical memory, percent of total (Linux and Windows only). Null when unknown. */
   freePercent: number | null;
   freeBytes: number | null;
+  /**
+   * Memory the system can reclaim without paging: free + inactive + speculative pages on macOS, MemAvailable on
+   * Linux, free physical memory on Windows. Null when unknown.
+   */
+  availableBytes?: number | null;
   /** Free bytes on the volume that holds the swap files (macOS only). Null when unknown. */
   swapDiskFreeBytes?: number | null;
 }
@@ -30,6 +35,11 @@ export interface MemoryGuardSettings {
   freeMemoryPercent: number;
   /** macOS: free space of the swap volume below this many GB refuses a start. Swap cannot grow on a full disk. */
   swapDiskFreeGB?: number;
+  /**
+   * FU-609: when set, a "warn" pressure reading allows the start if available memory is at or above this many GB.
+   * Critical always refuses. Unset by default: warn refuses.
+   */
+  warnAllowAvailableGB?: number;
 }
 
 export const DEFAULT_SWAP_DISK_FREE_GB = 15;
@@ -101,6 +111,28 @@ const SWAP_UNIT_BYTES: Record<string, number> = {
   G: 1024 ** 3,
   T: 1024 ** 4,
 };
+
+/** Parses PASEO_MEMORY_WARN_ALLOW_AVAILABLE_GB. Returns undefined for unset, empty, negative or non-numeric text. */
+export function parseWarnAllowAvailableGB(value: string | undefined): number | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  const parsed = Number(value.trim());
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+/** Sums free, inactive and speculative pages from `vm_stat` output, in bytes. Null when the text is not vm_stat. */
+export function parseDarwinVmStatAvailableBytes(output: string): number | null {
+  const pageSize = output.match(/page size of (\d+) bytes/);
+  if (!pageSize) return null;
+  const pages = (name: string): number | null => {
+    const match = output.match(new RegExp(`^Pages ${name}:\\s+(\\d+)\\.`, "m"));
+    return match ? Number.parseInt(match[1]!, 10) : null;
+  };
+  const free = pages("free");
+  const inactive = pages("inactive");
+  const speculative = pages("speculative");
+  if (free === null || inactive === null || speculative === null) return null;
+  return (free + inactive + speculative) * Number.parseInt(pageSize[1]!, 10);
+}
 
 /** Parses `vm.swapusage`: "total = 10240.00M  used = 9532.00M  free = 708.00M  (encrypted)". */
 export function parseDarwinSwapUsedPercent(output: string): number | null {
@@ -175,11 +207,12 @@ export async function readHostMemory(
     swapUsedPercent: null,
     freePercent: null,
     freeBytes: null,
+    availableBytes: null,
     swapDiskFreeBytes: null,
   };
   try {
     if (probes.platform === "darwin") {
-      const [level, swap, diskFree] = await Promise.all([
+      const [level, swap, diskFree, vmStat] = await Promise.all([
         settle(() =>
           withTimeout(
             probes.exec("sysctl", ["-n", "kern.memorystatus_vm_pressure_level"]),
@@ -193,7 +226,9 @@ export async function readHostMemory(
             probes.timeoutMs,
           ),
         ),
+        settle(() => withTimeout(probes.exec("vm_stat", []), probes.timeoutMs)),
       ]);
+      if (vmStat !== null) reading.availableBytes = parseDarwinVmStatAvailableBytes(vmStat);
       if (diskFree !== null && Number.isFinite(diskFree) && diskFree >= 0) {
         reading.swapDiskFreeBytes = diskFree;
       }
@@ -210,6 +245,7 @@ export async function readHostMemory(
       const info = meminfo === null ? null : parseLinuxMeminfo(meminfo);
       if (info) {
         reading.freeBytes = info.availableBytes;
+        reading.availableBytes = info.availableBytes;
         reading.freePercent = (info.availableBytes / info.totalBytes) * 100;
       }
       return reading;
@@ -219,6 +255,7 @@ export async function readHostMemory(
       const free = probes.freemem();
       if (Number.isFinite(total) && Number.isFinite(free) && total > 0) {
         reading.freeBytes = free;
+        reading.availableBytes = free;
         reading.freePercent = (free / total) * 100;
       }
     }
@@ -234,13 +271,23 @@ export type MemoryGuardDecision =
   | { decision: "allow"; reasons: [] }
   | { decision: "refuse"; reasons: string[] };
 
-/** High = pressure warn or critical, OR macOS swap at or above its limit (only when one is set), OR Linux/Windows free RAM below its limit. Unknown allows. */
+/** FU-609: true when a warn reading is allowed because enough memory is available. */
+function warnIsAllowed(reading: HostMemoryReading, settings: MemoryGuardSettings): boolean {
+  const threshold = settings.warnAllowAvailableGB;
+  const available = reading.availableBytes;
+  return threshold !== undefined && available != null && available >= threshold * GIB;
+}
+
+/** High = pressure warn (unless warnAllowAvailableGB is set and enough memory is available) or critical, OR macOS swap at or above its limit (only when one is set), OR Linux/Windows free RAM below its limit. Unknown allows. */
 export function evaluateMemoryGuard(
   reading: HostMemoryReading,
   settings: MemoryGuardSettings,
 ): MemoryGuardDecision {
   const reasons: string[] = [];
-  if (reading.level === "warn" || reading.level === "critical") {
+  if (
+    reading.level === "critical" ||
+    (reading.level === "warn" && !warnIsAllowed(reading, settings))
+  ) {
     reasons.push(`pressure ${reading.level}`);
   }
   if (
@@ -339,6 +386,10 @@ export function createAgentStartMemoryGuard(
       swapUsedPercent:
         reading.swapUsedPercent === null ? null : Math.round(reading.swapUsedPercent),
       freePercent: reading.freePercent === null ? null : Math.round(reading.freePercent * 10) / 10,
+      availableGB:
+        reading.availableBytes == null
+          ? null
+          : Math.round((reading.availableBytes / GIB) * 10) / 10,
       swapDiskFreeGB:
         reading.swapDiskFreeBytes == null
           ? null
