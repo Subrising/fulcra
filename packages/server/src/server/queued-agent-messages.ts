@@ -70,6 +70,8 @@ const RecordSchema = z.object({
   nativeReceipt: z.boolean().optional(),
   runtimeInstanceId: z.string().optional(),
   uncertaintyReported: z.boolean().optional(),
+  /** FU-622: timed checks run after a final notice handoff timed out. */
+  handoffRetries: z.number().int().nonnegative().optional(),
   /** When the record reached delivered or refused. Settled records leave the file a day later. */
   settledAt: z.number().finite().positive().optional(),
   /** The payload was dropped after delivery. The IDs stay so a resent message ID is still refused. */
@@ -81,6 +83,14 @@ const RecordSchema = z.object({
 type Record = z.infer<typeof RecordSchema>;
 type InputReceipt = "present" | "absent" | "unknown";
 const SETTLED_RECORD_MS = 24 * 60 * 60 * 1000;
+/**
+ * FU-622: a final notice handoff that timed out is checked again after 30 s, 60 s and 120 s. Each check reads the
+ * receiver's input receipt and sends again only when the message is absent. After the last check a chat is told.
+ */
+export const HANDOFF_RETRY_DELAYS_MS: readonly number[] = [30_000, 60_000, 120_000];
+export function handoffRetryDelay(retries: number): number | null {
+  return HANDOFF_RETRY_DELAYS_MS[retries] ?? null;
+}
 
 const sha = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const requestHashOf = (request: z.infer<typeof RequestSchema>) => sha(request);
@@ -510,7 +520,8 @@ export class QueuedAgentMessages {
         reason,
         record.state === "uncertain",
       );
-    if (!record.request.sender) return;
+    // A remote sender learns through its host link. Any other sender, or none (a script), gets a chat told.
+    if (record.request.hostLinkMessageId && !record.request.sender) return;
     tellSenderUndelivered({
       ...this.deps,
       sender: record.request.sender,
@@ -1131,8 +1142,25 @@ export class QueuedAgentMessages {
     this.attempts.delete(`${receiver.id}:${messageId}`);
   }
 
+  /** FU-622: true when a timed handoff check is scheduled, so nobody is told yet. */
+  private retryHandoff(record: Record): boolean {
+    if (record.reason !== new FinalInputHandoffTimeoutError().message) return false;
+    const delay = handoffRetryDelay(record.handoffRetries ?? 0);
+    if (delay === null) return false;
+    record.handoffRetries = (record.handoffRetries ?? 0) + 1;
+    this.deps.logger.info(
+      { agentId: record.agentId, retry: record.handoffRetries, delayMs: delay },
+      "Final notice handoff timed out; checking again",
+    );
+    this.schedule(record.agentId, Date.now() + delay);
+    return true;
+  }
+
   private async tellUncertain(records: Record[]): Promise<void> {
-    const unreported = records.filter((record) => !record.uncertaintyReported);
+    const pending = records.filter((record) => !record.uncertaintyReported);
+    const retrying = pending.filter((record) => this.retryHandoff(record));
+    if (retrying.length) await this.save();
+    const unreported = pending.filter((record) => !retrying.includes(record));
     if (!unreported.length) return;
     for (const record of unreported) record.uncertaintyReported = true;
     await this.save();

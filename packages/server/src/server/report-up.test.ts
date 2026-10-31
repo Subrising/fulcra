@@ -565,6 +565,19 @@ describe("a result or question in the final text is never silent (FU-402)", () =
     }
   });
 
+  test("FU-622: a bare lead ID that is no chat here is a lead on another computer, never a silent drop", async () => {
+    const remoteLead = "88b1e035-23be-4d19-bcdc-2a09aa2dfc01";
+    const f = fixture(
+      [{ ...worker({ [REPORTS_TO_LABEL]: remoteLead }), lastMessage: "DONE checked" }],
+      { enabled: false },
+    );
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered.map((notice) => notice.leadId)).toEqual([WORKER]);
+    expect(f.delivered[0]!.prompt).toContain(remoteLead);
+    expect(f.delivered[0]!.prompt).toContain("another computer");
+  });
+
   test("a result the worker already sent to its lead in this turn is not sent again", async () => {
     resetAgentMessageLogForTests();
     for (const [line, enabled, note] of [

@@ -278,6 +278,9 @@ export async function leadChatOf(
   const [id, server] = leadId.split("@", 2);
   if (server !== undefined && server !== localServerId) return { skip: LEAD_ON_ANOTHER_COMPUTER };
   if (!id || id === worker.id) return { skip: "no lead chat" };
+  // FU-622: a bare lead ID (no "@server") that is no chat here names a lead on another computer. Saying so routes the
+  // worker's result to it instead of dropping it as "lead not here".
+  if (server === undefined && !(await store.get(id))) return { skip: LEAD_ON_ANOTHER_COMPUTER };
   return { id };
 }
 
