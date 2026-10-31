@@ -34,6 +34,7 @@ export function asSessionLogger(stub: {
 export function asAgentManager(stub: {
   [K in keyof SessionOptions["agentManager"]]?: unknown;
 }): SessionOptions["agentManager"] {
+<<<<<<< HEAD
   return createStub<SessionOptions["agentManager"]>(
     withTrustedSurface({
       listProviderSubagentActivity: () => [],
@@ -51,6 +52,13 @@ export function asAgentManager(stub: {
       ...stub,
     }),
   );
+=======
+  return createStub<SessionOptions["agentManager"]>({
+    listProviderSubagentActivity: () => [],
+    getRetiredInternalAgent: () => null,
+    ...stub,
+  });
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
 }
 
 export function asAgentStorage(stub: {

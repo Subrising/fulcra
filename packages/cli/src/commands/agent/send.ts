@@ -1,7 +1,12 @@
+<<<<<<< HEAD
 import { createHash, randomUUID } from "node:crypto";
 import { type Command } from "commander";
 import type { PaseoAgentSendOptions } from "@getpaseo/client";
 import { readPromptFile } from "../../utils/prompt-file.js";
+=======
+import { type Command, Option } from "commander";
+import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
 import { collectMultiple } from "../../utils/command-options.js";
 import { connectToDaemon } from "../../utils/client.js";
 import type {
@@ -50,9 +55,13 @@ export const agentSendSchema: OutputSchema<AgentSendResult> = {
 };
 
 export interface AgentSendOptions extends CommandOptions {
+<<<<<<< HEAD
   notifyOnFinish?: boolean;
   steer?: boolean;
   queue?: boolean;
+=======
+  behavior?: ActiveTurnBehavior;
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
   wait?: boolean;
   nativeQueue?: boolean;
   messageId?: string;
@@ -76,6 +85,7 @@ export function addSendOptions(cmd: Command): Command {
     .option("--prompt <text>", "Provide the message inline as a flag")
     .option("--prompt-file <path>", "Read the message from a UTF-8 text file")
     .option("--image <path>", "Attach image(s) to the message", collectMultiple, [])
+<<<<<<< HEAD
     .option("--no-notify-on-finish", "Do not request a finish notice for this message")
     .option("--steer", "Inject into the running turn; queue if native steering is unavailable")
     .option("--queue", "Queue agent messages for one combined delivery (default for agent senders)")
@@ -106,6 +116,14 @@ export function addSendOptions(cmd: Command): Command {
       "Source daemon reporting-line refusal for a restricted relay",
     )
     .option("--check-only", "Check receiver admission without sending input")
+=======
+    .addOption(
+      new Option(
+        "--behavior <behavior>",
+        "Active-turn behavior (agent default: steer; otherwise: interrupt)",
+      ).choices(["interrupt", "steer"]),
+    )
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
     .option("--no-wait", "Return immediately without waiting for completion");
 }
 
@@ -569,6 +587,7 @@ export async function runSendCommand(
     const images =
       options.image && options.image.length > 0 ? await readImageFiles(options.image) : undefined;
 
+<<<<<<< HEAD
     const slashResult = await runSlashCommand(
       client,
       agentIdArg,
@@ -601,6 +620,15 @@ export async function runSendCommand(
         schema: agentSendSchema,
       };
     }
+=======
+    const sourceAgentId = process.env.PASEO_AGENT_ID?.trim() || undefined;
+    // Send the message
+    await client.sendAgentMessage(agentIdArg, promptInput, {
+      images,
+      sourceAgentId,
+      activeTurnBehavior: options.behavior ?? (sourceAgentId ? "steer" : "interrupt"),
+    });
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
 
     // If --no-wait, return immediately
     if (policy.background) {

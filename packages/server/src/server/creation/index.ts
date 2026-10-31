@@ -13,6 +13,10 @@ import { writeFileAtomic } from "../atomic-file.js";
 import { generateWorkspaceId } from "../workspace-registry-model.js";
 
 type Observer = (snapshot: CreationSnapshot) => void;
+export interface CreatedAgent {
+  agent: AgentSnapshotPayload;
+  initialPromptStarted: boolean;
+}
 interface CreationRequest {
   key: string;
   request: { [key: string]: unknown };
@@ -28,7 +32,7 @@ interface CreationRequest {
     agentId: string,
     workspace: WorkspaceDescriptorPayload | undefined,
     onReady: (agent: AgentSnapshotPayload) => Promise<void>,
-  ) => Promise<AgentSnapshotPayload>;
+  ) => Promise<CreatedAgent>;
 }
 export type CreationInput = CreationRequest &
   (
@@ -280,8 +284,40 @@ export class CreationService {
         }
         signal.throwIfAborted();
         record.inFlight = null;
+<<<<<<< HEAD
         await this.publish(identity, record, { phase: "completed" });
       });
+=======
+        await this.publish(identity, record, {
+          phase: "workspace_ready",
+          workspace,
+          workspaceId: workspace.id,
+          setupSkippedReason,
+        });
+      }
+      if (input.hasAgent && input.createAgent && !record.snapshot.agent) {
+        record.inFlight = "agent";
+        await this.write(identity, record);
+        const { agent, initialPromptStarted } = await input.createAgent(
+          record.snapshot.agentId!,
+          record.snapshot.workspace,
+          async (readyAgent) => {
+            record.inFlight = input.hasPrompt ? "prompt" : null;
+            await this.publish(identity, record, {
+              phase: "agent_ready",
+              agent: readyAgent,
+              workspaceId: readyAgent.workspaceId ?? record.snapshot.workspaceId,
+            });
+          },
+        );
+        record.inFlight = null;
+        if (initialPromptStarted)
+          await this.publish(identity, record, { phase: "prompt_started", agent });
+        else record.snapshot = { ...record.snapshot, agent };
+      }
+      record.inFlight = null;
+      await this.publish(identity, record, { phase: "completed" });
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
     } catch (error) {
       const stage = record.inFlight ?? "agent";
       const resourceId =

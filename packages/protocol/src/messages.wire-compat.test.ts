@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import {
+  UsageReportEntrySchema,
   AgentSnapshotPayloadSchema,
   AgentTimelineItemPayloadSchema,
   ServerInfoStatusPayloadSchema,
@@ -483,6 +484,7 @@ test("usage login errors are additive and older reports still parse", () => {
   expect(legacy.parse(newMessage)).toEqual(oldMessage);
 });
 
+<<<<<<< HEAD
 test("reporting-line checks preserve optional sender restrictions on the wire", () => {
   const message = {
     type: "send_agent_message_request",
@@ -516,4 +518,41 @@ test("reporting-line checks preserve optional sender restrictions on the wire", 
       },
     }).payload.output,
   ).toMatchObject({ inboundOnly: true });
+=======
+test("usage entries accept older failures and additive successful snapshots", () => {
+  const oldEntry = {
+    id: "source:account",
+    sourceId: "source",
+    sourceLabel: "Source",
+    account: {},
+    fetchedAt: "2026-10-17T10:06:00Z",
+    report: { status: "error", error: "Rate limited" },
+  };
+  expect(UsageReportEntrySchema.parse(oldEntry)).toEqual(oldEntry);
+  const retained = {
+    ...oldEntry,
+    lastSuccessful: {
+      fetchedAt: "2026-10-17T10:00:00Z",
+      report: { status: "available", windows: [{ id: "weekly", label: "Weekly", usedPct: 42 }] },
+    },
+  };
+  expect(UsageReportEntrySchema.parse(retained)).toEqual(retained);
+  const available = {
+    ...oldEntry,
+    report: retained.lastSuccessful.report,
+    successfulAt: "2026-10-17T10:00:15Z",
+  };
+  expect(UsageReportEntrySchema.parse(available)).toEqual(available);
+  expect(
+    UsageReportEntrySchema.omit({ lastSuccessful: true, successfulAt: true }).parse(available),
+  ).toEqual({ ...oldEntry, report: available.report });
+  // An older client's entry shape strips the additive snapshot and still sees the failure.
+  expect(UsageReportEntrySchema.omit({ lastSuccessful: true }).parse(retained)).toEqual(oldEntry);
+  expect(
+    UsageReportEntrySchema.safeParse({
+      ...oldEntry,
+      lastSuccessful: { fetchedAt: oldEntry.fetchedAt, report: oldEntry.report },
+    }).success,
+  ).toBe(false);
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
 });
