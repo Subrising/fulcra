@@ -3,6 +3,11 @@ import { transformWithEsbuild } from "vite";
 import { playwright } from "@vitest/browser-playwright";
 import path from "path";
 import fs from "fs";
+import { transformSync } from "@babel/core";
+import { build } from "esbuild";
+
+// Set this before Vite resolves dependencies and Vitest starts its workers.
+Object.assign(process.env, { NODE_ENV: "test" });
 
 const appNodeModules = path.resolve(__dirname, "node_modules");
 const rootNodeModules = path.resolve(__dirname, "../../node_modules");
@@ -20,6 +25,7 @@ const resolvePackageEntry = (packageName: string) => {
 export default defineConfig({
   plugins: [
     {
+<<<<<<< HEAD
       name: "native-markdown-jsx",
       enforce: "pre",
       transform(code, id) {
@@ -28,6 +34,40 @@ export default defineConfig({
         if (/\/react-native-markdown-display\/src\/.*\.js$/.test(file)) {
           return transformWithEsbuild(code, file, { loader: "jsx", jsx: "automatic" });
         }
+=======
+      name: "compile-usage-components",
+      enforce: "pre",
+      transform(source, id) {
+        // These labels must react to time and language in the compiled app too.
+        if (!id.includes("/src/usage/") || !id.endsWith(".tsx") || id.includes(".test.")) return;
+        const result = transformSync(source, {
+          filename: id,
+          babelrc: false,
+          configFile: false,
+          parserOpts: { plugins: ["typescript", "jsx"] },
+          plugins: [["babel-plugin-react-compiler", { target: "19" }]],
+          sourceMaps: true,
+        });
+        if (result?.code) return { code: result.code, map: result.map };
+      },
+    },
+    {
+      name: "bundle-i18n-resources",
+      // Metro resolves literal requires lazily. Vite's TS transform leaves them
+      // to Node, which cannot resolve the resource modules. Bundle this boundary
+      // so unit and browser consumers exercise the same deferred module loading.
+      async transform(_source, id) {
+        if (path.resolve(id) !== path.resolve(__dirname, "src/i18n/i18next.ts")) return;
+        const result = await build({
+          entryPoints: [id],
+          bundle: true,
+          format: "esm",
+          platform: "neutral",
+          external: ["i18next", "react-i18next"],
+          write: false,
+        });
+        return { code: result.outputFiles[0].text, map: null };
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
       },
     },
   ],
@@ -48,7 +88,12 @@ export default defineConfig({
           include: [
             "src/**/*.{test,spec}.{ts,tsx}",
             "native-release-version.test.ts",
+<<<<<<< HEAD
             "plugins/with-fdroid-autolinking.test.ts",
+=======
+            "app.config.test.ts",
+            "vitest-environment.test.ts",
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
           ],
           setupFiles: [path.resolve(__dirname, "vitest.setup.ts")],
           exclude: [...configDefaults.exclude, "e2e/**", "src/**/*.browser.{test,spec}.{ts,tsx}"],
@@ -93,9 +138,12 @@ export default defineConfig({
       deps: {
         fallbackCJS: true,
         inline: [
+          "react-native-enriched-markdown",
           "zustand",
           "@tanstack/react-query",
           "react-native-web",
+          "react-native-reanimated",
+          "react-native-worklets",
           "react-native-gesture-handler",
           "react-native-keyboard-controller",
         ],
@@ -107,9 +155,32 @@ export default defineConfig({
   // so it scans the native files and dies on imports react-native-web has no answer for.
   // Unbundled, the same imports go through the resolver below and land on the web files.
   optimizeDeps: {
+    // Expo's public navigation barrel also loads screens. Match Metro's web-first resolution
+    // while optimizing its CJS dependencies, including DebugContainer.web.js.
+    esbuildOptions: {
+      resolveExtensions: [
+        ".web.js",
+        ".web.jsx",
+        ".web.ts",
+        ".web.tsx",
+        ".js",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        ".json",
+      ],
+    },
     // Bundle the CJS dependencies of the excluded gesture-handler package for the browser.
     include: [
       "react/jsx-runtime",
+      "react/compiler-runtime",
+      "expo-router/react-navigation",
+      "@testing-library/react",
+      "@tanstack/react-query",
+      "react-i18next",
+      "i18next",
+      "@marijn/find-cluster-break",
+      "tiny-invariant",
       "react-native-gesture-handler > hoist-non-react-statics",
       "react-native-gesture-handler > invariant",
     ],

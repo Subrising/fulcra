@@ -12,7 +12,11 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { chromium } from "playwright";
+<<<<<<< HEAD
 import { assertTestHome } from "../../../scripts/test-support/test-home.cjs";
+=======
+import { hideDeveloperToasts } from "../../app/e2e/support/developer-ui.mjs";
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
 import { runAppearanceFontSizeRegression } from "./appearance-font-size.electron.mjs";
 import { runSettingsMemoryRegression } from "./settings-memory.electron.mjs";
 
@@ -345,7 +349,6 @@ async function createCallerAgent(daemonPort, workspaceId = workspaceIds[0]) {
         provider: "mock/ten-second-stream",
         settings: { modeId: "load-test" },
         initialPrompt: "Remain available while the browser bridge regression runs.",
-        background: true,
       },
     });
     const result = response.structuredContent;
@@ -1250,6 +1253,7 @@ async function main() {
         cwd: rootDir,
         env: {
           ...commonEnv,
+          EXPO_UNSTABLE_HEADLESS: "1",
           EXPO_PORT: String(expoPort),
           EXPO_DEV_URL: `http://localhost:${expoPort}`,
           PASEO_ELECTRON_REMOTE_DEBUGGING_PORT: String(cdpPort),
@@ -1264,6 +1268,7 @@ async function main() {
 
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`);
     const page = await waitForAppPage(browser, expoPort);
+    await hideDeveloperToasts(page);
     const status = await waitForDesktopStatus(page);
     await registerHarnessHost(page, daemonPort);
 

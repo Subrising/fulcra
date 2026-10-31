@@ -10,8 +10,12 @@ import {
   type PressableStateCallbackType,
 } from "react-native";
 import { useRouter } from "expo-router";
+<<<<<<< HEAD
 import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { useFocusEffect } from "@react-navigation/native";
+=======
+import { useFocusEffect } from "expo-router/react-navigation";
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
@@ -35,6 +39,13 @@ import {
   FolderGit2,
   SquareTerminal,
   Code2,
+<<<<<<< HEAD
+=======
+  Files,
+  Smartphone,
+  Sparkles,
+  Blocks,
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
   Globe,
   PanelLeft,
   MessageSquare,
@@ -84,9 +95,15 @@ import { AddRemoteSshHostModal } from "@/components/add-remote-ssh-host-modal";
 import { PairLinkModal } from "@/components/pair-link-modal";
 import { KeyboardShortcutsSection } from "@/screens/settings/keyboard-shortcuts-section";
 import { EditorSection } from "@/screens/settings/editor-section";
+<<<<<<< HEAD
 import { LicensesSection } from "@/screens/settings/licenses-section";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+=======
+import { FilesSection } from "@/screens/settings/files-section";
+import { Button } from "@/components/ui/button";
+import { CommunityLinks } from "@/components/community-links";
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { DesktopPermissionsSection } from "@/desktop/components/desktop-permissions-section";
@@ -142,6 +159,7 @@ import { MetadataGenerationPage } from "@/screens/settings/metadata-generation-p
 import ProjectsScreen from "@/screens/projects-screen";
 import ProjectSettingsScreen from "@/screens/project-settings-screen";
 import { SETTINGS_DESKTOP_SIDEBAR_WIDTH, useIsCompactFormFactor } from "@/constants/layout";
+import { densityIconBox, densityIconSize } from "@/styles/density";
 import { useLocalDaemonServerId } from "@/hooks/use-is-local-daemon";
 import {
   type EnableBuiltInDaemonOption,
@@ -155,7 +173,7 @@ import {
 } from "@/utils/host-routes";
 import { useLastWorkspaceSelection } from "@/stores/navigation-active-workspace-store";
 import { returnFromSettings, type SettingsView } from "@/navigation/settings-navigation";
-import { isNative, isWeb } from "@/constants/platform";
+import { isWeb } from "@/constants/platform";
 
 // ---------------------------------------------------------------------------
 // View model
@@ -213,6 +231,7 @@ const SIDEBAR_SECTION_ITEMS: SidebarSectionItem[] = [
     webOnly: true,
     Content: EditorSection,
   },
+  { id: "files", labelKey: "settings.sections.files", icon: Files, Content: FilesSection },
   {
     id: "shortcuts",
     labelKey: SECTION_LABEL_KEYS.shortcuts,
@@ -336,15 +355,26 @@ function renderHostSettingsContent(
 // Trigger + sidebar style helpers
 // ---------------------------------------------------------------------------
 
-function sidebarItemStyle({ hovered }: PressableStateCallbackType & { hovered?: boolean }) {
-  return [sidebarStyles.item, Boolean(hovered) && sidebarStyles.itemHovered];
+function sidebarItemStyle({
+  hovered,
+  pressed,
+}: PressableStateCallbackType & { hovered?: boolean }) {
+  return [
+    sidebarStyles.item,
+    Boolean(hovered) && sidebarStyles.itemHovered,
+    pressed && sidebarStyles.itemPressed,
+  ];
 }
 
-function selectedSidebarItemStyle({ hovered }: PressableStateCallbackType & { hovered?: boolean }) {
+function selectedSidebarItemStyle({
+  hovered,
+  pressed,
+}: PressableStateCallbackType & { hovered?: boolean }) {
   return [
     sidebarStyles.item,
     Boolean(hovered) && sidebarStyles.itemHovered,
     sidebarStyles.itemSelected,
+    pressed && sidebarStyles.itemPressed,
   ];
 }
 
@@ -430,8 +460,6 @@ function GeneralSection({ settings, handleLanguageChange }: GeneralSectionProps)
 }
 
 interface DiagnosticsSectionProps {
-  useLegacyTerminalRenderer: boolean;
-  onUseLegacyTerminalRendererChange: (value: boolean) => void;
   voiceAudioEngine: ReturnType<typeof useVoiceAudioEngineOptional>;
   isPlaybackTestRunning: boolean;
   playbackTestResult: string | null;
@@ -439,8 +467,6 @@ interface DiagnosticsSectionProps {
 }
 
 function DiagnosticsSection({
-  useLegacyTerminalRenderer,
-  onUseLegacyTerminalRendererChange,
   voiceAudioEngine,
   isPlaybackTestRunning,
   playbackTestResult,
@@ -454,26 +480,6 @@ function DiagnosticsSection({
   return (
     <SettingsSection title={t("settings.diagnostics.title")}>
       <View style={settingsStyles.card}>
-        {isNative ? (
-          <View style={settingsStyles.row} testID="legacy-terminal-renderer-row">
-            <View style={settingsStyles.rowContent}>
-              <Text style={settingsStyles.rowTitle}>
-                {t("settings.diagnostics.legacyTerminalRenderer.label")}
-              </Text>
-              <Text style={settingsStyles.rowHint}>
-                {t("settings.diagnostics.legacyTerminalRenderer.description")}
-              </Text>
-            </View>
-            <Switch
-              value={useLegacyTerminalRenderer}
-              onValueChange={onUseLegacyTerminalRendererChange}
-              accessibilityLabel={t(
-                "settings.diagnostics.legacyTerminalRenderer.accessibilityLabel",
-              )}
-              testID="legacy-terminal-renderer-switch"
-            />
-          </View>
-        ) : null}
         <View style={settingsStyles.row} testID="app-diagnostic-row">
           <View style={settingsStyles.rowContent}>
             <Text style={settingsStyles.rowTitle}>{t("settings.diagnostics.app.rowTitle")}</Text>
@@ -817,6 +823,7 @@ function MenuRow({
   description,
   icon: IconComponent,
   isSelected,
+<<<<<<< HEAD
   onPress,
   testID,
 }: MenuRowProps) {
@@ -824,6 +831,14 @@ function MenuRow({
   // On a phone the list is the whole page, not a sidebar beside a detail: its titles read at full contrast.
   const isCompact = useIsCompactFormFactor();
   const { theme } = useUnistyles();
+=======
+  onSelect,
+}: SidebarSectionButtonProps) {
+  const { theme, rt } = useUnistyles();
+  const handlePress = useCallback(() => {
+    onSelect(itemId);
+  }, [onSelect, itemId]);
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
   const accessibilityState = useMemo(() => ({ selected: isSelected }), [isSelected]);
   const labelStyle = useMemo(
     () => [sidebarStyles.label, (isSelected || isCompact) && { color: theme.colors.foreground }],
@@ -847,7 +862,7 @@ function MenuRow({
       style={rowStyle}
     >
       <IconComponent
-        size={theme.iconSize.md}
+        size={densityIconSize(rt, "md")}
         color={isSelected ? theme.colors.foreground : theme.colors.foregroundMuted}
       />
       <View style={sidebarStyles.labelColumn}>
@@ -897,6 +912,7 @@ function SidebarHostSectionButton({
   isSelected,
   showDescription,
   onSelect,
+<<<<<<< HEAD
 }: {
   item: HostSectionItem;
   isSelected: boolean;
@@ -905,6 +921,18 @@ function SidebarHostSectionButton({
 }) {
   const { t } = useTranslation();
   const handlePress = useCallback(() => onSelect(item.id), [onSelect, item.id]);
+=======
+}: SidebarHostSectionButtonProps) {
+  const { theme, rt } = useUnistyles();
+  const handlePress = useCallback(() => {
+    onSelect(itemId);
+  }, [onSelect, itemId]);
+  const accessibilityState = useMemo(() => ({ selected: isSelected }), [isSelected]);
+  const labelStyle = useMemo(
+    () => [sidebarStyles.label, isSelected && { color: theme.colors.foreground }],
+    [isSelected, theme.colors.foreground],
+  );
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
   return (
     <MenuRow
       label={t(item.labelKey)}
@@ -912,6 +940,7 @@ function SidebarHostSectionButton({
       icon={item.icon}
       isSelected={isSelected}
       onPress={handlePress}
+<<<<<<< HEAD
       testID={`settings-host-section-${item.id}`}
     />
   );
@@ -974,6 +1003,20 @@ function PluginScreenRow({
       onPress={handlePress}
       testID={`settings-plugin-screen-${entry.screenId}`}
     />
+=======
+      testID={`settings-host-section-${itemId}`}
+      style={isSelected ? selectedSidebarItemStyle : sidebarItemStyle}
+    >
+      <IconComponent
+        size={densityIconSize(rt, "md")}
+        color={isSelected ? theme.colors.foreground : theme.colors.foregroundMuted}
+        strokeWidth={SIDEBAR_ICON_STROKE_WIDTH}
+      />
+      <Text style={labelStyle} numberOfLines={1}>
+        {label}
+      </Text>
+    </Pressable>
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
   );
 }
 
@@ -1012,10 +1055,11 @@ function HostPicker({
     [],
   );
   const triggerStyle = useCallback(
-    ({ hovered = false }: PressableStateCallbackType & { hovered?: boolean }) => [
+    ({ hovered = false, pressed }: PressableStateCallbackType & { hovered?: boolean }) => [
       sidebarStyles.pickerTrigger,
       touch && touchTargetStyles.text,
       hovered && sidebarStyles.pickerTriggerHovered,
+      pressed && sidebarStyles.itemPressed,
     ],
     [touch],
   );
@@ -1062,6 +1106,16 @@ function HostPicker({
   );
 }
 
+/** A labelled group of sidebar rows. On compact layouts the rows sit together in one island. */
+function SidebarGroup({ label, children }: { label?: string; children: ReactNode }) {
+  return (
+    <View style={sidebarStyles.group}>
+      {label ? <Text style={sidebarStyles.groupLabel}>{label}</Text> : null}
+      <View style={sidebarStyles.island}>{children}</View>
+    </View>
+  );
+}
+
 interface SettingsSidebarProps {
   view: SettingsView;
   onSelectSection: (section: SettingsSectionSlug) => void;
@@ -1083,6 +1137,7 @@ function SettingsSidebar({
   activeHostServerId,
   layout,
 }: SettingsSidebarProps) {
+<<<<<<< HEAD
   const touch = useTouchTargets();
   const isCompact = layout === "mobile";
   const advancedStyle = useCallback(
@@ -1095,6 +1150,9 @@ function SettingsSidebar({
     [isCompact, touch],
   );
   const { theme } = useUnistyles();
+=======
+  const { theme, rt } = useUnistyles();
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
   const { t } = useTranslation();
   const hosts = useHosts();
   const localServerId = useLocalDaemonServerId();
@@ -1251,12 +1309,84 @@ function SettingsSidebar({
   // Advanced toggle reads as a row (full-contrast title, chevron on the trailing edge).
   const sidebarBody = (
     <>
+<<<<<<< HEAD
       {isCompact ? (
         <View style={sidebarStyles.compactCard}>
           <View style={sidebarStyles.compactCardBody}>{everydayRows}</View>
         </View>
       ) : (
         <View style={sidebarStyles.list}>{everydayRows}</View>
+=======
+      <SidebarGroup label={t("settings.groups.app")}>
+        {items.map((item) => (
+          <SidebarSectionButton
+            key={item.id}
+            itemId={item.id}
+            label={t(item.labelKey)}
+            icon={item.icon}
+            isSelected={selectedSectionId === item.id}
+            onSelect={onSelectSection}
+          />
+        ))}
+      </SidebarGroup>
+      {hasHosts ? (
+        <SidebarGroup label={t("settings.groups.host")}>
+          <HostPicker
+            activeServerId={activeHostServerId}
+            sortedHosts={sortedHosts}
+            onSelectHost={onSelectHost}
+            onAddHost={onAddHost}
+            enableBuiltInDaemonOption={enableBuiltInDaemonOption}
+          />
+          {HOST_SECTION_ITEMS.map((item) => (
+            <SidebarHostSectionButton
+              key={item.id}
+              itemId={item.id}
+              label={t(item.labelKey)}
+              icon={item.icon}
+              isSelected={selectedHostSection === item.id}
+              onSelect={onSelectHostSection}
+            />
+          ))}
+        </SidebarGroup>
+      ) : (
+        <SidebarGroup>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t("settings.addHost")}
+            onPress={onAddHost}
+            testID="settings-add-host"
+            style={sidebarItemStyle}
+          >
+            <Plus
+              size={densityIconSize(rt, "md")}
+              color={theme.colors.foregroundMuted}
+              strokeWidth={SIDEBAR_ICON_STROKE_WIDTH}
+            />
+            <Text style={sidebarStyles.label} numberOfLines={1}>
+              {t("settings.addHost")}
+            </Text>
+          </Pressable>
+          {enableBuiltInDaemonOption.visible ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t("settings.enableBuiltInDaemon")}
+              onPress={enableBuiltInDaemonOption.onPress}
+              testID="settings-enable-built-in-daemon"
+              style={sidebarItemStyle}
+            >
+              <Server
+                size={densityIconSize(rt, "md")}
+                color={theme.colors.foregroundMuted}
+                strokeWidth={SIDEBAR_ICON_STROKE_WIDTH}
+              />
+              <Text style={sidebarStyles.label} numberOfLines={1}>
+                {t("settings.enableBuiltInDaemon")}
+              </Text>
+            </Pressable>
+          ) : null}
+        </SidebarGroup>
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
       )}
       {isCompact ? null : <SidebarSeparator />}
       <View style={isCompact ? sidebarStyles.compactAdvanced : sidebarStyles.list}>
@@ -1384,13 +1514,6 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
   const handleLanguageChange = useCallback(
     (language: AppLanguage) => {
       void updateSettings({ language });
-    },
-    [updateSettings],
-  );
-
-  const handleUseLegacyTerminalRendererChange = useCallback(
-    (useLegacyTerminalRenderer: boolean) => {
-      void updateSettings({ useLegacyTerminalRenderer });
     },
     [updateSettings],
   );
@@ -1563,6 +1686,7 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
     description?: string;
   } | null => {
     if (view.kind === "plugin") {
+<<<<<<< HEAD
       const screen = installedPlugins
         .find((plugin) => plugin.serverId === view.serverId && plugin.id === view.pluginId)
         ?.settingsScreens.find((candidate) => candidate.id === view.screenId);
@@ -1571,6 +1695,13 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
         title: screen?.title ?? t("settings.title"),
         description: descriptionKey ? t(descriptionKey) : undefined,
       };
+=======
+      const plugin = installedPlugins.find(
+        (candidate) => candidate.serverId === view.serverId && candidate.id === view.pluginId,
+      );
+      const screen = plugin?.settingsScreens.find((candidate) => candidate.id === view.screenId);
+      return `${view.pluginId} · ${plugin && screen ? plugin.i18n.resolve(screen.title, plugin.locale) : t("settings.title")}`;
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
     }
     if (view.kind === "host") {
       const item = HOST_SECTION_ITEMS.find((s) => s.id === view.section);
@@ -1640,8 +1771,6 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
         case "diagnostics":
           return (
             <DiagnosticsSection
-              useLegacyTerminalRenderer={settings.useLegacyTerminalRenderer}
-              onUseLegacyTerminalRendererChange={handleUseLegacyTerminalRendererChange}
               voiceAudioEngine={voiceAudioEngine}
               isPlaybackTestRunning={isPlaybackTestRunning}
               playbackTestResult={playbackTestResult}
@@ -1920,9 +2049,11 @@ const sidebarStyles = StyleSheet.create((theme) => ({
   compactLabel: {
     color: theme.colors.foreground,
   },
-  list: {
+  // Compact values draw each group as an island of tiles; desktop keeps a plain list.
+  group: {
     paddingVertical: theme.spacing[2],
     paddingHorizontal: theme.spacing[2],
+<<<<<<< HEAD
     gap: theme.spacing[1],
   },
   groupLabel: {
@@ -1930,16 +2061,39 @@ const sidebarStyles = StyleSheet.create((theme) => ({
     fontWeight: theme.fontWeight.medium,
     color: theme.colors.foregroundMuted,
     paddingHorizontal: theme.spacing[2],
+=======
+    gap: { xs: theme.spacing[1], md: theme.spacing[0.5] },
+  },
+  groupLabel: {
+    fontSize: theme.fontSize.base,
+    fontWeight: theme.fontWeight.normal,
+    color: theme.colors.foregroundExtraMuted,
+    paddingHorizontal: { xs: theme.spacing[4], md: theme.spacing[2] },
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
     paddingVertical: theme.spacing[1],
+  },
+  island: {
+    gap: { xs: 2, md: theme.spacing[0.5] },
+    borderRadius: { xs: theme.borderRadius["2xl"], md: 0 },
+    overflow: "hidden",
   },
   item: {
     flexDirection: "row",
     alignItems: "center",
+<<<<<<< HEAD
     gap: theme.spacing[2],
     minHeight: 36,
     paddingVertical: theme.spacing[2],
     paddingHorizontal: theme.spacing[2],
     borderRadius: theme.borderRadius.lg,
+=======
+    gap: { xs: theme.spacing[3], md: theme.spacing[2] },
+    minHeight: { xs: 52, md: 28 },
+    paddingVertical: theme.spacing[1],
+    paddingHorizontal: { xs: theme.spacing[4], md: theme.spacing[2] },
+    borderRadius: { xs: 0, md: theme.borderRadius.lg },
+    backgroundColor: { xs: theme.colors.surface1, md: "transparent" },
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
   },
   itemHovered: {
     backgroundColor: theme.colors.surfaceSidebarHover,
@@ -1947,8 +2101,12 @@ const sidebarStyles = StyleSheet.create((theme) => ({
   itemSelected: {
     backgroundColor: theme.colors.surfaceSidebarHover,
   },
+  // The workspace rows' pressed fill.
+  itemPressed: {
+    backgroundColor: theme.colors.surface2,
+  },
   label: {
-    fontSize: theme.fontSize.base,
+    fontSize: { xs: theme.fontSize.lg, md: theme.fontSize.base },
     color: theme.colors.foregroundMuted,
     fontWeight: theme.fontWeight.normal,
     flex: 1,
@@ -1979,11 +2137,20 @@ const sidebarStyles = StyleSheet.create((theme) => ({
   pickerTrigger: {
     flexDirection: "row",
     alignItems: "center",
+<<<<<<< HEAD
     gap: theme.spacing[2],
     minHeight: 36,
     paddingVertical: theme.spacing[2],
     paddingHorizontal: theme.spacing[2],
     borderRadius: theme.borderRadius.lg,
+=======
+    gap: { xs: theme.spacing[3], md: theme.spacing[2] },
+    minHeight: { xs: 52, md: 28 },
+    paddingVertical: theme.spacing[1],
+    paddingHorizontal: { xs: theme.spacing[4], md: theme.spacing[2] },
+    borderRadius: { xs: 0, md: theme.borderRadius.lg },
+    backgroundColor: { xs: theme.colors.surface1, md: "transparent" },
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
   },
   pickerTriggerHovered: {
     backgroundColor: theme.colors.surfaceSidebarHover,
@@ -1991,14 +2158,14 @@ const sidebarStyles = StyleSheet.create((theme) => ({
   pickerTriggerLabel: {
     flex: 1,
     minWidth: 0,
-    fontSize: theme.fontSize.base,
+    fontSize: { xs: theme.fontSize.lg, md: theme.fontSize.base },
     color: theme.colors.foreground,
     fontWeight: theme.fontWeight.normal,
   },
   // Match the setting items' icon footprint so the host label aligns with them.
   pickerTriggerDot: {
-    width: theme.iconSize.md,
-    height: theme.iconSize.md,
+    width: densityIconBox("md"),
+    height: densityIconBox("md"),
     alignItems: "center",
     justifyContent: "center",
   },

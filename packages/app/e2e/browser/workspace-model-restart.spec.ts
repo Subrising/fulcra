@@ -406,7 +406,11 @@ async function fetchWorkspaceStatuses(
 }
 
 test.describe("Workspace model restart regressions", () => {
+<<<<<<< HEAD
   test("browser-created same-cwd workspace preserves settled legacy agent status and migrated tab ownership", async ({
+=======
+  test("browser-created same-cwd workspace preserves repaired restart status and migrated tab ownership", async ({
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
     page,
     baseURL,
   }) => {
@@ -425,8 +429,16 @@ test.describe("Workspace model restart regressions", () => {
         .toMatchObject({
           id: LEGACY_AGENT_ID,
           workspaceId: seeded.workspaceA,
+<<<<<<< HEAD
           status: "idle",
+=======
+          status: "closed",
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
         });
+
+      await expect
+        .poll(() => fetchWorkspaceStatuses(client, [seeded.workspaceA, seeded.workspaceB]))
+        .toEqual({ [seeded.workspaceA]: "done", [seeded.workspaceB]: "done" });
 
       await page.goto(buildHostWorkspaceRoute(serverId, seeded.workspaceA));
       await waitForSidebarHydration(page);
@@ -474,14 +486,18 @@ test.describe("Workspace model restart regressions", () => {
           ]),
         )
         .toMatchObject({
+          [seeded.workspaceA]: "done",
           [seeded.workspaceB]: "done",
           [createdWorkspaceId]: "done",
         });
 
+<<<<<<< HEAD
       // A persisted running flag without a live provider handle settles on startup. Ownership must not move.
       const workspaceStatuses = await fetchWorkspaceStatuses(client, [seeded.workspaceA]);
       expect(workspaceStatuses[seeded.workspaceA]).toBe("done");
 
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
       await expectWorkspaceRowDoesNotShowIndicator(page, {
         serverId,
         workspaceId: seeded.workspaceB,

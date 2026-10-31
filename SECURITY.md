@@ -19,7 +19,14 @@ Fulcra v0.2 defaults to the retained upstream endpoint `relay.paseo.sh:443`; it 
 
 Pairing v3 uses an out-of-band `fulcra://pair#offer=…` link or QR code. The offer pins the host's Curve25519 public key and carries a single-use secret with a ten-minute default expiry. The daemon stores only the secret hash; claiming consumes it before the reply. At most four offers are outstanding. A new app refuses version-2 offers with an update instruction. An old app against a v3 host can still receive a masked relay close and retry without that clear instruction.
 
+<<<<<<< HEAD
 Each app installation keeps a long-lived device key. The desktop app keeps it in the Electron main process, wrapped with safeStorage (the app's keychain entry on macOS); an older plaintext copy in renderer storage moves there unchanged on first use and is then deleted, so paired hosts keep admitting the device. iOS, Android and the browser still keep it unencrypted in app storage: anyone who can read that storage can act as the device to every paired host until you revoke it. Don't describe these device keys as OS-protected. Both parties derive session keys from the client ephemeral key, device key, host key, host identifier and a fresh daemon challenge. Separate direction keys and strictly increasing 64-bit counters reject reflection, duplicated frames, counter gaps and captured-session replay. The daemon admits a session only after decrypting a device proof and checking its registry or a valid pairing claim.
+=======
+1. The daemon generates a persistent Curve25519 keypair on first run and stores it at `$PASEO_HOME/daemon-keypair.json` with mode `0600`
+2. The pairing URL (rendered as a QR code or opened directly) carries the daemon's public key in its URL fragment (`https://app.paseo.sh/#offer=...`). Fragments are not sent to the web server, so `app.paseo.sh` never sees the key.
+3. When the phone connects via the relay, it generates fresh ephemeral keys and sends an `e2ee_hello` message. The daemon will not process any application messages until this handshake completes.
+4. Updated peers run a Noise `NK` handshake (`Noise_NK_25519_ChaChaPoly_SHA256`) keyed to the daemon's static key: the `e2ee_hello` carries the first Noise message and the daemon's `e2ee_ready` carries the second. Every later frame is a counter-nonced ChaCha20-Poly1305 record. When either side predates this, the session falls back to the legacy construction: a Curve25519 ECDH shared key with XSalsa20-Poly1305 (NaCl `box`) and a random `[24-byte nonce][ciphertext]` bundle. Both modes negotiate `binaryCiphertext`: negotiated application text is carried as a base64 WebSocket text frame, while application binary is carried as a raw WebSocket binary frame. A peer that does not negotiate the capability uses base64 text frames for both kinds. [docs/relay-endpoint-security.md](docs/relay-endpoint-security.md) has the exact mapping.
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
 
 A paired device can run code as the host user through terminals and agents, like any local process running as that user. **Revocation, not the permission list, is the containment for paired-device access.** RPC restrictions are not an OS-user sandbox and cannot undo code already executed or persistence a hostile device installed. The local CLI `paseo daemon pair` mints directly under the rule **local user = owner**. Plugin service sessions are excluded from pairing, device-management and relay-endpoint RPCs. Command Centre management remains separately fenced by V1.1b cryptographic authentication evidence; neither a device principal nor unpassworded loopback carries that evidence.
 
@@ -29,9 +36,23 @@ Revocation immediately denies the device in memory, detaches and closes its sock
 
 The unchanged relay has no authenticated host-slot token. It can replace a transport slot, drop traffic, delay it or prevent connections; endpoint host-key authentication still prevents impersonation. A leaked unused offer can be claimed by an attacker before its owner uses it. A stolen paired device is a powerful host operator until revoked. App storage is not OS-protected secret storage in this version, and a stolen host private key can expose captured traffic: forward secrecy against host-key theft is not provided. A hostile process running as the daemon's OS user remains inside the local trust boundary.
 
+<<<<<<< HEAD
 See [self-hosting and recovery](docs/relay-self-host.md). Identity rotation requires a stopped daemon and unpairs every device.
 
 Relay admission requires the paired-device handshake and its fresh owner grants. A password or anonymous `hello` never substitutes for the device identity.
+=======
+- **Impersonate the daemon to your phone** — Without the daemon's secret key, it cannot derive the shared key, so any traffic it injects fails authenticated decryption on the phone
+- **Send commands as you** — The daemon only accepts traffic that decrypts and authenticates under a shared key derived with its own secret key. The phone's keypair is ephemeral per connection, so there is no persistent phone-side secret to steal; protection comes from the daemon's secret key never leaving the daemon.
+- **Read your traffic** — After the handshake every message is encrypted: ChaCha20-Poly1305 in protected mode, XSalsa20-Poly1305 (NaCl box) in legacy mode
+- **Forge messages** — Both constructions are authenticated encryption; a tampered message is rejected in either mode
+- **Replay old messages** — In protected mode the daemon contributes a fresh ephemeral key to every session and every record carries a strictly increasing counter, so a recorded session cannot be replayed into a new one and a duplicated, reordered, or reflected record closes the session. Legacy mode has neither property: it uses random nonces, and a daemon that still admits legacy clients accepts a recorded legacy transcript (hello, credentials, commands) as a new session. Set `daemon.relay.requireProtectedSecurity: true` to refuse legacy clients once every client you use has updated.
+
+### Trust model
+
+The QR code or pairing link is the trust anchor. It contains the daemon's public key, which is required to establish the encrypted connection. Treat it like a password — don't share it publicly.
+
+When a daemon password is configured, relay clients send it in the encrypted `hello` message, so the relay never sees it. The daemon rejects a relay client that sends a wrong password or none, so a leaked pairing link alone does not grant access to a password-protected daemon.
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
 
 ## Local daemon trust boundary
 

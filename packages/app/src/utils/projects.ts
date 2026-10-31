@@ -15,6 +15,7 @@ export interface WorkspaceSummary {
   archivingAt?: string;
   /** Pull/merge request number backing this workspace, so a query can find it. */
   changeRequestNumber: number | null;
+  statusEnteredAt: Date | null;
 }
 
 export interface ProjectHostEntry {
@@ -164,6 +165,7 @@ function toWorkspaceSummary(workspace: WorkspaceDescriptor): WorkspaceSummary {
     currentBranch: currentBranch && currentBranch !== "HEAD" ? currentBranch : null,
     ...(workspace.archivingAt ? { archivingAt: workspace.archivingAt } : {}),
     changeRequestNumber: toChangeRequestNumber(workspace),
+    statusEnteredAt: workspace.statusEnteredAt,
   };
 }
 

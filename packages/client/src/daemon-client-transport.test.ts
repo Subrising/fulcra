@@ -10,12 +10,15 @@ import {
   extractRelayMessage,
 } from "./daemon-client-transport.js";
 
+<<<<<<< HEAD
 const createClientChannelMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./relay-v3/index.js", () => ({
   createClientChannel: createClientChannelMock,
 }));
 
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
 describe("daemon-client transport helpers", () => {
   test("raw close codes cannot carry an authenticated terminal marker", () => {
     let rawClose: ((event?: unknown) => void) | undefined;
@@ -67,9 +70,7 @@ describe("daemon-client transport helpers", () => {
     expect(closed).toHaveBeenCalledWith({ code: 4403, reason: "Device unpaired", trusted: true });
   });
   test("createEncryptedTransport closes handshake failures with browser-safe code", async () => {
-    createClientChannelMock.mockReset();
-    createClientChannelMock.mockRejectedValueOnce(new Error("handshake failed"));
-
+    // An unusable daemon key fails the handshake before any frame is sent.
     const connection: { open: (() => void) | null } = { open: null };
     const close = vi.fn();
 
@@ -89,8 +90,7 @@ describe("daemon-client transport helpers", () => {
         onError: () => () => {},
         onMessage: () => () => {},
       },
-      "daemon-public-key",
-      { warn: vi.fn() },
+      { daemonPublicKeyB64: "not-a-key", logger: { warn: vi.fn() } },
     );
 
     expect(connection.open).not.toBeNull();

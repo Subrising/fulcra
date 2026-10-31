@@ -1,6 +1,10 @@
 {
   "name": "@getpaseo/highlight",
+<<<<<<< HEAD
   "version": "0.11.4",
+=======
+  "version": "0.13.2",
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
   "files": [
     "dist",
     "!dist/**/*.map",

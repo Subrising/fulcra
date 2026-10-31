@@ -116,9 +116,13 @@ async function exerciseProviderSettingsStack(page: Page) {
 
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
   await expectProviderSettingsVisible(page);
+  await expect(page.getByText("Updated just now", { exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
 }
 
 test.describe("provider settings overlay stack", () => {
+<<<<<<< HEAD
   test("provider model update age says just now", async ({ page }) => {
     const session = await seedMockAgentWorkspace({
       repoPrefix: "provider-relative-time-",
@@ -139,6 +143,8 @@ test.describe("provider settings overlay stack", () => {
     }
   });
 
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
   test("provider settings covers the desktop model selector without closing it", async ({
     page,
   }) => {

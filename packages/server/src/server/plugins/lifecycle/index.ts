@@ -1,6 +1,10 @@
+<<<<<<< HEAD
 import { randomUUID } from "node:crypto";
 import { SessionCostRecordsSchema } from "../../agent/session-cost.js";
 import type { AgentStreamEvent, AgentTimelineItem } from "../../agent/agent-sdk-types.js";
+=======
+import type { AgentStreamEvent } from "../../agent/agent-sdk-types.js";
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
 import { z } from "zod";
 import { CreateAgentRequestMessageSchema } from "@getpaseo/protocol/messages";
 import type {
@@ -150,8 +154,11 @@ export function publishAgentStream(
   lifecycle: PluginLifecycle,
   agent: PluginHookAgent,
   event: AgentStreamEvent,
+<<<<<<< HEAD
   timeline: readonly AgentTimelineItem[],
   observation?: { id: string; at: string },
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
 ): void {
   if (event.type === "turn_started") {
     lifecycle.emit("agent.turn_started", { agent, turnId: event.turnId ?? null });
@@ -160,7 +167,7 @@ export function publishAgentStream(
       agent,
       ...describeTurnObservation(observation),
       turnId: event.turnId ?? null,
-      timeline,
+      timeline: [],
       outcome: { kind: "completed" },
       ...(event.usage ? { usage: event.usage } : {}),
     });
@@ -170,6 +177,7 @@ export function publishAgentStream(
       ...describeTurnObservation(observation),
       ...(event.usage ? { usage: event.usage } : {}),
       turnId: event.turnId ?? null,
+<<<<<<< HEAD
       timeline,
       outcome: {
         kind: "failed",
@@ -178,13 +186,17 @@ export function publishAgentStream(
           code: event.code,
         },
       },
+=======
+      timeline: [],
+      outcome: { kind: "failed", error: { message: event.error, code: event.code } },
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
     });
   } else if (event.type === "turn_canceled") {
     lifecycle.emit("agent.turn_ended", {
       agent,
       ...describeTurnObservation(observation),
       turnId: event.turnId ?? null,
-      timeline,
+      timeline: [],
       outcome: { kind: "canceled", reason: event.reason },
     });
   } else if (event.type === "permission_requested") {

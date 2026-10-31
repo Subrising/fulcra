@@ -47,9 +47,15 @@ export function parseClaudeWorkflowRun(contents: string): ClaudeWorkflowRun | nu
  */
 export function observeReplayWorkflows(input: {
   workflows: readonly ClaudeWorkflowRun[];
+<<<<<<< HEAD
   parentEntries?: readonly ClaudeWorkflowParentEntry[];
   parentLinks?: ReadonlyMap<string, string>;
   entriesByRunId?: ReadonlyMap<string, readonly ClaudeReplayEntry[]>;
+=======
+  parentEntries: Iterable<ClaudeWorkflowParentEntry>;
+  /** Repeatable entries in chronological order, supplied by the transcript reader. */
+  entriesByRunId?: ReadonlyMap<string, Iterable<ClaudeReplayEntry>>;
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
   convertEntry?: (entry: ClaudeReplayEntry) => AgentTimelineItem[];
 }): SubagentObservation[] {
   const toolCallIdByRunId = input.parentLinks ?? readWorkflowLinks(input.parentEntries ?? []);
@@ -79,15 +85,15 @@ export function observeReplayWorkflows(input: {
       });
     }
 
-    observations.push(
-      ...observeWorkflowTimeline({
-        id,
-        result: workflow.result,
-        entries: input.entriesByRunId?.get(workflow.runId) ?? [],
-        convertEntry: input.convertEntry,
-        finishedAt,
-      }),
-    );
+    for (const observation of observeWorkflowTimeline({
+      id,
+      result: workflow.result,
+      entries: input.entriesByRunId?.get(workflow.runId) ?? [],
+      convertEntry: input.convertEntry,
+      finishedAt,
+    })) {
+      observations.push(observation);
+    }
 
     const subtitle = buildClaudeSubagentSubtitle({
       title: "Workflow",
@@ -118,15 +124,14 @@ export function observeReplayWorkflows(input: {
 function observeWorkflowTimeline(input: {
   id: string;
   result: unknown;
-  entries: readonly ClaudeReplayEntry[];
+  entries: Iterable<ClaudeReplayEntry>;
   convertEntry?: (entry: ClaudeReplayEntry) => AgentTimelineItem[];
   finishedAt?: string;
 }): SubagentObservation[] {
   const observations: SubagentObservation[] = [];
   const replayedAssistantText = new Set<string>();
-  const entries = [...input.entries].sort(compareReplayTimestamps);
 
-  for (const entry of entries) {
+  for (const entry of input.entries) {
     const timestamp = normalizeProviderReplayTimestamp(entry.timestamp);
     const items = input.convertEntry?.(entry) ?? [];
     for (const item of items) {
@@ -151,6 +156,7 @@ function observeWorkflowTimeline(input: {
   return observations;
 }
 
+<<<<<<< HEAD
 function compareReplayTimestamps(a: ClaudeReplayEntry, b: ClaudeReplayEntry): number {
   const aTimestamp = normalizeProviderReplayTimestamp(a.timestamp);
   const bTimestamp = normalizeProviderReplayTimestamp(b.timestamp);
@@ -163,6 +169,9 @@ function compareReplayTimestamps(a: ClaudeReplayEntry, b: ClaudeReplayEntry): nu
 export function readWorkflowLinks(
   entries: readonly ClaudeWorkflowParentEntry[],
 ): Map<string, string> {
+=======
+function readWorkflowLinks(entries: Iterable<ClaudeWorkflowParentEntry>): Map<string, string> {
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
   const workflowToolCallIds = new Set<string>();
   const toolCallIdByRunId = new Map<string, string>();
 

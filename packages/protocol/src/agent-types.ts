@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 import type { RecordedUsage } from "./recorded-usage.js";
+=======
+import type { AgentMessage } from "./agent-message.js";
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
 import type { AgentAttachment } from "./messages.js";
 
 export type AgentProvider = string;
@@ -326,6 +330,7 @@ export type ToolCallDetail =
     };
 
 interface ToolCallBase {
+  agentMessage?: AgentMessage;
   [key: string]: unknown;
   type: "tool_call";
   callId: string;

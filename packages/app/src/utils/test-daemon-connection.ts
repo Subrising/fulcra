@@ -152,6 +152,8 @@ export async function buildClientConfig(
     | "buildDesktopTransportUrl"
   > = defaultDaemonConnectionDependencies,
 ): Promise<DaemonClientConfig> {
+  if (connection.type === "routed")
+    throw new Error("Routed host connections are resolved by HostRuntime");
   const clientId = await deps.getClientId();
   const desktopTransportFactory = deps.createDesktopTransportFactory();
   const base = {
@@ -211,7 +213,11 @@ export async function buildClientConfig(
     e2ee: {
       enabled: true,
       daemonPublicKeyB64: connection.daemonPublicKeyB64,
+<<<<<<< HEAD
       getDeviceKeyPair: () => getDeviceIdentity(),
+=======
+      ...(connection.minimumSecurityMode ? { minimumMode: connection.minimumSecurityMode } : {}),
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
     },
   };
 }
