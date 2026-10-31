@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { View } from "react-native";
 import { Settings } from "lucide-react-native";
 import { withUnistyles } from "react-native-unistyles";
@@ -8,11 +9,11 @@ import { useIsCompactFormFactor } from "@/constants/layout";
 import { SettingsRow, SettingsSwitch } from "@/components/settings";
 import { SegmentedControl, type SegmentedControlOption } from "@/components/ui/segmented-control";
 import { settingsStyles } from "@/styles/settings";
-import { usageCopy } from "./copy";
 import { useUsagePreferences } from "./display";
 import { useUsageInSidebar } from "./in-sidebar";
 import type { UsageDisplayAs } from "./preferences";
 
+<<<<<<< HEAD
 const DISPLAY_AS_OPTIONS: SegmentedControlOption<UsageDisplayAs>[] = [
   { value: "used", label: usageCopy.displayUsed, testID: "usage-display-used" },
   { value: "remaining", label: usageCopy.displayRemaining, testID: "usage-display-remaining" },
@@ -25,10 +26,21 @@ const ACTION_TARGET = {
   justifyContent: "center",
 } as const;
 
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
 const ThemedSettings = withUnistyles(Settings);
 
 /** The shared usage preferences, opened from a cog as a popover or compact sheet. */
 export function UsageOptions() {
+  const { t } = useTranslation();
+  const displayAsOptions: SegmentedControlOption<UsageDisplayAs>[] = [
+    { value: "used", label: t("providerUsage.displayUsed"), testID: "usage-display-used" },
+    {
+      value: "remaining",
+      label: t("providerUsage.displayRemaining"),
+      testID: "usage-display-remaining",
+    },
+  ];
   const compact = useIsCompactFormFactor();
   const { display } = useUsagePreferences();
   const { inSidebar, setInSidebar } = useUsageInSidebar();
@@ -36,8 +48,12 @@ export function UsageOptions() {
     <DropdownMenu compactMode="sheet">
       <ToolbarButton
         kind="menu"
+<<<<<<< HEAD
         style={ACTION_TARGET}
         label={usageCopy.options}
+=======
+        label={t("providerUsage.options")}
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
         compact={compact}
         testID="usage-options-menu"
       >
@@ -49,21 +65,21 @@ export function UsageOptions() {
       <DropdownMenuContent
         align="end"
         width={340}
-        sheetTitle={usageCopy.options}
+        sheetTitle={t("providerUsage.options")}
         testID="usage-options-surface"
       >
         <View testID="usage-options-fields">
           <SettingsSwitch
-            label={usageCopy.showInSidebar}
-            hint={usageCopy.showInSidebarHint}
+            label={t("providerUsage.showInSidebar")}
+            hint={t("providerUsage.showInSidebarHint")}
             value={inSidebar}
             onValueChange={setInSidebar}
             testID="usage-show-in-sidebar"
           />
           <View style={settingsStyles.rowBorder}>
-            <SettingsRow label={usageCopy.displayAs}>
+            <SettingsRow label={t("providerUsage.displayAs")}>
               <SegmentedControl
-                options={DISPLAY_AS_OPTIONS}
+                options={displayAsOptions}
                 value={display.displayAs}
                 onValueChange={display.setDisplayAs}
                 size="sm"

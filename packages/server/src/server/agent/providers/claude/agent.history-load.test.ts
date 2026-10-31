@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+=======
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
 import * as os from "node:os";
 import * as path from "node:path";
 import pino from "pino";
@@ -6,7 +10,11 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ClaudeAgentClient } from "./agent.js";
 import { claudeProjectDirSync } from "./project-dir.js";
+<<<<<<< HEAD
 import { providerMessageId } from "../../provider-message-id.js";
+=======
+import { withClaudeReplayHistory } from "./transcript-history.js";
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
 
 /**
  * A resumed Claude agent whose transcript is missing or unreadable opens with an empty timeline.
@@ -122,6 +130,7 @@ describe("ClaudeAgentSession persisted history load", () => {
     );
   });
 
+<<<<<<< HEAD
   test("coalesces data while each resume keeps its own session and complete history", async () => {
     mkdirSync(path.dirname(transcriptPath()), { recursive: true });
     writeFileSync(
@@ -399,6 +408,54 @@ describe("ClaudeAgentSession persisted history load", () => {
     expect(JSON.stringify(items)).toContain("hello from the transcript");
     expect(items).toMatchSnapshot();
   });
+=======
+  test("loads readable history when the temporary directory is unavailable", () => {
+    const file = transcriptPath();
+    const entry = { type: "assistant", message: { content: [{ type: "text", text: "saved" }] } };
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify(entry));
+    const unavailable = path.join(tempRoot, "unavailable-tmp");
+    for (const variable of ["TMPDIR", "TEMP", "TMP"]) vi.stubEnv(variable, unavailable);
+    withClaudeReplayHistory(file, (history) => {
+      expect([...history.parentEntries]).toEqual([entry]);
+    });
+  });
+
+  test.each(["parent", "child", "workflow"])(
+    "preserves indexed %s history when its transcript disappears between passes",
+    (target) => {
+      const parent = transcriptPath();
+      const sessionDirectory = parent.slice(0, -".jsonl".length);
+      const child = path.join(sessionDirectory, "subagents", "agent-child.jsonl");
+      const workflow = path.join(
+        sessionDirectory,
+        "subagents",
+        "workflows",
+        "wf_test",
+        "agent-child.jsonl",
+      );
+      const parentEntry = {
+        type: "assistant",
+        message: { content: [{ type: "text", text: "parent" }] },
+      };
+      const childEntry = { ...parentEntry, isSidechain: true, agentId: "child" };
+      mkdirSync(path.dirname(workflow), { recursive: true });
+      writeFileSync(parent, JSON.stringify(parentEntry));
+      writeFileSync(child, JSON.stringify(childEntry));
+      writeFileSync(workflow, JSON.stringify(childEntry));
+      withClaudeReplayHistory(parent, (history) => {
+        rmSync({ parent, child, workflow }[target]);
+        // Ownership facts and visible payloads are separate passes over the same source.
+        for (let pass = 0; pass < 2; pass++) {
+          expect([...history.parentEntries]).toEqual([parentEntry]);
+          expect(history.subagents).toHaveLength(1);
+          expect([...history.subagents[0]!.entries]).toEqual([childEntry]);
+          expect([...history.workflowEntriesByRunId.get("wf_test")!]).toEqual([childEntry]);
+        }
+      });
+    },
+  );
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
 
   // chmod does not remove read access on Windows, or for root.
   test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(

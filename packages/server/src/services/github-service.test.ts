@@ -862,6 +862,7 @@ describe("ForgeService", () => {
       headRepositorySshUrl: "git@github.com:therainisme/paseo.git",
       headRepositoryUrl: "https://github.com/therainisme/paseo",
       isCrossRepository: true,
+      headRefKind: "branch",
     });
 
     expect(runner.calls).toHaveLength(2);

@@ -13,4 +13,5 @@ export interface DictationAudioSource {
   start: () => Promise<void>;
   stop: (options?: DictationAudioStopOptions) => Promise<void>;
   volume: number;
+  isPaused: boolean;
 }

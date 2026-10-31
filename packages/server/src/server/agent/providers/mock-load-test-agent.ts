@@ -19,6 +19,7 @@ import type {
   AgentRuntimeInfo,
   AgentSession,
   AgentSessionConfig,
+  AgentSlashCommand,
   AgentStreamEvent,
   AgentTimelineItem,
   FetchCatalogOptions,
@@ -36,7 +37,13 @@ import { getAgentProviderDefinition } from "@getpaseo/protocol/provider-manifest
 
 export const MOCK_LOAD_TEST_PROVIDER_ID = "mock";
 export const MOCK_LOAD_TEST_DEFAULT_MODEL_ID = "five-minute-stream";
-export const MOCK_LOAD_TEST_HANDLED_COMMAND = "/mock handled-command";
+const MOCK_LOAD_TEST_COMMAND: AgentSlashCommand = {
+  name: "mock",
+  description: "Reply without starting a turn",
+  argumentHint: "handled-command",
+  kind: "command",
+};
+export const MOCK_LOAD_TEST_HANDLED_COMMAND = `/${MOCK_LOAD_TEST_COMMAND.name} ${MOCK_LOAD_TEST_COMMAND.argumentHint}`;
 const MOCK_LOAD_TEST_MODE_ID = "load-test";
 const MOCK_LOAD_TEST_DURATION_MS = 5 * 60 * 1000;
 const MOCK_LOAD_TEST_INTERVAL_MS = 40;
@@ -233,6 +240,7 @@ type SteeringReplayShape = "claude" | "codex";
 interface MockQuestionOption {
   label: string;
   description?: string;
+  preview?: string;
 }
 
 interface MockQuestionPromptQuestion {
@@ -272,6 +280,16 @@ function parseSettledAssistantImageMarkdown(prompt: AgentPromptInput): string | 
   return match?.[1] ?? null;
 }
 
+const ROLLOUT_FLAG_PREVIEW = [
+  "Ship it dark behind the new-surface flag, then turn it on for internal users before everyone else.",
+  "",
+  'if (flags.enabled("new-surface")) {',
+  "  render(<NewSurface />);",
+  "}",
+  ...Array.from({ length: 40 }, (_, i) => `// rollout step ${i + 1}`),
+  "// LAST PREVIEW LINE",
+].join("\n");
+
 function parseMockQuestionPrompt(prompt: AgentPromptInput): MockQuestionPromptRequest | null {
   const text = promptToText(prompt);
   if (!/emit\s+(?:a\s+)?synthetic\s+questions?/i.test(text)) {
@@ -310,7 +328,10 @@ function parseMockQuestionPrompt(prompt: AgentPromptInput): MockQuestionPromptRe
       {
         question: "Which rollout should we use?",
         header: "rollout",
-        options: [{ label: "Immediately" }, { label: "Behind feature flag" }],
+        options: [
+          { label: "Immediately" },
+          { label: "Behind feature flag", preview: ROLLOUT_FLAG_PREVIEW },
+        ],
         multiSelect: false,
       },
       {
@@ -955,11 +976,16 @@ export class MockLoadTestAgentSession implements AgentSession {
     return { turnId };
   }
 
+<<<<<<< HEAD
   // The app rejects slash commands the provider does not list, so the mock lists its own.
   async listCommands(): Promise<AgentSlashCommand[]> {
     return [
       { name: "mock", description: "Mock daemon-handled command", argumentHint: "handled-command" },
     ];
+=======
+  async listCommands(): Promise<AgentSlashCommand[]> {
+    return [MOCK_LOAD_TEST_COMMAND];
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
   }
 
   tryHandleOutOfBand(

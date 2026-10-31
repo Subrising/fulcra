@@ -1,10 +1,10 @@
+import { useTranslation } from "react-i18next";
 import { RotateCw } from "lucide-react-native";
 import { withUnistyles } from "react-native-unistyles";
 import { extraMutedIconColorMapping } from "@/components/ui/icon-button-chrome";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { ToolbarButton, paneContentToolbarIconSize } from "@/components/ui/pane-content-toolbar";
 import { useIsCompactFormFactor } from "@/constants/layout";
-import { usageCopy } from "./copy";
 
 const ACTION_TARGET = {
   minWidth: 48,
@@ -16,14 +16,22 @@ const ACTION_TARGET = {
 const ThemedRotateCw = withUnistyles(RotateCw);
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 
-/** Refreshes every report on the host; spins while a refresh is in flight. */
+/**
+ * Refreshes every report on the host; spins while a refresh is in flight. On compact it sits in the
+ * header's island, so its highlight is round.
+ */
 export function UsageRefreshButton({ busy, onRefresh }: { busy: boolean; onRefresh: () => void }) {
+  const { t } = useTranslation();
   const compact = useIsCompactFormFactor();
   const iconSize = paneContentToolbarIconSize(compact);
   return (
     <ToolbarButton
+<<<<<<< HEAD
       label={usageCopy.refreshAll}
       style={ACTION_TARGET}
+=======
+      label={t("providerUsage.refreshAll")}
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
       compact={compact}
       disabled={busy}
       onPress={onRefresh}
