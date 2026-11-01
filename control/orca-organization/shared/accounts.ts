@@ -40,6 +40,8 @@ const account = z
     status,
     credentialKind: z.enum(["api-key", "subscription"]).optional(),
     topUpAt: z.string().datetime().nullable().optional(),
+    // FU-643/FU-650: the account's own weekly launch cap (percent); absent when no cap is set.
+    weeklyLaunchCapPct: z.number().int().min(1).max(100).optional(),
     limitNote: z.string().max(200).nullable(),
     limitKind: z.string().max(24).nullable().optional(),
     sessions: z.array(z.string().max(80)).max(50),
@@ -150,6 +152,8 @@ export const accountUpdateRpc = defineContract({
       priority: z.number().int().min(1).max(99).optional(),
       clearLimit: z.literal(true).optional(),
       topUpAt: z.string().datetime().nullable().optional(),
+      // FU-643/FU-650: 1 to 100 sets the weekly launch cap; null clears it.
+      weeklyLaunchCapPct: z.number().int().min(1).max(100).nullable().optional(),
       token: z.string().max(1024).optional(),
       signIn: z.literal(true).optional(),
       remove: z.literal(true).optional(),
