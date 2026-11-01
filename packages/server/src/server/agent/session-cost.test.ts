@@ -164,3 +164,20 @@ test("new provider instances count reused turn IDs and true replays remain dupli
     ],
   });
 });
+
+test("FU-632: the first total of a resumed session with billed turns and no cursor adds no spend", () => {
+  // Records saved before cursors existed: one billed turn, no cursor.
+  const legacy: SessionCostRecords = {
+    cursors: {},
+    turns: { old: { accountId: "account-a", amountUsd: 600, at: "2026-10-17T00:00:00.000Z" } },
+  };
+  const resumed = fold(legacy, "first", 603.62, "account-a")!;
+  expect(sessionCost(resumed)?.totalUsd).toBe(600);
+  expect(sessionCost(resumed)?.lastTurnUsd).toBe(0);
+  expect(resumed.cursors[JSON.stringify(["claude", "native-one"])]).toBe(603.62);
+  // The next result charges only its increment.
+  const next = fold(resumed, "second", 604.12, "account-a")!;
+  expect(sessionCost(next)?.totalUsd).toBeCloseTo(600.5);
+  // A brand-new session with no billed turns still charges its whole first total.
+  expect(sessionCost(fold(undefined, "only", 2))?.totalUsd).toBe(2);
+});

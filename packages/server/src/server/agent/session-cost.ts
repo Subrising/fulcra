@@ -41,6 +41,23 @@ export function sessionCost(records?: SessionCostRecords): SessionCost | undefin
   });
 }
 
+/**
+ * FU-632: a resumed Claude session reports its whole history as the first total. With turns
+ * already billed and no cursor to subtract, that total is not new spend. Set the cursor only.
+ */
+function isResumedHistoryTotal(
+  records: SessionCostRecords,
+  provider: string,
+  cursor: number | undefined,
+): boolean {
+  return (
+    cursor === undefined &&
+    provider === "claude" &&
+    Object.keys(records.cursors).length === 0 &&
+    Object.keys(records.turns).length > 0
+  );
+}
+
 /** Fold result records, never streaming context samples. The stable turn ID makes replay harmless. */
 export function recordSessionCost(
   previous: SessionCostRecords | undefined,
@@ -66,6 +83,7 @@ export function recordSessionCost(
   if (knownIncrement !== undefined && Number.isFinite(knownIncrement) && knownIncrement >= 0)
     amountUsd = knownIncrement;
   else if (cursor !== undefined && total >= cursor) amountUsd = total - cursor;
+  else if (isResumedHistoryTotal(records, input.provider, cursor)) amountUsd = 0;
   records.revision = (records.revision ?? Object.keys(records.turns).length) + 1;
   records.cursors[key] = total;
   records.turns[turnId] = { accountId, amountUsd, at };
