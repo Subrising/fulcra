@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { finishNoticeWanted, finishNotificationWanted } from "./finish-notice-filter.js";
+import {
+  addressesLead,
+  finishNoticeWanted,
+  finishNotificationWanted,
+} from "./finish-notice-filter.js";
 
 describe("finishNoticeWanted (FU-483)", () => {
   test.each([
@@ -41,5 +45,33 @@ describe("finishNotificationWanted (FU-492)", () => {
     expect(finishNotificationWanted("finished", null)).toBe(true);
     expect(finishNotificationWanted("errored", "WAITING q1205")).toBe(true);
     expect(finishNotificationWanted("needs permission", "")).toBe(true);
+  });
+});
+
+describe("addressesLead (FU-633)", () => {
+  const lead = "88b1e035-23be-4d19-bcdc-2a09aa2dfc01@srv_4ALF2hvPiVim";
+
+  test.each([
+    "To Main (88b1e035): the link was wrong. I fixed it.",
+    "Fixed it.\n**To Main (88b1e035):** done",
+    "to lead 88b1e035: result",
+  ])("is true for %j", (message) => {
+    expect(addressesLead(message, lead)).toBe(true);
+  });
+
+  test.each([
+    "To Main (aaaaaaaa): the link was wrong.",
+    "I will send this to Main (88b1e035): later",
+    "Note to self about 88b1e035: nothing",
+    "To Main: no ID here",
+    "Tomorrow (88b1e035): plan",
+    "",
+  ])("is false for %j", (message) => {
+    expect(addressesLead(message, lead)).toBe(false);
+  });
+
+  test("is false when the reporting line is missing or has no chat ID", () => {
+    expect(addressesLead("To Main (88b1e035): x", undefined)).toBe(false);
+    expect(addressesLead("To Main (88b1e035): x", "role:main-assistant")).toBe(false);
   });
 });

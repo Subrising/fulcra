@@ -578,6 +578,34 @@ describe("a result or question in the final text is never silent (FU-402)", () =
     expect(f.delivered[0]!.prompt).toContain("another computer");
   });
 
+  test("FU-633: a final message addressed to a lead on another computer is a result, with finished-turn notices off", async () => {
+    const remoteLead = "88b1e035-23be-4d19-bcdc-2a09aa2dfc01";
+    const ref = `${remoteLead}@srv_other`;
+    const f = fixture(
+      [
+        {
+          ...worker({ [REPORTS_TO_LABEL]: ref }),
+          lastMessage: "To Main (88b1e035): the link was wrong. I fixed it.",
+        },
+      ],
+      { enabled: false },
+    );
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered.map((notice) => notice.leadId)).toEqual([WORKER]);
+    expect(f.delivered[0]!.prompt).toContain(ref);
+    expect(f.delivered[0]!.prompt).toContain("another computer");
+    // A message to someone else, or plain progress, stays quiet.
+    for (const lastMessage of ["To Main (aaaaaaaa): hi", "Tests pass."]) {
+      const quiet = fixture([{ ...worker({ [REPORTS_TO_LABEL]: ref }), lastMessage }], {
+        enabled: false,
+      });
+      quiet.turn(WORKER);
+      await quiet.settle();
+      expect(quiet.delivered).toEqual([]);
+    }
+  });
+
   test("a result the worker already sent to its lead in this turn is not sent again", async () => {
     resetAgentMessageLogForTests();
     for (const [line, enabled, note] of [

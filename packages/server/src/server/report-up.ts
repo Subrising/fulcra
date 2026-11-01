@@ -68,7 +68,7 @@ import {
   isNudgeOwnerSkipped,
   type LedgerRow,
 } from "./ledger-items.js";
-import { finishNoticeWanted } from "./finish-notice-filter.js";
+import { addressesLead, finishNoticeWanted } from "./finish-notice-filter.js";
 import { lastAgentMessageAt, lastAgentMessageDeliveredAt } from "./agent-message-log.js";
 import type { HostLinkNoticeKind } from "./host-link-contracts.js";
 import { classifyEndingAssistantMessage, classifyFailedTurn } from "./limit-resume/detect.js";
@@ -2018,7 +2018,14 @@ export class ReportUpService {
       observedLast === undefined
         ? await this.deps.agentManager.getLastAssistantMessage(worker.id).catch(() => null)
         : observedLast;
-    if (!lastMessage || !finishNoticeWanted(lastMessage)) return;
+    if (
+      !lastMessage ||
+      !(
+        finishNoticeWanted(lastMessage) ||
+        addressesLead(lastMessage, reportsTo(worker) ?? undefined)
+      )
+    )
+      return;
     // The worker already messaged its lead during this turn, so its result is not unseen.
     if (sentToLeadDuring(worker, startedAt, this.deps.localServerId)) return;
     const lead = await this.leadOf(worker);
