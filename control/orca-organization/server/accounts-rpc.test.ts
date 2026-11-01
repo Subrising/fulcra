@@ -1006,6 +1006,28 @@ test("only the owner can set the top-up reporting date; cap settings do not exis
   assert.equal(readAccounts(root).accounts[0].topUpAt, null);
 });
 
+test("weekly launch cap: account view and update input accept it (FU-650)", async (t) => {
+  const root = scratch();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const a = await addAccount(root, { provider: "claude", name: "Cap fixture" });
+  await setAccount(root, a.id, { weeklyLaunchCapPct: 50 });
+  const { accountUpdateRpc, accountsRpc } = await import("../shared/accounts");
+  // A cap must not break the account list (FU-650: account ls failed with unrecognized_keys).
+  const view = accountsRpc.output.parse(await handlers(root).read(paseo));
+  assert.equal(view.accounts[0].weeklyLaunchCapPct, 50);
+  const cap = (value: unknown) =>
+    accountUpdateRpc.input.safeParse({ id: a.id, weeklyLaunchCapPct: value }).success;
+  for (const ok of [1, 100, null]) assert.equal(cap(ok), true, String(ok));
+  for (const bad of [0, 101, 1.5, "50"]) assert.equal(cap(bad), false, String(bad));
+  const patch = accountUpdateRpc.input.parse({ id: a.id, weeklyLaunchCapPct: 30 });
+  assert.equal((await mover(root)(patch)).ok, true);
+  assert.equal(readAccounts(root).accounts[0].weeklyLaunchCapPct, 30);
+  assert.equal((await mover(root)({ id: a.id, weeklyLaunchCapPct: null })).ok, true);
+  assert.equal("weeklyLaunchCapPct" in readAccounts(root).accounts[0], false);
+  const cleared = accountsRpc.output.parse(await handlers(root).read(paseo));
+  assert.equal("weeklyLaunchCapPct" in cleared.accounts[0], false);
+});
+
 test("account switch and takeover skip archived native sessions without changing the pool", async (t) => {
   const root = scratch();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

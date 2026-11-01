@@ -2,6 +2,7 @@ export const PROVIDERS: readonly ["claude", "codex"];
 export const POLICIES: readonly ["priority", "spread"];
 export interface Account {
   topUpAt?: string | null;
+  weeklyLaunchCapPct?: number;
   keyEpoch?: string;
   localRevoked?: boolean;
   credentialKind?: "api-key" | "subscription";
