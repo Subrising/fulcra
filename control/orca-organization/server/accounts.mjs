@@ -319,10 +319,23 @@ function tierOf(a) {
   if (isApiAccount(a) || a.credentialKind === "api-key") return 2;
   return a.credentialKind === "subscription" ? 0 : 1;
 }
+// FU-643 (the owner's rule, 1 Nov 2026): an account with its own weeklyLaunchCapPct (1 to 100) takes no NEW session,
+// move or rotation once its weekly use reaches that figure -- even when no other account has room. A session already on
+// it keeps it. No figure, or no usage reading, holds nothing back.
+export function atOwnCap(a, usage = {}) {
+  return (
+    Number.isFinite(a.weeklyLaunchCapPct) &&
+    typeof usage[a.id] === "number" &&
+    usage[a.id] >= a.weeklyLaunchCapPct
+  );
+}
 export function choose(s, provider, now = Date.now(), except = [], usage = {}) {
   const ready = s.accounts.filter(
     (a) =>
-      a.provider === provider && !except.includes(a.id) && accountStatus(a, now).state === "ok",
+      a.provider === provider &&
+      !except.includes(a.id) &&
+      accountStatus(a, now).state === "ok" &&
+      !atOwnCap(a, usage),
   );
   // FU-430 (the owner's rule, 11 Oct 2026): paid API credit only when every usable subscription account is capped.
   // A free subscription account always wins, whatever the priority numbers or the default say.
@@ -485,6 +498,12 @@ export async function setAccount(root, id, patch, expectedEpoch) {
       a.topUpAt = patch.topUpAt === null ? null : new Date(patch.topUpAt).toISOString();
     }
     if (patch.enabled !== undefined) a.enabled = patch.enabled === true;
+    if (patch.weeklyLaunchCapPct !== undefined) {
+      const c = patch.weeklyLaunchCapPct;
+      if (c === null) delete a.weeklyLaunchCapPct;
+      else if (!Number.isSafeInteger(c) || c < 1 || c > 100) throw Error("Weekly cap is 1 to 100");
+      else a.weeklyLaunchCapPct = c;
+    }
     if (patch.priority !== undefined) {
       if (!Number.isSafeInteger(patch.priority) || patch.priority < 1 || patch.priority > 99)
         throw Error("Priority is 1 to 99");
@@ -1024,6 +1043,9 @@ export function publicView(s, now = Date.now()) {
       name: a.name,
       enabled: a.enabled,
       priority: a.priority,
+      ...(Number.isFinite(a.weeklyLaunchCapPct)
+        ? { weeklyLaunchCapPct: a.weeklyLaunchCapPct }
+        : {}),
       status: accountStatus(a, now),
       credentialKind: isApiAccount(a) ? "api-key" : "subscription",
       ...(isApiAccount(a) ? { topUpAt: a.topUpAt ?? null } : {}),

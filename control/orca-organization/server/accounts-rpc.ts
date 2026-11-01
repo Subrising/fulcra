@@ -253,6 +253,7 @@ export function createAccountHandlers(d: Deps) {
         priority?: number;
         clearLimit?: true;
         topUpAt?: string | null;
+        weeklyLaunchCapPct?: number | null;
         token?: string;
         signIn?: true;
         remove?: true;
@@ -333,7 +334,14 @@ export function createAccountHandlers(d: Deps) {
             signIn(a.id);
           }
           const patch: Record<string, unknown> = {};
-          for (const k of ["name", "enabled", "priority", "clearLimit", "topUpAt"] as const)
+          for (const k of [
+            "name",
+            "enabled",
+            "priority",
+            "clearLimit",
+            "topUpAt",
+            "weeklyLaunchCapPct",
+          ] as const)
             if (input[k] !== undefined) patch[k] = input[k];
           if (Object.keys(patch).length) await setAccount(d.root(), a.id, patch);
           return ok(
