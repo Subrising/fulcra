@@ -1611,3 +1611,26 @@ test("the store lock waits on a Windows EPERM or EBUSY open and keeps EPERM fata
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("FU-643: an account with its own weekly cap takes no new session, move or rotation at that figure; a session on it stays", async () => {
+  const root = scratch();
+  const work = await addAccount(root, { provider: "claude", name: "Work" }, T0),
+    personal = await addAccount(root, { provider: "claude", name: "Personal" }, T0 + 1);
+  await assert.rejects(setAccount(root, work.id, { weeklyLaunchCapPct: 0 }), /1 to 100/);
+  await assert.rejects(setAccount(root, work.id, { weeklyLaunchCapPct: 50.5 }), /1 to 100/);
+  await setAccount(root, work.id, { weeklyLaunchCapPct: 50 });
+  assert.equal(publicView(readAccounts(root), T0).accounts[0].weeklyLaunchCapPct, 50);
+  assert.equal((await assign(root, S(1), "claude", T0)).account.id, work.id); // no reading: nothing held back
+  writeUsage(root, { [work.id]: week(49), [personal.id]: week(95) });
+  assert.equal((await assign(root, S(2), "claude", T0)).account.id, work.id); // under its cap
+  writeUsage(root, { [work.id]: week(50), [personal.id]: week(95) });
+  // Personal is past the global 90% too, but Work is at its own cap: hard stop, Personal is used.
+  assert.equal((await assign(root, S(3), "claude", T0)).account.id, personal.id);
+  assert.equal((await assign(root, S(1), "claude", T0 + 5)).account.id, work.id); // running session keeps Work
+  assert.equal(choose(readAccounts(root), "claude", T0, [personal.id], readUsage(root, T0)), null); // no move onto Work
+  await setAccount(root, work.id, { weeklyLaunchCapPct: null });
+  assert.equal(
+    choose(readAccounts(root), "claude", T0, [personal.id], readUsage(root, T0)).id,
+    work.id,
+  ); // cap removed
+});
