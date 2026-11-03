@@ -400,3 +400,68 @@ test("owned precondition refusal preserves its message through the management ch
   });
   channel.close();
 });
+test("a controller past the replay window keeps accepting new frames and refuses recent replays", async () => {
+  const child = {};
+  const rpc = vi.fn(async () => null);
+  const channel = new ControllerChannel({
+    child,
+    issue: () => "token",
+    revoke: () => {},
+    rpc,
+    send: async () => null,
+  });
+  const frame = (id: string) => ({ id, epoch: channel.epoch, type: "daemon-rpc", frame: {} });
+  for (let i = 0; i < 66000; i++) {
+    const reply = await channel.receive(child, frame(`id-${i}`));
+    if (!reply.ok) throw new Error(`frame ${i} refused: ${reply.code}`);
+  }
+  await expect(channel.receive(child, frame("fresh"))).resolves.toMatchObject({ ok: true });
+  await expect(channel.receive(child, frame("fresh"))).resolves.toMatchObject({
+    ok: false,
+    code: "expired",
+  });
+  await expect(channel.receive(child, frame("id-65999"))).resolves.toMatchObject({
+    ok: false,
+    code: "expired",
+  });
+}, 60000);
+test("management command ids past the replay window still dispatch and recent duplicates refuse", async () => {
+  const child = {};
+  const send = vi.fn(async (frame: { id: string; epoch: string }) => ({
+    id: frame.id,
+    epoch: frame.epoch,
+    ok: true,
+    result: null,
+  }));
+  const channel = new ControllerChannel({
+    child,
+    issue: () => "token",
+    revoke: () => {},
+    rpc: async () => null,
+    send,
+  });
+  const principal = {
+    id: "owner",
+    authentication: "daemon-password",
+    deviceId: null,
+    permissions: ["daemon.manage", "command-centre.manage"],
+  } as const;
+  const host = new ManagementAuthority({ enabled: () => true, validate: (command) => command });
+  let nextId = "";
+  host.register("orca-organization-next", (command, p) => channel.management(command, p, nextId));
+  const call = async (id: string) => {
+    nextId = id;
+    const invocation = host.open(bundledTarget, () => principal)!;
+    return host.invoke(invocation.id, "orca-organization-next", "call", {
+      method: "list",
+      input: null,
+    });
+  };
+  try {
+    for (let i = 0; i < 65600; i++) await call(`cmd-${i}`);
+    await expect(call("cmd-fresh")).resolves.toBeNull();
+    await expect(call("cmd-fresh")).rejects.toThrow();
+  } finally {
+    host.close();
+  }
+}, 60000);

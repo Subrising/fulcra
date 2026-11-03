@@ -16,6 +16,8 @@ import {
   parseControllerReply,
 } from "./controller-frames.js";
 
+const REPLAY_WINDOW = 65536;
+
 /** V4 owns child creation/handshake. Construct only for a verified ready owned channel. */
 export class ControllerChannel {
   readonly epoch = randomUUID();
@@ -97,8 +99,10 @@ export class ControllerChannel {
     return reply.result;
   }
   private claim(ids: Set<string>, id: string): void {
-    // Bounded replay history: a full epoch refuses new work until V4 replaces it.
-    if (ids.has(id) || ids.size >= 65536) throw new ControllerFrameError("expired");
+    if (ids.has(id)) throw new ControllerFrameError("expired");
+    // Bounded replay window: keep the newest REPLAY_WINDOW ids and forget the oldest.
+    // A full set must never refuse new work, or a long-lived controller fails every call.
+    if (ids.size >= REPLAY_WINDOW) ids.delete(ids.values().next().value as string);
     ids.add(id);
   }
   private check(child: object): void {
