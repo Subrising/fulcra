@@ -1,9 +1,18 @@
 import {
   CoalescedHistoryLoads,
+  type HistoryByteRange,
   historyLoadBudget,
   logHistoryLoad,
   readHistoryLines,
 } from "../../history-load.js";
+import { readLinesBackward } from "../../journal-tail.js";
+import {
+  type ClaudeResumeCacheOptions,
+  DEFAULT_RESUME_CACHE_MIN_BYTES,
+  RESUME_POINT_REFRESH_BYTES,
+  readClaudeResumePoint,
+  writeClaudeResumePoint,
+} from "./resume-cache.js";
 import { readWorkflowLinks } from "./subagents/workflow-replay-source.js";
 import { providerMessageId } from "../../provider-message-id.js";
 import { recordedClaudeUsage } from "../../usage-recording.js";
@@ -72,7 +81,7 @@ import {
 import { parsePartialJsonObject } from "./partial-json.js";
 import { ClaudeSidechainTracker } from "./sidechain-tracker.js";
 import { readClaudeSubagentHandback } from "./subagent-handback.js";
-import { ClaudeTaskState } from "./task-state.js";
+import { ClaudeTaskState, type ClaudeTaskStateSnapshot } from "./task-state.js";
 import { ClaudeBackgroundWorkTracker } from "./background-work.js";
 import {
   ClaudeTaskProtocolSource,
@@ -137,6 +146,7 @@ import {
   type AgentCreateSessionOptions,
   type AgentFeature,
   type AgentLaunchContext,
+  type AgentResumeSessionOptions,
   type AgentMetadata,
   type AgentMode,
   type AgentModelDefinition,
@@ -373,6 +383,24 @@ interface ClaudeResumeAnchor {
   notificationToolUseId: string | null;
 }
 
+/** One record's timeline output. Its place is final once subagent ownership is known. */
+interface ClaudeTimelineSlot {
+  notificationToolUseId: string | null;
+  taskSnapshot: AgentTimelineItem | null;
+  items: AgentTimelineItem[];
+  timestamp?: string;
+}
+
+/** Session state after a transcript prefix, as saved in a resume point. */
+interface ClaudeResumeState {
+  /** [0 user | 1 assistant, uuid, notification tool use id]. */
+  anchors: [0 | 1, string, string | null][];
+  facts: ClaudeReplayFactsSnapshot;
+  tasks: ClaudeTaskStateSnapshot;
+  toolUses: ToolUseCacheEntry[];
+  handbacks: string[];
+}
+
 interface ClaudeRewindTurnAnchor {
   userMessageId: string;
   assistantMessageId: string | null;
@@ -490,6 +518,8 @@ interface ClaudeAgentClientOptions {
   modelProbe?: ClaudeModelProbe;
   now?: () => number;
   rewindSdk?: ClaudeRewindSdk;
+  /** Saved resume points. Without it, every resume reads the whole transcript. */
+  resumeCache?: ClaudeResumeCacheOptions;
 }
 
 // How long a resolved Claude Code version is reused for the catalogue cache key before `--version` reruns.
@@ -523,6 +553,9 @@ interface ClaudeAgentSessionOptions {
   queryFactory?: ClaudeQueryFactory;
   resolveBinary: () => Promise<string>;
   rewindSdk?: ClaudeRewindSdk;
+  resumeCache?: ClaudeResumeCacheOptions;
+  /** The caller streams the history right after resume, so build it in the resume read. */
+  historyTimeline?: boolean;
 }
 
 type ClaudeThinkingEffort = "low" | "medium" | "high" | "xhigh" | "max";
@@ -1647,6 +1680,7 @@ export class ClaudeAgentClient implements AgentClient {
   private readonly now: () => number;
   private versionForKey: { version: string | null; at: number } | null = null;
   private readonly rewindSdk: ClaudeRewindSdk;
+  private readonly resumeCache?: ClaudeResumeCacheOptions;
 
   constructor(options: ClaudeAgentClientOptions) {
     this.defaults = options.defaults;
@@ -1660,6 +1694,7 @@ export class ClaudeAgentClient implements AgentClient {
     this.modelProbe = options.modelProbe ?? probeClaudeModels;
     this.now = options.now ?? Date.now;
     this.rewindSdk = options.rewindSdk ?? realClaudeRewindSdk;
+    this.resumeCache = options.resumeCache;
   }
 
   resolveConfiguredModel(model: AgentModelDefinition): AgentModelDefinition {
@@ -1683,6 +1718,7 @@ export class ClaudeAgentClient implements AgentClient {
       queryFactory: this.queryFactory,
       resolveBinary: this.resolveBinary,
       rewindSdk: this.rewindSdk,
+      resumeCache: this.resumeCache,
     });
   }
 
@@ -1690,6 +1726,7 @@ export class ClaudeAgentClient implements AgentClient {
     handle: AgentPersistenceHandle,
     overrides?: Partial<AgentSessionConfig>,
     launchContext?: AgentLaunchContext,
+    options?: AgentResumeSessionOptions,
   ): Promise<AgentSession> {
     const metadata = coerceSessionMetadata(handle.metadata);
     const merged: Partial<AgentSessionConfig> = { ...metadata, ...overrides };
@@ -1712,6 +1749,8 @@ export class ClaudeAgentClient implements AgentClient {
       queryFactory: this.queryFactory,
       resolveBinary: this.resolveBinary,
       rewindSdk: this.rewindSdk,
+      resumeCache: this.resumeCache,
+      historyTimeline: options?.historyTimeline === true,
     });
   }
 
@@ -2332,6 +2371,9 @@ class ClaudeAgentSession implements AgentSession {
   // FU-472: resume keeps only the transcript bytes it saw. The timeline is built from them only
   // when streamHistory asks; a daemon with a stored timeline never asks.
   private persistedTimelineSource: ClaudePersistedTimelineSource | null = null;
+  // FU-530: a resume told that its history is streamed next builds the timeline in its one read.
+  private persistedTimeline: ClaudePersistedTimeline | null = null;
+  private readonly resumeCache: ClaudeResumeCacheOptions | null;
   // FU-77: the transcript is read without blocking the main thread; readers of resume state await this first.
   private historyLoad: Promise<void> = Promise.resolve();
   private readonly historyAbort = new AbortController();
@@ -2379,6 +2421,7 @@ class ClaudeAgentSession implements AgentSession {
     this.queryFactory = options.queryFactory;
     this.resolveBinary = options.resolveBinary;
     this.rewindSdk = options.rewindSdk ?? realClaudeRewindSdk;
+    this.resumeCache = options.resumeCache ?? null;
     this.contextUsage = new ClaudeContextUsageState(
       findClaudeModel(this.config.model)?.contextWindowMaxTokens,
     );
@@ -2390,7 +2433,9 @@ class ClaudeAgentSession implements AgentSession {
       }
       this.claudeSessionId = handle.sessionId;
       this.persistence = handle;
-      this.historyLoad = this.loadPersistedHistory(handle.sessionId);
+      this.historyLoad = this.loadPersistedHistory(handle.sessionId, {
+        timeline: options.historyTimeline === true,
+      });
     } else {
       // A rotation names the fresh conversation up front; the first query starts it with sessionId.
       this.claudeSessionId = options.freshSessionId ?? null;
@@ -2809,10 +2854,10 @@ class ClaudeAgentSession implements AgentSession {
 
   async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
     await this.historyLoad;
+    const ready = this.persistedTimeline;
     const source = this.persistedTimelineSource;
-    if (!source) return;
-    this.persistedTimelineSource = null;
-    const persisted = await this.readPersistedTimeline(source);
+    this.clearPersistedTimeline();
+    const persisted = ready ?? (source ? await this.readPersistedTimeline(source) : null);
     if (!persisted) return;
     const { timeline, providerSubagentEvents } = persisted;
     for (const entry of timeline) {
@@ -3119,7 +3164,7 @@ class ClaudeAgentSession implements AgentSession {
     );
     this.closed = true;
     this.historyAbort.abort();
-    this.persistedTimelineSource = null;
+    this.clearPersistedTimeline();
     this.rejectAllPendingPermissions(new Error("Claude session closed"));
     this.cancelCurrentTurn?.();
     this.subscribers.clear();
@@ -3549,12 +3594,13 @@ class ClaudeAgentSession implements AgentSession {
     this.persistence = null;
     this.cachedRuntimeInfo = null;
     this.queryRestartNeeded = true;
-    this.persistedTimelineSource = null;
+    this.clearPersistedTimeline();
     this.userMessageIds = [];
     this.emittedUserMessageIds.clear();
     this.rewindTurnAnchors.length = 0;
     this.taskState.reset();
-    this.historyLoad = this.loadPersistedHistory(sessionId);
+    // A conversation rewind replaces the timeline next, so read it with the state.
+    this.historyLoad = this.loadPersistedHistory(sessionId, { timeline: true });
     if (oldSessionId && oldSessionId !== sessionId) {
       this.dispatchEvents([
         {
@@ -3578,7 +3624,7 @@ class ClaudeAgentSession implements AgentSession {
     this.persistence = null;
     this.cachedRuntimeInfo = null;
     this.queryRestartNeeded = true;
-    this.persistedTimelineSource = null;
+    this.clearPersistedTimeline();
     this.userMessageIds = [];
     this.emittedUserMessageIds.clear();
     this.rewindTurnAnchors.length = 0;
@@ -4078,8 +4124,17 @@ class ClaudeAgentSession implements AgentSession {
     const file = await promises.open(historyPath, "r");
     try {
       const before = await file.stat();
-      for await (const line of readHistoryLines(file, false, this.historyAbort.signal)) {
-        if (!line.text.trim()) continue;
+      // FU-530: a queued input is near the end, so read from the end. Only a line that names
+      // the uuid can be the input, so the others are not parsed.
+      const read = async (offset: number, bytes: number) => {
+        const buffer = Buffer.alloc(bytes);
+        const { bytesRead } = await file.read(buffer, 0, bytes, offset);
+        if (bytesRead !== bytes) throw new Error("Claude transcript changed during the read");
+        return buffer;
+      };
+      for await (const line of readLinesBackward(read, before.size, RECEIPT_READ_CHUNK_BYTES)) {
+        this.historyAbort.signal.throwIfAborted();
+        if (!line.text.includes(uuid)) continue;
         const entry = JSON.parse(line.text) as ClaudeHistoryEntry;
         if (entry.type === "user" && entry.isSidechain !== true && entry.uuid === uuid)
           return "present";
@@ -4755,7 +4810,7 @@ class ClaudeAgentSession implements AgentSession {
       this.input = null;
     }
     this.persistence = null;
-    this.persistedTimelineSource = null;
+    this.clearPersistedTimeline();
     this.cachedRuntimeInfo = null;
     this.queryRestartNeeded = false;
     this.autonomousTurn = null;
@@ -5739,11 +5794,15 @@ class ClaudeAgentSession implements AgentSession {
   }
 
   /**
-   * Resume reads the transcript once and keeps only live session state: rewind anchors, user
-   * message ids, tasks, and the tool links conversion leaves behind. It keeps no records and no
-   * timeline, so a 1 GB transcript costs one pass and almost no retained memory.
+   * Resume reads the transcript once. It always rebuilds live session state: rewind anchors,
+   * user message ids, tasks, and the tool links conversion leaves behind. With `timeline`, the
+   * same read also builds the timeline that streamHistory returns next. Without it, no records
+   * and no timeline stay, and a saved resume point lets the read start where the last one ended.
    */
-  private async loadPersistedHistory(sessionId: string): Promise<void> {
+  private async loadPersistedHistory(
+    sessionId: string,
+    mode: { timeline: boolean },
+  ): Promise<void> {
     let historyPath: string | null = null;
     try {
       this.taskState.reset();
@@ -5758,39 +5817,41 @@ class ClaudeAgentSession implements AgentSession {
       const signal = this.historyAbort.signal;
       const end = (await promises.stat(historyPath)).size;
       const sidechains = await readClaudeSidechainHistory(historyPath);
-      const replayBytes = end + sidechains.bytes;
-      logHistoryLoad(this.logger, "start", "claude_resume", replayBytes);
       const data = emptyParsedClaudeHistory();
       const anchors: ClaudeResumeAnchor[] = [];
-      // A record that fails to convert ends the parent's state there, as it ends its timeline.
-      // Subagent replay still needs the facts of every record.
-      let conversionError: unknown = null;
-      for await (const entry of readClaudeHistoryFile(historyPath, signal, end)) {
-        if (entry.isSidechain !== true) data.facts.observe(entry);
-        if (entry.isSidechain === true && typeof entry.agentId === "string")
-          data.sidechainEntries.push(entry);
-        if (entry.isSidechain || conversionError) continue;
-        try {
-          this.observeResumeState(entry, anchors);
-        } catch (error) {
-          conversionError = error;
-        }
-      }
+      const slots: ClaudeTimelineSlot[] | null = mode.timeline ? [] : null;
+      // The timeline needs every record. State alone can continue from a saved point.
+      const point = slots ? null : await this.readResumePoint(historyPath, end);
+      const start = point ? this.restoreResumeState(point, anchors, data) : 0;
+      const replayBytes = end - start + sidechains.bytes;
+      logHistoryLoad(this.logger, "start", "claude_resume", replayBytes);
+      const conversionError = await this.readResumeRecords({
+        historyPath,
+        range: { start, end },
+        data,
+        anchors,
+        slots,
+      });
+      // Captured before subagent replay, which adds its own tool links on every resume. Old
+      // transcripts with subagents inline keep those records in memory, so they get no point.
+      const savedState =
+        !conversionError && data.sidechainEntries.length === 0 && this.savesResumePoint(start, end)
+          ? JSON.stringify(this.captureResumeState(anchors, data.facts))
+          : null;
       await readParsedClaudeSidechains(data, sidechains, signal);
       signal.throwIfAborted();
-      const { replay } = this.replayPersistedSidechains(data);
-      for (const anchor of anchors) {
-        const id = anchor.notificationToolUseId;
-        if (id && (replay.restoredIds.has(id) || replay.toolOwners.has(id))) continue;
-        if (anchor.kind === "assistant") {
-          this.rememberRewindAssistantAnchor(anchor.uuid);
-          continue;
-        }
-        this.rememberUserMessageId(anchor.uuid);
-        this.rememberRewindUserAnchor(anchor.uuid);
-      }
-      this.persistedTimelineSource = { historyPath, end };
+      const { replay, providerSubagentEvents } = this.replayPersistedSidechains(data);
+      this.applyResumeAnchors(anchors, replay);
+      if (slots)
+        this.persistedTimeline = resolvePersistedTimelineSlots({
+          slots,
+          replay,
+          providerSubagentEvents,
+          parentFailed: conversionError !== null,
+        });
+      else this.persistedTimelineSource = { historyPath, end };
       logHistoryLoad(this.logger, "end", "claude_resume", replayBytes);
+      if (savedState) await this.writeResumePoint(historyPath, end, savedState);
       if (conversionError) throw conversionError;
     } catch (error) {
       if (this.historyAbort.signal.aborted) return;
@@ -5801,16 +5862,155 @@ class ClaudeAgentSession implements AgentSession {
     }
   }
 
+  /**
+   * Feeds parent records to the session state. Returns the conversion error, if any: a record
+   * that fails to convert ends the parent's state there, as it ends its timeline. Subagent
+   * replay still needs the facts of every record.
+   */
+  private async readResumeRecords(input: {
+    historyPath: string;
+    range: { start: number; end: number };
+    data: ParsedClaudeHistory;
+    anchors: ClaudeResumeAnchor[];
+    slots: ClaudeTimelineSlot[] | null;
+  }): Promise<unknown> {
+    const { data } = input;
+    let conversionError: unknown = null;
+    for await (const entry of readClaudeHistoryFile(
+      input.historyPath,
+      this.historyAbort.signal,
+      input.range,
+    )) {
+      if (entry.isSidechain !== true) data.facts.observe(entry);
+      if (entry.isSidechain === true && typeof entry.agentId === "string")
+        data.sidechainEntries.push(entry);
+      if (entry.isSidechain || conversionError) continue;
+      try {
+        this.observeResumeState(entry, input.anchors, input.slots);
+      } catch (error) {
+        conversionError = error;
+      }
+    }
+    return conversionError;
+  }
+
+  private savesResumePoint(start: number, end: number): boolean {
+    const cache = this.resumeCache;
+    if (!cache || end < (cache.minBytes ?? DEFAULT_RESUME_CACHE_MIN_BYTES)) return false;
+    return start === 0 || end - start >= RESUME_POINT_REFRESH_BYTES;
+  }
+
+  private applyResumeAnchors(anchors: ClaudeResumeAnchor[], replay: ClaudeReplayOwnership): void {
+    for (const anchor of anchors) {
+      const id = anchor.notificationToolUseId;
+      if (id && (replay.restoredIds.has(id) || replay.toolOwners.has(id))) continue;
+      if (anchor.kind === "assistant") {
+        this.rememberRewindAssistantAnchor(anchor.uuid);
+        continue;
+      }
+      this.rememberUserMessageId(anchor.uuid);
+      this.rememberRewindUserAnchor(anchor.uuid);
+    }
+  }
+
+  private async readResumePoint(historyPath: string, size: number) {
+    const cache = this.resumeCache;
+    if (!cache || size < (cache.minBytes ?? DEFAULT_RESUME_CACHE_MIN_BYTES)) return null;
+    const handle = await promises.open(historyPath, "r");
+    try {
+      return await readClaudeResumePoint(cache, historyPath, handle);
+    } finally {
+      await handle.close();
+    }
+  }
+
+  private async writeResumePoint(historyPath: string, end: number, stateJson: string) {
+    const cache = this.resumeCache;
+    if (!cache) return;
+    try {
+      const handle = await promises.open(historyPath, "r");
+      try {
+        await writeClaudeResumePoint(cache, historyPath, handle, end, stateJson);
+      } finally {
+        await handle.close();
+      }
+    } catch (error) {
+      // The point only saves time. The next resume reads the whole transcript.
+      this.logger.warn({ err: error, historyPath }, "Failed to save Claude resume point");
+    }
+  }
+
+  private captureResumeState(
+    anchors: ClaudeResumeAnchor[],
+    facts: ClaudeReplayFacts,
+  ): ClaudeResumeState {
+    return {
+      anchors: anchors.map((anchor) => [
+        anchor.kind === "user" ? 0 : 1,
+        anchor.uuid,
+        anchor.notificationToolUseId,
+      ]),
+      facts: facts.toSnapshot(),
+      tasks: this.taskState.toSnapshot(),
+      toolUses: [...this.toolUseCache.values()],
+      handbacks: [...this.subagentHandbackIds],
+    };
+  }
+
+  /** Loads a saved state into this session and returns the byte offset to read on from. */
+  private restoreResumeState(
+    point: { end: number; state: unknown },
+    anchors: ClaudeResumeAnchor[],
+    data: ParsedClaudeHistory,
+  ): number {
+    const state = point.state as ClaudeResumeState;
+    this.taskState.restore(state.tasks);
+    for (const entry of state.toolUses) this.toolUseCache.set(entry.id, entry);
+    for (const id of state.handbacks) this.subagentHandbackIds.add(id);
+    data.facts = ClaudeReplayFacts.fromSnapshot(state.facts);
+    for (const [kind, uuid, notificationToolUseId] of state.anchors)
+      anchors.push({ kind: kind === 0 ? "user" : "assistant", uuid, notificationToolUseId });
+    return point.end;
+  }
+
   /** Task notifications are text, so tasks and tool links do not depend on who owns them. */
-  private observeResumeState(entry: ClaudeHistoryEntry, anchors: ClaudeResumeAnchor[]): void {
+  private observeResumeState(
+    entry: ClaudeHistoryEntry,
+    anchors: ClaudeResumeAnchor[],
+    slots: ClaudeTimelineSlot[] | null,
+  ): void {
     const notificationToolUseId = readTaskNotificationToolUseIdFromHistoryRecord(entry);
-    this.taskState.observe(entry);
-    this.convertHistoryEntry(entry);
+    const taskSnapshot = this.taskState.observe(entry);
+    const items = this.convertHistoryEntry(entry);
+    if (slots && (taskSnapshot || items.length > 0))
+      slots.push({
+        notificationToolUseId,
+        taskSnapshot,
+        items,
+        timestamp: normalizeProviderReplayTimestamp(entry.timestamp) ?? undefined,
+      });
     if (typeof entry.uuid !== "string") return;
-    if (isVisibleHistoryUserEntry(entry))
+    if (isVisibleHistoryUserEntry(entry)) {
       anchors.push({ kind: "user", uuid: entry.uuid, notificationToolUseId });
-    else if (entry.type === "assistant")
-      anchors.push({ kind: "assistant", uuid: entry.uuid, notificationToolUseId });
+      return;
+    }
+    if (entry.type !== "assistant") return;
+    // Only the last answer of a turn becomes its rewind point, so keep only that one.
+    const last = anchors.at(-1);
+    if (
+      notificationToolUseId === null &&
+      last?.kind === "assistant" &&
+      last.notificationToolUseId === null
+    ) {
+      last.uuid = entry.uuid;
+      return;
+    }
+    anchors.push({ kind: "assistant", uuid: entry.uuid, notificationToolUseId });
+  }
+
+  private clearPersistedTimeline(): void {
+    this.persistedTimelineSource = null;
+    this.persistedTimeline = null;
   }
 
   private async readPersistedTimeline(
@@ -6705,6 +6905,42 @@ interface ParsedClaudeHistory {
 }
 const sharedClaudeHistory = new CoalescedHistoryLoads<ParsedClaudeHistory>();
 
+/** Places each record's output once subagent ownership is known, as the record replay did. */
+function resolvePersistedTimelineSlots(input: {
+  slots: ClaudeTimelineSlot[];
+  replay: ClaudeReplayOwnership;
+  providerSubagentEvents: Extract<AgentStreamEvent, { type: "provider_subagent" }>[];
+  /** Publish no partial parent timeline. Subagent replay stays. */
+  parentFailed: boolean;
+}): ClaudePersistedTimeline {
+  const { replay } = input;
+  const persisted: ClaudePersistedTimeline = {
+    timeline: [],
+    providerSubagentEvents: input.providerSubagentEvents,
+  };
+  for (const slot of input.slots) {
+    const id = slot.notificationToolUseId;
+    if (id && replay.restoredIds.has(id)) continue;
+    const owner = id ? replay.toolOwners.get(id) : undefined;
+    if (owner) {
+      for (const item of slot.items)
+        persisted.providerSubagentEvents.push({
+          type: "provider_subagent",
+          provider: "claude",
+          event: { type: "timeline", id: owner, item, timestamp: slot.timestamp },
+        });
+      continue;
+    }
+    if (input.parentFailed) continue;
+    for (const item of [
+      ...(slot.taskSnapshot ? [slot.taskSnapshot] : []),
+      ...slot.items.map((entry) => labelReplayedSubagentCard(entry, replay.subagentToolCalls)),
+    ])
+      persisted.timeline.push({ item, timestamp: slot.timestamp });
+  }
+  return persisted;
+}
+
 function emptyParsedClaudeHistory(): ParsedClaudeHistory {
   return {
     parentEntries: [],
@@ -6729,7 +6965,7 @@ async function readParsedClaudeHistory(
   try {
     logHistoryLoad(logger, "start", "claude", replayBytes);
     const data = emptyParsedClaudeHistory();
-    for await (const entry of readClaudeHistoryFile(historyPath, signal, end)) {
+    for await (const entry of readClaudeHistoryFile(historyPath, signal, { end })) {
       if (entry.isSidechain !== true) data.facts.observe(entry);
       if (entry.isSidechain === true && typeof entry.agentId === "string")
         data.sidechainEntries.push(entry);
@@ -6857,6 +7093,8 @@ function cloneClaudeReplayValue(value: unknown): unknown {
   );
 }
 
+const RECEIPT_READ_CHUNK_BYTES = 1024 * 1024;
+
 /**
  * Claude Code bookkeeping records that replay never reads. Claude Code writes `type` first, so a
  * prefix check skips them before JSON.parse. In a 1.2 GB lead transcript they are 42% of the bytes.
@@ -6882,12 +7120,12 @@ export function isSkippedClaudeHistoryLine(line: string): boolean {
 async function* readClaudeHistoryFile(
   file: string,
   signal?: AbortSignal,
-  end?: number,
+  range?: HistoryByteRange,
 ): AsyncGenerator<ClaudeHistoryEntry> {
   signal?.throwIfAborted();
   const handle = await promises.open(file, "r");
   try {
-    for await (const line of readHistoryLines(handle, true, signal, end)) {
+    for await (const line of readHistoryLines(handle, true, signal, range)) {
       if (isSkippedClaudeHistoryLine(line.text)) continue;
       const trimmed = line.text.trim();
       if (!trimmed) continue;
@@ -6936,11 +7174,37 @@ function labelReplayedSubagentCard(
  * source consumes. The agentId scrape is kept only as a fallback for sessions recorded before
  * Claude Code wrote the meta sidecar.
  */
+interface ClaudeReplayFactsSnapshot {
+  toolCalls: [string, { title?: string; description?: string }][];
+  outcomes: [string, { failed: boolean }][];
+  links: [string, { toolCallId: string; failed: boolean }][];
+  workflowEntries: ClaudeHistoryEntry[];
+}
+
 class ClaudeReplayFacts {
   private readonly toolCalls = new Map<string, { title?: string; description?: string }>();
   private readonly outcomes = new Map<string, { failed: boolean }>();
   private readonly links = new Map<string, { toolCallId: string; failed: boolean }>();
   private readonly workflowEntries: ClaudeHistoryEntry[] = [];
+
+  /** Only Task call outcomes are read. A result never comes before its call. */
+  toSnapshot(): ClaudeReplayFactsSnapshot {
+    return {
+      toolCalls: [...this.toolCalls],
+      outcomes: [...this.outcomes].filter(([id]) => this.toolCalls.has(id)),
+      links: [...this.links],
+      workflowEntries: [...this.workflowEntries],
+    };
+  }
+
+  static fromSnapshot(snapshot: ClaudeReplayFactsSnapshot): ClaudeReplayFacts {
+    const facts = new ClaudeReplayFacts();
+    for (const [id, call] of snapshot.toolCalls) facts.toolCalls.set(id, call);
+    for (const [id, outcome] of snapshot.outcomes) facts.outcomes.set(id, outcome);
+    for (const [id, link] of snapshot.links) facts.links.set(id, link);
+    facts.workflowEntries.push(...snapshot.workflowEntries);
+    return facts;
+  }
 
   observe(entry: ClaudeHistoryEntry): void {
     const content = toObjectRecord(entry.message)?.content;

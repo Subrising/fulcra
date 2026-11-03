@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { Logger } from "pino";
 import type { ProviderOptions, ToolPolicy } from "@getpaseo/protocol/agent-types";
 
@@ -24,6 +25,7 @@ import {
   resolveDefaultAgentCreateConfig,
 } from "./create-agent-mode.js";
 import { normalizeAgentModelDefinition } from "./agent-sdk-types.js";
+import { resolvePaseoHome } from "../paseo-home.js";
 import { runProviderRefreshActivity } from "./provider-refresh-deadline.js";
 import type { WorkspaceGitService } from "../workspace-git-service.js";
 import type { ManagedProcessRegistry } from "../managed-processes/managed-processes.js";
@@ -191,6 +193,7 @@ const PROVIDER_CLIENT_FACTORIES: Record<string, ProviderClientFactory> = {
     new ClaudeAgentClient({
       logger,
       runtimeSettings,
+      resumeCache: { dir: path.join(resolvePaseoHome(), "cache", "claude-resume") },
     }),
   codex: (logger, runtimeSettings, options) =>
     new CodexAppServerAgentClient(logger, runtimeSettings, {

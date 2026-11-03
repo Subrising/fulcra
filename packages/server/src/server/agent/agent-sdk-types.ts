@@ -735,6 +735,11 @@ export interface AgentResumeSessionOptions {
   purpose?: AgentResumePurpose;
   /** See AgentCreateSessionOptions.configuredModelIds. */
   configuredModelIds?: readonly string[];
+  /**
+   * The caller streams the session's history right after resume, because it has no stored
+   * timeline. A provider may build that history in its resume read instead of a second read.
+   */
+  historyTimeline?: boolean;
 }
 
 /**
