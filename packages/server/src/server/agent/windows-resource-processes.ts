@@ -128,7 +128,13 @@ export async function readWindowsResourceProcesses(
         "-PolicyPath",
         policyFile ?? path.join(directory, "missing-policy.json"),
       ],
-      { timeout: 15_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true },
+      {
+        timeout: 15_000,
+        maxBuffer: 16 * 1024 * 1024,
+        windowsHide: true,
+        // DETACHED_PROCESS: no console, so no conhost.exe per sample.
+        detached: true,
+      },
     );
     pending.child.stdin?.end();
     return parseWindowsResourceSnapshot((await pending).stdout, onStaleInstallRoot);

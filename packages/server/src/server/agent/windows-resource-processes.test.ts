@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   parseWindowsResourceSnapshot,
   protectedSessionDirectory,
@@ -141,4 +141,18 @@ test("a stale Windows installation identity no longer protects other processes",
     }),
   );
   expect(row?.protectionReason).toBeUndefined();
+});
+
+test("the Windows resource table reader starts PowerShell detached (no conhost per sample)", async () => {
+  vi.resetModules();
+  const execFileMock = vi.fn((_file: string, _args: string[], _opts: unknown, cb: Function) => {
+    cb(null, { stdout: "[]", stderr: "" });
+    return { stdin: { end: vi.fn() } };
+  });
+  vi.doMock("node:child_process", () => ({ execFile: execFileMock }));
+  const mod = await import("./windows-resource-processes.js");
+  await mod.readWindowsResourceProcesses().catch(() => undefined);
+  const options = execFileMock.mock.calls[0][2] as Record<string, unknown>;
+  expect(options).toMatchObject({ detached: true, windowsHide: true, timeout: 15_000 });
+  vi.doUnmock("node:child_process");
 });

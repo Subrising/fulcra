@@ -270,7 +270,8 @@ export function spawnGitProcess(args: string[], options: SpawnOptions = {}): Chi
     env: { ...gitEnvironment(options.env), FULCRA_GIT_TIMEOUT_MS: String(timeout) },
     timeout: undefined,
     signal: undefined,
-    detached: process.platform !== "win32",
+    // win32: DETACHED_PROCESS, so guardian.exe gets no console and no conhost.exe.
+    detached: true,
     shell: false,
     windowsHide: true,
   });
@@ -628,7 +629,7 @@ const SYNC_WORKER = String.raw`
 import {spawn, execFile} from "node:child_process";
 let text=""; for await(const c of process.stdin) text+=c;
 const request=JSON.parse(text);
-const child=spawn(request.executable,request.args,{cwd:request.cwd,env:process.env,windowsHide:true,shell:false,detached:process.platform!=="win32",stdio:["pipe","pipe","pipe"]});
+const child=spawn(request.executable,request.args,{cwd:request.cwd,env:process.env,windowsHide:true,shell:false,detached:true,stdio:["pipe","pipe","pipe"]});
 let timedOut=false, bytes=0, stopped=false;
 function stop(){
  if(stopped)return; stopped=true;
