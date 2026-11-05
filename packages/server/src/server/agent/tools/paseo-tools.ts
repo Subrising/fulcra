@@ -1,4 +1,4 @@
-import { noticePaused, NoticePausedError } from "../../notice-pause.js";
+import { noticePaused } from "../../notice-pause.js";
 import { hostLinksFor, type HostLinks } from "../../host-links.js";
 import { randomUUID } from "node:crypto";
 import { HostLinkSpawnSchema } from "../../host-link-contracts.js";
@@ -84,23 +84,10 @@ import {
   serializeSnapshotWithMetadata,
   toScheduleSummary,
 } from "../mcp-shared.js";
-import {
-  sendPromptToAgentAndWaitForStart,
-  type PromptDispatchDisposition,
-  sendPromptToAgent,
-  waitForAgentRunStartWithTimeout,
-  disarmFinishNotification,
-  armPromptFinishNotification,
-  SteerUnavailableError,
-} from "../agent-prompt.js";
-import { FINAL_INPUT_CHECK } from "../agent-sdk-types.js";
+import { sendPromptToAgent, waitForAgentRunStartWithTimeout } from "../agent-prompt.js";
+import { AgentNotFoundError } from "../agent-loading.js";
 import { reviewWork } from "../work-review.js";
-import {
-  recipientLimit,
-  queuedAgentMessagesFor,
-  queuedReceiverCheck,
-  loadQueuedReceiver,
-} from "../../queued-agent-messages.js";
+import { queuedAgentMessagesFor, loadQueuedReceiver } from "../../queued-agent-messages.js";
 import { respondToAgentPermission } from "../permission-response.js";
 import {
   archiveAgentCommand,
@@ -683,6 +670,10 @@ function createToolCatalog(
     return result.data;
   };
 
+  function agentMessages(): AgentMessageDelivery {
+    if (!options.agentMessages) throw new Error("Agent messages are not configured");
+    return options.agentMessages();
+  }
   function finishSubscriptions(): FinishSubscriptions {
     if (!options.finishSubscriptions) throw new Error("Finish subscriptions are not configured");
     return options.finishSubscriptions();
@@ -2228,157 +2219,121 @@ function createToolCatalog(
         callerAgentId,
         localPromptIdentifier(requestedAgentId),
       );
-      let rearmedFinishMessageId: string | null = null;
-      async function armFinishNotification(forNextTurn = false): Promise<boolean> {
-        if (!callerAgentId || !notifyOnFinish) {
-          return false;
-        }
-        rearmedFinishMessageId = await armPromptFinishNotification({
-          agentManager,
-          agentStorage,
-          childAgentId: agentId,
-          callerAgentId,
-          forNextTurn,
-          logger: childLogger,
-        });
-        if (rearmedFinishMessageId) return true;
-        return !agentManager.nativeReportOwnsFinish(agentId, callerAgentId);
-      }
-
-      let backgroundNotify = false;
-      const dispatch = async () => {
-        if (callerAgentId) {
-          const record = agentManager.getAgent(agentId) ?? (await agentStorage.get(agentId));
-          await loadQueuedReceiver(
-            { agentManager, agentStorage, logger: childLogger },
-            agentId,
-            record?.persistence?.sessionId ?? null,
-          );
-        }
-        const receiver = agentManager.getAgent(agentId);
-        const check = callerAgentId
-          ? queuedReceiverCheck(
-              agentManager,
-              agentId,
-              receiver?.persistence?.sessionId ?? null,
-              undefined,
-              () => {
-                if (
-                  noticePaused(
-                    agentStorage.noticePausePath,
-                    agentManager.getAgent(agentId),
-                    (id) => agentManager.getAgent(id) ?? agentStorage.getCached(id),
-                  )
-                )
-                  throw new NoticePausedError();
-              },
-            )
-          : undefined;
-        try {
-          if (callerAgentId && notifyOnFinish) backgroundNotify = await armFinishNotification(true);
-          const send = callerAgentId ? sendPromptToAgentAndWaitForStart : sendPromptToAgent;
-          const result = await send({
-            agentManager,
-            agentStorage,
-            agentId,
-            prompt,
-            // Upstream sender envelope (#6373): the receiver sees who sent the message.
-            source: callerAgentId
-              ? {
-                  kind: "agent-message",
-                  agentId: callerAgentId,
-                  title: resolveCallerAgent()?.config.title ?? undefined,
-                }
-              : undefined,
-            sessionMode,
-            // FU-657 row 6 (owner decision, 5 Nov): an agent caller steers a busy receiver's turn, as upstream
-            // Paseo. It never interrupts unless it asks; steer unavailable falls back to the Fulcra queue below.
-            activeTurnBehavior,
-            ...(callerAgentId && activeTurnBehavior === "steer" ? { steerOnly: true } : {}),
-            ...(check ? { runOptions: { [FINAL_INPUT_CHECK]: check }, unarchive: false } : {}),
-            logger: childLogger,
-          });
-          if (!callerAgentId && result.disposition === "turn_started")
-            await waitForAgentRunStartWithTimeout(agentManager, agentId);
-          if (result.disposition !== "turn_started") await clearBackgroundNotification();
-          noteDeliveredReport(agentManager, agentId, callerAgentId);
-          if (callerAgentId) noteAgentMessageDelivered(callerAgentId, agentId);
-          return result;
-        } catch (error) {
-          await clearBackgroundNotification();
-          throw error;
-        }
-      };
-      async function clearBackgroundNotification(): Promise<void> {
-        if (backgroundNotify && callerAgentId)
-          disarmFinishNotification(agentManager, agentId, callerAgentId);
-        if (rearmedFinishMessageId)
-          await agentStorage.settleFinishNotice(agentId, rearmedFinishMessageId, "cancelled");
-        rearmedFinishMessageId = null;
-        backgroundNotify = false;
-      }
-      const queueForTurnEnd = async (senderId: string, resumeAt?: number) => {
-        await queuedAgentMessagesFor({ agentManager, agentStorage, logger: childLogger }).enqueue(
+      if (callerAgentId) {
+        // Upstream agent-message delivery (#5164, #6373, #7561): batched, steering a busy receiver, with the
+        // sender in the envelope and the finish notice as a durable subscription (its delivery applies the
+        // Fulcra finish-notice filter). Fulcra keeps the reporting-line check above and the paused-notice hold.
+        noteAgentMessage(callerAgentId, agentId);
+        const record = agentManager.getAgent(agentId) ?? (await agentStorage.get(agentId));
+        if (!record) throw new PaseoToolInputError(`Agent ${agentId} not found`);
+        await loadQueuedReceiver(
+          { agentManager, agentStorage, logger: childLogger },
           agentId,
-          { text: prompt, sender: { agentId: senderId }, sessionMode, notifyOnFinish },
-          undefined,
-          resumeAt,
+          record.persistence?.sessionId ?? null,
         );
-        noteAgentMessageDelivered(senderId, agentId);
+        const pausedTarget = agentManager.getAgent(agentId) ?? (await agentStorage.get(agentId));
+        if (
+          noticePaused(
+            agentStorage.noticePausePath,
+            pausedTarget,
+            (id) => agentManager.getAgent(id) ?? agentStorage.getCached(id),
+          )
+        ) {
+          await queuedAgentMessagesFor({ agentManager, agentStorage, logger: childLogger }).enqueue(
+            agentId,
+            { text: prompt, sender: { agentId: callerAgentId }, sessionMode, notifyOnFinish },
+          );
+          noteAgentMessageDelivered(callerAgentId, agentId);
+          return {
+            content: [],
+            structuredContent: ensureValidJson({
+              success: true,
+              deliveryStatus: "queued",
+              status: agentManager.getAgent(agentId)?.lifecycle ?? "running",
+              guidance: HELD_PROMPT_GUIDANCE,
+            }),
+          };
+        }
+        const notification = notifyOnFinish
+          ? await finishSubscriptions().register({ childAgentId: agentId, callerAgentId }, true)
+          : undefined;
+        const rejectNotification = () => {
+          void notification
+            ?.reject()
+            .catch((error) =>
+              childLogger.error(
+                { err: error, agentId },
+                "Failed to remove rejected finish subscription",
+              ),
+            );
+        };
+        const receipt = (() => {
+          try {
+            return agentMessages().enqueue({
+              recipientId: agentId,
+              prompt,
+              source: {
+                kind: "agent-message",
+                agentId: callerAgentId,
+                title: resolveCallerAgent()?.config.title ?? undefined,
+              },
+              sessionMode,
+              activeTurnBehavior,
+              onDispatch: () => {
+                notification?.accept();
+                noteDeliveredReport(agentManager, agentId, callerAgentId);
+                noteAgentMessageDelivered(callerAgentId, agentId);
+              },
+            });
+          } catch (error) {
+            rejectNotification();
+            throw error;
+          }
+        })();
+        void receipt.dispatched.catch(() => {
+          rejectNotification();
+        });
         return {
           content: [],
           structuredContent: ensureValidJson({
             success: true,
-            deliveryStatus: "queued",
-            status: agentManager.getAgent(agentId)?.lifecycle ?? "running",
-            guidance: HELD_PROMPT_GUIDANCE,
+            deliveryStatus: receipt.status,
+            messageId: receipt.messageId,
+            status: agentManager.getAgent(agentId)?.lifecycle ?? "idle",
+            guidance: notifyOnFinish
+              ? `Queued for delivery after two quiet seconds. ${PROMPTED_AGENT_NOTIFICATION_GUIDANCE}`
+              : "Queued for delivery after two quiet seconds; provider dispatch has not occurred.",
           }),
         };
-      };
-      if (callerAgentId) noteAgentMessage(callerAgentId, agentId);
-      const shouldQueuePrompt = async () => {
-        if (!callerAgentId) return false;
-        const target = agentManager.getAgent(agentId) ?? (await agentStorage.get(agentId));
-        return noticePaused(
-          agentStorage.noticePausePath,
-          target,
-          (id) => agentManager.getAgent(id) ?? agentStorage.getCached(id),
-        );
-      };
-      if (await shouldQueuePrompt()) return queueForTurnEnd(callerAgentId!);
-      let disposition: PromptDispatchDisposition;
-      try {
-        ({ disposition } = await dispatch());
-      } catch (error) {
-        const limit = recipientLimit(error);
-        if (
-          callerAgentId &&
-          (limit || error instanceof SteerUnavailableError || error instanceof NoticePausedError)
-        )
-          return queueForTurnEnd(callerAgentId, limit?.resumeAt);
-        throw error;
       }
 
-      // Upstream removed blocking sends: the result always arrives as a finish notice.
-      const notifying = backgroundNotify;
+      const { disposition } = await sendPromptToAgent({
+        agentManager,
+        agentStorage,
+        agentId,
+        prompt,
+        sessionMode,
+        activeTurnBehavior,
+        logger: childLogger,
+      }).catch((error) => {
+        if (error instanceof AgentNotFoundError) throw new PaseoToolInputError(error.message);
+        throw error;
+      });
+      // Return once the provider has accepted the turn, so the status reports it running.
+      if (disposition === "turn_started")
+        await waitForAgentRunStartWithTimeout(agentManager, agentId);
 
       const currentSnapshot = agentManager.getAgent(agentId);
-
-      const responseData = {
-        success: true,
-        disposition,
-        status: currentSnapshot?.lifecycle ?? "idle",
-        guidance: notifying
-          ? PROMPTED_AGENT_NOTIFICATION_GUIDANCE
-          : "Dispatch acknowledged. Observe completion using get_agent_status/get_agent_activity or SDK/RPC subscriptions and wait APIs.",
-      };
-      const validJson = ensureValidJson(responseData);
-
-      const response = {
+      return {
         content: [],
-        structuredContent: validJson,
+        structuredContent: ensureValidJson({
+          success: true,
+          disposition,
+          status: currentSnapshot?.lifecycle ?? "idle",
+          guidance:
+            "Dispatch acknowledged. Observe completion using get_agent_status/get_agent_activity or SDK/RPC subscriptions and wait APIs.",
+        }),
       };
-      return response;
     },
   );
 
