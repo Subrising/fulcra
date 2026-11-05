@@ -238,8 +238,9 @@ async function waitForAgentFinish(options: { client: McpClient; agentId: string 
     .poll(
       async () => {
         const result = await options.client.callTool({
+          // Fulcra compacts get_agent_status by default; the status needs the full result.
           name: "get_agent_status",
-          args: { agentId: options.agentId },
+          args: { agentId: options.agentId, fullResult: true },
         });
         return getStructuredContent(result)?.status;
       },
@@ -1646,6 +1647,10 @@ test("computer-use job label works through the scratch MCP endpoint with one lea
     expect(result.isError, JSON.stringify(result)).not.toBe(true);
     const workerId = (result.structuredContent as { agentId: string }).agentId;
     if (!codexSession) throw new Error("Real Codex adapter session required");
+    // Real Codex announces the turn before it asks for consent. The thread counts as saved from
+    // then on, so the consent decisions reach the stored persistence.
+    const turnStart = await appServer.waitForTurnStart();
+    appServer.startsTurn({ threadId: String(turnStart.threadId), turnId: "turn-1" });
     const request = (app: string) => appServer.requestMcpElicitation(computerUseConsent(app));
     for (let i = 0; i < 3; i++) {
       request("VRoid Studio");

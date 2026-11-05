@@ -5975,44 +5975,48 @@ export class Session {
         throw new Error(`Working directory does not exist or is not a directory: ${resolvedCwd}`);
       }
 
-      const { snapshot, liveSnapshot, initialPromptStarted } = await createAgentCommand(
-        {
-          agentManager: this.agentManager,
-          agentStorage: this.agentStorage,
-          logger: this.sessionLogger,
-          paseoHome: this.paseoHome,
-          worktreesRoot: this.worktreesRoot,
-          providerSnapshotManager: this.providerSnapshotManager,
-        },
-        {
-          kind: "session",
-          onAgentReady: async (agent) => {
-            createdAgentId = agent.id;
-            await onAgentReady?.(await this.buildAgentPayload(agent));
+      const { snapshot, liveSnapshot, initialPromptStarted, initialPromptError } =
+        await createAgentCommand(
+          {
+            agentManager: this.agentManager,
+            agentStorage: this.agentStorage,
+            logger: this.sessionLogger,
+            paseoHome: this.paseoHome,
+            worktreesRoot: this.worktreesRoot,
+            providerSnapshotManager: this.providerSnapshotManager,
           },
-          agentId,
-          config: resolvedIntent.config,
-          workspaceId: resolvedIntent.intent.workspaceId,
-          initialPrompt,
-          source: msg.callerAgentId
-            ? { kind: "agent-message", agentId: msg.callerAgentId }
-            : undefined,
-          clientMessageId,
-          outputSchema,
-          images,
-          attachments,
-          labels: resolvedIntent.intent.labels,
-          parentAgentId: resolvedIntent.intent.parentAgentId,
-          env,
-          provisionalTitle,
-          firstAgentContext,
-        },
-      );
+          {
+            kind: "session",
+            onAgentReady: async (agent) => {
+              createdAgentId = agent.id;
+              await onAgentReady?.(await this.buildAgentPayload(agent));
+            },
+            agentId,
+            config: resolvedIntent.config,
+            workspaceId: resolvedIntent.intent.workspaceId,
+            initialPrompt,
+            source: msg.callerAgentId
+              ? { kind: "agent-message", agentId: msg.callerAgentId }
+              : undefined,
+            clientMessageId,
+            outputSchema,
+            images,
+            attachments,
+            labels: resolvedIntent.intent.labels,
+            parentAgentId: resolvedIntent.intent.parentAgentId,
+            env,
+            provisionalTitle,
+            firstAgentContext,
+          },
+        );
       createdAgentId = snapshot.id;
       // `snapshot` predates the initial prompt; subscribers keep the last state they receive.
       await this.agentUpdates.forwardLiveAgent(
         this.agentManager.getAgent(snapshot.id) ?? liveSnapshot,
       );
+      // FULCRA(create): FU-657. The agent stays registered (upstream rule), but the caller still gets
+      // the first-turn error, as on 0.2.42. The schedule service does the same.
+      if (initialPromptError) throw initialPromptError;
       if (resolvedIntent.createdDirectoryWorkspace && trimmedPrompt) {
         this.workspaceAutoName.scheduleForDirectory(
           {
