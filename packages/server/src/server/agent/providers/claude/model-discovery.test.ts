@@ -86,7 +86,7 @@ async function catalogWith(probe: ClaudeModelProbe) {
     logger: createTestLogger(),
     resolveBinary: async () => "/test/claude",
     resolveVersion: async () => "2.1.280",
-    configDir: await emptyConfigDir(),
+    runtimeSettings: { env: { CLAUDE_CONFIG_DIR: await emptyConfigDir() } },
     modelProbe: probe,
   });
   return client.fetchCatalog({ scope: "workspace", cwd: os.tmpdir(), force: false });
@@ -122,13 +122,13 @@ describe("X6: probe failure — the manifest is the full fallback", () => {
       throw new Error("Claude model probe timed out after 20000ms");
     });
 
-    expect(models).toEqual(getClaudeManifestModels("2.1.280"));
+    expect(models).toEqual(getClaudeManifestModels("2.1.280", new Set()));
   });
 
   it("returns the manifest when discovery reports nothing", async () => {
     const { models } = await catalogWith(async () => []);
 
-    expect(models).toEqual(getClaudeManifestModels("2.1.280"));
+    expect(models).toEqual(getClaudeManifestModels("2.1.280", new Set()));
   });
 });
 

@@ -659,6 +659,8 @@ test("leaves out the client bundles a catalog request already holds", async () =
       type: "plugin.catalog.get.response",
       payload: {
         requestId: "reconnect",
+        trustedHost: { contract: "1.1", boot: expect.any(String) },
+        trustedPlugins: [],
         plugins: [
           { id: "cached", clientBundleHash: "hash-cached" },
           { id: "changed", clientBundle: "new bundle", clientBundleHash: "hash-new" },
@@ -670,6 +672,8 @@ test("leaves out the client bundles a catalog request already holds", async () =
       type: "plugin.catalog.get.response",
       payload: {
         requestId: "legacy",
+        trustedHost: { contract: "1.1", boot: expect.any(String) },
+        trustedPlugins: [],
         plugins: [
           { id: "cached", clientBundle: "cached bundle", clientBundleHash: "hash-cached" },
           { id: "changed", clientBundle: "new bundle", clientBundleHash: "hash-new" },

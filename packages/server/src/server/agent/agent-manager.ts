@@ -245,7 +245,7 @@ import {
   type PendingForegroundRun,
 } from "./agent-run-state.js";
 import { invokeRewindCapability, type RewindMode } from "./rewind/rewind.js";
-import { FINISH_NOTIFICATION_MESSAGE_PREFIX, isSystemInjectedEnvelope } from "./agent-prompt.js";
+import { FINISH_NOTIFICATION_MESSAGE_PREFIX } from "./agent-prompt.js";
 import { parseAgentMessage, projectAgentMessages } from "./agent-messages/index.js";
 import { isStaleProviderSessionError } from "./stale-provider-session-error.js";
 
@@ -5451,8 +5451,9 @@ export class AgentManager {
       await this.closeAgentRuntime(agentId);
       await this.deleteAgentState(agentId);
       this.retireInternalAgent({ record, lastMessage });
-      // An internal parent has no stored record, so only its internal children follow it.
-      await this.cascadeArchiveInternalChildren(agentId, admittedPlan ?? new Map());
+      // An internal parent has no stored record, so its archived snapshot stands in for it (upstream) and its
+      // stored children follow it too, as well as its internal children.
+      await this.cascadeArchiveChildren(agentId, admittedPlan ?? new Map(), record);
       return { archivedAt };
     }
     if (!this.registry) {
@@ -5536,9 +5537,10 @@ export class AgentManager {
   private async cascadeArchiveChildren(
     parentAgentId: string,
     plan: CascadeArchivePlan,
+    internalParent?: StoredAgentRecord,
   ): Promise<void> {
     const registry = this.requireRegistry();
-    const parent = await registry.get(parentAgentId);
+    const parent = internalParent ?? (await registry.get(parentAgentId));
     if (!parent) throw new Error(`Archived parent ${parentAgentId} not found in storage`);
     // V1 has no payload-bound plan: preserve its dynamic child/open-tab reconciliation.
     if (!this.trustedPlugins.hasV11Authority()) {
@@ -10074,12 +10076,6 @@ export class AgentManager {
   }): Promise<void> {
     const { agent, event, options, flags } = params;
 
-    if (event.item.type === "user_message" && isSystemInjectedEnvelope(event.item.text)) {
-      flags.shouldDispatchEvent = false;
-      flags.shouldNotifyWaiters = false;
-      return;
-    }
-
     flags.shouldDispatchEvent = false;
     flags.shouldNotifyWaiters = false;
     for (const item of projectAgentMessages(event.item)) {
@@ -10994,7 +10990,12 @@ export class AgentManager {
           accountId: agent.session?.limitResumeAccountBinding?.()?.replace(/^pool:/, ""),
         }),
         event,
-        this.timelineStore.getItems(agentId),
+        // FULCRA: only a turn end carries the timeline (report-up reads the last answer); other events read none.
+        event.type === "turn_completed" ||
+          event.type === "turn_failed" ||
+          event.type === "turn_canceled"
+          ? this.timelineStore.getItems(agentId)
+          : [],
         metadata?.epoch && metadata.seq !== undefined
           ? {
               id: `${metadata.epoch}:${metadata.seq}`,

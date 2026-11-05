@@ -1003,10 +1003,11 @@ describe("Paseo tool timeline presentation", () => {
     try {
       const { tools } = await client.listTools();
       const cataloged = new Set<string>(PASEO_TOOL_NAMES);
-      // speak renders as a voice message, not a tool call row.
+      // speak renders as a voice message, not a tool call row. The Fulcra work_* tools are outside
+      // the upstream catalog on purpose; they render through the humanized-name fallback.
       const uncataloged = tools
         .map((tool) => tool.name)
-        .filter((name) => name !== "speak" && !cataloged.has(name));
+        .filter((name) => name !== "speak" && !name.startsWith("work_") && !cataloged.has(name));
       expect(tools.length).toBeGreaterThan(40);
       expect(uncataloged).toEqual([]);
     } finally {
@@ -3054,6 +3055,20 @@ describe("create_agent MCP tool", () => {
       registry: storage,
       logger,
     });
+    // FULCRA(orchestration): a created child's finish notice is armed in storage and sent by report-up.
+    const reports = new ReportUpService({
+      agentManager,
+      agentStorage: storage,
+      logger,
+      localServerId: null,
+      isEnabled: () => false,
+      isOtherEnabled: () => false,
+      isNudgeEnabled: () => false,
+      readLedger: () => [],
+    });
+    const offReports = agentManager.subscribe((event) => reports.onEvent(event), {
+      replayState: false,
+    });
 
     try {
       const parent = await agentManager.createAgent(
@@ -3077,13 +3092,20 @@ describe("create_agent MCP tool", () => {
       });
       const childId = z.object({ agentId: z.string() }).parse(response.structuredContent).agentId;
 
-      await vi.waitFor(() => {
-        const parentPrompts = parentClient.sessions[0]!.prompts;
-        expect(parentPrompts).toHaveLength(1);
-        expect(parentPrompts[0]).toContain(childId);
-        expect(parentPrompts[0]).toContain("finished");
-      });
+      await vi.waitFor(
+        () => {
+          const parentPrompts = parentClient.sessions[0]!.prompts;
+          // The fake parent ends its turn with no answer, so the idle-turn recovery may add a second prompt.
+          expect(parentPrompts.length).toBeGreaterThanOrEqual(1);
+          expect(parentPrompts[0]).toContain(childId);
+          expect(parentPrompts[0]).toContain("finished");
+        },
+        // FULCRA(orchestration): report-up holds the notice briefly before it is sent.
+        { timeout: 10_000 },
+      );
     } finally {
+      offReports();
+      reports.stop();
       await removeAgentStateDir(agentManager, storage, workdir);
     }
   });
@@ -3643,6 +3665,13 @@ class HeldTurnAgentSession implements AgentSession {
       // The whole turn runs before the turn-start request returns, as a provider whose
       // start acknowledgment arrives together with the turn's completion does.
       this.pushEvent({ type: "turn_started", provider: this.provider, turnId });
+      // A finished turn ends with an answer; a bare turn_completed reads as an unfinished idle turn.
+      this.pushEvent({
+        type: "timeline",
+        provider: this.provider,
+        turnId,
+        item: { type: "assistant_message", text: "Done" },
+      });
       this.pushEvent({ type: "turn_completed", provider: this.provider, turnId });
       return { turnId };
     }
@@ -4112,10 +4141,14 @@ describe("send_agent_prompt MCP tool", () => {
         prompt: "Follow up",
       });
       expect(parsed.success).toBe(true);
-      expect(parsed.data).toMatchObject({ background: true, notifyOnFinish: true });
-      const response = await tool.handler(parsed.data as Record<string, unknown>);
+      expect(parsed.data).toMatchObject({ notifyOnFinish: true });
+      const response = await invokeToolWithParsedInput(
+        tool,
+        parsed.data as Record<string, unknown>,
+      );
       expect(response.structuredContent.guidance).toContain("You will get notified");
-      await vi.waitFor(() => expect(childClient.sessions[0]!.prompts).toEqual(["Follow up"]));
+      await vi.waitFor(() => expect(childClient.sessions[0]!.prompts).toHaveLength(1));
+      expect(childClient.sessions[0]!.prompts[0]).toContain("Follow up");
       expect(parentClient.sessions[0]!.prompts).toEqual([]);
       childClient.sessions[0]!.finishTurn();
       await vi.waitFor(() => expect(parentClient.sessions[0]!.prompts).toHaveLength(1));
@@ -4324,50 +4357,6 @@ describe("send_agent_prompt MCP tool", () => {
       expect(parentClient.sessions[0]!.prompts).toEqual([]);
     } finally {
       await queuedAgentMessagesFor({ agentManager, agentStorage: storage, logger }).close();
-      await removeAgentStateDir(agentManager, storage, workdir);
-    }
-  });
-
-  it("does not send a finish notification for blocking agent-scoped prompts", async () => {
-    const workdir = await mkdtemp(join(tmpdir(), "mcp-blocking-send-"));
-    const storage = new AgentStorage(join(workdir, "agents"), logger);
-    const parentClient = new HeldTurnAgentClient("claude", false);
-    const childClient = new HeldTurnAgentClient("codex", false);
-    const agentManager = new AgentManager({
-      clients: { claude: parentClient, codex: childClient },
-      registry: storage,
-      logger,
-    });
-    try {
-      const parent = await agentManager.createAgent(
-        { provider: "claude", cwd: existingCwd },
-        undefined,
-        { workspaceId: "wks_parent" },
-      );
-      const child = await agentManager.createAgent(
-        { provider: "codex", cwd: existingCwd },
-        undefined,
-        { workspaceId: "wks_parent" },
-      );
-      const server = await createAgentMcpServer({
-        agentManager,
-        agentStorage: storage,
-        providerSnapshotManager: createOpenCodeManager().manager,
-        callerAgentId: parent.id,
-        logger,
-      });
-      const response = await invokeToolWithParsedInput(
-        registeredTool(server, "send_agent_prompt"),
-        {
-          agentId: child.id,
-          prompt: "Follow up",
-          background: false,
-        },
-      );
-      expect(response.structuredContent).toMatchObject({ success: true, status: "idle" });
-      expect(childClient.sessions[0]!.prompts).toEqual(["Follow up"]);
-      expect(parentClient.sessions[0]!.prompts).toEqual([]);
-    } finally {
       await removeAgentStateDir(agentManager, storage, workdir);
     }
   });
@@ -4588,153 +4577,6 @@ describe("send_agent_prompt MCP tool", () => {
       await removeAgentStateDir(agentManager, storage, workdir);
     }
   });
-  it("holds a prompt to a running child until its turn ends, then notifies the caller once per turn", async () => {
-    const workdir = await mkdtemp(join(tmpdir(), "mcp-send-running-child-"));
-    const storage = new AgentStorage(join(workdir, "agents"), logger);
-    const parentClient = new HeldTurnAgentClient("claude", false);
-    const childClient = new HeldTurnAgentClient("codex", true);
-    const agentManager = new AgentManager({
-      clients: { claude: parentClient, codex: childClient },
-      registry: storage,
-      logger,
-    });
-
-    const reports = new ReportUpService({
-      agentManager,
-      agentStorage: storage,
-      logger,
-      localServerId: null,
-      isEnabled: () => false,
-      isOtherEnabled: () => false,
-      isNudgeEnabled: () => false,
-      readLedger: () => [],
-    });
-    const offReports = agentManager.subscribe((event) => reports.onEvent(event), {
-      replayState: false,
-    });
-
-    try {
-      const parent = await agentManager.createAgent(
-        { provider: "claude", cwd: existingCwd },
-        undefined,
-        { workspaceId: "wks_parent" },
-      );
-      const server = await createAgentMcpServer({
-        agentManager,
-        agentStorage: storage,
-        callerAgentId: parent.id,
-        providerSnapshotManager: createOpenCodeManager().manager,
-        logger,
-      });
-
-      const created = await invokeToolWithParsedInput(registeredTool(server, "create_agent"), {
-        relationship: { kind: "subagent" },
-        workspace: { kind: "current" },
-        title: "Busy Child",
-        provider: "codex/gpt-5.4",
-        initialPrompt: "Run a long command",
-      });
-      const childId = z.object({ agentId: z.string() }).parse(created.structuredContent).agentId;
-      await vi.waitFor(() => expect(agentManager.getAgent(childId)?.lifecycle).toBe("running"));
-
-      const tool = registeredTool(server, "send_agent_prompt");
-      const sent = await invokeToolWithParsedInput(tool, {
-        agentId: childId,
-        prompt: "Stop and reply instead",
-      });
-      await invokeToolWithParsedInput(tool, { agentId: childId, prompt: "Also report tests" });
-      await invokeToolWithParsedInput(tool, { agentId: childId, prompt: "Keep it short" });
-      expect(sent.structuredContent).toMatchObject({
-        success: true,
-        deliveryStatus: "queued",
-      });
-      const childSession = childClient.sessions[0]!;
-      // FULCRA(orchestration): a prompt from another chat never enters or cancels the running turn.
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      expect(childSession.prompts).toEqual(["Run a long command"]);
-
-      function finishNotifications() {
-        return (parentClient.sessions[0]?.prompts ?? []).filter(
-          (prompt) => prompt.includes(childId) && prompt.includes("finished"),
-        );
-      }
-      childSession.finishTurn();
-      await vi.waitFor(() => expect(childSession.prompts).toHaveLength(2), { timeout: 10_000 });
-      expect(childSession.prompts[1]).toBe(
-        `Message 1 from ${parent.id}:\nStop and reply instead\n\nMessage 2 from ${parent.id}:\nAlso report tests\n\nMessage 3 from ${parent.id}:\nKeep it short`,
-      );
-      childSession.finishTurn();
-      // Each completed turn keeps its notice. Three queued messages share the answering turn's notice.
-      await vi.waitFor(() => expect(finishNotifications()).toHaveLength(2), { timeout: 10_000 });
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      expect(finishNotifications()).toHaveLength(2);
-    } finally {
-      offReports();
-      reports.stop();
-      await removeAgentStateDir(agentManager, storage, workdir);
-    }
-  });
-
-  it("a held prompt that the reporting line refuses at delivery is not sent and the caller is told why", async () => {
-    const workdir = await mkdtemp(join(tmpdir(), "mcp-held-refused-"));
-    const storage = new AgentStorage(join(workdir, "agents"), logger);
-    const parentClient = new HeldTurnAgentClient("claude", false);
-    const childClient = new HeldTurnAgentClient("codex", true);
-    const agentManager = new AgentManager({
-      clients: { claude: parentClient, codex: childClient },
-      registry: storage,
-      logger,
-    });
-
-    try {
-      const parent = await agentManager.createAgent(
-        { provider: "claude", cwd: existingCwd },
-        undefined,
-        { workspaceId: "wks_parent" },
-      );
-      const server = await createAgentMcpServer({
-        agentManager,
-        agentStorage: storage,
-        callerAgentId: parent.id,
-        providerSnapshotManager: createOpenCodeManager().manager,
-        logger,
-      });
-      const created = await invokeToolWithParsedInput(registeredTool(server, "create_agent"), {
-        relationship: { kind: "subagent" },
-        workspace: { kind: "current" },
-        title: "Busy Child",
-        provider: "codex/gpt-5.4",
-        initialPrompt: "Run a long command",
-      });
-      const childId = z.object({ agentId: z.string() }).parse(created.structuredContent).agentId;
-      await vi.waitFor(() => expect(agentManager.getAgent(childId)?.lifecycle).toBe("running"));
-      await invokeToolWithParsedInput(registeredTool(server, "send_agent_prompt"), {
-        agentId: childId,
-        prompt: "Held prompt",
-      });
-
-      // While the prompt waits, the line changes: the child no longer reports to the caller, and the caller now
-      // reports to another chat. A send from the caller to the child is then outside its line.
-      const relabel = async (id: string, labels: Record<string, string>) => {
-        const live = Reflect.get(agentManager, "agents").get(id);
-        if (live) live.labels = labels;
-        const record = await storage.get(id);
-        if (record) await storage.upsert({ ...record, labels });
-      };
-      await relabel(childId, {});
-      await relabel(parent.id, { "fulcra.reports-to": "99999999-9999-4999-8999-999999999999" });
-
-      const childSession = childClient.sessions[0]!;
-      childSession.finishTurn();
-      const toldWhy = () =>
-        (parentClient.sessions[0]?.prompts ?? []).join("\n").includes("was not delivered");
-      await vi.waitFor(() => expect(toldWhy()).toBe(true));
-      expect(childSession.prompts).toEqual(["Run a long command"]);
-    } finally {
-      await removeAgentStateDir(agentManager, storage, workdir);
-    }
-  });
-
   it("reports queue admission before the background prompt starts", async () => {
     const workdir = await mkdtemp(join(tmpdir(), "mcp-background-send-status-"));
     const storage = new AgentStorage(join(workdir, "agents"), logger);
@@ -7353,7 +7195,8 @@ it("FU-164 native prompts refuse a done worker before provider input", async () 
       prompt: "New task",
       notifyOnFinish: false,
     });
-    expect(childClient.sessions[0]!.prompts).toEqual(["New task"]);
+    expect(childClient.sessions[0]!.prompts).toHaveLength(1);
+    expect(childClient.sessions[0]!.prompts[0]).toContain("New task");
     childClient.sessions[0]!.finishTurn();
   } finally {
     await queuedAgentMessagesFor({ agentManager, agentStorage: storage, logger }).close();

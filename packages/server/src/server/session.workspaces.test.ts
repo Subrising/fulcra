@@ -10053,19 +10053,24 @@ test("workspace PR status survives session cleanup and reconnect", async () => {
     projectRegistry,
     workspaceRegistry,
   });
+  // FU-590: only a checkout the client opened (or one with a live agent) stays under git observation.
+  await session1.handleMessage({
+    type: "checkout_status_request",
+    cwd,
+    requestId: "open-1",
+  });
   await session1.handleMessage({
     type: "fetch_workspaces_request",
     requestId: "sub-1",
     subscribe: { subscriptionId: "sub-1" },
   });
   expect(filterByType(emitted1, "rpc_error")).toEqual([]);
-  const prUrlFrom = (m: SessionOutboundMessage) =>
-    m.type === "workspace_update" && m.payload.kind === "upsert"
-      ? (m.payload.workspace.githubRuntime?.pullRequest?.url ?? null)
-      : null;
+  // The observed checkout reaches the shared runtime store; that store outlives the session.
   await vi.waitFor(
     () => {
-      expect(emitted1.map(prUrlFrom)).toContain("https://github.com/acme/repo/pull/123");
+      expect(workspaceRuntimeStore.get(cwd)?.forge.pullRequest?.url).toBe(
+        "https://github.com/acme/repo/pull/123",
+      );
     },
     { timeout: 5_000 },
   );

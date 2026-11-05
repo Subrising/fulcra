@@ -2291,9 +2291,10 @@ function createToolCatalog(
                 }
               : undefined,
             sessionMode,
-            // Agent callers start a fresh turn (queuedOnly); a busy receiver gets the Fulcra queue instead.
-            ...(callerAgentId ? {} : { activeTurnBehavior }),
-            queuedOnly: Boolean(callerAgentId),
+            // FU-657 row 6 (owner decision, 5 Nov): an agent caller steers a busy receiver's turn, as upstream
+            // Paseo. It never interrupts unless it asks; steer unavailable falls back to the Fulcra queue below.
+            activeTurnBehavior,
+            ...(callerAgentId && activeTurnBehavior === "steer" ? { steerOnly: true } : {}),
             ...(check ? { runOptions: { [FINAL_INPUT_CHECK]: check }, unarchive: false } : {}),
             logger: childLogger,
           });
@@ -2337,7 +2338,6 @@ function createToolCatalog(
       if (callerAgentId) noteAgentMessage(callerAgentId, agentId);
       const shouldQueuePrompt = async () => {
         if (!callerAgentId) return false;
-        if (agentManager.hasInFlightRun(agentId)) return true;
         const target = agentManager.getAgent(agentId) ?? (await agentStorage.get(agentId));
         return noticePaused(
           agentStorage.noticePausePath,

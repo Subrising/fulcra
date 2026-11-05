@@ -135,7 +135,9 @@ async function stopUnixGitTree(root: number): Promise<void> {
       process.kill(pid, kind);
       return true;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      // macOS answers EPERM, not ESRCH, for a process group that holds only exited (zombie) processes.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ESRCH" && code !== "EPERM") throw error;
       return false;
     }
   };

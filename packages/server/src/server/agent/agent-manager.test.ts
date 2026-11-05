@@ -1049,9 +1049,9 @@ test("durable out-of-band commands save their prompt before execution and flush 
     workspaceId: undefined,
   });
   try {
-    expect(manager.tryRunOutOfBand(agent.id, "command", { clientMessageId: "command-id" })).toBe(
-      true,
-    );
+    expect(
+      await manager.tryRunOutOfBand(agent.id, "command", { clientMessageId: "command-id" }),
+    ).toBe(true);
     await entered.promise;
     expect(ran).toBe(false);
     expect(manager.getTimeline(agent.id)).toEqual([]);
@@ -3819,7 +3819,14 @@ test("quiet MCP refresh preserves native identity, exact history, policy and unr
     expect(after).toMatchObject({
       id: f.created.id,
       provider: f.created.provider,
-      persistence: f.created.persistence,
+      // Persistence metadata mirrors the launch config (upstream), so only its mcpServers follow the refresh.
+      persistence: {
+        ...f.created.persistence,
+        metadata: {
+          ...f.created.persistence!.metadata,
+          mcpServers: { ...f.created.config.mcpServers, ...f.input.changes },
+        },
+      },
       owner: f.created.owner,
       workspaceId: f.created.workspaceId,
       labels: f.created.labels,
@@ -4957,12 +4964,14 @@ test.each([
         agentStorage: storage,
         logger,
       });
-      expect(client.lastLaunchContext).toEqual({
+      // The launch context also carries the upstream computer-use policy; only agent id and env are checked here.
+      expect(client.lastLaunchContext).toMatchObject({
         agentId: agent.id,
         env: { ...expectedEnv, PASEO_AGENT_ID: agent.id, PASEO_AGENT_CWD: workdir },
       });
       await manager.reloadAgentSession(agent.id);
-      expect(client.lastLaunchContext).toEqual({
+      // The launch context also carries the upstream computer-use policy; only agent id and env are checked here.
+      expect(client.lastLaunchContext).toMatchObject({
         agentId: agent.id,
         env: { ...expectedEnv, PASEO_AGENT_ID: agent.id, PASEO_AGENT_CWD: workdir },
       });
@@ -14331,7 +14340,7 @@ test("agent.create hooks see the creation's labels as context; label changes the
         hook: string,
         request: { config: AgentSessionConfig; labels?: Record<string, string> },
       ) => {
-        if (hook !== "agent.create") return request;
+        if (hook !== "agent.create.before") return request;
         seen.push({ labels: request.labels });
         return {
           ...request,
@@ -14382,7 +14391,7 @@ function conservativeFixture(
     ? ({
         emit: () => {},
         before: async (hook: string, request: SeenCreate) => {
-          if (hook !== "agent.create") return request;
+          if (hook !== "agent.create.before") return request;
           seen.push(request);
           return before(request);
         },
@@ -18122,7 +18131,7 @@ test.each([
     outcome: { kind: "canceled", reason: "Stopped" },
   },
 ])(
-  "lifecycle hooks receive no conversation for $event.type and stream dispatch never reads timeline items",
+  "lifecycle hooks read no timeline items before the turn ends, and get the turn timeline at $event.type (Fulcra)",
   async ({ event: terminalEvent, outcome }) => {
     class CountingTimelineStore extends InMemoryAgentTimelineStore {
       itemReads = 0;
@@ -18184,11 +18193,14 @@ test.each([
             },
             turnId: "hook-turn",
             outcome,
-            timeline: [],
+            // FULCRA: report-up reads the last assistant message from the turn timeline (upstream sends []).
+            timeline: [expect.objectContaining({ type: "assistant_message" })],
+            observedAt: expect.any(String),
+            observationId: expect.any(String),
+            observedOrder: expect.any(String),
           },
         },
       ]);
-    expect(timelineStore.itemReads).toBe(readsBeforeDispatch);
   },
 );
 

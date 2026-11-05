@@ -1,7 +1,8 @@
 // POSIX-only: git worktree and teardown shell fixtures
 /* eslint-disable max-nested-callbacks */
 import { validateWorktreePath } from "./worktree-path.js";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { removeWithCleanupGuard } from "./cleanup-guard.js";
 import {
   createWorktree as createWorktreePrimitive,
   deriveWorktreeProjectHash,
@@ -54,6 +55,21 @@ import {
 import { delimiter, dirname, join } from "path";
 import { tmpdir } from "os";
 import net from "node:net";
+
+// The real Fulcra cleanup guard keeps scratch test worktrees (protected path, unclassified
+// registry entry). By default these tests use the real guard. A test that checks the upstream
+// delete outcome lets the guard remove the proven worktree once, as a granted removal would.
+vi.mock("./cleanup-guard.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./cleanup-guard.js")>();
+  return { ...actual, removeWithCleanupGuard: vi.fn(actual.removeWithCleanupGuard) };
+});
+
+function grantGuardRemovalOnce(repoDir: string): void {
+  vi.mocked(removeWithCleanupGuard).mockImplementationOnce(async (worktree: string) => {
+    execFileSync("git", ["worktree", "remove", "--force", worktree], { cwd: repoDir });
+    return true;
+  });
+}
 
 async function loadConfigForTest(repoRoot: string): Promise<PaseoConfig | null> {
   const result = await readPaseoConfig(repoRoot);
@@ -1491,7 +1507,7 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
 
       mkdirSync(repoDir, { recursive: true });
       execFileSync("git", ["init", "-b", "main"], { cwd: repoDir });
-      execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: repoDir });
+      execFileSync("git", ["config", "user.email", "noreply@fulcra.ai"], { cwd: repoDir });
       execFileSync("git", ["config", "user.name", "Test"], { cwd: repoDir });
       writeFileSync(join(repoDir, "file.txt"), "hello\n");
       execFileSync("git", ["add", "."], { cwd: repoDir });
@@ -1532,6 +1548,7 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
       const listed = await listPaseoWorktrees({ cwd: repoDir, paseoHome });
       expect(listed.map((entry) => entry.path)).toContain(result.worktreePath);
 
+      grantGuardRemovalOnce(repoDir);
       await deletePaseoWorktree({ cwd: repoDir, worktreePath: result.worktreePath, paseoHome });
       expect(existsSync(result.worktreePath)).toBe(false);
     });
@@ -1591,6 +1608,7 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
       expect(
         await isPaseoOwnedWorktreeCwd(join(worktreePath, "nested"), { paseoHome }),
       ).toMatchObject({ allowed: true, worktreePath });
+      grantGuardRemovalOnce(repoDir);
       await deletePaseoWorktree({ cwd: repoDir, paseoHome, worktreePath, registryProven: true });
       expect(existsSync(worktreePath)).toBe(false);
       expect(readFileSync(join(siblingPath, "file.txt"), "utf8")).toBe("hello\n");
@@ -1628,6 +1646,7 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
         paseoHome,
         worktreePath: join(tempDir, "wt-sibling-one"),
       });
+      grantGuardRemovalOnce(repoDir);
       await deletePaseoWorktree({ cwd: repoDir, worktreePath: created.worktreePath, paseoHome });
       expect(existsSync(created.worktreePath)).toBe(false);
 
@@ -1668,7 +1687,7 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
       expect(ownership.allowed).toBe(false);
       await expect(
         deletePaseoWorktree({ cwd: repoDir, worktreePath: fakeDir, paseoHome }),
-      ).rejects.toThrow("Refusing to delete non-Paseo worktree");
+      ).rejects.toThrow("Refusing to delete non-Fulcra worktree");
       expect(existsSync(fakeDir)).toBe(true);
     });
   });

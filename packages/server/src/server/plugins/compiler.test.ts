@@ -1094,8 +1094,7 @@ export default function contribute() { void value; void secret; return () => und
 // let/const one binding per function, so the compiler lowers both before the bundle leaves the daemon.
 const testRequire = createRequire(import.meta.url);
 const HERMESC = path.join(
-  path.dirname(testRequire.resolve("react-native/package.json")),
-  "sdks",
+  path.dirname(testRequire.resolve("hermes-compiler/package.json")),
   "hermesc",
   { darwin: "osx-bin", linux: "linux64-bin", win32: "win64-bin" }[process.platform as string] ?? "",
   process.platform === "win32" ? "hermesc.exe" : "hermesc",

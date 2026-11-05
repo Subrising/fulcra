@@ -6,6 +6,7 @@ import path from "node:path";
 import pino, { type Logger } from "pino";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { removeWithCleanupGuard } from "../utils/cleanup-guard.js";
 import type { ForgeService } from "../services/forge-service.js";
 import { createRealpathAwarePathMatcher } from "../utils/path.js";
 import { getPaseoWorktreeMetadataPath } from "../utils/worktree-metadata.js";
@@ -22,6 +23,21 @@ import {
   resolveWorkspaceIdAtPath,
 } from "./workspace-archive-service.js";
 import { WorkspaceAutomationBlockedError } from "./workspace-automation-gate.js";
+
+// The real Fulcra cleanup guard keeps scratch test directories outside the legacy root. By
+// default these tests use the real guard. A test that checks the upstream removal outcome lets
+// the guard remove the proven worktree once, as a granted removal would.
+vi.mock("../utils/cleanup-guard.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../utils/cleanup-guard.js")>();
+  return { ...actual, removeWithCleanupGuard: vi.fn(actual.removeWithCleanupGuard) };
+});
+
+function grantGuardRemovalOnce(repoDir: string): void {
+  vi.mocked(removeWithCleanupGuard).mockImplementationOnce(async (worktree: string) => {
+    execFileSync("git", ["worktree", "remove", "--force", worktree], { cwd: repoDir });
+    return true;
+  });
+}
 
 const cleanupPaths: string[] = [];
 
@@ -323,6 +339,7 @@ describe("archiveByScope", () => {
       source: { kind: "branch-off", branchName: "feature", baseBranch: "main" },
     });
     const dependencies = createArchiveDeps({ paseoHome, activeWorkspaces: [] });
+    grantGuardRemovalOnce(repoDir);
     const result = await archiveCommand(
       {
         ...dependencies,
@@ -358,6 +375,7 @@ describe("archiveByScope", () => {
     });
     rmSync(await getPaseoWorktreeMetadataPath(worktree.worktreePath), { force: true });
     const workspaceId = "ws-registry-proven";
+    grantGuardRemovalOnce(repoDir);
 
     const result = await archiveByScope(
       createArchiveDeps({
@@ -784,7 +802,7 @@ describe("archiveByScope", () => {
     const paseoHome = path.join(tempDir, ".paseo");
     const worktree = await createPaseoOwnedWorktree(repoDir, paseoHome, "zero-records");
 
-    const result = await archiveByScope(dependencies, {
+    const result = await archiveByScope(createArchiveDeps({ paseoHome, activeWorkspaces: [] }), {
       scope: { kind: "worktree", targetPath: worktree.worktreePath },
       requestId: "req-zero-records",
     });

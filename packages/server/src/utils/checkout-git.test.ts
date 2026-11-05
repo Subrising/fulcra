@@ -102,7 +102,7 @@ function initRepo(): { tempDir: string; repoDir: string } {
   const repoDir = join(tempDir, "repo");
   mkdirSync(repoDir, { recursive: true });
   execFileSync("git", ["init", "-b", "main"], { cwd: repoDir });
-  execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: repoDir });
+  execFileSync("git", ["config", "user.email", "noreply@fulcra.ai"], { cwd: repoDir });
   execFileSync("git", ["config", "user.name", "Test"], { cwd: repoDir });
   writeFileSync(join(repoDir, "file.txt"), "hello\n");
   execFileSync("git", ["add", "."], { cwd: repoDir });
@@ -233,7 +233,7 @@ function setupRemoteTrackingMain(
   execFileSync("git", ["remote", "add", "origin", remoteDir], { cwd: repoDir });
   execFileSync("git", ["push", "-u", "origin", "main"], { cwd: repoDir });
   execFileSync("git", ["clone", remoteDir, cloneDir]);
-  execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: cloneDir });
+  execFileSync("git", ["config", "user.email", "noreply@fulcra.ai"], { cwd: cloneDir });
   execFileSync("git", ["config", "user.name", "Test"], { cwd: cloneDir });
   return { remoteDir, cloneDir };
 }
@@ -862,7 +862,7 @@ const x = 1;
     execFileSync("git", ["push", "-u", "origin", "main"], { cwd: repoDir });
 
     execFileSync("git", ["clone", remoteDir, cloneDir]);
-    execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: cloneDir });
+    execFileSync("git", ["config", "user.email", "noreply@fulcra.ai"], { cwd: cloneDir });
     execFileSync("git", ["config", "user.name", "Test"], { cwd: cloneDir });
     writeFileSync(join(cloneDir, "file.txt"), "remote\n");
     execFileSync("git", ["add", "file.txt"], { cwd: cloneDir });
@@ -1059,7 +1059,7 @@ const x = 1;
     );
     execFileSync("git", ["clone", prRemoteDir, prCloneDir]);
     execFileSync("git", ["checkout", "open-button-targets-active-file"], { cwd: prCloneDir });
-    execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: prCloneDir });
+    execFileSync("git", ["config", "user.email", "noreply@fulcra.ai"], { cwd: prCloneDir });
     execFileSync("git", ["config", "user.name", "Test"], { cwd: prCloneDir });
     commitFile(prCloneDir, "remote.txt", "remote\n", "remote update");
     execFileSync("git", ["push"], { cwd: prCloneDir });
@@ -1282,7 +1282,7 @@ const x = 1;
     execFileSync("git", ["push", "-u", "origin", "feature"], { cwd: repoDir });
     const featureCloneDir = join(tempDir, "feature-clone");
     execFileSync("git", ["clone", join(tempDir, "remote.git"), featureCloneDir]);
-    execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: featureCloneDir });
+    execFileSync("git", ["config", "user.email", "noreply@fulcra.ai"], { cwd: featureCloneDir });
     execFileSync("git", ["config", "user.name", "Test"], { cwd: featureCloneDir });
     execFileSync("git", ["checkout", "feature"], { cwd: featureCloneDir });
     commitFile(featureCloneDir, "remote-feature.txt", "remote feature\n", "remote feature update");
@@ -1336,7 +1336,7 @@ const x = 1;
     execFileSync("git", ["push", "-u", "origin", "main"], { cwd: repoDir });
 
     execFileSync("git", ["clone", remoteDir, cloneDir]);
-    execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: cloneDir });
+    execFileSync("git", ["config", "user.email", "noreply@fulcra.ai"], { cwd: cloneDir });
     execFileSync("git", ["config", "user.name", "Test"], { cwd: cloneDir });
     writeFileSync(join(cloneDir, "upstream.txt"), "upstream 1\nupstream 2\n");
     execFileSync("git", ["add", "upstream.txt"], { cwd: cloneDir });
@@ -1373,7 +1373,7 @@ const x = 1;
     execFileSync("git", ["push", "-u", "origin", "main"], { cwd: repoDir });
 
     execFileSync("git", ["clone", remoteDir, otherClone]);
-    execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: otherClone });
+    execFileSync("git", ["config", "user.email", "noreply@fulcra.ai"], { cwd: otherClone });
     execFileSync("git", ["config", "user.name", "Test"], { cwd: otherClone });
     writeFileSync(join(otherClone, "already-on-origin.txt"), "origin\n");
     execFileSync("git", ["add", "already-on-origin.txt"], { cwd: otherClone });
@@ -1511,7 +1511,7 @@ const x = 1;
     execFileSync("git", ["push", "-u", "origin", "main"], { cwd: repoDir });
 
     execFileSync("git", ["clone", remoteDir, otherClone]);
-    execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: otherClone });
+    execFileSync("git", ["config", "user.email", "noreply@fulcra.ai"], { cwd: otherClone });
     execFileSync("git", ["config", "user.name", "Test"], { cwd: otherClone });
     writeFileSync(join(otherClone, "origin-base.txt"), "origin\n");
     execFileSync("git", ["add", "origin-base.txt"], { cwd: otherClone });
@@ -1892,7 +1892,7 @@ const x = 1;
 
     const mainCheckoutDir = join(tempDir, "main-checkout");
     execFileSync("git", ["-C", bareRepoDir, "worktree", "add", mainCheckoutDir, "main"]);
-    execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: mainCheckoutDir });
+    execFileSync("git", ["config", "user.email", "noreply@fulcra.ai"], { cwd: mainCheckoutDir });
     execFileSync("git", ["config", "user.name", "Test"], { cwd: mainCheckoutDir });
 
     const worktree = await createLegacyWorktreeForTest({
@@ -2011,7 +2011,7 @@ const x = 1;
     // Advance origin/main without advancing local main.
     const otherClone = join(tempDir, "other-clone");
     execFileSync("git", ["clone", remoteDir, otherClone]);
-    execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: otherClone });
+    execFileSync("git", ["config", "user.email", "noreply@fulcra.ai"], { cwd: otherClone });
     execFileSync("git", ["config", "user.name", "Test"], { cwd: otherClone });
     writeFileSync(join(otherClone, "remote-only.txt"), "remote\n");
     execFileSync("git", ["add", "remote-only.txt"], { cwd: otherClone });
@@ -2112,7 +2112,7 @@ const x = 1;
 
     const otherClone = join(tempDir, "other-clone");
     execFileSync("git", ["clone", remoteDir, otherClone]);
-    execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: otherClone });
+    execFileSync("git", ["config", "user.email", "noreply@fulcra.ai"], { cwd: otherClone });
     execFileSync("git", ["config", "user.name", "Test"], { cwd: otherClone });
     writeFileSync(join(otherClone, "pulled.txt"), "remote\n");
     execFileSync("git", ["add", "pulled.txt"], { cwd: otherClone });
@@ -2163,7 +2163,7 @@ const x = 1;
 
     const otherClone = join(tempDir, "other-clone");
     execFileSync("git", ["clone", remoteDir, otherClone]);
-    execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: otherClone });
+    execFileSync("git", ["config", "user.email", "noreply@fulcra.ai"], { cwd: otherClone });
     execFileSync("git", ["config", "user.name", "Test"], { cwd: otherClone });
     writeFileSync(join(otherClone, "conflict.txt"), "remote\n");
     execFileSync("git", ["add", "conflict.txt"], { cwd: otherClone });
@@ -2202,7 +2202,7 @@ const x = 1;
 
     const otherClone = join(tempDir, "other-clone");
     execFileSync("git", ["clone", remoteDir, otherClone]);
-    execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: otherClone });
+    execFileSync("git", ["config", "user.email", "noreply@fulcra.ai"], { cwd: otherClone });
     execFileSync("git", ["config", "user.name", "Test"], { cwd: otherClone });
     writeFileSync(join(otherClone, "conflict.txt"), "remote\n");
     execFileSync("git", ["add", "conflict.txt"], { cwd: otherClone });
@@ -2450,7 +2450,7 @@ const x = 1;
 
     const otherClone = join(tempDir, "other-clone");
     execFileSync("git", ["clone", remoteDir, otherClone]);
-    execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: otherClone });
+    execFileSync("git", ["config", "user.email", "noreply@fulcra.ai"], { cwd: otherClone });
     execFileSync("git", ["config", "user.name", "Test"], { cwd: otherClone });
     execFileSync("git", ["checkout", "-b", "feature/remote-only"], { cwd: otherClone });
     writeFileSync(join(otherClone, "remote-only.txt"), "remote-only\n");
@@ -2511,7 +2511,7 @@ const x = 1;
 
     const otherClone = join(tempDir, "diverged-clone");
     execFileSync("git", ["clone", remoteDir, otherClone]);
-    execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: otherClone });
+    execFileSync("git", ["config", "user.email", "noreply@fulcra.ai"], { cwd: otherClone });
     execFileSync("git", ["config", "user.name", "Test"], { cwd: otherClone });
     writeFileSync(join(otherClone, "remote.txt"), "remote\n");
     execFileSync("git", ["add", "remote.txt"], { cwd: otherClone });
@@ -2550,7 +2550,7 @@ const x = 1;
 
     const otherClone = join(tempDir, "other-clone");
     execFileSync("git", ["clone", remoteDir, otherClone]);
-    execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: otherClone });
+    execFileSync("git", ["config", "user.email", "noreply@fulcra.ai"], { cwd: otherClone });
     execFileSync("git", ["config", "user.name", "Test"], { cwd: otherClone });
     execFileSync("git", ["checkout", "-b", "feature/remote-only"], { cwd: otherClone });
     writeFileSync(join(otherClone, "remote-only.txt"), "remote-only\n");
@@ -2602,7 +2602,7 @@ const x = 1;
 
     const otherClone = join(tempDir, "other-clone");
     execFileSync("git", ["clone", remoteDir, otherClone]);
-    execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: otherClone });
+    execFileSync("git", ["config", "user.email", "noreply@fulcra.ai"], { cwd: otherClone });
     execFileSync("git", ["config", "user.name", "Test"], { cwd: otherClone });
     execFileSync("git", ["checkout", "-b", "feature/remote-only"], { cwd: otherClone });
     writeFileSync(join(otherClone, "remote-only.txt"), "remote-only\n");
@@ -2639,7 +2639,7 @@ const x = 1;
 
     const otherClone = join(tempDir, "other-clone");
     execFileSync("git", ["clone", remoteDir, otherClone]);
-    execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: otherClone });
+    execFileSync("git", ["config", "user.email", "noreply@fulcra.ai"], { cwd: otherClone });
     execFileSync("git", ["config", "user.name", "Test"], { cwd: otherClone });
     execFileSync("git", ["checkout", "-b", "feature/remote-only"], { cwd: otherClone });
     writeFileSync(join(otherClone, "remote-only.txt"), "remote-only\n");

@@ -94,6 +94,7 @@ test("hidden provider cost is not read by report or legacy usage RPCs", async ()
     },
   };
   const usage = new UsageSession({
+    isEnabled: () => true,
     emit: (m) => emitted.push(m),
     logger: pino({ level: "silent" }),
     runtime,

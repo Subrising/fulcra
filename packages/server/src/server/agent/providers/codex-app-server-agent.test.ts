@@ -8444,6 +8444,11 @@ test("U8 account usage label follows create and resume launch context", async ()
   });
   expect(alpha.usageSourceLabel?.()).toBe("Alpha");
   await alpha.startTurn("seed the retained thread");
+  // A thread can be resumed only after Codex announces its first turn.
+  await a.waitForTurnStart();
+  const saved = waitForNextEvent(alpha, "thread_started");
+  a.startsTurn({ threadId: "thread-1" });
+  await saved;
   const handle = alpha.describePersistence();
   expect(handle).toBeTruthy();
   await alpha.close();
@@ -8930,11 +8935,15 @@ test("publishes a materialized image before dispatching the following turn compl
   session.subscribe((event) => events.push(event));
   try {
     await session.startTurn("generate an image");
+    await appServer.waitForTurnStart();
+    appServer.startsTurn({ threadId: "thread-1" });
     const data = Buffer.alloc(1024 * 1024, 47).toString("base64");
     const imageFrame =
       JSON.stringify({
         method: "item/completed",
         params: {
+          threadId: "thread-1",
+          turnId: "turn-thread-1",
           item: {
             id: "ordered-image",
             type: "imageGeneration",

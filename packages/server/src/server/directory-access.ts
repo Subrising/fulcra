@@ -27,7 +27,7 @@ export const DEFAULT_DIRECTORY_CHECK_TIMEOUT_MS = 3_000;
 // per path as soon as it knows, so a later path that blocks does not hide earlier answers.
 const CHECK_SCRIPT = `
 const fs = require("node:fs");
-const paths = process.argv.slice(1);
+const paths = JSON.parse(fs.readFileSync(0, "utf8"));
 for (let index = 0; index < paths.length; index += 1) {
   let state;
   try {
@@ -74,10 +74,13 @@ export async function inspectOutOfProcess(
   const unique = Array.from(new Set(paths));
   const states = new Map<string, DirectoryState>();
   if (unique.length === 0) return states;
-  const child = spawn(options.execPath, ["-e", CHECK_SCRIPT, ...unique], {
+  // The paths go through stdin, not argv: thousands of workspaces exceed the OS argument limit (E2BIG).
+  const child = spawn(options.execPath, ["-e", CHECK_SCRIPT], {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
-    stdio: ["ignore", "pipe", "ignore"],
+    stdio: ["pipe", "pipe", "ignore"],
   });
+  child.stdin.on("error", () => undefined);
+  child.stdin.end(JSON.stringify(unique));
   limitChildOutput(child);
   let buffered = "";
   child.stdout.setEncoding("utf8");

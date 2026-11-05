@@ -60,6 +60,11 @@ async function createClaudeConfigDirWithRawSettings(settings: string): Promise<s
   return configDir;
 }
 
+// A failed probe reports nothing, so the catalog omits Mythos, which Claude Code must advertise.
+function getClaudeModelsWithoutMythos() {
+  return getClaudeModels().filter((model) => model.id !== "claude-mythos-5-1");
+}
+
 function createCatalogClient(
   claudeCodeVersion = "2.1.293",
   runtimeSettings?: ProviderRuntimeSettings,
@@ -399,7 +404,7 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
     });
 
     expect(models).toEqual([
-      ...getClaudeModels(),
+      ...getClaudeModelsWithoutMythos(),
       {
         provider: "claude",
         id: "us.anthropic.claude-opus-4-7[1m]",
@@ -476,7 +481,7 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
       force: true,
     });
 
-    expect(models).toEqual(getClaudeModels());
+    expect(models).toEqual(getClaudeModelsWithoutMythos());
   });
 
   it("falls back to hardcoded models when settings.json is malformed", async () => {
@@ -490,7 +495,7 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
       force: true,
     });
 
-    expect(models).toEqual(getClaudeModels());
+    expect(models).toEqual(getClaudeModelsWithoutMythos());
   });
 
   it("ignores empty env blocks and unexpected settings shapes", async () => {
@@ -510,7 +515,7 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
       force: true,
     });
 
-    expect(models).toEqual(getClaudeModels());
+    expect(models).toEqual(getClaudeModelsWithoutMythos());
   });
 
   it("deduplicates discovered settings models by ID", async () => {
@@ -531,7 +536,7 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
     });
 
     expect(models.map((model) => model.id)).toEqual([
-      ...getClaudeModels().map((model) => model.id),
+      ...getClaudeModelsWithoutMythos().map((model) => model.id),
       "glm-5.1",
     ]);
   });

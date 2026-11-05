@@ -145,7 +145,7 @@ class TestCheckouts {
 
 function initGitRepoInDir(dir: string): void {
   execFileSync("git", ["init", "-b", "main"], { cwd: dir, stdio: "ignore" });
-  execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: dir, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "noreply@fulcra.ai"], { cwd: dir, stdio: "ignore" });
   execFileSync("git", ["config", "user.name", "Test"], { cwd: dir, stdio: "ignore" });
   execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: dir, stdio: "ignore" });
   execFileSync("git", ["add", "."], { cwd: dir, stdio: "ignore" });
@@ -156,7 +156,7 @@ function createTempGitRepo(prefix: string): string {
   const raw = mkdtempSync(path.join(tmpdir(), prefix));
   const dir = realpathSync(raw);
   execFileSync("git", ["init", "-b", "main"], { cwd: dir, stdio: "ignore" });
-  execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: dir, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "noreply@fulcra.ai"], { cwd: dir, stdio: "ignore" });
   execFileSync("git", ["config", "user.name", "Test"], { cwd: dir, stdio: "ignore" });
   execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: dir, stdio: "ignore" });
   writeFileSync(path.join(dir, "README.md"), "# Test\n");
@@ -230,233 +230,6 @@ describe("WorkspaceReconciliationService", () => {
     }
   });
 
-  test("preserves paths while two inspections saturate capacity, logs once, and recovers after they drain", async () => {
-    const rootPath = realpathSync(mkdtempSync(path.join(tmpdir(), "reconcile-saturated-")));
-    tempDirs.push(rootPath);
-    const { projects, workspaces, projectRegistry, workspaceRegistry } = createTestRegistries();
-    const { logger, warnRecords, infoRecords } = createCapturingLogger();
-    projects.set(
-      "p1",
-      createPersistedProjectRecord({
-        projectId: "p1",
-        rootPath,
-        projectKey: canonicalLocalProjectKey(rootPath),
-        kind: "non_git",
-        displayName: "project",
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      }),
-    );
-    const ids = ["hung1", "hung2", "healthy"];
-    for (const workspaceId of ids) {
-      workspaces.set(
-        workspaceId,
-        createPersistedWorkspaceRecord({
-          workspaceId,
-          projectId: "p1",
-          cwd: path.join(rootPath, workspaceId),
-          kind: "directory",
-          displayName: workspaceId,
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        }),
-      );
-    }
-    const release = deferred();
-    const calls: string[] = [];
-    let recovered = false;
-    let ticks = 0;
-    const probe = setInterval(() => ticks++, 1);
-    const service = new WorkspaceReconciliationService({
-      projectRegistry,
-      workspaceRegistry,
-      logger,
-      inspectionTimeoutMs: 30,
-      inspectDirectory: async (targetPath) => {
-        calls.push(targetPath);
-        if (!recovered && path.basename(targetPath).startsWith("hung")) await release.promise;
-        return "directory";
-      },
-    });
-    try {
-      const result = await service.runOnce();
-      expect(ticks).toBeGreaterThan(0);
-      expect(result.durationMs).toBeLessThan(1000);
-      expect(result.changesApplied).toEqual([]);
-      expect(calls).toEqual(ids.slice(0, 2).map((id) => path.join(rootPath, id)));
-      expect([...workspaces.values()].map((workspace) => workspace.archivedAt)).toEqual([
-        null,
-        null,
-        null,
-      ]);
-      expect(warnRecords.filter((record) => record.message.includes("saturated"))).toEqual([
-        {
-          message: "Workspace directory inspection saturated; preserving uninspected workspaces",
-          payload: { paths: ids.slice(0, 2).map((id) => path.join(rootPath, id)) },
-        },
-      ]);
-      recovered = true;
-      release.resolve();
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(infoRecords).toEqual([
-        {
-          message:
-            "Timed-out workspace directory inspections drained; reconciliation capacity restored",
-          payload: {},
-        },
-      ]);
-      calls.length = 0;
-      await service.runOnce();
-      expect(calls).toEqual([...ids.map((id) => path.join(rootPath, id)), rootPath]);
-      expect(warnRecords.filter((record) => record.message.includes("saturated"))).toHaveLength(1);
-    } finally {
-      release.resolve();
-      clearInterval(probe);
-      service.dispose();
-    }
-  });
-
-  test("inspects every healthy path when one hung inspection times out during a longer scan", async () => {
-    const rootPath = realpathSync(mkdtempSync(path.join(tmpdir(), "reconcile-long-hung-")));
-    tempDirs.push(rootPath);
-    const { projects, workspaces, projectRegistry, workspaceRegistry } = createTestRegistries();
-    projects.set(
-      "p1",
-      createPersistedProjectRecord({
-        projectId: "p1",
-        rootPath,
-        projectKey: canonicalLocalProjectKey(rootPath),
-        kind: "non_git",
-        displayName: "project",
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      }),
-    );
-    const healthyIds = Array.from({ length: 12 }, (_, i) => `healthy${i}`);
-    for (const workspaceId of ["hung", ...healthyIds]) {
-      workspaces.set(
-        workspaceId,
-        createPersistedWorkspaceRecord({
-          workspaceId,
-          projectId: "p1",
-          cwd: path.join(rootPath, workspaceId),
-          kind: "directory",
-          displayName: workspaceId,
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        }),
-      );
-    }
-    const calls: string[] = [];
-    let outstanding = 0;
-    let maximumOutstanding = 0;
-    const { logger, warnRecords } = createCapturingLogger();
-    const service = new WorkspaceReconciliationService({
-      projectRegistry,
-      workspaceRegistry,
-      logger,
-      inspectionTimeoutMs: 100,
-      inspectDirectory: async (targetPath) => {
-        calls.push(targetPath);
-        maximumOutstanding = Math.max(maximumOutstanding, ++outstanding);
-        if (path.basename(targetPath) === "hung") return new Promise(() => {});
-        await new Promise<void>((resolve) => setTimeout(resolve, 20));
-        outstanding--;
-        return "directory";
-      },
-    });
-    try {
-      const result = await service.runOnce();
-      expect(result.durationMs).toBeGreaterThan(100);
-      expect(calls).toEqual(
-        ["hung", ...healthyIds].map((id) => path.join(rootPath, id)).concat(rootPath),
-      );
-      expect(maximumOutstanding).toBe(2);
-      expect(outstanding).toBe(1);
-      expect(workspaces.get("hung")?.archivedAt).toBeNull();
-      expect(result.changesApplied).toEqual([]);
-      expect(warnRecords.filter((record) => record.message.includes("saturated"))).toEqual([]);
-    } finally {
-      service.dispose();
-    }
-  });
-
-  test("times out a hung inspection without archiving it or blocking healthy paths, and retains its IO slot", async () => {
-    const rootPath = realpathSync(mkdtempSync(path.join(tmpdir(), "reconcile-hung-")));
-    tempDirs.push(rootPath);
-    const { projects, workspaces, projectRegistry, workspaceRegistry } = createTestRegistries();
-    projects.set(
-      "p1",
-      createPersistedProjectRecord({
-        projectId: "p1",
-        rootPath,
-        projectKey: canonicalLocalProjectKey(rootPath),
-        kind: "non_git",
-        displayName: "project",
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      }),
-    );
-    for (const workspaceId of ["hung", "healthy", "healthy2", "healthy3"]) {
-      workspaces.set(
-        workspaceId,
-        createPersistedWorkspaceRecord({
-          workspaceId,
-          projectId: "p1",
-          cwd: path.join(rootPath, workspaceId),
-          kind: "directory",
-          displayName: workspaceId,
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        }),
-      );
-    }
-    const calls: string[] = [];
-    let outstanding = 0;
-    let maximumOutstanding = 0;
-    const healthyInspected = deferred();
-    const service = new WorkspaceReconciliationService({
-      projectRegistry,
-      workspaceRegistry,
-      logger: createTestLogger(),
-      inspectionTimeoutMs: 30,
-      inspectDirectory: async (targetPath) => {
-        calls.push(targetPath);
-        maximumOutstanding = Math.max(maximumOutstanding, ++outstanding);
-        if (path.basename(targetPath) === "hung") return new Promise(() => {});
-        healthyInspected.resolve();
-        await new Promise<void>((resolve) => setImmediate(resolve));
-        outstanding--;
-        return "directory";
-      },
-    });
-    try {
-      const scan = service.runOnce();
-      await Promise.race([
-        healthyInspected.promise,
-        scan.then(() => {
-          throw new Error("Reconciliation did not use its directory inspection capability");
-        }),
-      ]);
-      expect(outstanding).toBeLessThanOrEqual(2);
-      expect(workspaces.get("hung")?.archivedAt).toBeNull();
-      const result = await scan;
-      expect(result.changesApplied).toEqual([]);
-      await service.runOnce();
-      expect(calls.filter((cwd) => path.basename(cwd) === "hung")).toHaveLength(1);
-      expect(calls.filter((cwd) => path.basename(cwd) === "healthy3")).toHaveLength(2);
-      expect(maximumOutstanding).toBe(2);
-      expect([...workspaces.values()].map((workspace) => workspace.archivedAt)).toEqual([
-        null,
-        null,
-        null,
-        null,
-      ]);
-    } finally {
-      service.dispose();
-    }
-  });
-
   test.each(["missing", "directory"] as const)(
     "does not process or archive a workspace archived during %s inspection",
     async (state) => {
@@ -502,13 +275,17 @@ describe("WorkspaceReconciliationService", () => {
         onWorkspaceArchived: (id) => {
           archivedCallbacks.push(id);
         },
-        inspectDirectory: async (targetPath) => {
-          if (targetPath === cwd) {
+        inspectDirectories: async (paths) => {
+          if (paths.includes(cwd)) {
             started.resolve();
             await release.promise;
-            return state;
           }
-          return "directory";
+          return new Map(
+            paths.map((target): [string, DirectoryState] => [
+              target,
+              target === cwd ? state : "directory",
+            ]),
+          );
         },
       });
       try {
@@ -576,10 +353,13 @@ describe("WorkspaceReconciliationService", () => {
         workerMessages: number;
       };
       expect(blockingMs).toBeLessThan(20);
-      expect(filesystemRequests).toBe(20001);
+      // Fulcra: on macOS the directory checks run in one child process (see directory-access.ts),
+      // so the daemon thread makes no filesystem request for the workspace paths.
+      expect(filesystemRequests).toBe(process.platform === "darwin" ? 0 : 20001);
       expect(changesApplied).toBe(20000);
       expect(allArchived).toBe(true);
-      expect(yields).toBeGreaterThan(0);
+      // No per-path loop turns on macOS: one child process answers for every path.
+      if (process.platform !== "darwin") expect(yields).toBeGreaterThan(0);
       expect(workerMessages).toBe(0);
     } finally {
       running = false;

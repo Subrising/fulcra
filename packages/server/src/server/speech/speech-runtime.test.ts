@@ -75,6 +75,8 @@ function createStubTurnDetection(id: string): TurnDetectionProvider {
 
 function rejectWhenAborted(signal?: AbortSignal): Promise<never> {
   return new Promise((_resolve, reject) => {
+    // Silero VAD is provisioned before the model download starts, so stop() can abort first.
+    if (signal?.aborted) return reject(signal.reason);
     signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
   });
 }
@@ -209,7 +211,8 @@ describe("createSpeechService readiness", () => {
     });
     runtime.start();
     await runtime.ready;
-    expect(ensureSherpaOnnxModelMock).toHaveBeenCalledOnce();
+    // Silero VAD is provisioned first (Fulcra), so the model download starts a little after ready.
+    await vi.waitFor(() => expect(ensureSherpaOnnxModelMock).toHaveBeenCalledOnce());
 
     await runtime.stop();
 

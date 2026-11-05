@@ -132,6 +132,7 @@ test("session create logs whether it armed a finish notice", async () => {
     } as unknown as Parameters<typeof createAgentCommand>[0]["agentManager"],
     agentStorage: {
       armFinishNotice: vi.fn(async () => notice),
+      getFinishNotice: vi.fn(async () => null),
     } as unknown as Parameters<typeof createAgentCommand>[0]["agentStorage"],
     logger: createLogger,
     providerSnapshotManager: createProviderSnapshotManagerStub().manager,
