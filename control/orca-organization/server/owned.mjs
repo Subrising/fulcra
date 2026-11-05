@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 
 // "Owned by this user and private" checks, in one place.
@@ -83,14 +82,18 @@ const STORE_LIMIT = 2000;
 
 /** FU-678: a plugin start is a new process, so the answers also live in a small file shared by all of them. */
 export function aclCacheFile(env = process.env) {
-  const base = env.LOCALAPPDATA ? path.win32.join(env.LOCALAPPDATA, "Fulcra") : tmpdir();
-  return path.join(base, "acl-cache-v1.json");
+  // No per-user folder means no file: a shared folder such as C:\Windows\Temp lets another user plant SAFE answers.
+  const local = env.LOCALAPPDATA;
+  if (!local || !path.win32.isAbsolute(local)) return undefined;
+  return path.win32.join(local, "Fulcra", "acl-cache-v1.json");
 }
-export function fileStore(file = aclCacheFile()) {
+/** With no file, the store keeps answers in memory only. */
+export function fileStore(file) {
   let loaded;
   const load = () => {
     if (loaded) return loaded;
     loaded = new Map();
+    if (!file) return loaded;
     try {
       const data = JSON.parse(readFileSync(file, "utf8"));
       for (const [k, v] of Object.entries(data)) if (typeof v === "boolean") loaded.set(k, v);
@@ -105,6 +108,7 @@ export function fileStore(file = aclCacheFile()) {
       const map = load();
       if (map.size > STORE_LIMIT) map.clear();
       map.set(key, value);
+      if (!file) return;
       try {
         mkdirSync(path.dirname(file), { recursive: true });
         const temp = `${file}.${process.pid}.tmp`;
@@ -127,7 +131,8 @@ function windowsSafe(file, stat, mask, owner, probe, store) {
   // An ACL change moves ctime, so a cached answer never outlives the state it described.
   const key = `${owner}|${mask}|${file}|${stat.ino}|${stat.ctimeMs}|${stat.mtimeMs}`;
   if (cache.has(key)) return cache.get(key);
-  const shared = store ?? (probe === windowsAclProbe ? (defaultStore ??= fileStore()) : undefined);
+  const shared =
+    store ?? (probe === windowsAclProbe ? (defaultStore ??= fileStore(aclCacheFile())) : undefined);
   let answer = shared?.get(key);
   if (typeof answer !== "boolean") {
     const result = probe(file, mask, owner);

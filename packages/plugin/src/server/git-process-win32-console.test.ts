@@ -78,3 +78,19 @@ test("git binary: falls back (undefined) when the file is missing or git fails",
   ).toBeUndefined();
   expect(resolveWindowsGitBinary({ execPath: () => "  ", exists: () => true })).toBeUndefined();
 });
+
+test("an inherited FULCRA_GIT_EXE is dropped; only our own resolved path is passed", () => {
+  Object.defineProperty(process, "platform", { value: "win32" });
+  const saved = process.env.FULCRA_GIT_EXE;
+  process.env.FULCRA_GIT_EXE = "C:\\evil\\git.exe";
+  try {
+    const child = fakeChild();
+    spawnGitProcess(["status"], { timeout: 5000 });
+    // resolution fails here (execFileSync is mocked), so no FULCRA_GIT_EXE may reach the guardian.
+    expect(spawnMock.mock.calls[0][2].env.FULCRA_GIT_EXE).toBeUndefined();
+    child.emit("close");
+  } finally {
+    if (saved === undefined) delete process.env.FULCRA_GIT_EXE;
+    else process.env.FULCRA_GIT_EXE = saved;
+  }
+});

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -179,4 +179,29 @@ test("FU-678: the default probe starts PowerShell hidden and detached", () => {
     readFileSync(new URL("../../orca-organization/server/owned.mjs", import.meta.url), "utf8"),
     /windowsHide: true,\s*\/\/[^\n]*\n\s*detached: true/,
   );
+});
+test("FU-678: no absolute LOCALAPPDATA means no cache file, and a planted file is never read", () => {
+  assert.equal(aclCacheFile({}), undefined);
+  assert.equal(aclCacheFile({ LOCALAPPDATA: "relative\\dir" }), undefined);
+  const t = tempStore();
+  const oldTmp = process.env.TMPDIR;
+  process.env.TMPDIR = t.dir;
+  try {
+    const s = { mode: 0, uid: 0, ino: 201, ctimeMs: 1, mtimeMs: 1 };
+    const key = `me|${PRIVATE_MASK}|p678h|201|1|1`;
+    // Hostile file where the old fallback (os.tmpdir) would look.
+    writeFileSync(join(t.dir, "acl-cache-v1.json"), JSON.stringify({ [key]: true }));
+    let n = 0;
+    const probe = () => (n++, false);
+    const store = fileStore(aclCacheFile({}));
+    assert.equal(store.get(key), undefined);
+    assert.equal(privateOwned(s, "p678h", { platform: "win32", probe, store }), false);
+    assert.equal(n, 1);
+    store.set(key, false);
+    assert.equal(readFileSync(join(t.dir, "acl-cache-v1.json"), "utf8").includes("false"), false);
+  } finally {
+    if (oldTmp === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = oldTmp;
+    rmSync(t.dir, { recursive: true });
+  }
 });

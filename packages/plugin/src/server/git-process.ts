@@ -189,7 +189,7 @@ export function gitEnvironment(base: NodeJS.ProcessEnv = process.env): NodeJS.Pr
   const env = { ...base };
   for (const key of Object.keys(env)) {
     if (
-      /^(GIT_TERMINAL_PROMPT|GCM_INTERACTIVE|GIT_ASKPASS|SSH_ASKPASS|SSH_ASKPASS_REQUIRE|GIT_SSH|GIT_SSH_COMMAND|GIT_SSH_VARIANT)$/i.test(
+      /^(FULCRA_GIT_EXE|GIT_TERMINAL_PROMPT|GCM_INTERACTIVE|GIT_ASKPASS|SSH_ASKPASS|SSH_ASKPASS_REQUIRE|GIT_SSH|GIT_SSH_COMMAND|GIT_SSH_VARIANT)$/i.test(
         key,
       )
     )
@@ -272,7 +272,9 @@ export function resolveWindowsGitBinary(deps: WindowsGitResolveDeps = {}): strin
 function guardianGitEnvironment(): NodeJS.ProcessEnv {
   if (process.platform !== "win32") return {};
   if (runtime.gitBinary === undefined) runtime.gitBinary = resolveWindowsGitBinary() ?? null;
-  return runtime.gitBinary ? { FULCRA_GIT_EXE: runtime.gitBinary } : {};
+  const exe = runtime.gitBinary;
+  // Only our own resolved, absolute, existing path is passed on.
+  return exe && path.win32.isAbsolute(exe) && existsSync(exe) ? { FULCRA_GIT_EXE: exe } : {};
 }
 
 function gitExecutable(): string {
