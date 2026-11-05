@@ -65,6 +65,10 @@ function spawnRelayDevServer(port: number): ChildProcess {
       String(port),
       "--live-reload=false",
       "--show-interactive-dev-session=false",
+      // The e2e test must exercise the local Durable Object, not the production cutover proxy.
+      // The upstream host in wrangler.toml no longer resolves, so an empty value disables the proxy.
+      "--var",
+      "PASEO_RELAY_UPSTREAM:",
     ],
     {
       cwd: relayPackageRoot,
