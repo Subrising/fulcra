@@ -82,8 +82,20 @@ describe("agent queue and steer", () => {
       expect(client.waitForFinish).not.toHaveBeenCalled();
     },
   );
-  it.each([{ flags: [] }, { flags: ["--queue"] }])(
-    "queues agent sends by default: %j",
+  // FU-657 row 6 (owner decision, 5 Nov): an agent send steers a busy receiver's turn by default, as upstream Paseo.
+  it("steers agent sends by default", async () => {
+    senderStamp.mockReturnValue({ agentId: "sender" });
+    await parsedSend(["target", "draft", "--no-wait"]);
+    expect(client.sendAgentMessage).toHaveBeenCalledExactlyOnceWith("target", "draft", {
+      images: undefined,
+      sender: { agentId: "sender" },
+      activeTurnBehavior: "steer",
+      onDelivery: expect.any(Function),
+      messageId: expect.any(String),
+    });
+  });
+  it.each([{ flags: ["--queue"] }, { flags: ["--behavior", "queue"] }])(
+    "queues an agent send only on request: %j",
     async ({ flags }) => {
       senderStamp.mockReturnValue({ agentId: "sender" });
       await parsedSend(["target", "draft", "--no-wait", ...flags]);
@@ -96,6 +108,16 @@ describe("agent queue and steer", () => {
       });
     },
   );
+  it("interrupts an agent send only on request", async () => {
+    senderStamp.mockReturnValue({ agentId: "sender" });
+    await parsedSend(["target", "draft", "--no-wait", "--behavior", "interrupt"]);
+    expect(client.sendAgentMessage).toHaveBeenCalledExactlyOnceWith(
+      "target",
+      "draft",
+      expect.objectContaining({ activeTurnBehavior: "interrupt" }),
+    );
+    expect(client.sendAgentMessage.mock.calls[0]![2]).not.toHaveProperty("queue");
+  });
   it("requests native steering and shows a queue fallback", async () => {
     senderStamp.mockReturnValue({ agentId: "sender" });
     client.sendAgentMessage.mockImplementation(async (_id, _prompt, options) => {
@@ -529,7 +551,7 @@ describe("send reporting lines", () => {
     expect(client.sendAgentMessage).toHaveBeenLastCalledWith("target", "hello", {
       images: undefined,
       sender: { agentId: "lead-1" },
-      queue: true,
+      activeTurnBehavior: "steer",
       onDelivery: expect.any(Function),
       messageId: expect.any(String),
     });

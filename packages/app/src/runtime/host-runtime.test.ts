@@ -836,6 +836,7 @@ describe("HostRuntimeController", () => {
       relayEndpoint: "relay.paseo.sh:443",
       useTls: true,
       daemonPublicKeyB64: "pk_a",
+      deviceId: "dev_fixture",
     };
     const createdClients: FakeDaemonClient[] = [];
     const controller = new HostRuntimeController({
@@ -877,6 +878,7 @@ describe("HostRuntimeController", () => {
       relayEndpoint: "relay.paseo.sh:443",
       useTls: true,
       daemonPublicKeyB64: "pk_a",
+      deviceId: "dev_fixture",
     };
     const createdClients: Array<{ client: FakeDaemonClient; connection: HostConnection }> = [];
     const controller = new HostRuntimeController({
@@ -1195,7 +1197,7 @@ describe("HostRuntimeController", () => {
       const clients: FakeDaemonClient[] = [];
       const latencies: Record<string, number | Error> = {
         "direct:lan:6767": 12,
-        "relay:relay.paseo.sh:443": 65,
+        "relay:relay.example.test:443": 65,
       };
       const controller = new HostRuntimeController({
         host: makeHost(),
@@ -1218,12 +1220,12 @@ describe("HostRuntimeController", () => {
       await controller.runProbeCycleNow();
 
       const snapshot = controller.getSnapshot();
-      expect(snapshot.activeConnectionId).toBe("relay:relay.paseo.sh:443");
+      expect(snapshot.activeConnectionId).toBe("relay:relay.example.test:443");
       expect(snapshot.connectionStatus).toBe("online");
       expect(snapshot.probeByConnectionId).toEqual(
         new Map([
           ["direct:lan:6767", { status: "unavailable", latencyMs: null }],
-          ["relay:relay.paseo.sh:443", { status: "available", latencyMs: 65 }],
+          ["relay:relay.example.test:443", { status: "available", latencyMs: 65 }],
         ]),
       );
       expect(directClient.isDisposed()).toBe(true);
@@ -4145,7 +4147,7 @@ describe("HostRuntimeStore", () => {
     const store = createPairingStore({ storage });
     answerHostConfirmations(store, true);
     const strictOffer = (serverId: string): ConnectionOffer => ({
-      ...makeOffer({ serverId, daemonPublicKeyB64: `pk_${serverId}` }),
+      ...makeOffer({ serverId, daemonPublicKeyB64: Buffer.alloc(32, serverId).toString("base64") }),
       minimumSecurityMode: "protected",
     });
 
@@ -4179,6 +4181,7 @@ describe("HostRuntimeStore", () => {
       type: "relay",
       relayEndpoint: "relay.paseo.sh:443",
       daemonPublicKeyB64: "pk_saved",
+      deviceId: "dev_fixture",
     };
     const host = makeHost({
       serverId: "srv_saved",

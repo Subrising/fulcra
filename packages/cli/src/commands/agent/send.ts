@@ -54,7 +54,7 @@ export interface AgentSendOptions extends CommandOptions {
   notifyOnFinish?: boolean;
   steer?: boolean;
   queue?: boolean;
-  behavior?: ActiveTurnBehavior;
+  behavior?: ActiveTurnBehavior | "queue";
   wait?: boolean;
   nativeQueue?: boolean;
   messageId?: string;
@@ -82,11 +82,11 @@ export function addSendOptions(cmd: Command): Command {
     .addOption(
       new Option(
         "--behavior <behavior>",
-        "Active-turn behavior (agent default: queue or steer; otherwise: interrupt)",
-      ).choices(["interrupt", "steer"]),
+        "Active-turn behavior (agent default: steer; otherwise: interrupt; queue waits for the turn end)",
+      ).choices(["interrupt", "steer", "queue"]),
     )
     .option("--steer", "Inject into the running turn; queue if native steering is unavailable")
-    .option("--queue", "Queue agent messages for one combined delivery (default for agent senders)")
+    .option("--queue", "Queue agent messages for one combined delivery after the current turn")
     .option(
       "--native-queue",
       "Request native queue; requires an authenticated delegated operation, grants no authority",
@@ -333,13 +333,18 @@ function sendOptions(
   onDelivery: (note: string, state?: "held") => void,
   sourceAgentId: string | undefined,
 ): PaseoAgentSendOptions {
-  const behavior: ActiveTurnBehavior | undefined = options.steer ? "steer" : options.behavior;
+  const requested = options.steer ? "steer" : options.behavior;
+  const queue = options.queue === true || requested === "queue";
+  // FU-657 row 6 (owner decision, 5 Nov): an agent sender steers a busy receiver's turn by default, as upstream Paseo.
+  // Queue only on --queue or --behavior queue; interrupt only on --behavior interrupt.
+  const behavior: ActiveTurnBehavior | undefined = queue
+    ? undefined
+    : ((requested as ActiveTurnBehavior | undefined) ?? (sender ? "steer" : undefined));
   return {
     images,
     ...(options.notifyOnFinish === false ? { notifyOnFinish: false } : {}),
     ...(sender ? { sender } : {}),
-    // FULCRA(queue): an agent sender queues by default. An explicit behavior opts out of the queue.
-    ...(options.queue || (sender && !behavior) ? { queue: true } : {}),
+    ...(queue ? { queue: true } : {}),
     ...(behavior ? { activeTurnBehavior: behavior } : {}),
     ...(sourceAgentId ? { sourceAgentId } : {}),
     onDelivery,
@@ -636,10 +641,10 @@ export async function runSendCommand(
         type: "single",
         data: {
           agentId: agentIdArg,
-          status: receipt.deliveryStatus ?? "sent",
+          status: receipt?.deliveryStatus ?? "sent",
           message:
             deliveryNote ??
-            (receipt.deliveryStatus === "queued"
+            (receipt?.deliveryStatus === "queued"
               ? "Message queued for delivery after two quiet seconds"
               : "Message sent, not waiting for completion"),
         },

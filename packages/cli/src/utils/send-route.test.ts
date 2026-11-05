@@ -165,6 +165,19 @@ it("preserves a relayed sender and the explicit notice opt-out", async () => {
   ]);
 });
 
+it.each(["queue", "interrupt"] as const)("relays an explicit --behavior %s", async (behavior) => {
+  await sshSend({
+    route,
+    agentId: "target",
+    prompt: "explicit",
+    sender: { agentId: "sender", serverId: "original" },
+    localServerId: "relay",
+    localHost: "relay host",
+    options: { daemonTarget: { kind: "instance", home: "/local" }, behavior },
+  });
+  expect(JSON.parse(wire).flags).toEqual(["--from", "sender@original", "--behavior", behavior]);
+});
+
 it("relays the source host's own-lead check to the destination (FU-402)", async () => {
   await sshSend({
     route,

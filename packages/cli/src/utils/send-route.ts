@@ -135,6 +135,7 @@ function relayFlags(input: {
     ...(options.notifyOnFinish === false ? ["--no-notify-on-finish"] : []),
     ...(options.steer ? ["--steer"] : []),
     ...(options.queue ? ["--queue"] : []),
+    ...(options.behavior ? ["--behavior", options.behavior] : []),
   ];
 }
 
