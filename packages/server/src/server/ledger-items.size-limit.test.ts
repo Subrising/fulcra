@@ -22,7 +22,8 @@ describe("readOpenLedgerRows size limit", () => {
     dir = await mkdtemp(path.join(os.tmpdir(), "ledger-size-"));
     await mkdir(path.join(dir, "big"));
     const rows = Array.from({ length: 6000 }, (_, i) => doneRow(i));
-    const text = [...header, ...rows, "| BG-1 | open | FIX | lead | OPEN | — | t |"].join("\n") + "\n";
+    const text =
+      [...header, ...rows, "| BG-1 | open | FIX | lead | OPEN | — | t |"].join("\n") + "\n";
     expect(Buffer.byteLength(text)).toBeGreaterThan(600 * 1024);
     await writeFile(path.join(dir, "big", "OPEN-ITEMS.md"), text);
     const got = await readOpenLedgerRows(dir, true);
