@@ -1,4 +1,6 @@
-import { describe, expect, test } from "vitest";
+import { EventEmitter } from "node:events";
+import { Readable } from "node:stream";
+import { describe, expect, test, vi } from "vitest";
 import {
   parseWindowsResourceSnapshot,
   protectedSessionDirectory,
@@ -141,4 +143,54 @@ test("a stale Windows installation identity no longer protects other processes",
     }),
   );
   expect(row?.protectionReason).toBeUndefined();
+});
+
+test("the Windows resource table reader starts PowerShell detached (no conhost per sample)", async () => {
+  vi.resetModules();
+  const spawnMock = vi.fn(() => {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter;
+      stderr: Readable;
+      kill: () => void;
+    };
+    child.stdout = new EventEmitter();
+    child.stderr = new Readable({ read() {} });
+    child.kill = vi.fn();
+    queueMicrotask(() => {
+      child.stdout.emit("data", Buffer.from("[]"));
+      child.emit("close", 0);
+    });
+    return child;
+  });
+  vi.doMock("node:child_process", () => ({ spawn: spawnMock }));
+  const mod = await import("./windows-resource-processes.js");
+  await mod.readWindowsResourceProcesses().catch(() => undefined);
+  const [file, , options] = spawnMock.mock.calls[0] as unknown as [
+    string,
+    string[],
+    Record<string, unknown>,
+  ];
+  expect(file).toBe("powershell.exe");
+  expect(options).toMatchObject({ detached: true, windowsHide: true });
+  vi.doUnmock("node:child_process");
+});
+
+test("the Windows resource table reader rejects a failed or oversized PowerShell run", async () => {
+  vi.resetModules();
+  const spawnMock = vi.fn(() => {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter;
+      stderr: Readable;
+      kill: () => void;
+    };
+    child.stdout = new EventEmitter();
+    child.stderr = new Readable({ read() {} });
+    child.kill = vi.fn();
+    queueMicrotask(() => child.emit("close", 1));
+    return child;
+  });
+  vi.doMock("node:child_process", () => ({ spawn: spawnMock }));
+  const mod = await import("./windows-resource-processes.js");
+  await expect(mod.readWindowsResourceProcesses()).rejects.toThrow("exited with code 1");
+  vi.doUnmock("node:child_process");
 });
