@@ -240,7 +240,6 @@ import { startWorkerTerminalManager } from "../terminal/worker-terminal-manager.
 import { applyTerminalAgentHookSetting } from "../terminal/agent-hooks/terminal-agent-hook-setting.js";
 import { loadOrCreateDaemonKeyPair } from "./daemon-keypair.js";
 import { createRelayRuntime, type RelayRuntime } from "./relay-runtime.js";
-import { admitSecuredRelaySocket } from "./websocket/secure-relay-ingress.js";
 import type { PushNotificationSender } from "./push/index.js";
 import { getOrCreateServerId } from "./server-id.js";
 import { DAEMON_SERVER_ID_ENV } from "./own-session-guard.js";
@@ -2410,7 +2409,6 @@ export async function createPaseoDaemon(
             restartRecovery.resumePending();
             await finishSubscriptions.start();
             wsServer.beginAcceptingConnections();
-            const relaySecurityLogger = logger.child({ module: "relay-security" });
             relayRuntime = createRelayRuntime({
               config: {
                 enabled: relayEnabled,
@@ -2421,24 +2419,13 @@ export async function createPaseoDaemon(
                 publicUseTls: relayPublicUseTls,
               },
               logger,
-              attachSocket: (ws, metadata) =>
-                admitSecuredRelaySocket(
-                  ws,
-                  {
-                    daemonKeyPair: daemonKeyPair.keyPair,
-                    logger: relaySecurityLogger,
-                    requireProtectedMode: () =>
-                      daemonConfigStore.get().relay?.requireProtectedSecurity === true,
-                  },
-                  async (secured) => {
-                    if (!wsServer) throw new Error("WebSocket server is not ready");
-                    await wsServer.attachExternalSocket(secured.socket, {
-                      ...metadata,
-                      transport: "relay",
-                      securityMode: secured.securityMode,
-                    });
-                  },
-                ),
+              // FULCRA(relay): FU-657 keeps the Fulcra v3 relay channel. relay-transport.ts already ran the
+              // E2EE handshake and the device gate, so the socket here is decrypted. The upstream protected
+              // ingress (admitSecuredRelaySocket) would wait for a second handshake and time out.
+              attachSocket: async (ws, metadata) => {
+                if (!wsServer) throw new Error("WebSocket server is not ready");
+                await wsServer.attachExternalSocket(ws, metadata);
+              },
               serverId,
               daemonKeyPair: daemonKeyPair.keyPair,
               paseoHome: config.paseoHome,
