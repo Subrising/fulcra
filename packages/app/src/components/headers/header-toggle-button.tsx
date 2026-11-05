@@ -8,7 +8,7 @@ import { isWeb } from "@/constants/platform";
 import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import {
   iconButtonChromeFrameStyle,
-  iconButtonChromeStyle,
+  useIconButtonChromeStyle,
 } from "@/components/ui/icon-button-chrome";
 
 interface HeaderToggleButtonState {
@@ -49,17 +49,15 @@ export function HeaderToggleButton({
 
   // FU-73: a 48 px target on a touch screen; the drawn icon frame stays the same.
   const touch = useTouchTargets();
-  const combinedStyle = useMemo(
-    () =>
-      ({ hovered, pressed }: { hovered?: boolean; pressed: boolean }) =>
-        iconButtonChromeStyle({
-          size: "large",
-          state: { hovered: Boolean(hovered), pressed },
-          disabled: Boolean(disabled),
-          style: touch ? [style, touchTargetStyles.icon] : style,
-        }),
-    [disabled, style, touch],
+  const touchStyle = useMemo(
+    () => (touch ? [style, touchTargetStyles.icon] : style),
+    [style, touch],
   );
+  const combinedStyle = useIconButtonChromeStyle({
+    size: "large",
+    disabled: Boolean(disabled),
+    style: touchStyle,
+  });
 
   return (
     <Tooltip delayDuration={tooltipDelayDuration} enabledOnDesktop enabledOnMobile={false}>

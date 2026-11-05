@@ -28,7 +28,7 @@ import { SidebarFilterEmptyState } from "@/components/sidebar/empty-states";
 import type { HostBadgeModel } from "@/hosts/appearance";
 import { isWeb as platformIsWeb, isNative as platformIsNative } from "@/constants/platform";
 import { StyleSheet } from "react-native-unistyles";
-import type { Theme } from "@/styles/theme";
+import { density, densityIconBox, densityIconProps } from "@/styles/density";
 import type { SidebarSurfaceBackdrop } from "@/styles/surface-backdrop";
 import { withUnistyles } from "react-native-unistyles";
 import {
@@ -75,10 +75,8 @@ import {
   SidebarWorkspaceMenu,
 } from "@/components/sidebar/sidebar-workspace-menu";
 import { useWithoutSupersededHosts } from "@/hosts/use-superseded-hosts";
-import {
-  PinnedSectionHeader,
-  PinnedHostConnectionNotice,
-} from "@/components/sidebar/pinned-section-header";
+import { PinnedHostConnectionNotice } from "@/components/sidebar/pinned-host-connection-notice";
+import { SidebarSectionHeader } from "@/components/sidebar/sidebar-section-header";
 import { SidebarGroupToggleRow } from "@/components/sidebar/sidebar-group-toggle-row";
 import { useLimitedSidebarGroup } from "@/components/sidebar/use-limited-sidebar-group";
 import type { ToggleSidebarWorkspacePin } from "@/hooks/use-sidebar-workspace-pin";
@@ -88,23 +86,23 @@ import { useLongPressDragInteraction } from "@/components/sidebar/use-long-press
 import { useTouchTargets } from "@/hooks/use-touch-targets";
 
 // Themed icon wrappers
-const foregroundMutedColorMapping = (theme: Theme) => ({
+const mutedGroupIconProps = densityIconProps("sm", (theme) => ({
   color: theme.colors.foregroundMuted,
-});
+}));
 // One mapping per bucket, resolved through the status-dot producer so a group header and
 // the rows under it cannot disagree about what "failed" looks like.
-const needsInputColorMapping = (theme: Theme) => ({
+const needsInputGroupIconProps = densityIconProps("sm", (theme) => ({
   color: getStatusDotColor({ theme, bucket: "needs_input" }) ?? undefined,
-});
-const failedColorMapping = (theme: Theme) => ({
+}));
+const failedGroupIconProps = densityIconProps("sm", (theme) => ({
   color: getStatusDotColor({ theme, bucket: "failed" }) ?? undefined,
-});
-const attentionColorMapping = (theme: Theme) => ({
+}));
+const attentionGroupIconProps = densityIconProps("sm", (theme) => ({
   color: getStatusDotColor({ theme, bucket: "attention" }) ?? undefined,
-});
-const runningColorMapping = (theme: Theme) => ({
+}));
+const runningGroupIconProps = densityIconProps("sm", (theme) => ({
   color: getStatusDotColor({ theme, bucket: "running" }) ?? undefined,
-});
+}));
 
 const ThemedChevronDown = withUnistyles(ChevronDown);
 const ThemedChevronRight = withUnistyles(ChevronRight);
@@ -154,6 +152,8 @@ export function SidebarStatusWorkspaceList({
   dragGestureHostActive,
 }: StatusWorkspaceListProps) {
   const pinnedWorkspaces = useWithoutSupersededHosts(allPinnedWorkspaces);
+  const { t } = useTranslation();
+  const activeWorkspaceSelection = useActiveWorkspaceSelection();
   const collapsedWorkspaceGroupKeys = useSidebarCollapsedSectionsStore(
     (state) => state.collapsedWorkspaceGroupKeys,
   );
@@ -162,23 +162,27 @@ export function SidebarStatusWorkspaceList({
     (state) => state.togglePinnedCollapsed,
   );
   const {
+    leadingItem: leadingPinnedWorkspace,
     visibleItems: visiblePinnedWorkspaces,
     expanded: pinnedWorkspacesExpanded,
     canToggle: canTogglePinnedWorkspaces,
     toggleExpanded: togglePinnedWorkspacesExpanded,
-  } = useLimitedSidebarGroup(pinnedWorkspaces);
+  } = useLimitedSidebarGroup({ items: pinnedWorkspaces, selection: activeWorkspaceSelection });
 
   const statusShortcutIndex = showShortcutBadges
     ? shortcutIndexByWorkspaceKey
     : EMPTY_SHORTCUT_INDEX;
-  const renderPinnedWorkspace = useCallback(
-    ({
-      item: workspace,
-      drag,
-      isActive,
-      dragHandleProps,
-    }: DraggableRenderItemInfo<SidebarWorkspaceEntry>) => (
+  const renderPinnedWorkspaceRow = useCallback(
+    (
+      workspace: SidebarWorkspaceEntry,
+      input?: {
+        drag?: () => void;
+        isDragging?: boolean;
+        dragHandleProps?: DraggableListDragHandleProps;
+      },
+    ) => (
       <StatusWorkspaceRow
+        key={workspace.workspaceKey}
         workspace={workspace}
         {...buildStatusRowProjectPresentation({
           workspace,
@@ -191,9 +195,9 @@ export function SidebarStatusWorkspaceList({
         canPin={supportsPinningByServerId.get(workspace.serverId) === true}
         onToggleWorkspacePin={onToggleWorkspacePin}
         onWorkspacePress={onWorkspacePress}
-        drag={drag}
-        isDragging={isActive}
-        dragHandleProps={dragHandleProps}
+        drag={input?.drag}
+        isDragging={input?.isDragging}
+        dragHandleProps={input?.dragHandleProps}
       />
     ),
     [
@@ -206,15 +210,35 @@ export function SidebarStatusWorkspaceList({
       supportsPinningByServerId,
     ],
   );
+  const renderPinnedWorkspace = useCallback(
+    ({
+      item: workspace,
+      drag,
+      isActive,
+      dragHandleProps,
+    }: DraggableRenderItemInfo<SidebarWorkspaceEntry>) =>
+      renderPinnedWorkspaceRow(workspace, {
+        drag,
+        isDragging: isActive,
+        dragHandleProps,
+      }),
+    [renderPinnedWorkspaceRow],
+  );
   const content = (
     <>
       <SidebarTopContent inset />
       {pinnedWorkspaces.length > 0 ? (
         <View style={styles.pinnedSection} testID="sidebar-pinned-section">
-          <PinnedSectionHeader collapsed={pinnedCollapsed} onToggle={togglePinnedCollapsed} />
+          <SidebarSectionHeader
+            title={t("sidebar.pinned.title")}
+            collapsed={pinnedCollapsed}
+            onToggle={togglePinnedCollapsed}
+            testID="sidebar-pinned-section-header"
+          />
           <PinnedHostConnectionNotice workspaces={pinnedWorkspaces} />
           {pinnedCollapsed ? null : (
             <>
+              {leadingPinnedWorkspace ? renderPinnedWorkspaceRow(leadingPinnedWorkspace) : null}
               <DraggableList
                 testID="sidebar-pinned-list"
                 data={visiblePinnedWorkspaces}
@@ -323,6 +347,11 @@ function StatusGroupList({
   );
 }
 
+const STATUS_GROUP_VISIBILITY = {
+  kind: "workspaces" as const,
+  getStatusBucket: (workspace: SidebarWorkspaceEntry) => workspace.statusBucket,
+};
+
 function StatusGroupRows({
   group,
   collapsed,
@@ -344,12 +373,39 @@ function StatusGroupRows({
   supportsPinningByServerId: ReadonlyMap<string, boolean>;
   onToggleWorkspacePin: ToggleSidebarWorkspacePin;
 }) {
+  const activeWorkspaceSelection = useActiveWorkspaceSelection();
   const {
+    leadingItem: leadingWorkspace,
     visibleItems: visibleWorkspaces,
     expanded: workspacesExpanded,
     canToggle: canToggleWorkspaces,
     toggleExpanded: toggleWorkspacesExpanded,
-  } = useLimitedSidebarGroup(group.rows, workspaceServerId);
+  } = useLimitedSidebarGroup({
+    items: group.rows,
+    // Fulcra: cut rows per host, so a quiet host's sessions are never pushed out by a busy one.
+    hostOf: workspaceServerId,
+    selection: activeWorkspaceSelection,
+    policy: STATUS_GROUP_VISIBILITY,
+  });
+
+  function renderWorkspaceRow(workspace: SidebarWorkspaceEntry) {
+    return (
+      <StatusWorkspaceRow
+        key={workspace.workspaceKey}
+        workspace={workspace}
+        {...buildStatusRowProjectPresentation({
+          workspace,
+          projectIconByProjectViewKey,
+          hostBadgeByServerId,
+        })}
+        shortcutNumber={shortcutIndex.get(workspace.workspaceKey) ?? null}
+        showShortcutBadge={showShortcutBadges}
+        canPin={supportsPinningByServerId.get(workspace.serverId) === true}
+        onToggleWorkspacePin={onToggleWorkspacePin}
+        onWorkspacePress={onWorkspacePress}
+      />
+    );
+  }
 
   return (
     <View style={collapsed ? undefined : styles.statusGroupBlockExpanded}>
@@ -359,22 +415,8 @@ function StatusGroupRows({
           style={styles.statusWorkspaceListContainer}
           testID={`sidebar-status-group-rows-${group.key}`}
         >
-          {visibleWorkspaces.map((workspace) => (
-            <StatusWorkspaceRow
-              key={workspace.workspaceKey}
-              workspace={workspace}
-              {...buildStatusRowProjectPresentation({
-                workspace,
-                projectIconByProjectViewKey,
-                hostBadgeByServerId,
-              })}
-              shortcutNumber={shortcutIndex.get(workspace.workspaceKey) ?? null}
-              showShortcutBadge={showShortcutBadges}
-              canPin={supportsPinningByServerId.get(workspace.serverId) === true}
-              onToggleWorkspacePin={onToggleWorkspacePin}
-              onWorkspacePress={onWorkspacePress}
-            />
-          ))}
+          {leadingWorkspace ? renderWorkspaceRow(leadingWorkspace) : null}
+          {visibleWorkspaces.map(renderWorkspaceRow)}
           {canToggleWorkspaces ? (
             <SidebarGroupToggleRow
               expanded={workspacesExpanded}
@@ -492,29 +534,29 @@ function StatusGroupLeadingVisual({
 }) {
   if (!showChevron) {
     return leading.kind === "offline" ? (
-      <ThemedWifiOff size={14} uniProps={foregroundMutedColorMapping} />
+      <ThemedWifiOff uniProps={mutedGroupIconProps} />
     ) : (
       <StatusGroupIcon bucket={leading.bucket} />
     );
   }
   if (collapsed) {
-    return <ThemedChevronRight size={14} uniProps={foregroundMutedColorMapping} />;
+    return <ThemedChevronRight uniProps={mutedGroupIconProps} />;
   }
-  return <ThemedChevronDown size={14} uniProps={foregroundMutedColorMapping} />;
+  return <ThemedChevronDown uniProps={mutedGroupIconProps} />;
 }
 
 function StatusGroupIcon({ bucket }: { bucket: StatusBucket }) {
   switch (bucket) {
     case "needs_input":
-      return <ThemedCircleAlert size={14} uniProps={needsInputColorMapping} />;
+      return <ThemedCircleAlert uniProps={needsInputGroupIconProps} />;
     case "failed":
-      return <ThemedCircleX size={14} uniProps={failedColorMapping} />;
+      return <ThemedCircleX uniProps={failedGroupIconProps} />;
     case "attention":
-      return <ThemedCircleCheck size={14} uniProps={attentionColorMapping} />;
+      return <ThemedCircleCheck uniProps={attentionGroupIconProps} />;
     case "running":
-      return <ThemedCircleDot size={14} uniProps={runningColorMapping} />;
+      return <ThemedCircleDot uniProps={runningGroupIconProps} />;
     case "done":
-      return <ThemedCircleCheck size={14} uniProps={foregroundMutedColorMapping} />;
+      return <ThemedCircleCheck uniProps={mutedGroupIconProps} />;
   }
 }
 
@@ -529,7 +571,6 @@ const StatusWorkspaceRow = memo(function StatusWorkspaceRow({
   onToggleWorkspacePin,
   reserveIdleStatusIndicatorSpace = true,
   inStatusGroup = true,
-  onWorkspacePress,
   drag,
   isDragging = false,
   dragHandleProps,
@@ -560,9 +601,8 @@ const StatusWorkspaceRow = memo(function StatusWorkspaceRow({
 
   const handlePress = useCallback(() => {
     if (!workspace.serverId) return;
-    onWorkspacePress?.();
     navigateToWorkspace({ serverId: workspace.serverId, workspaceId: workspace.workspaceId });
-  }, [onWorkspacePress, workspace.serverId, workspace.workspaceId]);
+  }, [workspace.serverId, workspace.workspaceId]);
 
   return (
     <StatusWorkspaceRowWithMenu
@@ -1086,7 +1126,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   statusWorkspaceListContainer: {},
   statusGroupRow: {
-    minHeight: 36,
+    minHeight: density.rowHeight,
     paddingVertical: theme.spacing[2],
     paddingHorizontal: theme.spacing[2],
     borderRadius: theme.borderRadius.lg,
@@ -1112,8 +1152,8 @@ const styles = StyleSheet.create((theme) => ({
   },
   statusGroupLeadingVisualSlot: {
     position: "relative",
-    width: theme.iconSize.md,
-    height: theme.iconSize.md,
+    width: densityIconBox("md"),
+    height: densityIconBox("md"),
     flexShrink: 0,
     alignItems: "center",
     justifyContent: "center",
@@ -1141,7 +1181,7 @@ const styles = StyleSheet.create((theme) => ({
     position: "relative",
   },
   workspaceRow: {
-    minHeight: 36,
+    minHeight: density.rowHeight,
     marginBottom: theme.spacing[0.5],
     paddingVertical: theme.spacing[2],
     paddingLeft: theme.spacing[2],

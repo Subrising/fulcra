@@ -17,6 +17,7 @@ import type { ShortcutKey } from "@/utils/format-shortcut";
 import {
   iconButtonChromeGlyphSize,
   iconButtonChromeStyle,
+  useIconButtonChromeStyle,
   smallIconButtonChromeFrameSize,
 } from "@/components/ui/icon-button-chrome";
 import { WORKSPACE_PANE_TRAILING_GLYPH_RAIL } from "@/components/tree-primitives";
@@ -63,6 +64,8 @@ interface ToolbarButtonCommonProps extends Omit<
   tooltip?: ReactNode;
   selected?: boolean;
   compact?: boolean;
+  /** A circular highlight, for buttons inside a pill-shaped container. */
+  round?: boolean;
   shortcut?: ShortcutKey[][] | null;
   tooltipSide?: "left" | "right" | "top" | "bottom";
   style?: StyleProp<ViewStyle>;
@@ -84,6 +87,7 @@ export function ToolbarButton({
   tooltip: tooltipBody,
   selected = false,
   compact = false,
+  round = false,
   shortcut,
   tooltipSide = "bottom",
   style,
@@ -95,17 +99,18 @@ export function ToolbarButton({
 }: ToolbarButtonProps) {
   // FU-96: on a touch screen every toolbar button is a 48 px target; the drawn icon keeps its size.
   const touch = useTouchTargets();
-  const buttonStyle = useMemo(
-    () => (state: { hovered?: boolean; pressed: boolean; open?: boolean }) =>
-      iconButtonChromeStyle({
-        size: "small",
-        compact,
-        state: { ...state, active: selected },
-        disabled: Boolean(disabled),
-        style: touch ? [style, touchTargetStyles.icon] : style,
-      }),
-    [compact, disabled, selected, style, touch],
+  const touchStyle = useMemo(
+    () => (touch ? [style, touchTargetStyles.icon] : style),
+    [style, touch],
   );
+  const buttonStyle = useIconButtonChromeStyle({
+    size: "small",
+    compact,
+    active: selected,
+    disabled: Boolean(disabled),
+    round,
+    style: touchStyle,
+  });
   const accessibilityState = useMemo(
     () => ({ disabled: Boolean(disabled), selected }),
     [disabled, selected],

@@ -1,7 +1,7 @@
 import { router, usePathname } from "expo-router";
 import React, { useCallback } from "react";
 import { SidebarHeaderRow } from "@/components/sidebar/sidebar-header-row";
-import { resolvePluginIcon } from "../icons";
+import { pluginIconComponent } from "../icons";
 import { buildPluginSurfaceRoute, hostIdFromPathname } from "../routes";
 import {
   getPreferredPluginContributionHost,
@@ -98,7 +98,7 @@ export function CompanyPluginSidebarRow({
     });
     return (
       <SidebarHeaderRow
-        icon={resolvePluginIcon(choice?.kind === "update" ? "ShieldAlert" : group.icon)}
+        icon={pluginIconComponent(choice?.kind === "update" ? "ShieldAlert" : group.icon)}
         variant="compact"
         label={label}
         accessibilityLabel={accessibilityLabel}
@@ -110,7 +110,7 @@ export function CompanyPluginSidebarRow({
   return (
     <>
       <SidebarHeaderRow
-        icon={resolvePluginIcon(target.untrusted ? "ShieldAlert" : group.icon)}
+        icon={pluginIconComponent(target.untrusted ? "ShieldAlert" : group.icon)}
         label={target.untrusted ? `${group.title} · Not trusted` : group.title}
         accessibilityLabel={
           target.untrusted

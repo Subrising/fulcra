@@ -303,4 +303,22 @@ describe("X6: the probe is catalog-only and bounded", () => {
     ).rejects.toThrow("timed out after 50ms");
     expect(calls.closed).toBe(1);
   });
+
+  it("closes a stalled probe when its refresh is canceled", async () => {
+    const controller = new AbortController();
+    const failure = new Error("refresh canceled");
+    const { factory, calls } = fakeQuery(() => {
+      controller.abort(failure);
+      return new Promise<never>(() => {});
+    });
+
+    await expect(
+      probeClaudeModels({
+        claudeBinary: "/test/claude",
+        queryFactory: factory,
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(failure);
+    expect(calls.closed).toBe(1);
+  });
 });

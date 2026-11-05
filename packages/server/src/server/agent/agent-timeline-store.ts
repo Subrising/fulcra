@@ -1,9 +1,6 @@
 import { randomUUID } from "node:crypto";
-import {
-  TimelineProjection,
-  selectProjectedTimelinePage,
-  type ProjectedTimelineRow,
-} from "./timeline-projection.js";
+import { TimelineProjection, type ProjectedTimelineRow } from "./timeline-projection.js";
+import { limitAgentTimelineItemContent } from "./agent-timeline-content.js";
 import type { AgentTimelineItem } from "./agent-sdk-types.js";
 import { isSeqInTurn } from "./timeline-turn-index.js";
 import type {
@@ -44,8 +41,7 @@ export class InMemoryAgentTimelineStore {
       ? options.rows.map(cloneRow)
       : this.buildRowsFromItems(options?.items ?? [], options?.nextSeq ?? 1, timestamp);
     const nextSeq = rows.reduce((next, row) => Math.max(next, row.seq + 1), options?.nextSeq ?? 1);
-    const projection = new TimelineProjection();
-    for (const row of rows) projection.append(row);
+    const projection = new TimelineProjection(rows);
     this.states.set(agentId, {
       epoch: options?.epoch ?? randomUUID(),
       projection,
@@ -102,24 +98,29 @@ export class InMemoryAgentTimelineStore {
     const state = this.requireState(agentId);
     const direction = options?.direction ?? "tail";
     const cursor = options?.cursor;
+    const hasRows = state.minSeq !== 0;
+    // Fulcra: a turn fetch pages inside one turn's projected rows only.
     const turn = options?.turn;
-    const allRows = state.projection.getRows();
-    const rows = turn ? allRows.filter((row) => isSeqInTurn(turn, row.seqStart)) : allRows;
+    const projection = turn
+      ? new TimelineProjection(
+          state.projection.getRows().filter((row) => isSeqInTurn(turn, row.seqStart)),
+        )
+      : state.projection;
     const window = { minSeq: state.minSeq, maxSeq: state.nextSeq - 1, nextSeq: state.nextSeq };
     const staleCursor = cursor !== undefined && cursor.epoch !== state.epoch;
     const gap =
       !staleCursor &&
       direction === "after" &&
       cursor !== undefined &&
-      rows.length > 0 &&
+      hasRows &&
       cursor.seq < state.minSeq - 1;
     const reset = staleCursor || gap;
-    const page = selectProjectedTimelinePage({
-      rows,
+    const page = projection.selectPage({
       bounds: turn ? { minSeq: turn.seqStart, maxSeq: turn.seqEnd } : window,
       direction: reset ? "tail" : direction,
       cursorSeq: cursor?.seq,
       limit: options?.limit ?? DEFAULT_TIMELINE_FETCH_LIMIT,
+      wholeTurns: options?.wholeTurns,
     });
     return {
       epoch: state.epoch,
@@ -132,7 +133,12 @@ export class InMemoryAgentTimelineStore {
       hasNewer: page.hasNewer,
       startSeq: page.startSeq,
       endSeq: page.endSeq,
-      rows: page.entries.map((entry) => Object.assign({ seq: entry.seqEnd }, entry)),
+      // Stored rows are already within budget; this bounds assistant and reasoning merges.
+      rows: page.entries.map((entry) =>
+        Object.assign({ seq: entry.seqEnd }, entry, {
+          item: limitAgentTimelineItemContent(entry.item),
+        }),
+      ),
     };
   }
 
@@ -157,14 +163,11 @@ export class InMemoryAgentTimelineStore {
 
   getLastItem(agentId: string): AgentTimelineItem | null {
     const state = this.requireState(agentId);
-    return state.projection.getRows().find((row) => row.seqEnd === state.nextSeq - 1)?.item ?? null;
+    return state.projection.getLastItem(state.nextSeq - 1);
   }
 
   getLastAssistantMessage(agentId: string): string | null {
-    const row = this.requireState(agentId)
-      .projection.getRows()
-      .findLast((candidate) => candidate.item.type === "assistant_message");
-    return row?.item.type === "assistant_message" ? row.item.text : null;
+    return this.requireState(agentId).projection.getLastAssistantMessage();
   }
 
   private requireState(agentId: string): AgentTimelineState {

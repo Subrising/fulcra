@@ -2379,6 +2379,7 @@ export class ReportUpService {
           (kind === "idle-nudge"
             ? `${NUDGE_MESSAGE_PREFIX}${randomUUID()}`
             : `${FINISH_NOTIFICATION_MESSAGE_PREFIX}report-up:${randomUUID()}`),
+        systemNotice: true,
         runOptions: { [FINAL_INPUT_CHECK]: finalCheck },
         ...(kind === "idle-nudge"
           ? { queuedOnly: true }

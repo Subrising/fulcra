@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { type Command } from "commander";
+import { type Command, Option } from "commander";
 import type { PaseoAgentSendOptions } from "@getpaseo/client";
+import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
 import { readPromptFile } from "../../utils/prompt-file.js";
 import { collectMultiple } from "../../utils/command-options.js";
 import { connectToDaemon } from "../../utils/client.js";
@@ -53,6 +54,7 @@ export interface AgentSendOptions extends CommandOptions {
   notifyOnFinish?: boolean;
   steer?: boolean;
   queue?: boolean;
+  behavior?: ActiveTurnBehavior;
   wait?: boolean;
   nativeQueue?: boolean;
   messageId?: string;
@@ -77,6 +79,12 @@ export function addSendOptions(cmd: Command): Command {
     .option("--prompt-file <path>", "Read the message from a UTF-8 text file")
     .option("--image <path>", "Attach image(s) to the message", collectMultiple, [])
     .option("--no-notify-on-finish", "Do not request a finish notice for this message")
+    .addOption(
+      new Option(
+        "--behavior <behavior>",
+        "Active-turn behavior (agent default: queue or steer; otherwise: interrupt)",
+      ).choices(["interrupt", "steer"]),
+    )
     .option("--steer", "Inject into the running turn; queue if native steering is unavailable")
     .option("--queue", "Queue agent messages for one combined delivery (default for agent senders)")
     .option(
@@ -311,6 +319,11 @@ function validateSendMode(options: AgentSendOptions): void {
       code: "CONFLICTING_SEND_MODE",
       message: "Choose one of --steer, --queue, or --native-queue",
     } satisfies CommandError;
+  if (options.behavior && (options.steer || options.queue || options.nativeQueue))
+    throw {
+      code: "CONFLICTING_SEND_MODE",
+      message: "--behavior cannot be combined with --steer, --queue, or --native-queue",
+    } satisfies CommandError;
 }
 
 function sendOptions(
@@ -318,13 +331,17 @@ function sendOptions(
   sender: ReturnType<typeof resolveSender>,
   images: Awaited<ReturnType<typeof readImageFiles>> | undefined,
   onDelivery: (note: string, state?: "held") => void,
+  sourceAgentId: string | undefined,
 ): PaseoAgentSendOptions {
+  const behavior: ActiveTurnBehavior | undefined = options.steer ? "steer" : options.behavior;
   return {
     images,
     ...(options.notifyOnFinish === false ? { notifyOnFinish: false } : {}),
     ...(sender ? { sender } : {}),
-    ...(options.queue || (sender && !options.steer) ? { queue: true } : {}),
-    ...(options.steer ? { activeTurnBehavior: "steer" as const } : {}),
+    // FULCRA(queue): an agent sender queues by default. An explicit behavior opts out of the queue.
+    ...(options.queue || (sender && !behavior) ? { queue: true } : {}),
+    ...(behavior ? { activeTurnBehavior: behavior } : {}),
+    ...(sourceAgentId ? { sourceAgentId } : {}),
     onDelivery,
   };
 }
@@ -577,19 +594,30 @@ export async function runSendCommand(
     );
     if (slashResult) return { type: "single", data: slashResult, schema: agentSendSchema };
 
+    // The sending agent travels as provenance when the host can read it; older hosts keep the sender stamp.
+    const sourceAgentId =
+      client.getLastServerInfoMessage()?.features?.agentMessageProvenance === true
+        ? process.env.PASEO_AGENT_ID?.trim() || undefined
+        : undefined;
     // Send the message
     let deliveryNote: string | undefined;
     let deliveryState: "held" | undefined;
     const policy = completionPolicy(options, sender, agentIdArg, promptInput);
     const completionMessageId = policy.messageId;
-    await client.sendAgentMessage(agentIdArg, promptInput, {
-      ...sendOptions(options, sender, images, (note, state) => {
-        deliveryNote = note;
-        // COMPAT(sendDeliveryState): added in v0.2.26; remove after 2027-04-19 once daemon floor >= v0.2.26.
-        deliveryState =
-          state ??
-          (note === "Provider paused. Notice saved. No turn was started." ? "held" : undefined);
-      }),
+    const receipt = await client.sendAgentMessage(agentIdArg, promptInput, {
+      ...sendOptions(
+        options,
+        sender,
+        images,
+        (note, state) => {
+          deliveryNote = note;
+          // COMPAT(sendDeliveryState): added in v0.2.26; remove after 2027-04-19 once daemon floor >= v0.2.26.
+          deliveryState =
+            state ??
+            (note === "Provider paused. Notice saved. No turn was started." ? "held" : undefined);
+        },
+        sourceAgentId,
+      ),
       ...(completionMessageId ? { messageId: completionMessageId } : {}),
       ...(policy.remote ? { issuedAt: Date.now() } : {}),
     });
@@ -608,8 +636,12 @@ export async function runSendCommand(
         type: "single",
         data: {
           agentId: agentIdArg,
-          status: "sent",
-          message: deliveryNote ?? "Message sent, not waiting for completion",
+          status: receipt.deliveryStatus ?? "sent",
+          message:
+            deliveryNote ??
+            (receipt.deliveryStatus === "queued"
+              ? "Message queued for delivery after two quiet seconds"
+              : "Message sent, not waiting for completion"),
         },
         schema: agentSendSchema,
       };

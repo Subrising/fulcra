@@ -50,13 +50,8 @@ export function ContextButton({
     openWorkspaceContext({
       isCompact,
       workspaceKey,
-      checkout: {
-        serverId,
-        cwd: workspace.workspaceDirectory,
-        isGit: Boolean(workspace.gitRuntime),
-      },
     });
-  }, [workspace, selectedAgentId, selectCurrentAgent, isCompact, workspaceKey, serverId]);
+  }, [workspace, selectedAgentId, selectCurrentAgent, isCompact, workspaceKey]);
   const label = t("context.open", { defaultValue: "Context" });
   return (
     <Button

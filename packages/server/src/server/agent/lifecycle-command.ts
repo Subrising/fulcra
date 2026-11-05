@@ -12,7 +12,7 @@ import type { StoredAgentRecord } from "./agent-storage.js";
 import { SEAT_LABEL } from "@getpaseo/protocol/agent-labels";
 import type { AgentProviderNotice } from "./agent-sdk-types.js";
 
-export type LifecycleAgentSnapshot = Pick<ManagedAgent, "id" | "cwd" | "lifecycle">;
+export type LifecycleAgentSnapshot = Pick<ManagedAgent, "id" | "cwd" | "lifecycle" | "internal">;
 
 export interface LifecycleAgentManager {
   withInput<T>(
@@ -185,7 +185,8 @@ export async function cancelAgentRunCommand(
 export interface ArchiveAgentResult {
   agentId: string;
   archivedAt: string;
-  record: StoredAgentRecord;
+  /** Null for an internal agent, which is closed and leaves no record behind. */
+  record: StoredAgentRecord | null;
 }
 
 export async function archiveAgentCommand(
@@ -204,7 +205,10 @@ export async function archiveAgentCommand(
       if (liveAgent) {
         await requestAgentRunCancellation(dependencies, agentId, { operationHandle });
         await dependencies.agentManager.clearAgentAttention(agentId).catch(() => undefined);
-        await dependencies.agentManager.archiveAgent(agentId, operationHandle);
+        const archived = await dependencies.agentManager.archiveAgent(agentId, operationHandle);
+        if (liveAgent.internal) {
+          return { agentId, archivedAt: archived.archivedAt, record: null };
+        }
         record = await dependencies.agentStorage.get(agentId);
       } else {
         record = await archiveStoredAgent(dependencies, agentId, operationHandle);

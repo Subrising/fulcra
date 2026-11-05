@@ -21,7 +21,11 @@ vi.mock("./home-computer", async (importOriginal) => ({
     enabled ? f.mainAssistantHosts : new Set<string>(),
 }));
 vi.mock("expo-router", () => ({ router: { push: f.push }, usePathname: () => "/h/remote" }));
-vi.mock("./icons", () => ({ Icon: () => null, resolvePluginIcon: () => () => null }));
+vi.mock("./icons", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./icons")>()),
+  Icon: () => null,
+  pluginIconComponent: () => () => null,
+}));
 vi.mock("./contribution-host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./contribution-host")>()),
   getPreferredPluginContributionHost: () => null,
@@ -152,6 +156,8 @@ it("with two computers, the one running the main assistant is home; otherwise it
     ({
       id: "orca-organization-next",
       serverId,
+      locale: "en",
+      i18n: { resolve: (text: string) => text },
       legacySidebarItems: sidebarItems,
       sidebarItems: { header: [], footer: [] },
     }) as never;

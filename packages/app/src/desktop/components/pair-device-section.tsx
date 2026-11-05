@@ -175,7 +175,6 @@ export function PairDeviceSection({ serverId, onClose }: PairDeviceSectionProps)
         type: "svg",
         errorCorrectionLevel: "M",
         margin: 1,
-        width: 480,
       }),
     enabled: Boolean(pairingQuery.data?.url),
     dataShape: "value",
@@ -943,7 +942,8 @@ function PairingQr({ svg, isError }: { svg: string | null; isError: boolean }) {
     return (
       <SvgXml
         xml={svg}
-        style={styles.qrImage}
+        width="100%"
+        height="100%"
         accessibilityRole="image"
         accessibilityLabel={t("pairing.device.qrAccessibility")}
       />

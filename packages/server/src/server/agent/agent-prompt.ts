@@ -13,6 +13,11 @@ import { randomUUID } from "node:crypto";
 import { deferredPromptPayload as promptPayload } from "./trusted-operation.js";
 import { TRUSTED_OPERATION, FINAL_INPUT_CHECK } from "./agent-sdk-types.js";
 import type { TrustedOperationHandle } from "../plugins/trusted.js";
+import {
+  formatSystemNotificationPrompt,
+  prepareAgentMessage,
+  type AgentPromptSource,
+} from "./agent-messages/index.js";
 import type { Logger } from "pino";
 
 import type {
@@ -40,6 +45,7 @@ export type AgentRunController = Pick<
   | "getAgent"
   | "tryRunOutOfBand"
   | "hasInFlightRun"
+  | "reloadStalePluginSession"
   | "replaceAgentRun"
   | "steerOrReplaceActiveTurn"
   | "streamAgent"
@@ -48,6 +54,8 @@ export type AgentRunController = Pick<
 };
 
 export interface StartAgentRunOptions {
+  /** Called after selecting the run, before consuming its events. */
+  onDispatch?: (disposition: PromptDispatchDisposition) => void;
   replaceRunning?: boolean;
   activeTurnBehavior?: ActiveTurnBehavior;
   runOptions?: AgentRunOptions;
@@ -172,10 +180,12 @@ export async function startAgentRun(
       // Out-of-band commands (e.g. /goal pause) must run WITHOUT canceling an
       // in-flight turn — replaceAgentRun would interrupt the running turn. The
       // intercept lives at this layer so it covers every prompt entrypoint.
-      if (agentManager.tryRunOutOfBand(agentId, prompt, options?.runOptions)) {
+      if (await agentManager.tryRunOutOfBand(agentId, prompt, options?.runOptions)) {
+        options?.onDispatch?.("out_of_band");
         return { disposition: "out_of_band" };
       }
       try {
+        await agentManager.reloadStalePluginSession(agentId);
         return await startAgentRunInner(agentManager, agentId, prompt, logger, options);
       } catch (error) {
         if (finishCheck || !isStaleProviderSessionError(error)) throw error;
@@ -217,6 +227,7 @@ async function startAgentRunInner(
   const snapshot = agentManager.getAgent(agentId);
   const steered = await steerOrReplaceActiveRun(agentManager, agentId, prompt, options);
   if (steered?.disposition === "steered") {
+    options?.onDispatch?.("steered");
     return steered;
   }
   finishCheck?.();
@@ -232,6 +243,7 @@ async function startAgentRunInner(
     },
     "agent.session.start_stream.iterator_returned",
   );
+  options?.onDispatch?.("turn_started");
   void (async () => {
     try {
       try {
@@ -295,28 +307,27 @@ export async function unarchiveAgentState(
   return true;
 }
 
-/**
- * Wrap a body in <paseo-system>…</paseo-system> so the receiving agent
- * recognizes the prompt as system-injected context — not a user turn.
- * Used by chat mentions, schedule fires, and notify-on-finish.
- */
-export function formatSystemNotificationPrompt(reason: string): string {
-  return `<paseo-system>\n${reason}\n</paseo-system>`;
-}
-
-const SYSTEM_ENVELOPE_PATTERN = /^<paseo-system>\n[\s\S]*\n<\/paseo-system>$/;
-
-export function isSystemInjectedEnvelope(text: string): boolean {
-  return SYSTEM_ENVELOPE_PATTERN.test(text);
-}
+// Fulcra callers import these from here. Upstream moved them to agent-messages.
+export {
+  formatSystemNotificationPrompt,
+  isSystemInjectedEnvelope,
+} from "./agent-messages/index.js";
 
 export interface SendPromptToAgentParams {
+  onDispatch?: StartAgentRunOptions["onDispatch"];
   agentManager: AgentManager;
   agentStorage: AgentStorage;
   agentId: string;
   /** Prompt to dispatch to the provider (may include image blocks or wrapped text). */
   prompt: AgentPromptInput;
+  source?: AgentPromptSource;
   messageId?: string;
+  /**
+   * FULCRA: the prompt is a daemon notice built with formatSystemNotificationPrompt (report-up,
+   * host-link, revive, undelivered notices). Daemon callers only; human sends never set it, so a
+   * human-typed envelope is still quoted.
+   */
+  systemNotice?: true;
   activeTurnBehavior?: ActiveTurnBehavior;
   /** With "steer": never replace a running turn; throws SteerUnavailableError instead. */
   steerOnly?: boolean;
@@ -336,10 +347,12 @@ export interface SendPromptToAgentParams {
 }
 
 export interface StartCreatedAgentInitialPromptParams {
+  agentStorage: AgentStorage;
   agentManager: AgentManager;
   agentId: string;
   snapshot?: ManagedAgent;
   prompt: AgentPromptInput | null;
+  source?: AgentPromptSource;
   runOptions?: AgentRunOptions;
   logger: Logger;
 }
@@ -384,6 +397,18 @@ export async function waitForAgentRunStartWithTimeout(
   }
 }
 
+async function resolvePromptSource(
+  source: AgentPromptSource | undefined,
+  manager: Pick<AgentManager, "getAgent">,
+  storage: AgentStorage,
+): Promise<AgentPromptSource | undefined> {
+  if (!source || source.title) return source;
+  const title = (
+    manager.getAgent(source.agentId)?.config.title ?? (await storage.get(source.agentId))?.title
+  )?.trim();
+  return title ? { ...source, title } : source;
+}
+
 /**
  * Load, optionally change mode, and start a prompt. A prompt never restores an
  * archived receiver. All prompt surfaces share this refusal.
@@ -393,11 +418,45 @@ export async function sendPromptToAgent(
 ): Promise<{ disposition: PromptDispatchDisposition }> {
   const finishCheck = finishDispatchChecks.get(params);
   finishCheck?.();
+  if (params.systemNotice) {
+    const { source: _s, messageId, systemNotice: _n, ...rest } = params;
+    const notice: PreparedPromptParams = messageId
+      ? { ...rest, runOptions: { ...params.runOptions, clientMessageId: messageId } }
+      : rest;
+    if (finishCheck) finishDispatchChecks.set(notice, finishCheck);
+    return sendPreparedPromptToAgent(notice);
+  }
+  const source = await resolvePromptSource(params.source, params.agentManager, params.agentStorage);
+  const delivery = prepareAgentMessage(params.prompt, source, params.messageId);
+  const { source: _source, messageId: _messageId, systemNotice: _notice, ...rest } = params;
+  const prepared: PreparedPromptParams = {
+    ...rest,
+    prompt: delivery.prompt,
+    runOptions: delivery.messageId
+      ? { ...params.runOptions, clientMessageId: delivery.messageId }
+      : params.runOptions,
+  };
+  if (finishCheck) finishDispatchChecks.set(prepared, finishCheck);
+  return sendPreparedPromptToAgent(prepared);
+}
+
+type PreparedPromptParams = Omit<SendPromptToAgentParams, "source" | "messageId" | "systemNotice">;
+
+/**
+ * Dispatch daemon-prepared context without reclassifying it as human input.
+ * Fulcra daemon notices (finish notices, report-up, host-link sends) built with
+ * formatSystemNotificationPrompt must use this path, or the send path quotes them as user text.
+ */
+export async function sendPreparedPromptToAgent(
+  params: PreparedPromptParams,
+): Promise<{ disposition: PromptDispatchDisposition }> {
+  const finishCheck = finishDispatchChecks.get(params);
+  finishCheck?.();
   assertFinalInputCheck(params.runOptions?.[FINAL_INPUT_CHECK]);
   return params.agentManager.withInput(
     params.agentId,
     "prompt",
-    params.messageId ?? params.runOptions?.clientMessageId,
+    params.runOptions?.clientMessageId,
     async (handle) => {
       if (handle)
         params = {
@@ -429,13 +488,12 @@ export async function sendPromptToAgent(
         await params.agentManager.setAgentMode(params.agentId, params.sessionMode, handle);
       }
 
-      const runOptions = params.messageId
-        ? { ...params.runOptions, clientMessageId: params.messageId }
-        : params.runOptions;
+      const runOptions = params.runOptions;
 
       finishCheck?.();
       assertFinalInputCheck(params.runOptions?.[FINAL_INPUT_CHECK]);
       const startOptions: StartAgentRunOptions = {
+        onDispatch: params.onDispatch,
         replaceRunning: !params.queuedOnly,
         activeTurnBehavior: params.activeTurnBehavior,
         clearPendingPermissions: params.clearPendingPermissions,
@@ -503,14 +561,17 @@ export async function startCreatedAgentInitialPrompt(
     return currentSnapshot;
   }
 
+  const delivery = prepareAgentMessage(
+    params.prompt,
+    await resolvePromptSource(params.source, params.agentManager, params.agentStorage),
+    params.runOptions?.clientMessageId,
+  );
   const dispatchResult = await startAgentRun(
     params.agentManager,
     params.agentId,
-    params.prompt,
+    delivery.prompt,
     params.logger,
-    {
-      runOptions: params.runOptions,
-    },
+    { runOptions: { ...params.runOptions, clientMessageId: delivery.messageId } },
   );
 
   if (dispatchResult.disposition === "turn_started") {
@@ -749,13 +810,13 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
           checkCurrent();
           const dispatcher = leadEventsFor(agentManager);
           const finalCheck = createFinalInputCheck(checkCurrent);
-          const dispatch: SendPromptToAgentParams = {
+          // Daemon-prepared notice: sendPreparedPromptToAgent keeps the plain system envelope and the notice id.
+          const dispatch: PreparedPromptParams = {
             agentManager,
             agentStorage,
             agentId: callerAgentId,
             prompt,
-            messageId,
-            runOptions: { [FINAL_INPUT_CHECK]: finalCheck },
+            runOptions: { clientMessageId: messageId, [FINAL_INPUT_CHECK]: finalCheck },
             activeTurnBehavior: "steer",
             steerOnly: true,
             unarchive: false,
@@ -763,7 +824,7 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
           };
           finishDispatchChecks.set(dispatch, checkCurrent);
           checkCurrent();
-          await sendPromptToAgent(dispatch);
+          await sendPreparedPromptToAgent(dispatch);
           await waitForFinalInputHandoff(finalCheck);
           if (reason === "finished")
             dispatcher?.noteDelivered(callerAgentId, {
@@ -831,7 +892,7 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
         return;
       }
 
-      if (event.type === "timeline_replacement") {
+      if (event.type !== "agent_stream") {
         return;
       }
 

@@ -221,11 +221,11 @@ function nativeFixture(chats: FakeChat[], options: Parameters<typeof fixture>[1]
     parentAgentId: null,
   });
   const begin = (id: string, message: object = { text: "do the task" }) => {
-    hooks.emit("agent.turn_started", { agent: agent(id), turnId: "native-turn" });
+    hooks.emit("agent.turn.before", { agent: agent(id), turnId: "native-turn" });
     f.stream(id, { type: "timeline", item: { type: "user_message", ...message } });
   };
   const end = (id: string, text = "DONE native result") =>
-    hooks.emit("agent.turn_ended", {
+    hooks.emit("agent.turn.after", {
       agent: agent(id),
       turnId: "native-turn",
       outcome: { kind: "completed" },
@@ -2488,7 +2488,7 @@ describe("report-up native policy", () => {
     const f = nativeFixture([lead, worker()]);
     try {
       f.begin(WORKER, { text: "notice", clientMessageId: "paseo-notify:fixture" });
-      f.hooks.emit("agent.turn_ended", {
+      f.hooks.emit("agent.turn.after", {
         agent: f.agent(WORKER),
         turnId: "native-turn",
         timeline: [],
@@ -2511,15 +2511,14 @@ describe("report-up native policy", () => {
       name: "Bash",
       input: { command: "echo hello" },
     };
-    const ask = () =>
-      f.hooks.emit("agent.permission_requested", { agent: f.agent(WORKER), request });
+    const ask = () => f.hooks.emit("agent.permission.before", { agent: f.agent(WORKER), request });
     try {
       ask();
       ask();
       await f.settle();
       expect(f.delivered).toHaveLength(1);
       expect(f.delivered[0]!.prompt).toContain("Command: echo hello");
-      f.hooks.emit("agent.permission_resolved", {
+      f.hooks.emit("agent.permission.after", {
         agent: f.agent(WORKER),
         requestId: request.id,
         resolution: { behavior: "allow" },
@@ -2527,7 +2526,7 @@ describe("report-up native policy", () => {
       ask();
       await f.settle();
       expect(f.delivered).toHaveLength(2);
-      f.hooks.emit("agent.closed", { agent: f.agent(WORKER) });
+      f.hooks.emit("agent.close.after", { agent: f.agent(WORKER) });
       ask();
       await f.settle();
       expect(f.delivered).toHaveLength(3);
@@ -2540,7 +2539,7 @@ describe("report-up native policy", () => {
     const f = nativeFixture([lead, worker()], { enabled: false });
     try {
       f.begin(WORKER);
-      f.hooks.emit("agent.turn_ended", {
+      f.hooks.emit("agent.turn.after", {
         agent: f.agent(WORKER),
         turnId: "native-turn",
         timeline: [],
@@ -2585,7 +2584,7 @@ describe("report-up native policy", () => {
       f.timers[0]!.run();
       f.begin(WORKER);
       f.end(WORKER);
-      f.hooks.emit("agent.permission_requested", {
+      f.hooks.emit("agent.permission.before", {
         agent: f.agent(WORKER),
         request: { id: "late-request", provider: "claude", name: "Bash" },
       });

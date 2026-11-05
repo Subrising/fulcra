@@ -15,7 +15,13 @@ import type { EvaluatedPlugin } from "./types";
 // that broke it on the phone are checked in packages/server compiler.test.ts; this test renders the page.
 
 // The test stub of lucide-react-native has no icons; the sidebar items name real ones.
-vi.mock("./icons", () => ({ resolvePluginIcon: () => () => null, Icon: () => null }));
+vi.mock("./icons", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./icons")>()),
+  parsePluginIcon: (_owner: string, icon: unknown) => icon,
+  parseSerializablePluginIcon: (_owner: string, icon: unknown) => icon,
+  pluginIconComponent: () => () => null,
+  Icon: () => null,
+}));
 
 const PRIME = "33333333-3333-4333-8333-333333333333",
   LEAD = "44444444-4444-4444-8444-444444444444",

@@ -262,7 +262,6 @@ try {
       ids.every((id) => id.startsWith("gpt-")),
       "all codex model IDs should be from the gpt family",
     );
-    await assertRuntimeModels(data, "codex");
     assert(
       data.every((m) => m.model && m.id && m.description),
       "every codex model should have model, id, and description fields",

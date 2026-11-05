@@ -27,8 +27,10 @@ beforeEach(() => {
   f.invoke.mockResolvedValue({ example: hash });
   f.evaluate.mockReturnValue({ cleanup: () => {} });
 });
+const localeSource = { getLocale: () => "en", subscribe: () => () => {} };
 it("D27 refuses an unknown remote hash before evaluation", () => {
   const registry = new PluginRegistry({
+    localeSource,
     version: "1.0.0",
     createRuntime: createPluginClientRuntime,
   });
@@ -51,6 +53,7 @@ it("D27 refuses an unknown remote hash before evaluation", () => {
 
 it("D27 evaluates a remote entry matching this app's bundled manifest", async () => {
   const registry = new PluginRegistry({
+    localeSource,
     version: "1.0.0",
     createRuntime: createPluginClientRuntime,
   });
@@ -64,6 +67,7 @@ it("D27 evaluates a remote entry matching this app's bundled manifest", async ()
 });
 it("D27 rejects a modified prepared bundle and disposes an earlier matching installation", async () => {
   const registry = new PluginRegistry({
+    localeSource,
     version: "1.0.0",
     createRuntime: createPluginClientRuntime,
   });
@@ -85,6 +89,7 @@ it("D27 rejects a modified prepared bundle and disposes an earlier matching inst
 });
 it("D27 cannot transfer trust by mutating or copying a verified entry", async () => {
   const registry = new PluginRegistry({
+    localeSource,
     version: "1.0.0",
     createRuntime: createPluginClientRuntime,
   });
@@ -98,6 +103,7 @@ it("D27 cannot transfer trust by mutating or copying a verified entry", async ()
 it("D27 fails closed when the app manifest is unavailable", async () => {
   f.invoke.mockRejectedValue(Error("missing resources"));
   const registry = new PluginRegistry({
+    localeSource,
     version: "1.0.0",
     createRuntime: createPluginClientRuntime,
   });
@@ -115,6 +121,7 @@ it("D27 fails closed when the app manifest is unavailable", async () => {
 it("m1 desktop target fails closed without the preload bridge", async () => {
   f.desktop = false;
   const registry = new PluginRegistry({
+    localeSource,
     version: "1.0.0",
     createRuntime: createPluginClientRuntime,
   });
@@ -134,6 +141,7 @@ it("m2 binds each of two pins to its ID, never any matching hash", async () => {
     other: createHash("sha256").update(other).digest("hex"),
   });
   const registry = new PluginRegistry({
+    localeSource,
     version: "1.0.0",
     createRuntime: createPluginClientRuntime,
   });
@@ -154,6 +162,7 @@ it("m2 disposes the same earlier bytes when pins disappear", async () => {
     legacySidebarItems: [{ id: "main", title: "Example", icon: "Blocks", surface: "main" }],
   });
   const registry = new PluginRegistry({
+    localeSource,
     version: "1.0.0",
     createRuntime: createPluginClientRuntime,
   });
@@ -172,6 +181,7 @@ it("m2 disposes the same earlier bytes when pins disappear", async () => {
 });
 it("F1.2 retains an untrusted sidebar row without evaluating the refused code", async () => {
   const registry = new PluginRegistry({
+    localeSource,
     version: "1.0.0",
     createRuntime: createPluginClientRuntime,
   });

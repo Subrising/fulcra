@@ -68,7 +68,7 @@ async function fixture(root?: string, account?: string) {
     pluginLifecycle: {
       emit: () => {},
       before: async (hook: string, request: PendingSessionCost) => {
-        if (hook !== "agent.cost_commit") return request;
+        if (hook !== "agent.cost_commit.before") return request;
         await hold?.(request);
         // One billing write at a time: on Windows the store lock can refuse a contended open with
         // EPERM, and these tests are about recovery, not that lock.

@@ -7,6 +7,7 @@ const deviceAdmission = {
   permissions: RELAY_DEVICE_DEFAULT_PERMISSIONS,
 };
 import { AccountActionsAudit } from "./plugins/account-actions.js";
+import { createWorkspaceRuntimeStore } from "./workspace-runtime-store/index.js";
 import { SessionDelivery } from "./session/owned-subscriptions/index.js";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { Server as HTTPServer } from "http";
@@ -83,6 +84,18 @@ const sessionMock = vi.hoisted(() => {
     wantsSourceEvent = (source: object) => !this.delivery.isModern(source);
     getSessionId = vi.fn(() => "mock-session-id");
     getPermissions = vi.fn(() => this.args.permissions as string[]);
+    setPermissions = (permissions: string[]) => {
+      this.args.permissions = permissions;
+    };
+    private routed = false;
+    setRouted = (routed: boolean) => {
+      this.routed = routed;
+    };
+    isRouted = () => this.routed;
+    setHostSource = (sourceId: string) => {
+      this.args.sourceId = sourceId;
+    };
+    getHostSourceId = () => this.args.sourceId as string;
     allowsInbound = vi.fn(() => true);
     allowsPermission = vi.fn(() => true);
     publish = vi.fn((message: unknown) => {
@@ -299,6 +312,7 @@ function createServer(options?: {
     null,
     { allowedOrigins: new Set(), startPaused: options?.startPaused },
     createWorkspaceAutoNameStub(),
+    createWorkspaceRuntimeStore(),
     options?.auth,
     speechReadiness
       ? {
@@ -502,16 +516,12 @@ function holdNextSessionMessage(session: (typeof sessionMock.instances)[number])
 function holdSessionCleanup(session: (typeof sessionMock.instances)[number]): {
   finish: () => void;
 } {
-  let finish = () => {};
-  session.cleanup.mockImplementationOnce(
-    () =>
-      new Promise<void>((resolve) => {
-        finish = resolve;
-      }),
-  );
-  return {
-    finish: () => finish(),
-  };
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  session.cleanup.mockImplementationOnce(() => pending);
+  return { finish };
 }
 
 const PLUGIN_DENIAL: Record<string, string> = {
@@ -863,6 +873,53 @@ describe("relay external socket reconnect behavior", () => {
     list.mockRestore();
     setInvites.mockRestore();
   });
+  test("closes only a hello socket when post-admission setup throws", async () => {
+    const server = createServer();
+    class ThrowOnceSocket extends MockSocket {
+      private firstClose = true;
+      override close(code?: number, reason?: string): void {
+        if (this.firstClose) {
+          this.firstClose = false;
+          throw new Error("socket close failed during hello");
+        }
+        super.close(code, reason);
+      }
+    }
+    const failed = new ThrowOnceSocket();
+    const relayMetadata = { transport: "relay", admission: deviceAdmission } as const;
+    try {
+      await server.attachExternalSocket(failed, relayMetadata);
+      failed.emit("message", JSON.stringify(createHelloMessage("plugin:not-a-plugin")));
+      await vi.waitFor(() => expect(failed.readyState).toBe(3));
+      const initiallyFailed = new ThrowOnceSocket();
+      await server.attachExternalSocket(
+        initiallyFailed,
+        relayMetadata,
+        undefined,
+        createHelloMessage("plugin:initially-invalid"),
+      );
+      await vi.waitFor(() => expect(initiallyFailed.readyState).toBe(3));
+      const healthy = new MockSocket();
+      await attachRelayAndHello({ server, socket: healthy, clientId: "still-running" });
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("does not log malformed pre-admission credential frames", async () => {
+    const logger = createLogger();
+    const server = createServer({ logger });
+    const socket = new MockSocket();
+    try {
+      await server.attachExternalSocket(socket, { transport: "relay", admission: deviceAdmission });
+      socket.emit("message", '{"type":"hello","auth":{"kind":"password","password":"log-secret"},');
+      await vi.waitFor(() => expect(socket.readyState).toBe(3));
+      expect(JSON.stringify(logger.error.mock.calls)).not.toContain("log-secret");
+    } finally {
+      await server.close();
+    }
+  });
+
   test("refuses anonymous relay admission", async () => {
     const server = createServer();
     const socket = new MockSocket();
@@ -1501,6 +1558,7 @@ describe("relay external socket reconnect behavior", () => {
     expect(serverInfo.features?.workspaceMarkUnread).toBe(true);
     expect(serverInfo.features?.["terminal-input-mode-replay"]).toBe(true);
     expect(serverInfo.features?.["terminal-size-ownership"]).toBe(true);
+    expect(serverInfo.features?.["terminal-grapheme-widths"]).toBe(true);
     expect(serverInfo.features?.agentTurnIdentity).toBeUndefined();
     expect(serverInfo.permissions).toEqual(RELAY_DEVICE_DEFAULT_PERMISSIONS);
     await server.close();

@@ -106,6 +106,7 @@ export function tellSenderUndelivered(input: UndeliveredNoticeInput): void {
             agentId: recipient,
             prompt,
             messageId: `${FINISH_NOTIFICATION_MESSAGE_PREFIX}undelivered:${randomUUID()}`,
+            systemNotice: true,
             activeTurnBehavior: "steer",
             steerOnly: true,
             unarchive: false,

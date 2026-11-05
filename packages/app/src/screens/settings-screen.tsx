@@ -11,7 +11,7 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect } from "expo-router/react-navigation";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
@@ -35,6 +35,8 @@ import {
   FolderGit2,
   SquareTerminal,
   Code2,
+  Files,
+  Mic,
   Globe,
   PanelLeft,
   MessageSquare,
@@ -85,8 +87,8 @@ import { PairLinkModal } from "@/components/pair-link-modal";
 import { KeyboardShortcutsSection } from "@/screens/settings/keyboard-shortcuts-section";
 import { EditorSection } from "@/screens/settings/editor-section";
 import { LicensesSection } from "@/screens/settings/licenses-section";
+import { FilesSection } from "@/screens/settings/files-section";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { DesktopPermissionsSection } from "@/desktop/components/desktop-permissions-section";
@@ -120,7 +122,8 @@ import {
 } from "@/screens/settings/host-page";
 import { PluginSettingsContent } from "@/plugins/settings";
 import { useInstalledPlugins } from "@/plugins/registry";
-import { resolvePluginIcon } from "@/plugins/icons";
+import { pluginIconComponent } from "@/plugins/icons";
+import type { PluginIcon } from "@getpaseo/plugin/client";
 import { buildPluginSettingsRoute } from "@/plugins/settings/routes";
 import { useHostFeature } from "@/runtime/host-features";
 import {
@@ -139,9 +142,15 @@ import {
 } from "@/screens/settings/settings-menu";
 import { HostPluginsPage } from "@/screens/settings/plugins-page";
 import { MetadataGenerationPage } from "@/screens/settings/metadata-generation-page";
+import { HostVoicePage } from "@/screens/settings/voice/voice-page";
 import ProjectsScreen from "@/screens/projects-screen";
 import ProjectSettingsScreen from "@/screens/project-settings-screen";
-import { SETTINGS_DESKTOP_SIDEBAR_WIDTH, useIsCompactFormFactor } from "@/constants/layout";
+import {
+  SETTINGS_DESKTOP_DETAIL_MIN_WIDTH,
+  SETTINGS_DESKTOP_SIDEBAR_WIDTH,
+  useIsCompactFormFactor,
+} from "@/constants/layout";
+import { densityIconBox, densityIconSize } from "@/styles/density";
 import { useLocalDaemonServerId } from "@/hooks/use-is-local-daemon";
 import {
   type EnableBuiltInDaemonOption,
@@ -153,9 +162,13 @@ import {
   type HostSectionSlug,
   type SettingsSectionSlug,
 } from "@/utils/host-routes";
-import { useLastWorkspaceSelection } from "@/stores/navigation-active-workspace-store";
+import {
+  selectSettingsHost,
+  useSettingsHostSelection,
+  useSettingsSidebarScroll,
+} from "@/navigation/settings-presentation";
 import { returnFromSettings, type SettingsView } from "@/navigation/settings-navigation";
-import { isNative, isWeb } from "@/constants/platform";
+import { isWeb } from "@/constants/platform";
 
 // ---------------------------------------------------------------------------
 // View model
@@ -213,6 +226,7 @@ const SIDEBAR_SECTION_ITEMS: SidebarSectionItem[] = [
     webOnly: true,
     Content: EditorSection,
   },
+  { id: "files", labelKey: SECTION_LABEL_KEYS.files, icon: Files, Content: FilesSection },
   {
     id: "shortcuts",
     labelKey: SECTION_LABEL_KEYS.shortcuts,
@@ -260,6 +274,7 @@ const HOST_SECTION_ITEMS: HostSectionItem[] = [
   { id: "usage", labelKey: HOST_SECTION_LABEL_KEYS.usage, icon: Gauge },
   { id: "agents", labelKey: HOST_SECTION_LABEL_KEYS.agents, icon: Bot },
   { id: "metadata", labelKey: HOST_SECTION_LABEL_KEYS.metadata, icon: Sparkles },
+  { id: "voice", labelKey: HOST_SECTION_LABEL_KEYS.voice, icon: Mic },
   { id: "workspaces", labelKey: HOST_SECTION_LABEL_KEYS.workspaces, icon: FolderGit2 },
   { id: "terminals", labelKey: HOST_SECTION_LABEL_KEYS.terminals, icon: SquareTerminal },
   { id: "plugins", labelKey: HOST_SECTION_LABEL_KEYS.plugins, icon: Blocks },
@@ -317,6 +332,8 @@ function renderHostSettingsContent(
       return <HostAgentsPage serverId={view.serverId} />;
     case "metadata":
       return <MetadataGenerationPage serverId={view.serverId} />;
+    case "voice":
+      return <HostVoicePage serverId={view.serverId} />;
     case "workspaces":
       return <HostWorkspacesPage serverId={view.serverId} />;
     case "providers":
@@ -336,15 +353,26 @@ function renderHostSettingsContent(
 // Trigger + sidebar style helpers
 // ---------------------------------------------------------------------------
 
-function sidebarItemStyle({ hovered }: PressableStateCallbackType & { hovered?: boolean }) {
-  return [sidebarStyles.item, Boolean(hovered) && sidebarStyles.itemHovered];
+function sidebarItemStyle({
+  hovered,
+  pressed,
+}: PressableStateCallbackType & { hovered?: boolean }) {
+  return [
+    sidebarStyles.item,
+    Boolean(hovered) && sidebarStyles.itemHovered,
+    pressed && sidebarStyles.itemPressed,
+  ];
 }
 
-function selectedSidebarItemStyle({ hovered }: PressableStateCallbackType & { hovered?: boolean }) {
+function selectedSidebarItemStyle({
+  hovered,
+  pressed,
+}: PressableStateCallbackType & { hovered?: boolean }) {
   return [
     sidebarStyles.item,
     Boolean(hovered) && sidebarStyles.itemHovered,
     sidebarStyles.itemSelected,
+    pressed && sidebarStyles.itemPressed,
   ];
 }
 
@@ -430,8 +458,6 @@ function GeneralSection({ settings, handleLanguageChange }: GeneralSectionProps)
 }
 
 interface DiagnosticsSectionProps {
-  useLegacyTerminalRenderer: boolean;
-  onUseLegacyTerminalRendererChange: (value: boolean) => void;
   voiceAudioEngine: ReturnType<typeof useVoiceAudioEngineOptional>;
   isPlaybackTestRunning: boolean;
   playbackTestResult: string | null;
@@ -439,8 +465,6 @@ interface DiagnosticsSectionProps {
 }
 
 function DiagnosticsSection({
-  useLegacyTerminalRenderer,
-  onUseLegacyTerminalRendererChange,
   voiceAudioEngine,
   isPlaybackTestRunning,
   playbackTestResult,
@@ -454,26 +478,6 @@ function DiagnosticsSection({
   return (
     <SettingsSection title={t("settings.diagnostics.title")}>
       <View style={settingsStyles.card}>
-        {isNative ? (
-          <View style={settingsStyles.row} testID="legacy-terminal-renderer-row">
-            <View style={settingsStyles.rowContent}>
-              <Text style={settingsStyles.rowTitle}>
-                {t("settings.diagnostics.legacyTerminalRenderer.label")}
-              </Text>
-              <Text style={settingsStyles.rowHint}>
-                {t("settings.diagnostics.legacyTerminalRenderer.description")}
-              </Text>
-            </View>
-            <Switch
-              value={useLegacyTerminalRenderer}
-              onValueChange={onUseLegacyTerminalRendererChange}
-              accessibilityLabel={t(
-                "settings.diagnostics.legacyTerminalRenderer.accessibilityLabel",
-              )}
-              testID="legacy-terminal-renderer-switch"
-            />
-          </View>
-        ) : null}
         <View style={settingsStyles.row} testID="app-diagnostic-row">
           <View style={settingsStyles.rowContent}>
             <Text style={settingsStyles.rowTitle}>{t("settings.diagnostics.app.rowTitle")}</Text>
@@ -823,7 +827,7 @@ function MenuRow({
   const touch = useTouchTargets();
   // On a phone the list is the whole page, not a sidebar beside a detail: its titles read at full contrast.
   const isCompact = useIsCompactFormFactor();
-  const { theme } = useUnistyles();
+  const { theme, rt } = useUnistyles();
   const accessibilityState = useMemo(() => ({ selected: isSelected }), [isSelected]);
   const labelStyle = useMemo(
     () => [sidebarStyles.label, (isSelected || isCompact) && { color: theme.colors.foreground }],
@@ -847,7 +851,7 @@ function MenuRow({
       style={rowStyle}
     >
       <IconComponent
-        size={theme.iconSize.md}
+        size={densityIconSize(rt, "md")}
         color={isSelected ? theme.colors.foreground : theme.colors.foregroundMuted}
       />
       <View style={sidebarStyles.labelColumn}>
@@ -922,7 +926,7 @@ interface PluginScreenEntry {
   pluginId: string;
   screenId: string;
   title: string;
-  icon: string;
+  icon: PluginIcon;
 }
 
 /** Settings pages that plugins on the chosen host add, in registration order. */
@@ -938,7 +942,7 @@ function usePluginScreenEntries(serverId: string | null): PluginScreenEntry[] {
           serverId,
           pluginId: plugin.id,
           screenId: screen.id,
-          title: screen.title,
+          title: plugin.i18n.resolve(screen.title, plugin.locale),
           icon: screen.icon,
         })),
       );
@@ -969,7 +973,7 @@ function PluginScreenRow({
     <MenuRow
       label={label ?? entry.title}
       description={showDescription && descriptionKey ? t(descriptionKey) : undefined}
-      icon={entry.screenId === ACCOUNTS_PLUGIN_SCREEN_ID ? Users : resolvePluginIcon(entry.icon)}
+      icon={entry.screenId === ACCOUNTS_PLUGIN_SCREEN_ID ? Users : pluginIconComponent(entry.icon)}
       isSelected={isSelected}
       onPress={handlePress}
       testID={`settings-plugin-screen-${entry.screenId}`}
@@ -1012,10 +1016,11 @@ function HostPicker({
     [],
   );
   const triggerStyle = useCallback(
-    ({ hovered = false }: PressableStateCallbackType & { hovered?: boolean }) => [
+    ({ hovered = false, pressed }: PressableStateCallbackType & { hovered?: boolean }) => [
       sidebarStyles.pickerTrigger,
       touch && touchTargetStyles.text,
       hovered && sidebarStyles.pickerTriggerHovered,
+      pressed && sidebarStyles.itemPressed,
     ],
     [touch],
   );
@@ -1107,6 +1112,7 @@ function SettingsSidebar({
   );
   const insets = useSafeAreaInsets();
   const isDesktop = layout === "desktop";
+  const sidebarScroll = useSettingsSidebarScroll(isDesktop);
   const outerContainerStyle = useMemo(
     () => [isDesktop ? sidebarStyles.desktopContainer : sidebarStyles.mobileContainer],
     [isDesktop],
@@ -1311,6 +1317,7 @@ function SettingsSidebar({
             style={sidebarStyles.scrollBody}
             showsVerticalScrollIndicator={false}
             testID="settings-sidebar-scroll-body"
+            {...sidebarScroll}
           >
             {sidebarBody}
           </ScrollView>
@@ -1352,21 +1359,7 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
   const hosts = useHosts();
   const localServerId = useLocalDaemonServerId();
   const sortedHosts = useSortedHosts(hosts, localServerId);
-  const lastWorkspaceSelection = useLastWorkspaceSelection();
-  const routedSettingsHostServerId =
-    view.kind === "host" || view.kind === "project" || view.kind === "plugin"
-      ? view.serverId
-      : null;
-  const [selectedSettingsHostServerId, setSelectedSettingsHostServerId] = useState<string | null>(
-    routedSettingsHostServerId ?? lastWorkspaceSelection?.serverId ?? null,
-  );
-  useFocusEffect(
-    useCallback(() => {
-      setSelectedSettingsHostServerId(
-        routedSettingsHostServerId ?? lastWorkspaceSelection?.serverId ?? null,
-      );
-    }, [lastWorkspaceSelection?.serverId, routedSettingsHostServerId]),
-  );
+  const selectedSettingsHostServerId = useSettingsHostSelection();
 
   // The host the four sections scope to: the host on the active view, otherwise
   // the picker choice, otherwise the connected local daemon, otherwise the first host.
@@ -1384,13 +1377,6 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
   const handleLanguageChange = useCallback(
     (language: AppLanguage) => {
       void updateSettings({ language });
-    },
-    [updateSettings],
-  );
-
-  const handleUseLegacyTerminalRendererChange = useCallback(
-    (useLegacyTerminalRenderer: boolean) => {
-      void updateSettings({ useLegacyTerminalRenderer });
     },
     [updateSettings],
   );
@@ -1493,7 +1479,7 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
   // host detail route, keep that detail section and swap only the host segment.
   const handleSelectHost = useCallback(
     (serverId: string) => {
-      setSelectedSettingsHostServerId(serverId);
+      selectSettingsHost(serverId);
       if (view.kind === "project") {
         const target = buildSettingsHostSectionRoute(serverId, "projects");
         if (isCompactLayout) {
@@ -1563,12 +1549,14 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
     description?: string;
   } | null => {
     if (view.kind === "plugin") {
-      const screen = installedPlugins
-        .find((plugin) => plugin.serverId === view.serverId && plugin.id === view.pluginId)
-        ?.settingsScreens.find((candidate) => candidate.id === view.screenId);
+      const plugin = installedPlugins.find(
+        (candidate) => candidate.serverId === view.serverId && candidate.id === view.pluginId,
+      );
+      const screen = plugin?.settingsScreens.find((candidate) => candidate.id === view.screenId);
       const descriptionKey = PLUGIN_SCREEN_DESCRIPTION_KEYS[view.screenId];
       return {
-        title: screen?.title ?? t("settings.title"),
+        title:
+          plugin && screen ? plugin.i18n.resolve(screen.title, plugin.locale) : t("settings.title"),
         description: descriptionKey ? t(descriptionKey) : undefined,
       };
     }
@@ -1640,8 +1628,6 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
         case "diagnostics":
           return (
             <DiagnosticsSection
-              useLegacyTerminalRenderer={settings.useLegacyTerminalRenderer}
-              onUseLegacyTerminalRendererChange={handleUseLegacyTerminalRendererChange}
               voiceAudioEngine={voiceAudioEngine}
               isPlaybackTestRunning={isPlaybackTestRunning}
               playbackTestResult={playbackTestResult}
@@ -1756,7 +1742,11 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
         </WindowChromeRegion>
         <WindowChromeRegion corners="top-right">
           <View style={desktopStyles.contentPane} testID="settings-detail-pane">
-            <PageLayout title={detailHeader?.title} titleTestID="settings-detail-header-title">
+            <PageLayout
+              title={detailHeader?.title}
+              titleTestID="settings-detail-header-title"
+              testID="settings-detail-scroll-body"
+            >
               {detailHeader?.description ? (
                 <Text style={styles.pageIntro}>{detailHeader.description}</Text>
               ) : null}
@@ -1860,6 +1850,7 @@ const desktopStyles = StyleSheet.create((theme) => ({
   },
   contentPane: {
     flex: 1,
+    minWidth: SETTINGS_DESKTOP_DETAIL_MIN_WIDTH,
   },
   detailLeft: {
     gap: theme.spacing[2],
@@ -1869,6 +1860,7 @@ const desktopStyles = StyleSheet.create((theme) => ({
 const sidebarStyles = StyleSheet.create((theme) => ({
   desktopContainer: {
     width: SETTINGS_DESKTOP_SIDEBAR_WIDTH,
+    flexShrink: 1,
     borderRightWidth: 1,
     borderRightColor: theme.colors.border,
     backgroundColor: theme.colors.surfaceSidebar,
@@ -1947,8 +1939,12 @@ const sidebarStyles = StyleSheet.create((theme) => ({
   itemSelected: {
     backgroundColor: theme.colors.surfaceSidebarHover,
   },
+  // The workspace rows' pressed fill.
+  itemPressed: {
+    backgroundColor: theme.colors.surface2,
+  },
   label: {
-    fontSize: theme.fontSize.base,
+    fontSize: { xs: theme.fontSize.lg, md: theme.fontSize.base },
     color: theme.colors.foregroundMuted,
     fontWeight: theme.fontWeight.normal,
     flex: 1,
@@ -1991,14 +1987,14 @@ const sidebarStyles = StyleSheet.create((theme) => ({
   pickerTriggerLabel: {
     flex: 1,
     minWidth: 0,
-    fontSize: theme.fontSize.base,
+    fontSize: { xs: theme.fontSize.lg, md: theme.fontSize.base },
     color: theme.colors.foreground,
     fontWeight: theme.fontWeight.normal,
   },
   // Match the setting items' icon footprint so the host label aligns with them.
   pickerTriggerDot: {
-    width: theme.iconSize.md,
-    height: theme.iconSize.md,
+    width: densityIconBox("md"),
+    height: densityIconBox("md"),
     alignItems: "center",
     justifyContent: "center",
   },

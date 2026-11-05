@@ -30,6 +30,8 @@ const PRIVATE_ATTACHMENT_DIR_MODE = 0o700;
 const MATERIALIZED_IMAGE_FILE_MODE = 0o600;
 
 const MAX_IMAGE_BYTES = 16 * 1024 * 1024;
+// Upstream name for the per-image limit. Fulcra keeps its 16 MiB bound.
+export const MAX_PROVIDER_IMAGE_BYTES = MAX_IMAGE_BYTES;
 // FULCRA(image-retention): retention is a rolling window. At the cap the least recently written images
 // are deleted to make room, instead of refusing every new image for the rest of the daemon run.
 export const MAX_PRIVATE_BYTES = 1024 * 1024 * 1024;
@@ -320,11 +322,15 @@ const PROVIDER_IMAGE_MARKDOWN = new RegExp(
 );
 
 export function isProviderImageMarkdown(text: string): boolean {
-  return PROVIDER_IMAGE_MARKDOWN.test(text);
+  return PROVIDER_IMAGE_MARKDOWN.test(text.trimStart());
 }
 
 interface RenderProviderImageOutputOptions {
-  materialize?: (image: { data: string; mimeType: string | null }) => MaterializedProviderImage;
+  // Fulcra materializes synchronously into its confined root; upstream callers may pass an async one.
+  materialize?: (image: {
+    data: string;
+    mimeType: string | null;
+  }) => MaterializedProviderImage | Promise<MaterializedProviderImage>;
 }
 
 function nonEmptyString(value: string | null | undefined): string | null {
@@ -381,16 +387,17 @@ function escapeMarkdownImageSource(value: string): string {
   return markdownImageSource(value).replace(/\\/g, "\\\\").replace(/\)/g, "\\)");
 }
 
-export function renderProviderImageOutputAsAssistantMarkdown(
+export async function renderProviderImageOutputAsAssistantMarkdown(
   image: ProviderImageOutput,
   options: RenderProviderImageOutputOptions = {},
-): AgentTimelineItem | null {
+): Promise<AgentTimelineItem | null> {
   const source = nonEmptyString(image.path) ?? nonEmptyString(image.url);
   if (source && !isDataImageSource(source)) {
     const altText = escapeMarkdownImageAlt(nonEmptyString(image.altText) ?? "Image");
     return {
       type: "assistant_message",
-      text: `![${altText}](${escapeMarkdownImageSource(source)})`,
+      // Image outputs remain standalone paragraphs when adjacent assistant chunks merge.
+      text: `\n\n![${altText}](${escapeMarkdownImageSource(source)})\n\n`,
     };
   }
 
@@ -402,7 +409,7 @@ export function renderProviderImageOutputAsAssistantMarkdown(
   let materialized: MaterializedProviderImage | null = null;
   try {
     materialized = options.materialize
-      ? options.materialize({
+      ? await options.materialize({
           data,
           mimeType: nonEmptyString(image.mimeType),
         })
@@ -420,6 +427,6 @@ export function renderProviderImageOutputAsAssistantMarkdown(
   const altText = escapeMarkdownImageAlt(nonEmptyString(image.altText) ?? "Image");
   return {
     type: "assistant_message",
-    text: `![${altText}](${escapeMarkdownImageSource(materialized.path)})`,
+    text: `\n\n![${altText}](${escapeMarkdownImageSource(materialized.path)})\n\n`,
   };
 }

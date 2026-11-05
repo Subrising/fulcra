@@ -21,6 +21,9 @@ export const ConnectionOfferV3Schema = z
       })
       .strict(),
     hostLabel: z.string().max(64).optional(),
+    // COMPAT(relayProtectedSecurity): added upstream in v0.13.0. Present when the daemon requires
+    // protected endpoint security; clients pin it before their first handshake.
+    minimumSecurityMode: z.literal("protected").optional(),
   })
   .strict()
   .superRefine((offer, ctx) => {

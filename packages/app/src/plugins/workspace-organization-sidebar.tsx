@@ -1,15 +1,14 @@
 import { SidebarTopContent } from "@/components/sidebar/sidebar-top-content";
 import React, { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { router } from "expo-router";
+import { useTranslation } from "react-i18next";
 import { FolderKanban, FolderGit2, MessageSquare } from "lucide-react-native";
 import { ScrollView, Text, View } from "react-native";
 import { SidebarHeaderRow } from "@/components/sidebar/sidebar-header-row";
 import { OrganizationExecutionRow } from "@/components/sidebar-workspace-list";
 import { SidebarSessions } from "@/components/sidebar/sidebar-sessions";
-import {
-  PinnedSectionHeader,
-  PinnedHostConnectionNotice,
-} from "@/components/sidebar/pinned-section-header";
+import { SidebarSectionHeader } from "@/components/sidebar/sidebar-section-header";
+import { PinnedHostConnectionNotice } from "@/components/sidebar/pinned-host-connection-notice";
 import { useSidebarOrderStore } from "@/stores/sidebar-order-store";
 import { applyStoredOrdering } from "@/hooks/sidebar-workspaces-view-model";
 import { useSidebarCollapsedSectionsStore } from "@/stores/sidebar-collapsed-sections-store";
@@ -111,6 +110,7 @@ function OrganizationReader(
 function OrganizationRows(
   props: Props & { serverId: string; data: OrganizationState; offline?: boolean },
 ) {
+  const { t } = useTranslation();
   const [outsideOpen, setOutsideOpen] = useState(false);
   const toggleOutside = useCallback(() => setOutsideOpen((open) => !open), []);
   const pinnedCollapsed = useSidebarCollapsedSectionsStore((state) => state.collapsedPinned);
@@ -145,7 +145,12 @@ function OrganizationRows(
       )}
       {pinned.length > 0 && (
         <>
-          <PinnedSectionHeader collapsed={pinnedCollapsed} onToggle={togglePinned} />
+          <SidebarSectionHeader
+            title={t("sidebar.pinned.title")}
+            collapsed={pinnedCollapsed}
+            onToggle={togglePinned}
+            testID="sidebar-pinned-section-header"
+          />
           <PinnedHostConnectionNotice workspaces={pinned} />
           {!pinnedCollapsed &&
             pinned.map((entry) => (

@@ -10,6 +10,7 @@ import type {
   PluginSidebarSection,
   UntrustedPlugin,
 } from "./types";
+import type { PluginIcon } from "@getpaseo/plugin/client";
 
 export interface PluginSidebarTarget {
   plugin: InstalledPlugin;
@@ -39,7 +40,7 @@ export type PluginSidebarGroup =
   | (PluginSidebarGroupBase & { kind: "item"; targets: PluginSidebarTarget[] })
   | (PluginSidebarGroupBase & {
       kind: "legacy";
-      icon: string;
+      icon: PluginIcon;
       targets: PluginLegacySidebarTarget[];
     });
 
@@ -66,7 +67,7 @@ export function groupPluginSidebarItems(
           key,
           pluginId: plugin.id,
           contributionId: item.id,
-          title: item.title,
+          title: plugin.i18n.resolve(item.title, plugin.locale),
           icon: item.icon,
           targets: [{ plugin, item }],
         });
@@ -82,7 +83,7 @@ export function groupPluginSidebarItems(
           key,
           pluginId: plugin.id,
           contributionId: item.id,
-          title: item.title,
+          title: plugin.i18n.resolve(item.title, plugin.locale),
           targets: [{ plugin, item }],
         });
       }
@@ -136,7 +137,9 @@ export function groupPluginSidebarContributions(
           key,
           pluginId: plugin.id,
           contributionId: item.id,
-          title: item.title,
+          // An untrusted plugin's code never runs, so it has no translation resolver. A translated
+          // message cannot be shown; the row falls back to the contribution id.
+          title: typeof item.title === "string" ? item.title : item.id,
           icon: item.icon,
           targets: [target],
         });
