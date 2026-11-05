@@ -1,10 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   ownedByMe,
   privateOwned,
   trustedCode,
   powershellExe,
+  fileStore,
+  aclCacheFile,
+  resetAclMemoryCache,
+  windowsAclProbe,
   WRITE_MASK,
   PRIVATE_MASK,
 } from "../../orca-organization/server/owned.mjs";
@@ -88,4 +95,88 @@ test("Windows: the owner rule is part of the cache key", () => {
 test("Windows: a throwing or non-true probe fails closed", () => {
   const o = { platform: "win32", probe: () => "SAFE" };
   assert.equal(privateOwned(st(0), "x", o), false);
+});
+
+// FU-678: the answer is kept in a file, so a new process (each plugin start) does not run PowerShell again.
+function tempStore() {
+  const dir = mkdtempSync(join(tmpdir(), "acl-cache-"));
+  const file = join(dir, "sub", "acl.json");
+  return { dir, file, open: () => fileStore(file) };
+}
+test("FU-678: a second process reads the saved answer and does not run the probe", () => {
+  const t = tempStore();
+  let n = 0;
+  const probe = () => (n++, true);
+  const s = { mode: 0, uid: 0, ino: 101, ctimeMs: 1, mtimeMs: 1 };
+  assert.equal(privateOwned(s, "p678a", { platform: "win32", probe, store: t.open() }), true);
+  resetAclMemoryCache();
+  assert.equal(privateOwned(s, "p678a", { platform: "win32", probe, store: t.open() }), true);
+  assert.equal(n, 1);
+  rmSync(t.dir, { recursive: true });
+});
+test("FU-678: a changed mtime or ctime asks the probe again", () => {
+  const t = tempStore();
+  let n = 0;
+  const probe = () => (n++, true);
+  const s = { mode: 0, uid: 0, ino: 102, ctimeMs: 1, mtimeMs: 1 };
+  privateOwned(s, "p678b", { platform: "win32", probe, store: t.open() });
+  resetAclMemoryCache();
+  privateOwned({ ...s, mtimeMs: 2 }, "p678b", { platform: "win32", probe, store: t.open() });
+  resetAclMemoryCache();
+  privateOwned({ ...s, ctimeMs: 2 }, "p678b", { platform: "win32", probe, store: t.open() });
+  assert.equal(n, 3);
+  rmSync(t.dir, { recursive: true });
+});
+test("FU-678: an UNSAFE answer stays a refusal from the saved file, and an error is never saved", () => {
+  const t = tempStore();
+  const s = { mode: 0, uid: 0, ino: 103, ctimeMs: 1, mtimeMs: 1 };
+  let n = 0;
+  const unsafe = () => (n++, false);
+  assert.equal(
+    trustedCode(s, "p678c", { platform: "win32", probe: unsafe, store: t.open() }),
+    false,
+  );
+  resetAclMemoryCache();
+  const safe = () => (n++, true);
+  assert.equal(trustedCode(s, "p678c", { platform: "win32", probe: safe, store: t.open() }), false);
+  assert.equal(n, 1);
+  const s2 = { ...s, ino: 104 };
+  let m = 0;
+  const failing = () => (m++, undefined);
+  assert.equal(
+    trustedCode(s2, "p678d", { platform: "win32", probe: failing, store: t.open() }),
+    false,
+  );
+  resetAclMemoryCache();
+  assert.equal(
+    trustedCode(s2, "p678d", { platform: "win32", probe: failing, store: t.open() }),
+    false,
+  );
+  assert.equal(m, 2);
+  const saved = JSON.parse(readFileSync(t.file, "utf8"));
+  assert.equal(Object.keys(saved).length, 1);
+  rmSync(t.dir, { recursive: true });
+});
+test("FU-678: no file state means no cache; a damaged cache file is ignored", () => {
+  let n = 0;
+  const probe = () => (n++, true);
+  const o = { platform: "win32", probe };
+  privateOwned(undefined, "p678e", o);
+  privateOwned(undefined, "p678e", o);
+  assert.equal(n, 2);
+  const t = tempStore();
+  const store = fileStore(join(t.dir, "missing.json"));
+  assert.equal(store.get("x"), undefined);
+  assert.match(
+    aclCacheFile({ LOCALAPPDATA: "C:\\Users\\a\\AppData\\Local" }),
+    /acl-cache-v1\.json$/,
+  );
+  rmSync(t.dir, { recursive: true });
+});
+test("FU-678: the default probe starts PowerShell hidden and detached", () => {
+  assert.equal(typeof windowsAclProbe, "function");
+  assert.match(
+    readFileSync(new URL("../../orca-organization/server/owned.mjs", import.meta.url), "utf8"),
+    /windowsHide: true,\s*\/\/[^\n]*\n\s*detached: true/,
+  );
 });

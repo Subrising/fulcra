@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 // "Owned by this user and private" checks, in one place.
@@ -64,24 +66,78 @@ export function windowsAclProbe(file, mask, owner = "trusted") {
         encoding: "utf8",
         timeout: 20000,
         windowsHide: true,
+        // FU-678: no console for the child. libuv maps detached to DETACHED_PROCESS on Windows.
+        detached: true,
         stdio: ["ignore", "pipe", "ignore"],
       },
     );
     return out.trim() === "SAFE";
   } catch {
-    return false;
+    // An error is not an answer: the caller refuses, and does not save it.
+    return undefined;
   }
 }
 
 const cache = new Map();
-function windowsSafe(file, stat, mask, owner, probe) {
+const STORE_LIMIT = 2000;
+
+/** FU-678: a plugin start is a new process, so the answers also live in a small file shared by all of them. */
+export function aclCacheFile(env = process.env) {
+  const base = env.LOCALAPPDATA ? path.win32.join(env.LOCALAPPDATA, "Fulcra") : tmpdir();
+  return path.join(base, "acl-cache-v1.json");
+}
+export function fileStore(file = aclCacheFile()) {
+  let loaded;
+  const load = () => {
+    if (loaded) return loaded;
+    loaded = new Map();
+    try {
+      const data = JSON.parse(readFileSync(file, "utf8"));
+      for (const [k, v] of Object.entries(data)) if (typeof v === "boolean") loaded.set(k, v);
+    } catch {
+      /* No file, or a damaged file: start empty. A missing answer only means one more check. */
+    }
+    return loaded;
+  };
+  return {
+    get: (key) => load().get(key),
+    set: (key, value) => {
+      const map = load();
+      if (map.size > STORE_LIMIT) map.clear();
+      map.set(key, value);
+      try {
+        mkdirSync(path.dirname(file), { recursive: true });
+        const temp = `${file}.${process.pid}.tmp`;
+        writeFileSync(temp, JSON.stringify(Object.fromEntries(map)), { mode: 0o600 });
+        renameSync(temp, file);
+      } catch {
+        /* A cache that cannot be saved costs one more check; it never changes an answer. */
+      }
+    },
+  };
+}
+let defaultStore;
+/** For tests: forget the in-process answers, as a new process would. */
+export function resetAclMemoryCache() {
+  cache.clear();
+}
+function windowsSafe(file, stat, mask, owner, probe, store) {
+  // Without a file state there is nothing to bind an answer to, so always check.
+  if (!stat) return probe(file, mask, owner) === true;
   // An ACL change moves ctime, so a cached answer never outlives the state it described.
-  const key = `${owner}|${mask}|${file}|${stat?.ino}|${stat?.ctimeMs}|${stat?.mtimeMs}`;
-  if (!cache.has(key)) {
-    if (cache.size > 2000) cache.clear();
-    cache.set(key, probe(file, mask, owner) === true);
+  const key = `${owner}|${mask}|${file}|${stat.ino}|${stat.ctimeMs}|${stat.mtimeMs}`;
+  if (cache.has(key)) return cache.get(key);
+  const shared = store ?? (probe === windowsAclProbe ? (defaultStore ??= fileStore()) : undefined);
+  let answer = shared?.get(key);
+  if (typeof answer !== "boolean") {
+    const result = probe(file, mask, owner);
+    if (result === undefined) return false;
+    answer = result === true;
+    shared?.set(key, answer);
   }
-  return cache.get(key);
+  if (cache.size > STORE_LIMIT) cache.clear();
+  cache.set(key, answer);
+  return answer;
 }
 
 const uid = () => process.getuid?.();
@@ -90,9 +146,9 @@ const uid = () => process.getuid?.();
 export function ownedByMe(
   stat,
   file,
-  { platform = process.platform, probe = windowsAclProbe } = {},
+  { platform = process.platform, probe = windowsAclProbe, store } = {},
 ) {
-  if (platform === "win32") return windowsSafe(file, stat, 0, "me", probe);
+  if (platform === "win32") return windowsSafe(file, stat, 0, "me", probe, store);
   return stat.uid === uid();
 }
 
@@ -100,9 +156,9 @@ export function ownedByMe(
 export function privateOwned(
   stat,
   file,
-  { platform = process.platform, probe = windowsAclProbe } = {},
+  { platform = process.platform, probe = windowsAclProbe, store } = {},
 ) {
-  if (platform === "win32") return windowsSafe(file, stat, PRIVATE_MASK, "me", probe);
+  if (platform === "win32") return windowsSafe(file, stat, PRIVATE_MASK, "me", probe, store);
   return stat.uid === uid() && (stat.mode & 0o077) === 0;
 }
 
@@ -110,8 +166,8 @@ export function privateOwned(
 export function trustedCode(
   stat,
   file,
-  { platform = process.platform, probe = windowsAclProbe } = {},
+  { platform = process.platform, probe = windowsAclProbe, store } = {},
 ) {
-  if (platform === "win32") return windowsSafe(file, stat, WRITE_MASK, "trusted", probe);
+  if (platform === "win32") return windowsSafe(file, stat, WRITE_MASK, "trusted", probe, store);
   return (stat.mode & 0o022) === 0 && [0, uid()].includes(stat.uid);
 }

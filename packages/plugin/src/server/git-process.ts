@@ -7,7 +7,7 @@ import {
   type ExecFileSyncOptions,
 } from "node:child_process";
 import { readFile, realpath } from "node:fs/promises";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { realpathSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -32,6 +32,8 @@ interface GitRuntime {
   termination: WeakMap<ChildProcess, Promise<void>>;
   fetches: Map<string, FetchState>;
   guardian?: string;
+  /** The real git binary (null: not found, use the PATH wrapper). Resolved once per process. */
+  gitBinary?: string | null;
   exitCleanupRegistered?: boolean;
   liveGroups?: Set<number>;
 }
@@ -232,6 +234,47 @@ export function terminateGitProcess(child: ChildProcess): Promise<void> {
   return stopped;
 }
 
+export interface WindowsGitResolveDeps {
+  execPath?: () => string;
+  exists?: (file: string) => boolean;
+}
+/**
+ * FU-678: the Git for Windows wrapper (cmd\\git.exe) starts mingw64\\bin\\git.exe without DETACHED, so Windows gives the
+ * real binary a console. Find the real binary from `git --exec-path`. Returns undefined when it is not found.
+ */
+export function resolveWindowsGitBinary(deps: WindowsGitResolveDeps = {}): string | undefined {
+  const execPath =
+    deps.execPath ??
+    (() =>
+      execFileSync("git.exe", ["--exec-path"], {
+        encoding: "utf8",
+        windowsHide: true,
+        detached: true,
+        timeout: 10_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      } as ExecFileSyncOptions & { encoding: BufferEncoding }));
+  const exists = deps.exists ?? existsSync;
+  try {
+    const exec = path.win32.normalize(execPath().trim());
+    if (!exec || exec === ".") return undefined;
+    for (const candidate of [
+      path.win32.join(exec, "..", "..", "bin", "git.exe"),
+      path.win32.join(exec, "..", "..", "mingw64", "bin", "git.exe"),
+      path.win32.join(exec, "..", "..", "..", "mingw64", "bin", "git.exe"),
+    ])
+      if (exists(candidate)) return candidate;
+  } catch {
+    /* Fall back to the PATH wrapper. */
+  }
+  return undefined;
+}
+/** Environment for the guardian: the real git binary, resolved once. Empty when it is not found or not Windows. */
+function guardianGitEnvironment(): NodeJS.ProcessEnv {
+  if (process.platform !== "win32") return {};
+  if (runtime.gitBinary === undefined) runtime.gitBinary = resolveWindowsGitBinary() ?? null;
+  return runtime.gitBinary ? { FULCRA_GIT_EXE: runtime.gitBinary } : {};
+}
+
 function gitExecutable(): string {
   if (process.platform !== "win32") return "git";
   if (runtime.guardian) return runtime.guardian;
@@ -267,7 +310,11 @@ export function spawnGitProcess(args: string[], options: SpawnOptions = {}): Chi
   );
   const child = spawn(gitExecutable(), gitArguments(args), {
     ...options,
-    env: { ...gitEnvironment(options.env), FULCRA_GIT_TIMEOUT_MS: String(timeout) },
+    env: {
+      ...gitEnvironment(options.env),
+      ...guardianGitEnvironment(),
+      FULCRA_GIT_TIMEOUT_MS: String(timeout),
+    },
     timeout: undefined,
     signal: undefined,
     // win32: DETACHED_PROCESS, so guardian.exe gets no console and no conhost.exe.
@@ -596,6 +643,7 @@ export function execGitCommandSync(
       ...options,
       env: {
         ...gitEnvironment(options.env),
+        ...guardianGitEnvironment(),
         ELECTRON_RUN_AS_NODE: "1",
         FULCRA_GIT_TIMEOUT_MS: String(timeout),
       },

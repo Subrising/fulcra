@@ -8,7 +8,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 import { WINDOWS_GIT_GUARDIAN } from "./git-guardian-windows.js";
-import { spawnGitProcess } from "./git-process.js";
+import { resolveWindowsGitBinary, spawnGitProcess } from "./git-process.js";
 
 const realPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
 afterEach(() => {
@@ -41,10 +41,40 @@ test("non-win32 git spawn stays detached", () => {
   child.emit("close");
 });
 
-test("guardian passes DETACHED_PROCESS | CREATE_SUSPENDED to CreateProcess", () => {
-  expect(WINDOWS_GIT_GUARDIAN).toContain("true,0x0000000C,");
-  expect(WINDOWS_GIT_GUARDIAN).not.toContain("0x08000004");
-  // 0x8 DETACHED_PROCESS | 0x4 CREATE_SUSPENDED, and no CREATE_NO_WINDOW (0x08000000).
-  expect(0x0c).toBe(0x8 | 0x4);
-  expect(0x0c & 0x08000000).toBe(0);
+test("guardian passes CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_SUSPENDED to CreateProcess", () => {
+  expect(WINDOWS_GIT_GUARDIAN).toContain("true,0x0800000C,");
+  expect(WINDOWS_GIT_GUARDIAN).not.toContain("0x0000000C,");
+  expect(0x0800000c).toBe(0x08000000 | 0x8 | 0x4);
+});
+
+test("guardian runs the git.exe named by FULCRA_GIT_EXE and falls back to git.exe", () => {
+  expect(WINDOWS_GIT_GUARDIAN).toContain('GetEnvironmentVariable("FULCRA_GIT_EXE")');
+  expect(WINDOWS_GIT_GUARDIAN).toContain('exe="git.exe"');
+});
+
+test("git binary: resolves mingw64\\bin\\git.exe from --exec-path", () => {
+  const exists = (file: string) => file === "C:\\Program Files\\Git\\mingw64\\bin\\git.exe";
+  const found = resolveWindowsGitBinary({
+    execPath: () => "C:/Program Files/Git/mingw64/libexec/git-core\n",
+    exists,
+  });
+  expect(found).toBe("C:\\Program Files\\Git\\mingw64\\bin\\git.exe");
+});
+
+test("git binary: falls back (undefined) when the file is missing or git fails", () => {
+  expect(
+    resolveWindowsGitBinary({
+      execPath: () => "C:/Git/mingw64/libexec/git-core",
+      exists: () => false,
+    }),
+  ).toBeUndefined();
+  expect(
+    resolveWindowsGitBinary({
+      execPath: () => {
+        throw new Error("no git");
+      },
+      exists: () => true,
+    }),
+  ).toBeUndefined();
+  expect(resolveWindowsGitBinary({ execPath: () => "  ", exists: () => true })).toBeUndefined();
 });
