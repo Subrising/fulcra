@@ -1,4 +1,4 @@
-import { useMemo, type ReactElement, type ReactNode } from "react";
+import { type ReactElement, type ReactNode } from "react";
 import { Text, View, type PressableProps, type StyleProp, type ViewStyle } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -8,7 +8,7 @@ import { isWeb } from "@/constants/platform";
 import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import {
   iconButtonChromeFrameStyle,
-  iconButtonChromeStyle,
+  useIconButtonChromeStyle,
 } from "@/components/ui/icon-button-chrome";
 
 interface HeaderToggleButtonState {
@@ -47,6 +47,7 @@ export function HeaderToggleButton({
       ? ({ "aria-expanded": expandedState } as Record<string, boolean>)
       : null;
 
+<<<<<<< HEAD
   // FU-73: a 48 px target on a touch screen; the drawn icon frame stays the same.
   const touch = useTouchTargets();
   const combinedStyle = useMemo(
@@ -60,6 +61,13 @@ export function HeaderToggleButton({
         }),
     [disabled, style, touch],
   );
+=======
+  const combinedStyle = useIconButtonChromeStyle({
+    size: "large",
+    disabled: Boolean(disabled),
+    style,
+  });
+>>>>>>> refs/remotes/upstream/tags/v0.13.1
 
   return (
     <Tooltip delayDuration={tooltipDelayDuration} enabledOnDesktop enabledOnMobile={false}>

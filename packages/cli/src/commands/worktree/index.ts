@@ -9,7 +9,14 @@ export function createWorktreeCommand(): Command {
   const worktree = new Command("worktree").description("Manage Fulcra-managed git worktrees");
 
   addJsonAndDaemonHostOptions(
+<<<<<<< HEAD
     worktree.command("ls").description("List Fulcra-managed git worktrees"),
+=======
+    worktree
+      .command("ls")
+      .description("List Paseo-managed git worktrees")
+      .option("--cwd <path>", "Repository directory (default: current)"),
+>>>>>>> refs/remotes/upstream/tags/v0.13.1
   ).action(withOutput(runLsCommand));
 
   addJsonAndDaemonHostOptions(
@@ -31,7 +38,8 @@ export function createWorktreeCommand(): Command {
     worktree
       .command("archive")
       .description("Archive a worktree (removes worktree and associated branch)")
-      .argument("<name>", "Worktree name or branch name"),
+      .argument("<name>", "Worktree name or branch name")
+      .option("--cwd <path>", "Repository directory (default: current)"),
   ).action(withOutput(runArchiveCommand));
 
   return worktree;

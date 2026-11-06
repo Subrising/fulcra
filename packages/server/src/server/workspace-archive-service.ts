@@ -35,6 +35,7 @@ export interface ArchiveDependencies {
   // Base directory that may hold worktrees across repositories.
   paseoWorktreesBaseRoot?: string;
   github: ForgeService;
+<<<<<<< HEAD
   workspaceGitService: Pick<WorkspaceGitService, "getSnapshot">;
   agentManager: Pick<
     AgentManager,
@@ -45,6 +46,10 @@ export interface ArchiveDependencies {
     | "trustedPlugins"
     | "preflightArchiveDescendants"
   >;
+=======
+  workspaceGitService: Pick<WorkspaceGitService, "getSnapshot" | "invalidateWorktrees">;
+  agentManager: Pick<AgentManager, "listAgents" | "getAgent" | "archiveAgent" | "archiveSnapshot">;
+>>>>>>> refs/remotes/upstream/tags/v0.13.1
   agentStorage: Pick<AgentStorage, "listByWorkspace">;
   // Resolves the worktree at a path to its workspaceId for archive-by-path. The
   // path uniquely identifies a worktree workspace; this is a directory lookup for
@@ -466,8 +471,14 @@ async function maybeRemoveDirectory(
       paseoHome: dependencies.paseoHome,
       worktreesBaseRoot: dependencies.paseoWorktreesBaseRoot,
     });
+<<<<<<< HEAD
     if (removed) dependencies.github.invalidate({ cwd: backing.path });
     return removed;
+=======
+    dependencies.workspaceGitService.invalidateWorktrees();
+    dependencies.github.invalidate({ cwd: backing.path });
+    return true;
+>>>>>>> refs/remotes/upstream/tags/v0.13.1
   } catch (error) {
     dependencies.sessionLogger?.warn(
       { err: error, targetPath: backing.path, requestId: request.requestId },
@@ -526,7 +537,7 @@ export async function archiveWorkspaceContents(
   const archivedAgents = new Set<string>();
 
   const liveAgents = dependencies.agentManager
-    .listAgents()
+    .listAgents({ includeInternal: true })
     .filter((agent) => agent.workspaceId === workspaceId);
   for (const agent of liveAgents) {
     archivedAgents.add(agent.id);

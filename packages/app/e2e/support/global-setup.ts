@@ -149,7 +149,12 @@ function startMetro(port: number, buffer: ReturnType<typeof createLineBuffer>): 
     env: {
       ...process.env,
       BROWSER: "none",
+<<<<<<< HEAD
       NODE_OPTIONS: metroNodeOptions(process.env),
+=======
+      // Automation never opens native DevTools or installs its desktop shell.
+      EXPO_UNSTABLE_HEADLESS: "1",
+>>>>>>> refs/remotes/upstream/tags/v0.13.1
       ...(process.env.E2E_DESKTOP_RUNTIME === "1" ? { PASEO_WEB_PLATFORM: "electron" } : {}),
     },
     stdio: ["ignore", "pipe", "pipe"],

@@ -1,5 +1,13 @@
 export type {
   PluginHostProps,
+  PluginTab,
+  PluginPanelProps,
+  PluginWorkspacePanelParams,
+  PluginAgentPanelParams,
+  PluginFilePanelParams,
+  PluginAgentPanelContribution,
+  PluginFilePanelContribution,
+  PluginFilePanelProps,
   PluginSurfaceProps,
   PluginScreenProps,
   PluginPopoverProps,
@@ -8,7 +16,7 @@ export type {
   PluginScreenLocation,
   PluginSidebarItemProps,
   PluginSidebarItemContribution,
-  PluginIconProps,
+  PluginIcon,
   PluginPanelLocation,
   PluginOpenPanelOptions,
   PluginWorkspacePanelProps,
@@ -55,6 +63,22 @@ export type {
   PluginComposerPillContribution,
   PluginHeaderButtonContribution,
 } from "./buttons.js";
+export type { PluginIconProps, PluginSerializableIcon, PluginSvgIcon } from "../icons.js";
+export type {
+  PluginFile,
+  PluginFileBytesState,
+  PluginFileEvent,
+  PluginFileTextState,
+  PluginFileUrlState,
+  PluginFileWriteOptions,
+} from "./file.js";
+export {
+  PluginFileConflictError,
+  PluginFileDeletedError,
+  useFileBytes,
+  useFileText,
+  useFileUrl,
+} from "./file.js";
 export { usePaseo } from "./paseo-context.js";
 export { useAgent, useWorkspace } from "./client-state.js";
 export { useRpc } from "./rpc-context.js";
@@ -84,6 +108,7 @@ export declare function invokeHostRpc(
 /** Open an absolute HTTP(S) URL using the client platform’s external opener. */
 export declare function openExternalUrl(url: string): Promise<void>;
 
+<<<<<<< HEAD
 /** Sanitised immutable projection of native events already cached by this app. No new host read. */
 export interface PluginObservedAgent {
   readonly serverId: string;
@@ -116,3 +141,10 @@ export interface PluginObservedAgentDirectory {
 }
 /** Optional at runtime on older apps. Cache observation only, with explicit subset coverage. */
 export declare function useObservedAgents(): PluginObservedAgentDirectory;
+=======
+export { defineTranslations, useTranslation } from "./translations.js";
+export type { PluginI18n } from "./translations.js";
+export type { PluginText, PluginMessage, PluginTranslations } from "../text.js";
+
+export { useTabState } from "./tab.js";
+>>>>>>> refs/remotes/upstream/tags/v0.13.1

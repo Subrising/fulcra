@@ -1,8 +1,8 @@
 import type { RelayDeviceGate } from "./pairing/relay-device-gate.js";
 /// <reference lib="dom" />
-import { EventEmitter } from "node:events";
 import { WebSocket } from "ws";
 import type pino from "pino";
+<<<<<<< HEAD
 import {
   createDaemonChannel,
   type Transport as RelayTransport,
@@ -12,6 +12,10 @@ import { buildRelayWebSocketUrl } from "@getpaseo/protocol/daemon-endpoints";
 import type { ExternalSocketMetadata } from "./websocket-server.js";
 import { createEncryptedRelaySocket } from "./websocket/encrypted-relay-socket.js";
 import { createRelayDnsLookup } from "./relay-dns-lookup.js";
+=======
+import { buildRelayWebSocketUrl } from "@getpaseo/protocol/daemon-endpoints";
+import type { ExternalSocketMetadata } from "./websocket-server.js";
+>>>>>>> refs/remotes/upstream/tags/v0.13.1
 
 export interface RelayTransportOptions {
   logger: pino.Logger;
@@ -19,8 +23,11 @@ export interface RelayTransportOptions {
   relayEndpoint: string; // "host:port"
   relayUseTls: boolean;
   serverId: string;
+<<<<<<< HEAD
   daemonKeyPair?: KeyPair;
   deviceGate?: RelayDeviceGate;
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.13.1
   createWebSocket?: RelayWebSocketFactory;
   random?: () => number;
 }
@@ -34,13 +41,12 @@ export interface RelaySocketLike {
   bufferedAmount?: number;
   send: (data: string | Uint8Array | ArrayBuffer, callback?: (error?: Error) => void) => void;
   close: (code?: number, reason?: string) => void;
-  terminate?: () => void;
+  terminate: () => void;
   on: (event: "message" | "close" | "error", listener: (...args: unknown[]) => void) => void;
   once: (event: "close" | "error", listener: (...args: unknown[]) => void) => void;
 }
 
 interface RelayWebSocketLike extends RelaySocketLike {
-  terminate: () => void;
   ping: () => void;
   on: (
     event: "open" | "message" | "close" | "error" | "pong",
@@ -60,10 +66,20 @@ type ControlMessage =
 const CONTROL_PING_INTERVAL_MS = 10_000;
 const CONTROL_STALE_TIMEOUT_MS = 30_000;
 const CONTROL_READY_TIMEOUT_MS = 8_000;
+<<<<<<< HEAD
 const CONTROL_HANDSHAKE_TIMEOUT_ALERT_THRESHOLD = 3;
 const HANDSHAKE_TIMEOUT_MESSAGE = "Opening handshake has timed out";
 const RELAY_WEBSOCKET_OPTIONS = { handshakeTimeout: 10_000, perMessageDeflate: false } as const;
 const relayDnsLookup = createRelayDnsLookup();
+=======
+const RELAY_WEBSOCKET_OPTIONS = {
+  handshakeTimeout: 10_000,
+  perMessageDeflate: false,
+  // Node cancels each non-final address when this expires, even if the next
+  // address is unreachable. Allow high-latency routes time to connect.
+  autoSelectFamilyAttemptTimeout: 5_000,
+} as const;
+>>>>>>> refs/remotes/upstream/tags/v0.13.1
 
 function createDefaultRelayWebSocket(url: string): RelayWebSocketLike {
   return new WebSocket(url, {
@@ -126,8 +142,11 @@ export function startRelayTransport({
   relayEndpoint,
   relayUseTls,
   serverId,
+<<<<<<< HEAD
   daemonKeyPair,
   deviceGate,
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.13.1
   createWebSocket = createDefaultRelayWebSocket,
   random = Math.random,
 }: RelayTransportOptions): RelayTransportController {
@@ -413,6 +432,7 @@ export function startRelayTransport({
         externalSessionKey: `session:${connectionId}`,
         relayConnectionId: connectionId,
       };
+<<<<<<< HEAD
       if (daemonKeyPair && deviceGate) {
         void attachEncryptedSocket(
           socket,
@@ -426,6 +446,9 @@ export function startRelayTransport({
       } else {
         socket.close(4403, "Not paired");
       }
+=======
+      void attachSocket(socket, externalMetadata);
+>>>>>>> refs/remotes/upstream/tags/v0.13.1
     });
 
     socket.on("close", (code, reason) => {
@@ -448,6 +471,7 @@ export function startRelayTransport({
 
   return { stop };
 }
+<<<<<<< HEAD
 
 async function attachEncryptedSocket(
   socket: RelayWebSocketLike,
@@ -631,3 +655,5 @@ function bufferFromWsData(data: unknown): Buffer | null {
   }
   return null;
 }
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.13.1

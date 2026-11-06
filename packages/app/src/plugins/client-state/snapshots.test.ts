@@ -4,6 +4,8 @@ import { projectObservedAgents, OBSERVED_AGENT_LIMIT } from "../observed-agents-
 import { createPluginAgentSnapshot, createPluginWorkspaceSnapshot } from "./snapshots";
 
 const workspace: WorkspaceDescriptor = {
+  createdAt: null,
+  lastUserMessageAt: null,
   id: "workspace-1",
   projectId: "project-1",
   projectDisplayName: "Paseo",

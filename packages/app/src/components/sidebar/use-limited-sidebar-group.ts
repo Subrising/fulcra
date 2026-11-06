@@ -1,5 +1,10 @@
 import { useCallback, useMemo, useState } from "react";
+import {
+  selectSidebarGroupVisibility,
+  type SidebarGroupVisibilityPolicy,
+} from "./sidebar-group-visibility";
 
+<<<<<<< HEAD
 export const INITIAL_VISIBLE_ITEMS = 20;
 
 /**
@@ -45,7 +50,20 @@ export function useLimitedSidebarGroup<T>(items: readonly T[], hostOf?: (item: T
     [expanded, items, limited],
   );
   const canToggle = limited.hidden > 0;
+=======
+const PINNED_POLICY = { kind: "pinned" } as const;
+
+export function useLimitedSidebarGroup<T>(
+  items: readonly T[],
+  policy: SidebarGroupVisibilityPolicy<T> = PINNED_POLICY,
+) {
+  const [expanded, setExpanded] = useState(false);
+  const visibility = useMemo(
+    () => selectSidebarGroupVisibility(items, expanded, policy),
+    [expanded, items, policy],
+  );
+>>>>>>> refs/remotes/upstream/tags/v0.13.1
   const toggleExpanded = useCallback(() => setExpanded((current) => !current), []);
 
-  return { visibleItems, expanded, canToggle, toggleExpanded };
+  return { ...visibility, expanded, toggleExpanded };
 }

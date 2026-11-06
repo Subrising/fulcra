@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
+import { usePullRequestConnection } from "@/git/pull-request-connection";
 import { checkoutPrStatusQueryKey } from "@/git/query-keys";
 import { normalizeForge } from "@/git/forge";
 import { selectPrHintFromStatus, type PrHint } from "@/git/pr-hint";
@@ -27,8 +27,7 @@ export function useCheckoutPrStatusQuery({
   pullRequest,
 }: UseCheckoutPrStatusQueryOptions) {
   const { t } = useTranslation();
-  const client = useHostRuntimeClient(serverId);
-  const isConnected = useHostRuntimeIsConnected(serverId);
+  const { client, isConnected } = usePullRequestConnection(serverId);
 
   const query = useQuery({
     queryKey:
@@ -74,8 +73,7 @@ export function useWorkspacePrHint({
   enabled = true,
 }: UseCheckoutPrStatusQueryOptions): PrHint | null {
   const { t } = useTranslation();
-  const client = useHostRuntimeClient(serverId);
-  const isConnected = useHostRuntimeIsConnected(serverId);
+  const { client, isConnected } = usePullRequestConnection(serverId);
 
   const query = useQuery<CheckoutPrStatusPayload, Error, PrHint | null>({
     queryKey: checkoutPrStatusQueryKey(serverId, cwd),
