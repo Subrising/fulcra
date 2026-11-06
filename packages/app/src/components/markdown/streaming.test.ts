@@ -67,5 +67,7 @@ describe("native streaming Markdown", () => {
       previous = head.length;
     }
     expect(previous).toBeGreaterThan(1000);
-  }, 15000);
+    // FULCRA(FU-657): this full-prefix sweep takes about 12 s on the shared CI runner (upstream limit 15 s), so
+    // it timed out in 2 of 3 PR runs. The code is the same as upstream; only the time limit is larger.
+  }, 60_000);
 });
