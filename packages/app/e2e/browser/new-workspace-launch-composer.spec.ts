@@ -14,6 +14,7 @@ import {
   fillNewWorkspaceDraft,
   openNewWorkspaceComposer,
 } from "../support/helpers/new-workspace";
+import { openCompactWorkspaceMenu } from "../support/helpers/compact-workspace-scripts";
 import { seedWorkspace, type SeededWorkspace } from "../support/helpers/seed-client";
 import {
   attachButton,
@@ -154,8 +155,26 @@ test.describe("New workspace: the composer is one control in two modes", () => {
       ]) {
         await page.setViewportSize({ width, height });
         await openAgentRoute(page, agent);
-        const context = page.getByRole("button", { name: "Context", exact: true }).first();
-        await expect(context).toBeVisible();
+        // FULCRA(FU-702): under 390 px the Context action is a row of the workspace menu.
+        const inMenu = width < 390;
+        const context = inMenu
+          ? page.getByTestId("workspace-header-context")
+          : page.getByRole("button", { name: "Context", exact: true }).first();
+        if (!inMenu) await expect(context).toBeVisible();
+        const workspaceTargets = await page.getByRole("button").evaluateAll(smallControls);
+        await writeFile(
+          testInfo.outputPath(`workspace-targets-${width}.json`),
+          JSON.stringify(workspaceTargets, null, 2),
+        );
+        await testInfo.attach(`workspace-targets-${width}`, {
+          body: JSON.stringify(workspaceTargets),
+          contentType: "application/json",
+        });
+        await page.screenshot({ path: testInfo.outputPath(`workspace-${width}.png`) });
+        if (inMenu) {
+          await openCompactWorkspaceMenu(page);
+          await expect(context).toBeVisible();
+        }
         const contextBox = await context.boundingBox();
         expect(contextBox).not.toBeNull();
         expect(contextBox!.width).toBeGreaterThanOrEqual(48);
@@ -179,16 +198,6 @@ test.describe("New workspace: the composer is one control in two modes", () => {
           return overlaps;
         });
         expect(faults).toEqual([]);
-        const workspaceTargets = await page.getByRole("button").evaluateAll(smallControls);
-        await writeFile(
-          testInfo.outputPath(`workspace-targets-${width}.json`),
-          JSON.stringify(workspaceTargets, null, 2),
-        );
-        await testInfo.attach(`workspace-targets-${width}`, {
-          body: JSON.stringify(workspaceTargets),
-          contentType: "application/json",
-        });
-        await page.screenshot({ path: testInfo.outputPath(`workspace-${width}.png`) });
         await context.click();
         await expect(page.getByText("Files & outputs", { exact: true }).first()).toBeVisible();
       }
