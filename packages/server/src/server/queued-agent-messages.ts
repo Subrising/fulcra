@@ -4,7 +4,11 @@ import { dirname, basename } from "node:path";
 import { noticePaused, noticePauseVersion, NoticePausedError } from "./notice-pause.js";
 import { leadEventsFor, withLeadEvent } from "./lead-events.js";
 import { createHash, randomUUID } from "node:crypto";
-import { DIRECT_LINK_LABEL, MAIN_ASSISTANT_ROLE } from "@getpaseo/protocol/agent-labels";
+import {
+  DIRECT_LINK_LABEL,
+  MAC_OPS_LEAD_ROLE,
+  MAIN_ASSISTANT_ROLE,
+} from "@getpaseo/protocol/agent-labels";
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import type { Logger } from "pino";
@@ -35,6 +39,7 @@ import {
   findRoleHolder,
   lineStoreOf,
   reportsTo,
+  soleHolder,
   type LineAgent,
 } from "./reporting-lines.js";
 import { tellSenderUndelivered } from "./undelivered-notice.js";
@@ -740,6 +745,7 @@ export class QueuedAgentMessages {
       const senderAgent = remote ? null : (agents.get(sender.agentId) ?? null);
       const holder = findRoleHolder([...agents.values()], MAIN_ASSISTANT_ROLE);
       const mainAssistantId = holder && "id" in holder ? holder.id : null;
+      const macOpsLeadId = soleHolder([...agents.values()], MAC_OPS_LEAD_ROLE);
       const identity = (agent: LineAgent | null) =>
         agent
           ? [
@@ -754,6 +760,7 @@ export class QueuedAgentMessages {
         identity(target),
         holder,
         identity(mainAssistantId ? (agents.get(mainAssistantId) ?? null) : null),
+        macOpsLeadId,
       ]);
       let reason: string | null = null;
       if (!target || target.archivedAt) reason = closedReceiverReason(target);
@@ -767,6 +774,7 @@ export class QueuedAgentMessages {
           senderParent: null,
           localServerId: record.localServerId,
           mainAssistantId,
+          macOpsLeadId,
         });
         if (!decision.allowed) reason = decision.reason;
       }

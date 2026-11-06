@@ -5,6 +5,7 @@ import {
   REPORTS_TO_LABEL,
   REPORTS_TO_OWNER,
   MAIN_ASSISTANT_ROLE,
+  MAC_OPS_LEAD_ROLE,
   SEAT_LABEL,
   ROLE_REF_PREFIX,
 } from "@getpaseo/protocol/agent-labels";
@@ -40,6 +41,8 @@ export interface LineInput {
   localServerId: string | null;
   /** The chat on this computer that holds the main assistant role now, if any. */
   mainAssistantId?: string | null;
+  /** FU-691: the one chat on this computer that holds the Mac ops lead seat now, if any. */
+  macOpsLeadId?: string | null;
 }
 
 export type LineDecision = { allowed: true; why: string } | { allowed: false; reason: string };
@@ -113,8 +116,10 @@ export async function decideSend(
   // A stamp from this computer names a chat that exists here; a made-up id is not "no line recorded".
   if (!remote && !senderAgent)
     return { allowed: false, reason: "This send names a chat that is not on this computer." };
-  const holder = findRoleHolder(await store.list(), MAIN_ASSISTANT_ROLE);
+  const agents = await store.list();
+  const holder = findRoleHolder(agents, MAIN_ASSISTANT_ROLE);
   const mainAssistantId = holder && "id" in holder ? holder.id : null;
+  const macOpsLeadId = soleHolder(agents, MAC_OPS_LEAD_ROLE);
   const parentRef = resolveLineRef(reportsTo(senderAgent), mainAssistantId);
   const senderParent =
     parentRef && parentRef !== REPORTS_TO_OWNER
@@ -127,7 +132,29 @@ export async function decideSend(
     senderParent,
     localServerId,
     mainAssistantId,
+    macOpsLeadId,
   });
+}
+
+/** The one live chat that holds a seat; null when none or two do (two are never guessed between). */
+export function soleHolder(agents: readonly LineAgent[], role: string): string | null {
+  const holder = findRoleHolder(agents, role);
+  return holder && "id" in holder ? holder.id : null;
+}
+
+/**
+ * FU-691: a lead is a chat that reports to the main assistant, or a chat that holds a seat. Workers report to their
+ * lead, so they are not leads here.
+ */
+function isLead(
+  sender: LineAgent | null,
+  rawLine: string,
+  line: string | null,
+  mainId: string | null,
+) {
+  if (rawLine === MAIN_ASSISTANT_REF) return true;
+  if (mainId && line && sameChat(line, mainId, null)) return true;
+  return Boolean(sender?.labels?.[SEAT_LABEL]?.trim());
 }
 
 /** A role reference becomes the chat that holds the role now; other references stay as they are. */
@@ -251,6 +278,13 @@ export function checkReportingLine(input: LineInput): LineDecision {
   if (sameChat(line, target.id, localServerId)) return { allowed: true, why: "parent" };
   if (input.senderAgent?.labels?.[DIRECT_LINK_LABEL]?.trim() === target.id)
     return { allowed: true, why: "direct link" };
+  // FU-691: any lead here may send to the Mac ops lead. No per-lead direct link is needed.
+  if (
+    input.macOpsLeadId &&
+    input.macOpsLeadId === target.id &&
+    isLead(input.senderAgent, rawLine, line, input.mainAssistantId ?? null)
+  )
+    return { allowed: true, why: "mac ops lead" };
   return refusal(input, rawLine, line);
 }
 
