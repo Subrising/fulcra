@@ -3,7 +3,8 @@ import { readLimitResumeSetting, writeLimitResumeSetting } from "./limit-resume-
 import { DEFAULT_RELAY_ENDPOINT } from "@getpaseo/protocol/daemon-endpoints";
 import {
   loadPersistedConfig,
-  savePersistedConfig,
+  savePersistedConfigAsync,
+  loadPersistedConfigAsync,
   type PersistedConfig,
 } from "./persisted-config.js";
 import { ProviderOverrideSchema } from "./agent/provider-launch-config.js";
@@ -12,6 +13,8 @@ import {
   MutableDaemonConfigPatchSchema,
 } from "@getpaseo/protocol/messages";
 import type { AgentSkillSelection } from "@getpaseo/protocol/messages";
+import type { SpeechSettingsPatch } from "@getpaseo/protocol/speech/rpc-schemas";
+import { mergeSpeechSettingsPatch, type SpeechSettingsOwner } from "./speech/speech-settings.js";
 
 export type { MutableDaemonConfig, MutableDaemonConfigPatch } from "@getpaseo/protocol/messages";
 
@@ -20,8 +23,13 @@ type MutableDaemonConfigPatch = import("@getpaseo/protocol/messages").MutableDae
 type ProviderOverride = import("./agent/provider-launch-config.js").ProviderOverride;
 
 interface SupportedMutableConfigPatch {
+<<<<<<< HEAD
   relay?: { enabled?: boolean };
   mcp?: { injectIntoAgents?: boolean; injectLabels?: Record<string, string> };
+=======
+  relay?: { enabled?: boolean; requireProtectedSecurity?: boolean };
+  mcp?: { injectIntoAgents?: boolean };
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
   browserTools?: { enabled?: boolean };
   providers?: MutableDaemonConfig["providers"];
   removeProviders?: string[];
@@ -30,6 +38,7 @@ interface SupportedMutableConfigPatch {
   explainDailyLimit?: number;
   notificationMode?: MutableDaemonConfig["notificationMode"];
   enableTerminalAgentHooks?: boolean;
+<<<<<<< HEAD
   reportUpOnTurnEnd?: boolean;
   nativeFinishNotices?: boolean;
   ledgerDispatchEnabled?: boolean;
@@ -39,13 +48,19 @@ interface SupportedMutableConfigPatch {
   idleLeadNudgeMinIntervalMinutes?: number;
   reviveOnRestart?: boolean;
   autoResumeOnLimit?: boolean;
+=======
+  idleRuntimeCleanup?: boolean;
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
   appendSystemPrompt?: string;
   terminalProfiles?: MutableDaemonConfig["terminalProfiles"];
   agentProfiles?: MutableDaemonConfig["agentProfiles"];
   skills?: MutableDaemonConfig["skills"];
   pluginsEnabled?: boolean;
   plugins?: MutableDaemonConfig["plugins"];
+  features?: SpeechSettingsPatch;
 }
+
+const SPEECH_PERSISTED_PATHS = ["features.dictation", "features.voiceMode"];
 
 interface LoggerLike {
   child(bindings: Record<string, unknown>): LoggerLike;
@@ -184,6 +199,7 @@ function isEqualValue(a: unknown, b: unknown): boolean {
 
 const RELOADABLE_PATHS = [
   "daemon.relay.enabled",
+  "daemon.relay.requireProtectedSecurity",
   "daemon.mcp.enabled",
   "daemon.mcp.injectIntoAgents",
   "daemon.mcp.injectLabels",
@@ -210,6 +226,7 @@ const RELOADABLE_PATHS = [
   "daemon.terminalProfiles",
   "daemon.agentProfiles",
   "app.baseUrl",
+  "agents.idleRuntimeCleanup",
   "agents.providers",
   "agents.catalogRefreshTimeoutMs",
   "agents.metadataGeneration",
@@ -219,6 +236,7 @@ const RELOADABLE_PATHS = [
 
 const PERSISTED_TO_MUTABLE_PATH = new Map<string, string>([
   ["daemon.relay.enabled", "relay.enabled"],
+  ["daemon.relay.requireProtectedSecurity", "relay.requireProtectedSecurity"],
   ["daemon.mcp.enabled", "mcp.enabled"],
   ["daemon.mcp.injectIntoAgents", "mcp.injectIntoAgents"],
   ["daemon.mcp.injectLabels", "mcp.injectLabels"],
@@ -245,6 +263,7 @@ const PERSISTED_TO_MUTABLE_PATH = new Map<string, string>([
   ["daemon.terminalProfiles", "terminalProfiles"],
   ["daemon.agentProfiles", "agentProfiles"],
   ["app.baseUrl", "app.baseUrl"],
+  ["agents.idleRuntimeCleanup", "idleRuntimeCleanup"],
   ["agents.providers", "providers"],
   ["agents.catalogRefreshTimeoutMs", "catalogRefreshTimeoutMs"],
   ["agents.metadataGeneration", "metadataGeneration"],
@@ -287,6 +306,7 @@ function compactOwnedPaths(paths: readonly string[], owners: readonly string[]):
   return Array.from(compacted).sort();
 }
 
+<<<<<<< HEAD
 // Kept apart so the patch picker stays under the complexity limit; present only when the patch sets it.
 function reportUpField(patch: MutableDaemonConfigPatch): {
   reportUpOnTurnEnd?: boolean;
@@ -337,12 +357,31 @@ function mcpField(patch: MutableDaemonConfigPatch): Pick<SupportedMutableConfigP
         },
       }
     : {};
+=======
+function pickRelayPatch(
+  relay: MutableDaemonConfigPatch["relay"],
+): Pick<SupportedMutableConfigPatch, "relay"> {
+  const picked: NonNullable<SupportedMutableConfigPatch["relay"]> = {
+    ...(relay?.enabled !== undefined ? { enabled: relay.enabled } : {}),
+    ...(relay?.requireProtectedSecurity !== undefined
+      ? { requireProtectedSecurity: relay.requireProtectedSecurity }
+      : {}),
+  };
+  return Object.keys(picked).length > 0 ? { relay: picked } : {};
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
 }
 
 function pickSupportedPatchFields(patch: MutableDaemonConfigPatch): SupportedMutableConfigPatch {
   return {
+<<<<<<< HEAD
     ...(patch.relay?.enabled !== undefined ? { relay: { enabled: patch.relay.enabled } } : {}),
     ...mcpField(patch),
+=======
+    ...pickRelayPatch(patch.relay),
+    ...(patch.mcp?.injectIntoAgents !== undefined
+      ? { mcp: { injectIntoAgents: patch.mcp.injectIntoAgents } }
+      : {}),
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
     ...(patch.browserTools?.enabled !== undefined
       ? { browserTools: { enabled: patch.browserTools.enabled } }
       : {}),
@@ -363,6 +402,9 @@ function pickSupportedPatchFields(patch: MutableDaemonConfigPatch): SupportedMut
     ...(patch.enableTerminalAgentHooks !== undefined
       ? { enableTerminalAgentHooks: patch.enableTerminalAgentHooks }
       : {}),
+    ...(patch.idleRuntimeCleanup !== undefined
+      ? { idleRuntimeCleanup: patch.idleRuntimeCleanup }
+      : {}),
     ...(patch.appendSystemPrompt !== undefined
       ? { appendSystemPrompt: patch.appendSystemPrompt }
       : {}),
@@ -370,6 +412,7 @@ function pickSupportedPatchFields(patch: MutableDaemonConfigPatch): SupportedMut
     ...(patch.agentProfiles !== undefined ? { agentProfiles: patch.agentProfiles } : {}),
     ...(patch.pluginsEnabled !== undefined ? { pluginsEnabled: patch.pluginsEnabled } : {}),
     ...(patch.plugins !== undefined ? { plugins: patch.plugins } : {}),
+    ...(patch.features !== undefined ? { features: patch.features } : {}),
   };
 }
 
@@ -403,6 +446,7 @@ export function applyMutableProviderConfigToOverrides(
 }
 
 export class DaemonConfigStore {
+  private mutations: Promise<unknown> = Promise.resolve();
   private current: MutableDaemonConfig;
   private readonly paseoHome: string;
   private readonly logger: LoggerLike | undefined;
@@ -412,6 +456,7 @@ export class DaemonConfigStore {
   private readonly relayEnabledMutable: boolean;
   private readonly reloadSource: DaemonConfigReloadSource | undefined;
   private readonly startupPersisted: PersistedConfig;
+  private readonly speechOwner: SpeechSettingsOwner | undefined;
   private lastKnownPersisted: PersistedConfig;
 
   constructor(
@@ -422,14 +467,22 @@ export class DaemonConfigStore {
       relayEnabledMutable?: boolean;
       reloadSource?: DaemonConfigReloadSource;
       startupPersisted?: PersistedConfig;
+      speech?: SpeechSettingsOwner;
     } = {},
   ) {
     this.paseoHome = paseoHome;
     this.logger = getLogger(logger);
+    this.relayEnabledMutable = options.relayEnabledMutable ?? true;
+    this.reloadSource = options.reloadSource;
+    this.speechOwner = options.speech;
+    this.startupPersisted = options.startupPersisted ?? loadPersistedConfig(paseoHome, this.logger);
+    this.lastKnownPersisted = this.startupPersisted;
     this.current = MutableDaemonConfigSchema.parse({
       ...initial,
       relay: initial.relay ?? { enabled: true },
+      ...this.readSpeech(this.startupPersisted),
     });
+<<<<<<< HEAD
     this.relayEnabledMutable = options.relayEnabledMutable ?? true;
     this.reloadSource = options.reloadSource;
     this.startupPersisted = options.startupPersisted ?? loadPersistedConfig(paseoHome, this.logger);
@@ -467,21 +520,35 @@ export class DaemonConfigStore {
     for (const handler of this.fieldChangeHandlers.get("relay.endpoint") ?? [])
       handler({ endpoint, useTls });
     for (const listener of this.changeListeners) listener(this.current, { removedProviders: [] });
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
   }
 
   public get(): MutableDaemonConfig {
     return this.current;
   }
 
-  public patch(partial: MutableDaemonConfigPatch): MutableDaemonConfig {
-    const parsedPatch = pickSupportedPatchFields(MutableDaemonConfigPatchSchema.parse(partial));
-    return this.applySupportedPatch(parsedPatch);
+  public patch(
+    partial:
+      | MutableDaemonConfigPatch
+      | ((current: MutableDaemonConfig) => MutableDaemonConfigPatch),
+  ): Promise<MutableDaemonConfig> {
+    return this.enqueue(() =>
+      this.applySupportedPatch(
+        pickSupportedPatchFields(
+          MutableDaemonConfigPatchSchema.parse(
+            typeof partial === "function" ? partial(this.current) : partial,
+          ),
+        ),
+      ),
+    );
   }
 
-  public setAgentSkillSelection(selection: AgentSkillSelection): MutableDaemonConfig {
-    return this.applySupportedPatch({ skills: { selection } });
+  public setAgentSkillSelection(selection: AgentSkillSelection): Promise<MutableDaemonConfig> {
+    return this.enqueue(() => this.applySupportedPatch({ skills: { selection } }));
   }
 
+<<<<<<< HEAD
   private dispatchOwnerAdmission: () => void = () => {
     throw new Error("Dispatch configuration needs owner authority");
   };
@@ -495,17 +562,27 @@ export class DaemonConfigStore {
       parsedPatch.ledgerDispatchEnabled !== undefined
     )
       this.dispatchOwnerAdmission();
+=======
+  private async applySupportedPatch(
+    parsedPatch: SupportedMutableConfigPatch,
+  ): Promise<MutableDaemonConfig> {
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
     if (parsedPatch.relay?.enabled !== undefined && !this.relayEnabledMutable) {
       throw new Error(
         "Relay is controlled by a daemon launch override. Remove PASEO_RELAY_ENABLED or the relay CLI flag before changing it here.",
       );
     }
-    const { removeProviders = [], ...configPatch } = parsedPatch;
+    const { removeProviders = [], ...patch } = parsedPatch;
+    const { features: speechPatch, ...configPatch } = patch;
     const removedProviders = Array.from(new Set(removeProviders));
     const merged = deepMerge(this.current, configPatch);
+<<<<<<< HEAD
     // Label filters replace the whole map. An empty map restores unrestricted injection.
     if (parsedPatch.mcp?.injectLabels !== undefined)
       merged.mcp.injectLabels = parsedPatch.mcp.injectLabels;
+=======
+    if (speechPatch !== undefined) Object.assign(merged, this.readPatchedSpeech(speechPatch));
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
     if (parsedPatch.skills?.selection !== undefined) {
       merged.skills = { selection: parsedPatch.skills.selection };
     }
@@ -521,15 +598,21 @@ export class DaemonConfigStore {
 
     const configChanged = !isEqualValue(this.current, next);
 
+<<<<<<< HEAD
     const preferenceChanged = this.preferenceChanged(configPatch);
     if (!configChanged && !preferenceChanged && removedProviders.length === 0) {
+=======
+    // A replaced API key leaves the speech view unchanged, so a speech patch always persists.
+    if (!configChanged && removedProviders.length === 0 && speechPatch === undefined) {
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
       return this.current;
     }
 
-    const { previous: persistedBeforePatch, knownNext } = this.persistConfig(
-      configPatch,
+    const { previous: persistedBeforePatch, knownNext } = await this.persistConfig(
+      patch,
       removedProviders,
     );
+<<<<<<< HEAD
     if (!configChanged) {
       this.lastKnownPersisted = knownNext;
       return this.current;
@@ -548,17 +631,54 @@ export class DaemonConfigStore {
       )
         savePersistedConfig(this.paseoHome, persistedBeforePatch, this.logger);
       throw error;
+=======
+    const speechChanged = this.speechPersistedChanged(this.lastKnownPersisted, knownNext);
+    if (configChanged) {
+      try {
+        this.applyReplacement(next, { removedProviders });
+      } catch (error) {
+        await savePersistedConfigAsync(this.paseoHome, persistedBeforePatch, this.logger);
+        throw error;
+      }
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
     }
+    this.lastKnownPersisted = knownNext;
+    if (speechChanged) this.speechOwner?.apply(knownNext);
 
     return this.current;
   }
 
-  public reload(): DaemonConfigReloadResult {
+  private readSpeech(
+    persisted: PersistedConfig,
+  ): Pick<MutableDaemonConfig, "features" | "envOverrides"> {
+    return this.speechOwner ? this.speechOwner.read(persisted) : {};
+  }
+
+  private readPatchedSpeech(
+    speechPatch: SpeechSettingsPatch,
+  ): Pick<MutableDaemonConfig, "features" | "envOverrides"> {
+    if (!this.speechOwner) {
+      throw new Error("Speech settings are unavailable for this daemon instance");
+    }
+    return this.speechOwner.read(mergeSpeechSettingsPatch(this.lastKnownPersisted, speechPatch));
+  }
+
+  private speechPersistedChanged(previous: PersistedConfig, next: PersistedConfig): boolean {
+    return diffPaths(previous, next).some((path) =>
+      SPEECH_PERSISTED_PATHS.some((owner) => pathBelongsTo(path, owner)),
+    );
+  }
+
+  public reload(): Promise<DaemonConfigReloadResult> {
+    return this.enqueue(() => this.reloadPersisted());
+  }
+
+  private async reloadPersisted(): Promise<DaemonConfigReloadResult> {
     if (!this.reloadSource) {
       throw new Error("Daemon config reload is unavailable for this daemon instance");
     }
 
-    const persisted = loadPersistedConfig(this.paseoHome, this.logger);
+    const persisted = await loadPersistedConfigAsync(this.paseoHome, this.logger);
     const resolved = this.reloadSource.resolve(persisted);
     // Plugin source changes require the plugin lifecycle operation or a daemon
     // restart. The global switch is independently reloadable.
@@ -569,6 +689,7 @@ export class DaemonConfigStore {
       notificationMode:
         readNotificationSetting(this.paseoHome) ?? resolved.mutable.notificationMode,
       plugins: this.current.plugins,
+      ...this.readSpeech(persisted),
     });
     if (
       !isEqualValue(this.current.projectDispatch, desired.projectDispatch) ||
@@ -582,7 +703,7 @@ export class DaemonConfigStore {
       ),
       resolved.overrideControlledPaths,
     );
-    const appliedPaths = RELOADABLE_PATHS.filter((persistedPath) => {
+    const appliedPaths: string[] = RELOADABLE_PATHS.filter((persistedPath) => {
       if (resolved.overrideControlledPaths.some((owner) => pathBelongsTo(persistedPath, owner))) {
         return false;
       }
@@ -599,6 +720,8 @@ export class DaemonConfigStore {
       diffPaths(this.startupPersisted, persisted).filter((path) => {
         if (path === "$schema" || path === "version") return false;
         if (RELOADABLE_PATHS.some((owner) => pathBelongsTo(path, owner))) return false;
+        if (this.speechOwner && SPEECH_PERSISTED_PATHS.some((owner) => pathBelongsTo(path, owner)))
+          return false;
         return !resolved.overrideControlledPaths.some((owner) => pathBelongsTo(path, owner));
       }),
       [],
@@ -607,8 +730,17 @@ export class DaemonConfigStore {
     const removedProviders = Object.keys(this.current.providers).filter(
       (provider) => !(provider in desired.providers),
     );
+    const speechChanged = this.speechPersistedChanged(this.lastKnownPersisted, persisted);
     this.applyReplacement(desired, { removedProviders });
     this.lastKnownPersisted = persisted;
+    if (speechChanged && this.speechOwner) {
+      this.speechOwner.apply(persisted);
+      appliedPaths.push(
+        ...SPEECH_PERSISTED_PATHS.filter((owner) =>
+          changedSinceLastApply.some((path) => pathBelongsTo(path, owner)),
+        ),
+      );
+    }
 
     return {
       appliedPaths: [...appliedPaths].sort(),
@@ -717,6 +849,7 @@ export class DaemonConfigStore {
     };
   }
 
+<<<<<<< HEAD
   private preferenceChanged(patch: SupportedMutableConfigPatch): boolean {
     return (
       (patch.autoResumeOnLimit !== undefined &&
@@ -752,10 +885,26 @@ export class DaemonConfigStore {
   }
 
   private persistConfig(
+=======
+  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.mutations.then(operation);
+    this.mutations = result.catch(() => {});
+    return result;
+  }
+
+  public readServicePorts(): Promise<NonNullable<PersistedConfig["worktrees"]>["servicePorts"]> {
+    return this.enqueue(
+      async () =>
+        (await loadPersistedConfigAsync(this.paseoHome, this.logger)).worktrees?.servicePorts,
+    );
+  }
+
+  private async persistConfig(
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
     patch: Omit<SupportedMutableConfigPatch, "removeProviders">,
     removeProviders: readonly string[],
-  ): { previous: PersistedConfig; knownNext: PersistedConfig } {
-    const persisted = loadPersistedConfig(this.paseoHome, this.logger);
+  ): Promise<{ previous: PersistedConfig; knownNext: PersistedConfig }> {
+    const persisted = await loadPersistedConfigAsync(this.paseoHome, this.logger);
     const merge = (source: PersistedConfig) =>
       mergeMutablePatchIntoPersistedConfig({
         persisted: source,
@@ -765,6 +914,7 @@ export class DaemonConfigStore {
       });
     const nextPersisted = merge(persisted);
     const knownNext = merge(this.lastKnownPersisted);
+<<<<<<< HEAD
     const writesMain =
       Object.keys(patch).some((key) => key !== "autoResumeOnLimit" && key !== "notificationMode") ||
       removeProviders.length > 0;
@@ -778,6 +928,9 @@ export class DaemonConfigStore {
       this.restorePreferences(patch, persisted);
       throw error;
     }
+=======
+    await savePersistedConfigAsync(this.paseoHome, nextPersisted, this.logger);
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
     return { previous: persisted, knownNext };
   }
 }
@@ -791,8 +944,11 @@ function mergeMutablePatchIntoPersistedConfig(params: {
   const { persisted, patch, removeProviders, persistRelayEnabled } = params;
   const daemon = mergeMutableDaemonPatch(persisted.daemon, patch, persistRelayEnabled);
   const agents = mergeMutableAgentPatch(persisted.agents, patch, removeProviders);
+  const withSpeech = patch.features
+    ? mergeSpeechSettingsPatch(persisted, patch.features)
+    : persisted;
   return {
-    ...persisted,
+    ...withSpeech,
     ...(patch.pluginsEnabled !== undefined ? { pluginsEnabled: patch.pluginsEnabled } : {}),
     ...(patch.plugins !== undefined ? { plugins: patch.plugins } : {}),
     ...(daemon ? { daemon } : { daemon: undefined }),
@@ -809,6 +965,7 @@ function mergeMutableAgentPatch(
     patch.providers === undefined &&
     patch.metadataGeneration === undefined &&
     patch.skills === undefined &&
+    patch.idleRuntimeCleanup === undefined &&
     removeProviders.length === 0
   ) {
     return persistedAgents;
@@ -841,6 +998,10 @@ function mergeMutableAgentPatch(
     next["skills"] = { selection: patch.skills.selection };
   }
 
+  if (patch.idleRuntimeCleanup !== undefined) {
+    next["idleRuntimeCleanup"] = patch.idleRuntimeCleanup;
+  }
+
   return Object.keys(next).length > 0 ? (next as PersistedConfig["agents"]) : undefined;
 }
 
@@ -852,6 +1013,9 @@ function mergeMutableDaemonPatch(
   const next = { ...persistedDaemon } as NonNullable<PersistedConfig["daemon"]>;
   if (persistRelayEnabled && patch.relay?.enabled !== undefined) {
     next.relay = { ...next.relay, enabled: patch.relay.enabled };
+  }
+  if (patch.relay?.requireProtectedSecurity !== undefined) {
+    next.relay = { ...next.relay, requireProtectedSecurity: patch.relay.requireProtectedSecurity };
   }
   if (patch.mcp?.injectIntoAgents !== undefined) {
     next.mcp = { ...next.mcp, injectIntoAgents: patch.mcp.injectIntoAgents };

@@ -1,10 +1,14 @@
 import { useMemo, type ReactNode } from "react";
-import { ScrollView, Text, View } from "react-native";
+import { Platform, ScrollView, Text, View } from "react-native";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StyleSheet } from "react-native-unistyles";
 import { BackHeader } from "@/components/headers/back-header";
 import { MenuHeader } from "@/components/headers/menu-header";
 import { useIsCompactFormFactor } from "@/constants/layout";
+import { SPACING } from "@/styles/theme";
+
+const PageScrollView = Platform.OS === "android" ? KeyboardAwareScrollView : ScrollView;
 
 interface PageLayoutProps {
   title?: string;
@@ -42,8 +46,19 @@ export function PageLayout({
       ) : (
         <MenuHeader borderless />
       )}
+<<<<<<< HEAD
       <ScrollView style={styles.scroll} contentContainerStyle={scrollContentStyle} testID={testID}>
         <View style={[styles.content, isCompact && styles.compactContent]}>
+=======
+      <PageScrollView
+        // Leave room for field borders and padding around the focused native input.
+        {...(Platform.OS === "android" ? { bottomOffset: SPACING[4] } : {})}
+        style={styles.scroll}
+        contentContainerStyle={scrollContentStyle}
+        testID={testID}
+      >
+        <View style={styles.content}>
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
           {showTitle ? (
             <View style={styles.titleRow} testID={titleTestID}>
               <Text style={styles.title} testID="page-title">
@@ -54,7 +69,7 @@ export function PageLayout({
           ) : null}
           {children}
         </View>
-      </ScrollView>
+      </PageScrollView>
     </View>
   );
 }

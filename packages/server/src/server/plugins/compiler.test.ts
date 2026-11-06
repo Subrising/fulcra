@@ -6,9 +6,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { evaluateBundle } from "./bundle-evaluator.js";
+=======
+import { ZodError } from "zod";
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
 import {
   compilePlugin,
+  compileDirectoryPlugin,
   resolveExistingAsarUnpackedEsbuildBinary,
   unpackedEsbuildBinaryFromPackageDir,
 } from "./compiler.js";
@@ -151,6 +156,51 @@ describe("plugin runtime entries", () => {
     const result = await compilePlugin({ client: null, server: entries.server });
     expect(result.serverBundle).toContain("@getpaseo/plugin/server/git");
     expect(typeof evaluateBundle(result.serverBundle!)({} as never)).toBe("function");
+  });
+
+  it.each([
+    'import type { AgentTimelineItem, ToolCallDetail } from "@getpaseo/protocol/agent-types"; export type Detail = ToolCallDetail; export type Item = AgentTimelineItem;',
+    'import { type AgentTimelineItem } from "@getpaseo/protocol/agent-types"; export type Item = AgentTimelineItem;',
+    'export type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";',
+    'export type Item = import("@getpaseo/protocol/agent-types").AgentTimelineItem;',
+    'export type { AgentAttachment } from "@getpaseo/protocol/messages";',
+  ])("compiles protocol types without local dependencies: %s", async (typeSource) => {
+    const entries = await createSplitPlugin();
+    await writeFile(
+      path.join(entries.directory, "shared", "labels.ts"),
+      `${typeSource}\nexport const clientLabel = "Client contribution"; export const serverLabel = "Server contribution";`,
+    );
+
+    const result = await compilePlugin(entries);
+
+    expect(result.clientBundle).toContain("Client contribution");
+    expect(result.serverBundle).toContain("Server contribution");
+    expect(result.clientBundle).not.toContain("@getpaseo/protocol");
+    expect(result.serverBundle).not.toContain("@getpaseo/protocol");
+  });
+
+  it("still requires local dependencies for protocol runtime imports", async () => {
+    const entries = await createSplitPlugin();
+    await writeFile(
+      entries.server,
+      'import { TOOL_CALL_ICON_NAMES } from "@getpaseo/protocol/agent-types"; export default () => TOOL_CALL_ICON_NAMES;',
+    );
+
+    await expect(compilePlugin(entries)).rejects.toThrow(
+      'Could not resolve "@getpaseo/protocol/agent-types"',
+    );
+  });
+
+  it("still rejects missing third-party type dependencies", async () => {
+    const entries = await createSplitPlugin();
+    await writeFile(
+      entries.client,
+      'import type { Item } from "missing-types"; export default (item: Item) => item;',
+    );
+
+    await expect(compilePlugin(entries)).rejects.toThrow(
+      'Could not resolve type dependency "missing-types"',
+    );
   });
 
   it.each([
@@ -503,6 +553,25 @@ export type Value = string;`,
     const { clientBundle } = await compilePlugin(entries);
     expect(clientBundle).toContain("react/jsx-runtime");
     expect(clientBundle).not.toContain("React.createElement");
+  });
+
+  it("imports an SVG file from a runtime directory as its markup", async () => {
+    const entries = await createSplitPlugin();
+    const svg = '<svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z" /></svg>';
+    await writeFile(path.join(entries.directory, "client", "icon.svg"), svg);
+    await writeFile(
+      entries.client,
+      `import icon from "./client/icon.svg";
+export default function contribute(client) {
+  client.addCommandCenterItem({ id: "open", title: "Open", icon: { svg: icon }, context: "global", onSelect() {} });
+  return () => undefined;
+}`,
+    );
+    const { clientBundle } = await compilePlugin(entries);
+    const registered: unknown[] = [];
+    const exports = new Function(`return ${clientBundle}`)()(() => undefined);
+    exports.default({ addCommandCenterItem: (item: unknown) => registered.push(item) });
+    expect(registered).toMatchObject([{ icon: { svg } }]);
   });
 
   it("lowers async callbacks before Hermes evaluates the client bundle", async () => {
@@ -928,6 +997,7 @@ export default function contribute() { void value; void secret; return () => und
   });
 });
 
+<<<<<<< HEAD
 // FULCRA(plugin-host): the app's Hermes runs client bundles from source. It rejects or drops class syntax and gives
 // let/const one binding per function, so the compiler lowers both before the bundle leaves the daemon.
 const testRequire = createRequire(import.meta.url);
@@ -1032,4 +1102,53 @@ export default function contribute(client) {
     await compilesWithHermes(clientBundle!);
     expect(Buffer.byteLength(JSON.stringify(clientBundle))).toBeLessThan(1024 * 1024);
   }, 120_000);
+=======
+it("preserves esbuild diagnostics across the compiler boundary", async () => {
+  const { server } = await createSplitPlugin();
+  await writeFile(server, "export default function contribute( {");
+  const error = await compilePlugin({ client: null, server }).catch((cause: unknown) => cause);
+  expect(error).toBeInstanceOf(Error);
+  expect(error).toMatchObject({
+    name: "Error",
+    message: expect.stringContaining("Expected identifier but found end of file"),
+    errors: [
+      expect.objectContaining({
+        text: "Expected identifier but found end of file",
+        location: expect.objectContaining({
+          line: 1,
+          lineText: "export default function contribute( {",
+        }),
+      }),
+    ],
+    warnings: [],
+  });
+  // A failed task does not poison the next build.
+  await writeFile(server, 'export default () => "recovered";');
+  const bundles = await compilePlugin({ client: null, server });
+  expect(bundles.serverBundle).toContain("recovered");
+});
+
+it("preserves manifest validation errors across the compiler boundary", async () => {
+  const { directory } = await createSplitPlugin();
+  await writeFile(path.join(directory, "paseo-plugin.json"), JSON.stringify({ id: 42 }));
+  const error = await compileDirectoryPlugin(directory, "0.13.2").catch((cause: unknown) => cause);
+  expect(error).toBeInstanceOf(ZodError);
+  expect(error).toMatchObject({
+    name: "ZodError",
+    issues: [expect.objectContaining({ path: ["id"], code: "invalid_type" })],
+  });
+  await writeFile(path.join(directory, "paseo-plugin.json"), "{");
+  await expect(compileDirectoryPlugin(directory, "0.13.2")).rejects.toBeInstanceOf(SyntaxError);
+});
+
+it("preserves filesystem error metadata for a missing entry", async () => {
+  const { server } = await createSplitPlugin();
+  await rm(server);
+  await expect(compilePlugin({ client: null, server })).rejects.toMatchObject({
+    code: "ENOENT",
+    errno: expect.any(Number),
+    syscall: "realpath",
+    path: server,
+  });
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
 });

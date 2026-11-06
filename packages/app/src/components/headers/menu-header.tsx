@@ -1,17 +1,17 @@
-import { useCallback, useMemo, type ReactNode } from "react";
-import { useTranslation } from "react-i18next";
-import { View, type StyleProp, type ViewStyle } from "react-native";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
-import { PanelLeft } from "lucide-react-native";
+import type { ReactNode } from "react";
+import { StyleSheet } from "react-native-unistyles";
 import { ScreenHeader } from "./screen-header";
 import { ScreenTitle } from "./screen-title";
-import { HeaderToggleButton, headerIconSlotStyle } from "./header-toggle-button";
-import { selectIsAgentListOpen, usePanelStore } from "@/stores/panel-store";
+import { CompactHeader } from "./compact-header";
+import { SidebarMenuToggle } from "./sidebar-menu-toggle";
 import { useIsCompactFormFactor } from "@/constants/layout";
+<<<<<<< HEAD
 import { getShortcutOs } from "@/utils/shortcut-platform";
 import { useHasWindowChromeObstruction, useOwnsWindowChromeCorner } from "@/utils/desktop-window";
 import { iconButtonChromeGlyphSize } from "@/components/ui/icon-button-chrome";
 import { HEADER_CONTROL_HEIGHT } from "@/components/ui/control-geometry";
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
 
 interface MenuHeaderProps {
   title?: string;
@@ -19,6 +19,7 @@ interface MenuHeaderProps {
   borderless?: boolean;
 }
 
+<<<<<<< HEAD
 interface SidebarMenuToggleProps {
   style?: StyleProp<ViewStyle>;
   tooltipSide?: "left" | "right" | "top" | "bottom";
@@ -143,7 +144,13 @@ export function WindowSidebarMenuToggle({ style, ...props }: SidebarMenuTogglePr
   );
 }
 
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
 export function MenuHeader({ title, rightContent, borderless }: MenuHeaderProps) {
+  const isCompact = useIsCompactFormFactor();
+  if (isCompact) {
+    return <CompactHeader navigation="menu" title={title} actions={rightContent} />;
+  }
   return (
     <ScreenHeader
       left={
@@ -160,6 +167,7 @@ export function MenuHeader({ title, rightContent, borderless }: MenuHeaderProps)
 }
 
 const styles = StyleSheet.create((theme) => ({
+<<<<<<< HEAD
   leadingToggle: {
     // A finger needs at least 48 points. The shared icon frame is 32 on a phone, so the menu control sets its own.
     width: {
@@ -175,25 +183,9 @@ const styles = StyleSheet.create((theme) => ({
       md: -theme.spacing[2],
     },
   },
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
   left: {
     gap: theme.spacing[2],
-  },
-  mobileMenuIcon: {
-    width: MOBILE_MENU_LINE_WIDTH,
-    height: 12,
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-  },
-  desktopMenuIconSpace: {
-    width: theme.iconSize.md,
-    height: theme.iconSize.md,
-  },
-  mobileMenuLine: {
-    width: MOBILE_MENU_LINE_WIDTH,
-    height: MOBILE_MENU_LINE_HEIGHT,
-    borderRadius: theme.borderRadius.full,
-  },
-  mobileMenuLineShort: {
-    width: MOBILE_MENU_LINE_SHORT_WIDTH,
   },
 }));

@@ -42,12 +42,17 @@ export function parseRelayConnectionUri(input: string): ParsedRelayConnectionUri
   }
   const endpoint = normalizeHostPort(url.host);
   const password = url.searchParams.get("password") || undefined;
+  const security = url.searchParams.get("security");
+  if (security !== null && security !== "protected") {
+    throw new Error("Relay connection URI has an unsupported security mode");
+  }
   return {
     offer: parseConnectionOffer({
       v: Number(url.searchParams.get("v")),
       serverId,
       daemonPublicKeyB64: key,
       relay: { endpoint, useTls: url.searchParams.get("ssl") === "true" },
+<<<<<<< HEAD
       pairing: {
         id: url.searchParams.get("pairingId"),
         secret: url.searchParams.get("pairingSecret"),
@@ -57,11 +62,16 @@ export function parseRelayConnectionUri(input: string): ParsedRelayConnectionUri
         ? { hostLabel: url.searchParams.get("hostLabel") }
         : {}),
     }),
+=======
+      ...(security === "protected" ? { minimumSecurityMode: "protected" as const } : {}),
+    },
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
     ...(password ? { password } : {}),
   };
 }
 
 export function serializeRelayConnectionUri(parts: ParsedRelayConnectionUri): string {
+<<<<<<< HEAD
   const offer = parseConnectionOffer(parts.offer);
   const url = new URL(`relay://${offer.relay.endpoint}/${encodeURIComponent(offer.serverId)}`);
   url.searchParams.set("v", String(offer.v));
@@ -71,6 +81,16 @@ export function serializeRelayConnectionUri(parts: ParsedRelayConnectionUri): st
   url.searchParams.set("pairingExpiresAt", offer.pairing.expiresAt);
   if (offer.hostLabel !== undefined) url.searchParams.set("hostLabel", offer.hostLabel);
   if (offer.relay.useTls) url.searchParams.set("ssl", "true");
+=======
+  const url = new URL(
+    `relay://${parts.offer.relay.endpoint}/${encodeURIComponent(parts.offer.serverId)}`,
+  );
+  url.searchParams.set("key", parts.offer.daemonPublicKeyB64);
+  if (parts.offer.relay.useTls) url.searchParams.set("ssl", "true");
+  if (parts.offer.minimumSecurityMode) {
+    url.searchParams.set("security", parts.offer.minimumSecurityMode);
+  }
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
   if (parts.password) url.searchParams.set("password", parts.password);
   return url.toString();
 }

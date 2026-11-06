@@ -16,9 +16,14 @@ import type {
   ProviderOptions,
   ToolPolicy,
 } from "@getpaseo/protocol/agent-types";
+<<<<<<< HEAD
 import type { AgentAttachment, AgentQuotaSnapshot } from "@getpaseo/protocol/messages";
 import type { AgentBackgroundWork } from "@getpaseo/protocol/agent-background-work";
 import type { OwnedProcessIdentity } from "../../utils/tree-kill.js";
+=======
+import type { AgentMessage } from "@getpaseo/protocol/agent-message";
+import type { AgentAttachment } from "@getpaseo/protocol/messages";
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
 import type { PaseoToolCatalog } from "./tools/types.js";
 
 export type {
@@ -386,6 +391,8 @@ interface ToolCallBase {
   name: string;
   detail: ToolCallDetail;
   metadata?: Record<string, unknown>;
+  /** Set when the row is a delivered agent message rather than a provider tool call. */
+  agentMessage?: AgentMessage;
 }
 
 type ToolCallRunningTimelineItem = ToolCallBase & {
@@ -696,9 +703,15 @@ export interface AgentComputerUsePolicy {
 }
 
 export interface AgentLaunchContext {
+<<<<<<< HEAD
   computerUsePolicy?: AgentComputerUsePolicy;
   /** Host-selected public text/hash snapshot. Runtime-only; never an account/profile/config override. */
   publicBaseline?: import("./host-public-baseline.js").HostPublicBaseline;
+=======
+  /** Launch-only plugin MCP servers and their owners; never persisted. */
+  mcpServers?: Record<string, McpServerConfig>;
+  mcpServerOwners?: Record<string, string>;
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
   agentId?: string;
   env?: Record<string, string>;
   /**
@@ -806,6 +819,10 @@ export interface AgentSession {
    * still uncertain.
    */
   interrupt(): Promise<void>;
+  /** True only when releasing this runtime loses no background work or pending replies.
+   * An optional additional veto: missing methods use daemon baseline eligibility;
+   * implemented checks that reject or return false keep the runtime resident. */
+  canStopRuntime?(): Promise<boolean>;
   /** Release live runtime resources without archiving or deleting the durable native session. */
   close(): Promise<void>;
   /**

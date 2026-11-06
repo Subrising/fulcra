@@ -1,8 +1,14 @@
 import { router, usePathname } from "expo-router";
+<<<<<<< HEAD
 import { CalendarClock, ChartColumn, History, Plus, Search, Workflow } from "lucide-react-native";
 import { memo, useCallback, useMemo, useRef, type ComponentType } from "react";
+=======
+import { CalendarClock, History, Plus, Search } from "lucide-react-native";
+import { memo, useCallback, useMemo, useRef, type ComponentType, type ReactNode } from "react";
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
 import { useTranslation } from "react-i18next";
 import { View, type StyleProp, type ViewStyle } from "react-native";
+import { StyleSheet } from "react-native-unistyles";
 import { SidebarHeaderRow } from "@/components/sidebar/sidebar-header-row";
 import { useShortcutKeys } from "@/hooks/use-shortcut-keys";
 import { PluginSidebarItem } from "@/plugins/sidebar-items";
@@ -34,18 +40,21 @@ interface SidebarNavRowProps {
 interface SidebarNavRowsProps extends SidebarNavRowProps {
   /** Style for the group wrapper, which the sidebar owns. */
   style?: StyleProp<ViewStyle>;
+  /** Sits to the right of the first row, which shrinks to make room. */
+  firstRowTrailing?: ReactNode;
 }
 
 /**
  * Top-level sidebar navigation, ordered and filtered by the user's
  * `sidebarNavItems` preference. Renders nothing — not even the bordered group
- * wrapper — when every item is hidden.
+ * wrapper — when every item is hidden and there is no `firstRowTrailing`.
  */
-export function SidebarNavRows({ style, onBeforeNavigate }: SidebarNavRowsProps) {
+export function SidebarNavRows({ style, onBeforeNavigate, firstRowTrailing }: SidebarNavRowsProps) {
   const { items } = useSidebarNavItems("header");
   const visibleItems = useMemo(() => items.filter((item) => item.visible), [items]);
   const groupRef = useRef<View | null>(null);
 
+<<<<<<< HEAD
   // Fulcra 0.2.8: the main assistant is pinned first, on every device, whichever computer it runs on.
   // With every item hidden there is no bordered group, so the pinned row stands alone.
   if (visibleItems.length === 0) return <PinnedMainAssistant onBeforeNavigate={onBeforeNavigate} />;
@@ -69,6 +78,37 @@ export function SidebarNavRows({ style, onBeforeNavigate }: SidebarNavRowsProps)
         const Row = BUILTIN_ROWS[item.id];
         return <Row key={item.key} onBeforeNavigate={onBeforeNavigate} />;
       })}
+=======
+  if (visibleItems.length === 0 && !firstRowTrailing) return null;
+
+  const [firstRow, ...restRows] = visibleItems.map((item) => {
+    if (item.kind === "plugin") {
+      return (
+        <PluginSidebarItem
+          key={item.key}
+          group={item.group}
+          section="header"
+          fallbackAnchorRef={groupRef}
+          onBeforeNavigate={onBeforeNavigate}
+        />
+      );
+    }
+    const Row = BUILTIN_ROWS[item.id];
+    return <Row key={item.key} onBeforeNavigate={onBeforeNavigate} />;
+  });
+
+  return (
+    <View ref={groupRef} collapsable={false} style={style}>
+      {firstRowTrailing ? (
+        <View style={styles.firstRow}>
+          <View style={styles.firstRowItem}>{firstRow}</View>
+          {firstRowTrailing}
+        </View>
+      ) : (
+        firstRow
+      )}
+      {restRows}
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
     </View>
   );
 }
@@ -140,14 +180,13 @@ function SidebarHistoryRow({ onBeforeNavigate }: SidebarNavRowProps) {
   );
 }
 
-function SidebarSearchRow({ onBeforeNavigate }: SidebarNavRowProps) {
+function SidebarSearchRow() {
   const { t } = useTranslation();
   const shortcutKeys = useShortcutKeys(builtinSidebarNavShortcutAction("search"));
   const setCommandCenterOpen = useKeyboardShortcutsStore((state) => state.setCommandCenterOpen);
   const handlePress = useCallback(() => {
-    onBeforeNavigate?.();
     setCommandCenterOpen(true);
-  }, [onBeforeNavigate, setCommandCenterOpen]);
+  }, [setCommandCenterOpen]);
 
   return (
     <SidebarHeaderRow
@@ -229,3 +268,14 @@ const BUILTIN_ROWS: Record<BuiltinSidebarNavId, ComponentType<SidebarNavRowProps
   insights: SidebarInsightsRow,
   automations: SidebarAutomationsRow,
 };
+
+const styles = StyleSheet.create({
+  firstRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  firstRowItem: {
+    flex: 1,
+    minWidth: 0,
+  },
+});

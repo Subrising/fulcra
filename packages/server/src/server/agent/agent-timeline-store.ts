@@ -1,9 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  TimelineProjection,
-  selectProjectedTimelinePage,
-  type ProjectedTimelineRow,
-} from "./timeline-projection.js";
+import { TimelineProjection, type ProjectedTimelineRow } from "./timeline-projection.js";
 import type { AgentTimelineItem } from "./agent-sdk-types.js";
 import { isSeqInTurn } from "./timeline-turn-index.js";
 import type {
@@ -44,8 +40,7 @@ export class InMemoryAgentTimelineStore {
       ? options.rows.map(cloneRow)
       : this.buildRowsFromItems(options?.items ?? [], options?.nextSeq ?? 1, timestamp);
     const nextSeq = rows.reduce((next, row) => Math.max(next, row.seq + 1), options?.nextSeq ?? 1);
-    const projection = new TimelineProjection();
-    for (const row of rows) projection.append(row);
+    const projection = new TimelineProjection(rows);
     this.states.set(agentId, {
       epoch: options?.epoch ?? randomUUID(),
       projection,
@@ -102,24 +97,34 @@ export class InMemoryAgentTimelineStore {
     const state = this.requireState(agentId);
     const direction = options?.direction ?? "tail";
     const cursor = options?.cursor;
+<<<<<<< HEAD
     const turn = options?.turn;
     const allRows = state.projection.getRows();
     const rows = turn ? allRows.filter((row) => isSeqInTurn(turn, row.seqStart)) : allRows;
+=======
+    const hasRows = state.minSeq !== 0;
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
     const window = { minSeq: state.minSeq, maxSeq: state.nextSeq - 1, nextSeq: state.nextSeq };
     const staleCursor = cursor !== undefined && cursor.epoch !== state.epoch;
     const gap =
       !staleCursor &&
       direction === "after" &&
       cursor !== undefined &&
-      rows.length > 0 &&
+      hasRows &&
       cursor.seq < state.minSeq - 1;
     const reset = staleCursor || gap;
+<<<<<<< HEAD
     const page = selectProjectedTimelinePage({
       rows,
       bounds: turn ? { minSeq: turn.seqStart, maxSeq: turn.seqEnd } : window,
+=======
+    const page = state.projection.selectPage({
+      bounds: window,
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
       direction: reset ? "tail" : direction,
       cursorSeq: cursor?.seq,
       limit: options?.limit ?? DEFAULT_TIMELINE_FETCH_LIMIT,
+      wholeTurns: options?.wholeTurns,
     });
     return {
       epoch: state.epoch,
@@ -157,14 +162,11 @@ export class InMemoryAgentTimelineStore {
 
   getLastItem(agentId: string): AgentTimelineItem | null {
     const state = this.requireState(agentId);
-    return state.projection.getRows().find((row) => row.seqEnd === state.nextSeq - 1)?.item ?? null;
+    return state.projection.getLastItem(state.nextSeq - 1);
   }
 
   getLastAssistantMessage(agentId: string): string | null {
-    const row = this.requireState(agentId)
-      .projection.getRows()
-      .findLast((candidate) => candidate.item.type === "assistant_message");
-    return row?.item.type === "assistant_message" ? row.item.text : null;
+    return this.requireState(agentId).projection.getLastAssistantMessage();
   }
 
   private requireState(agentId: string): AgentTimelineState {

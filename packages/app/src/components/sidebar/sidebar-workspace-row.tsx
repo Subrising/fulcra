@@ -4,6 +4,7 @@ import { View, Text, type GestureResponderEvent } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import type { HostBadgeModel } from "@/hosts/appearance";
 import type { SidebarWorkspaceEntry } from "@/hooks/use-sidebar-workspaces-list";
+import { density } from "@/styles/density";
 import type { SidebarSurfaceBackdrop } from "@/styles/surface-backdrop";
 import type { DraggableListDragHandleProps } from "@/components/draggable-list.types";
 import type { ShortcutKey } from "@/utils/format-shortcut";
@@ -39,8 +40,6 @@ import {
 } from "@/components/sidebar/workspace-trailing";
 import { sidebarTouchStyles, useSidebarTouchRows } from "@/components/sidebar/sidebar-touch";
 import { useTouchTargets } from "@/hooks/use-touch-targets";
-
-function noop() {}
 
 interface SidebarWorkspaceRowProps {
   workspace: SidebarWorkspaceEntry;
@@ -239,7 +238,7 @@ function WorkspaceRowBody({
   const trailing = useSidebarWorkspaceTrailing();
   const draggable = Boolean(drag);
   const interaction = useLongPressDragInteraction({
-    drag: drag ?? noop,
+    drag,
     menuController: null,
   });
   const {
@@ -490,7 +489,7 @@ const styles = StyleSheet.create((theme) => ({
     position: "relative",
   },
   workspaceRow: {
-    minHeight: 36,
+    minHeight: density.rowHeight,
     marginBottom: theme.spacing[1],
     paddingVertical: theme.spacing[2],
     paddingLeft: theme.spacing[2],

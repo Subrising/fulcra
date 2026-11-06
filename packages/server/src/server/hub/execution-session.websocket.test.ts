@@ -252,6 +252,7 @@ test("ordinary Hub workspace recovery preserves its worker archive after daemon 
       messageId: "after-restore",
       requestId: "send-before-worker-restore",
     }),
+<<<<<<< HEAD
   ).toMatchObject({
     payload: { agentId, accepted: false, error: "The receiver is archived. Restore it first." },
   });
@@ -265,6 +266,11 @@ test("ordinary Hub workspace recovery preserves its worker archive after daemon 
   ).toMatchObject({ type: "rpc_error", payload: { code: "access_denied" } });
   expect(hub.providerPromptTexts().filter((text) => text === "follow up")).toHaveLength(0);
 }, 20_000);
+=======
+  ).toMatchObject({ payload: { agentId, accepted: true } });
+  expect(hub.providerPromptTexts().filter((text) => text === "follow up")).toHaveLength(1);
+});
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
 
 test("Hub completes the standard hello before rejecting a second hello", async () => {
   const hub = await launchRelationship();

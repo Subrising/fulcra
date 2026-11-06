@@ -11,10 +11,14 @@ import {
   serializeConnectionUri,
   serializeConnectionUriForStorage,
 } from "@/utils/daemon-endpoints";
+<<<<<<< HEAD
 import {
   buildConnectionFailureCopy,
   type DirectConnectionLabels,
 } from "@/utils/direct-connection-error-copy";
+=======
+import { buildConnectionFailureCopy } from "./connection-failure-copy";
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
 import { AdaptiveModalSheet, AdaptiveTextInput, type SheetHeader } from "./adaptive-modal-sheet";
 import { Button } from "@/components/ui/button";
 import { PairingTargetTracker } from "./pair-link-credentials";

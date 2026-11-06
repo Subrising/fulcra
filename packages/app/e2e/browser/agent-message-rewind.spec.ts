@@ -20,7 +20,10 @@ async function completeSubmittedTurn(
   const userMessage = page.getByTestId("user-message").filter({ hasText: prompt });
   await expect(userMessage).toBeVisible();
 
+<<<<<<< HEAD
   // The seed client can still report idle before the browser submits this turn.
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
   await expectAgentReadyToInterrupt(page);
   const finish = await agent.client.waitForFinish(agent.agentId, 30_000);
   expect(finish.status).toBe("idle");

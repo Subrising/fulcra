@@ -10,7 +10,18 @@ export type PermissionRequirement =
   | null;
 
 const INBOUND_PERMISSION = {
+<<<<<<< HEAD
   "checkout.git_ai.draft.request": "workspace.write",
+=======
+  "hosts.list.request": "daemon.read",
+  "hosts.add.request": "tunnel.manage",
+  "hosts.update.request": "tunnel.manage",
+  "hosts.remove.request": "tunnel.manage",
+  "hosts.link.open.request": null,
+  "hosts.route.open.request": null,
+  "hosts.route.frame.request": null,
+  "hosts.route.close.request": null,
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
   abort_request: "workspace.write",
   "agent.config.apply.request": ["workspace.write", "hub.execute"],
   "agent.detach.request": "workspace.write",
@@ -241,6 +252,9 @@ const INBOUND_PERMISSION = {
   set_agent_model_request: "workspace.write",
   set_agent_thinking_request: "workspace.write",
   set_daemon_config_request: "daemon.manage",
+  "speech.local_models.list.request": "daemon.read",
+  "speech.local_models.download.request": "daemon.manage",
+  "speech.local_models.delete.request": "daemon.manage",
   set_voice_mode: "workspace.write",
   shutdown_server_request: "daemon.manage",
   start_workspace_script_request: "workspace.write",
@@ -277,15 +291,28 @@ const INBOUND_PERMISSION = {
   "workspace.script.stop.request": "workspace.write",
   "workspace.title.set.request": ["workspace.manage", "hub.execute"],
   workspace_setup_status_request: "workspace.read",
+  "workspace.setup.subscribe.request": "workspace.read",
   "workspace.setup.run.request": "workspace.write",
   write_project_config_request: "workspace.write",
 } as const satisfies Record<InboundOperation, PermissionRequirement>;
 
 const OUTBOUND_PERMISSION = {
+<<<<<<< HEAD
   "checkout.git_ai.draft.response": "workspace.write",
   "agent.mcp.get_refresh_state.response": "workspace.read",
   "agent.mcp.refresh.response": "workspace.write",
   "agent.context.rotate.response": "workspace.write",
+=======
+  "hosts.list.response": "daemon.read",
+  "hosts.changed": "daemon.read",
+  "hosts.add.response": "tunnel.manage",
+  "hosts.update.response": "tunnel.manage",
+  "hosts.remove.response": "tunnel.manage",
+  "hosts.link.open.response": null,
+  "hosts.route.open.response": null,
+  "hosts.route.frame": null,
+  "hosts.route.closed": null,
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
   "agent.create.response": ["workspace.write", "hub.execute"],
   "agent.create.update": ["workspace.write", "hub.execute"],
   "workspace.create.update": "workspace.manage",
@@ -524,6 +551,9 @@ const OUTBOUND_PERMISSION = {
   set_agent_model_response: "workspace.write",
   set_agent_thinking_response: "workspace.write",
   set_daemon_config_response: "daemon.manage",
+  "speech.local_models.list.response": "daemon.read",
+  "speech.local_models.download.response": "daemon.manage",
+  "speech.local_models.delete.response": "daemon.manage",
   set_voice_mode_response: "workspace.write",
   start_workspace_script_response: "workspace.write",
   stash_list_response: "workspace.read",
@@ -561,6 +591,7 @@ const OUTBOUND_PERMISSION = {
   "workspace.title.set.response": ["workspace.manage", "hub.execute"],
   workspace_setup_progress: "workspace.read",
   workspace_setup_status_response: "workspace.read",
+  "workspace.setup.subscribe.response": "workspace.read",
   "workspace.setup.run.response": "workspace.write",
   workspace_update: ["workspace.read", "hub.execute"],
   write_project_config_response: "workspace.write",

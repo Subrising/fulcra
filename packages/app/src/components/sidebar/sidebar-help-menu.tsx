@@ -13,15 +13,21 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+<<<<<<< HEAD
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useSidebarTouchRows } from "@/components/sidebar/sidebar-touch";
 import { sidebarFooterButtonSize } from "@/components/sidebar/sidebar-footer-size";
+=======
+import { DensityIcon } from "@/components/ui/density-icon";
+import { SidebarFooterIconHighlight } from "./sidebar-footer-icon-highlight";
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAppDiagnosticStore } from "@/diagnostics/store";
 import { useKeyboardShortcutsAvailable } from "@/keyboard/availability";
 import { useHostRuntimeIsConnected, useHosts } from "@/runtime/host-runtime";
 import { useKeyboardShortcutsStore } from "@/stores/keyboard-shortcuts-store";
 import { useSessionStore } from "@/stores/session-store";
+import { density } from "@/styles/density";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 import type { HostProfile } from "@/types/host-connection";
 import { formatVersionWithPrefix } from "@/desktop/updates/desktop-updates";
@@ -30,10 +36,17 @@ import { buildSettingsSectionRoute } from "@/utils/host-routes";
 import { hostDisplayName } from "@/hosts/host-display-name";
 
 const ThemedActivity = withUnistyles(Activity);
+<<<<<<< HEAD
 const ThemedCircleHelp = withUnistyles(CircleHelp);
 const ThemedKeyboard = withUnistyles(Keyboard);
 const ThemedScale = withUnistyles(Scale);
 const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
+=======
+const ThemedGift = withUnistyles(Gift);
+const ThemedKeyboard = withUnistyles(Keyboard);
+const ThemedDiscordIcon = withUnistyles(DiscordIcon);
+const ThemedGitHubIcon = withUnistyles(GitHubIcon);
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
 const foregroundMutedColorMapping = (theme: Theme) => ({
   color: theme.colors.foregroundMuted,
 });
@@ -69,8 +82,11 @@ function HostVersionHint({ host }: { host: HostProfile }) {
 }
 
 export function SidebarHelpMenu() {
+<<<<<<< HEAD
   const isCompact = useIsCompactFormFactor();
   const touchRows = useSidebarTouchRows();
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
   const { t } = useTranslation();
   const shortcutsAvailable = useKeyboardShortcutsAvailable();
   const openAppDiagnostic = useAppDiagnosticStore((state) => state.open);
@@ -94,16 +110,32 @@ export function SidebarHelpMenu() {
         <TooltipTrigger asChild>
           <View>
             <DropdownMenuTrigger
+<<<<<<< HEAD
               style={styles.trigger(isCompact, touchRows)}
+=======
+              style={styles.trigger}
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
               testID="sidebar-help"
               accessibilityRole="button"
               accessibilityLabel={t("sidebar.help.trigger")}
             >
+<<<<<<< HEAD
               {({ hovered }) => (
                 <ThemedCircleHelp
                   size={isCompact || touchRows ? ICON_SIZE.lg : ICON_SIZE.md}
                   uniProps={hovered ? foregroundColorMapping : foregroundMutedColorMapping}
                 />
+=======
+              {({ hovered, pressed, open: menuOpen }) => (
+                <>
+                  <SidebarFooterIconHighlight visible={pressed || menuOpen} />
+                  <DensityIcon
+                    icon={CircleHelp}
+                    size="md"
+                    color={hovered ? "foreground" : "foregroundMuted"}
+                  />
+                </>
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
               )}
             </DropdownMenuTrigger>
           </View>
@@ -156,15 +188,21 @@ export function SidebarHelpMenu() {
 }
 
 const styles = StyleSheet.create((theme) => ({
+<<<<<<< HEAD
   // FU-62: the same touch target as the other footer buttons on a touch screen.
   trigger: (isCompact: boolean, touch: boolean) => ({
     width: sidebarFooterButtonSize(isCompact, touch),
     height: sidebarFooterButtonSize(isCompact, touch),
+=======
+  trigger: {
+    width: density.iconButton,
+    height: density.iconButton,
+>>>>>>> refs/remotes/upstream/tags/v0.14.0
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: theme.spacing[1],
     paddingHorizontal: theme.spacing[1],
-  }),
+  },
   tooltipText: {
     fontSize: theme.fontSize.base,
     color: theme.colors.popoverForeground,
