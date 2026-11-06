@@ -492,6 +492,7 @@ for (const autoExpandReasoning of [false, true]) {
       await agent.client.waitForFinish(agent.agentId, 30_000);
       await openAgentRoute(page, agent);
       await expectComposerVisible(page);
+      await expectTimelineSettled(page);
       const reasoning = page
         .getByText(/Need to find the scroll container, the layout effect/)
         .filter({ visible: true })
@@ -499,6 +500,7 @@ for (const autoExpandReasoning of [false, true]) {
       await expectThinkingPresentation(page, autoExpandReasoning);
       await switchToCollapsedTurns(page);
       await expectComposerVisible(page);
+      await expectTimelineSettled(page);
       const summary = page.getByTestId("turn-summary").last().getByRole("button");
       await expect(summary).toBeVisible();
       await expect(summary).not.toContainText(/thought/i);
@@ -560,6 +562,14 @@ async function expectThinkingPresentation(page: Page, autoExpandReasoning: boole
       await expect(reasoning).toBeVisible({ timeout: 2_000 });
     }).toPass();
   }
+}
+
+// FU-712: the history catch-up ("Updating messages") replaces the rows when it ends. A group opened before that loses
+// its open state when the catch-up brings more rows, so the test waits for it to end first.
+async function expectTimelineSettled(page: Page) {
+  await expect(page.getByRole("alert").filter({ hasText: "Updating messages" })).toHaveCount(0, {
+    timeout: 20_000,
+  });
 }
 
 async function switchToCollapsedTurns(page: Page) {
