@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { selectReferenceProjectedTimelinePage } from "./test-utils/timeline-page-reference.js";
 import type { AgentTimelineItem } from "./agent-sdk-types.js";
 import { InMemoryAgentTimelineStore } from "./agent-timeline-store.js";
+import { formatSystemNotificationPrompt, projectAgentMessages } from "./agent-messages/index.js";
 import { FileAgentTimelineStore } from "./file-agent-timeline-store.js";
 import {
   mkdtempSync,
@@ -202,6 +203,33 @@ describe("durable native timeline", () => {
 });
 
 describe("InMemoryAgentTimelineStore", () => {
+  it("finds a submitted finish notice and an agent message by their message id (FU-657)", () => {
+    const store = new InMemoryAgentTimelineStore();
+    store.initialize("agent", { epoch: "current" });
+    const [notice] = projectAgentMessages({
+      type: "user_message",
+      text: formatSystemNotificationPrompt("Worker finished"),
+      clientMessageId: "paseo-notify:one",
+    });
+    expect(notice).toMatchObject({ type: "tool_call", name: "heartbeat" });
+    store.append("agent", notice!, { turnId: "notice-turn" });
+    store.append(
+      "agent",
+      {
+        type: "tool_call",
+        callId: "paseo-agent-message:send-one",
+        name: "agent_message",
+        status: "completed",
+        error: null,
+        detail: { type: "plain_text", text: "report", icon: "bot" },
+      },
+      { turnId: "send-turn" },
+    );
+    expect(store.getSubmittedUserMessage("agent", "paseo-notify:one")?.turnId).toBe("notice-turn");
+    expect(store.getSubmittedUserMessage("agent", "send-one")?.turnId).toBe("send-turn");
+    expect(store.getSubmittedUserMessage("agent", "other")).toBeNull();
+  });
+
   it("resets stale forward cursors to complete available turns", () => {
     const store = new InMemoryAgentTimelineStore();
     store.initialize("agent", { epoch: "current" });

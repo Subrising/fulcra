@@ -31,22 +31,22 @@ class Host implements HostObservation {
     };
   }
   emit(status: "idle" | "running", event?: AgentStreamEvent) {
-    this.handler!(
-      buildStoredAgentPayload(
-        {
-          id: "child",
-          cwd: "/tmp",
-          provider: "codex",
-          labels: {},
-          lastStatus: status,
-          createdAt: "2026-01-01",
-          updatedAt: "2026-01-01",
-        },
-        ["codex"],
-      ),
-      event,
-      "Last response",
+    const payload = buildStoredAgentPayload(
+      {
+        id: "child",
+        cwd: "/tmp",
+        provider: "codex",
+        labels: {},
+        lastStatus: status,
+        createdAt: "2026-01-01",
+        updatedAt: "2026-01-01",
+      },
+      ["codex"],
     );
+    // FULCRA(FU-657): Fulcra projects a stored running record as idle (no process runs it). The host
+    // emits a live agent here, so the fixture keeps the live status.
+    payload.status = status;
+    this.handler!(payload, event, "Last response");
   }
 }
 function permission(id: string): AgentStreamEvent {

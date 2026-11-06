@@ -69,8 +69,9 @@ export class InMemoryAgentTimelineStore {
       .projection.getRows()
       .find(
         (candidate) =>
-          candidate.item.type === "user_message" &&
-          candidate.item.clientMessageId === clientMessageId,
+          (candidate.item.type === "user_message" &&
+            candidate.item.clientMessageId === clientMessageId) ||
+          isAgentMessageCall(candidate.item, clientMessageId),
       );
     return row ? cloneRow(row) : null;
   }
@@ -194,4 +195,20 @@ export class InMemoryAgentTimelineStore {
       return row;
     });
   }
+}
+
+// FULCRA(FU-657): since upstream v0.15 a prompt from another agent (a send or a report) is in the
+// timeline as an "agent_message" tool call with the message id in its call id, and a system envelope
+// (a finish notice) is a "heartbeat" tool call with the id in its metadata. Fulcra's submitted-message
+// checks must still find them, or a notice can repeat.
+const AGENT_MESSAGE_CALL_PREFIX = "paseo-agent-message:";
+export function submittedToolMessageId(item: AgentTimelineItem): string | null {
+  if (item.type !== "tool_call") return null;
+  if (item.name === "agent_message" && item.callId.startsWith(AGENT_MESSAGE_CALL_PREFIX))
+    return item.callId.slice(AGENT_MESSAGE_CALL_PREFIX.length);
+  const submitted = item.metadata?.submittedMessageId;
+  return item.name === "heartbeat" && typeof submitted === "string" ? submitted : null;
+}
+function isAgentMessageCall(item: AgentTimelineItem, messageId: string): boolean {
+  return submittedToolMessageId(item) === messageId;
 }

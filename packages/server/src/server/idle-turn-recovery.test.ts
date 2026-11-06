@@ -35,6 +35,21 @@ test("unfinishedIdleTurn detects tool or waiting endings and excludes current-tu
     retried: false,
   });
   expect(unfinishedIdleTurn([])).toBeNull();
+  // FU-657: a prompt from another agent is an "agent_message" tool call. It starts the turn; it is not
+  // the turn's own unfinished tool work.
+  const agentPrompt = (body: string): AgentTimelineItem => ({
+    type: "tool_call",
+    callId: "paseo-agent-message:m1",
+    name: "agent_message",
+    status: "completed",
+    error: null,
+    detail: { type: "plain_text", text: body, icon: "bot" },
+    agentMessage: { event: "message", sender: { id: "lead" }, text: body },
+  });
+  expect(unfinishedIdleTurn([agentPrompt("fixture child work")])).toBeNull();
+  expect(unfinishedIdleTurn([user(), tool, agentPrompt("next task")])).toBeNull();
+  expect(unfinishedIdleTurn([agentPrompt("next task"), tool])).toEqual({ retried: false });
+  expect(unfinishedIdleTurn([agentPrompt(IDLE_TURN_PROMPT), tool])).toEqual({ retried: true });
   // FU-611: a deliberate WAITING line is not an unfinished turn, also when a tool call follows.
   expect(unfinishedIdleTurn([user(), text("WAITING for the worker job q123"), tool])).toBeNull();
   expect(unfinishedIdleTurn([user(), text("**WAITING** q123")])).toBeNull();

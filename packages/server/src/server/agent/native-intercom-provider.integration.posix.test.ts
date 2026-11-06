@@ -129,9 +129,15 @@ async function fixture(
           parentRefusals--;
           return { __jsonRpcError: { message: "Fixture parent refused turn" } };
         }
-        return reply === "valid"
-          ? { turn: { id: `native-${turn}`, status: "inProgress", error: null } }
-          : {};
+        if (reply !== "valid") return {};
+        // FULCRA(FU-657): Codex announces each turn (turn/started). Since upstream #8393 a new
+        // thread has its native identity only from that announcement on.
+        const turnId = `native-${turn}`;
+        created.startsTurn({
+          threadId: (params as { threadId?: string }).threadId ?? "thread-1",
+          turnId,
+        });
+        return { turn: { id: turnId, status: "inProgress", error: null } };
       },
     });
     servers.push(created);
@@ -261,11 +267,23 @@ async function fixture(
   );
   manager.setNativeMessageReceipts(receipts);
   const createSession = vi.spyOn(provider, "createSession");
-  const agent = await manager.createAgent(
-    { provider: parentProvider, cwd: directory, model: "gpt-5.4" },
-    undefined,
-    { workspaceId: reports ? randomUUID() : undefined },
-  );
+  const resumeSession = vi.spyOn(provider, "resumeSession");
+  // FULCRA(FU-657): since upstream #8393 a new Codex thread has no native identity until its first
+  // turn. A parent lead is a saved Codex thread, so the fixture opens it from its stored handle.
+  if (parentProvider === "codex" && reports) thread = 1;
+  const agent =
+    parentProvider === "codex"
+      ? await manager.resumeAgentFromPersistence(
+          { provider: "codex", sessionId: "thread-1", nativeHandle: "thread-1" },
+          { cwd: directory, model: "gpt-5.4" },
+          undefined,
+          { workspaceId: reports ? randomUUID() : undefined },
+        )
+      : await manager.createAgent(
+          { provider: parentProvider, cwd: directory, model: "gpt-5.4" },
+          undefined,
+          { workspaceId: reports ? randomUUID() : undefined },
+        );
   const messageId = randomUUID();
   return {
     manager,
@@ -314,7 +332,7 @@ async function fixture(
       const launch = Reflect.get(manager, "reportLaunches").get(id);
       return manager.nativeReportMcpOrigin(id, launch?.witness)!;
     },
-    launchConfig: () => createSession.mock.calls[0]![0],
+    launchConfig: () => (resumeSession.mock.calls[0]?.[1] ?? createSession.mock.calls[0]![0])!,
     onChildStart(callback: () => void) {
       onChildStart = callback;
     },
@@ -817,7 +835,7 @@ test.each(["completed", "failed"] as const)(
 test("native finish switch off gives one report-up notice and no late native turn", async () => {
   const f = await fixture("valid", true);
   await registerPrime(f, false);
-  f.finishConfig.patch({ nativeFinishNotices: false });
+  await f.finishConfig.patch({ nativeFinishNotices: false });
   const offReportUp = observeFixtureReportUp(f);
   const snapshots = Object.create(ProviderSnapshotManager.prototype) as ProviderSnapshotManager;
   vi.spyOn(snapshots, "resolveCreateConfig").mockResolvedValue({
@@ -863,7 +881,7 @@ async function defaultOwnedNoticeFixture(
 ) {
   const f = await fixture("valid", true);
   await registerPrime(f, options.registerPrime ?? false);
-  f.finishConfig.patch({ nativeFinishNotices: options.nativeFinishNotices ?? false });
+  await f.finishConfig.patch({ nativeFinishNotices: options.nativeFinishNotices ?? false });
   const offReportUp = observe ? observeFixtureReportUp(f) : () => {};
   const snapshots = Object.create(ProviderSnapshotManager.prototype) as ProviderSnapshotManager;
   vi.spyOn(snapshots, "resolveCreateConfig").mockResolvedValue({
@@ -947,8 +965,10 @@ test("a refused finish notice retries once when the child's new parent becomes i
         retryAfterRefusal: true,
       }),
     );
-    const newParent = await f.manager.createAgent(
-      { provider: "codex", cwd: f.directory, model: "gpt-5.4" },
+    // FULCRA(FU-657): a new parent is a saved Codex thread (upstream #8393), as in the fixture.
+    const newParent = await f.manager.resumeAgentFromPersistence(
+      { provider: "codex", sessionId: "thread-new-parent", nativeHandle: "thread-new-parent" },
+      { cwd: f.directory, model: "gpt-5.4" },
       undefined,
       { workspaceId: f.agent.workspaceId },
     );
@@ -1261,7 +1281,7 @@ test("FU-176 an uninitialized report inbox refuses armed and stopped workers unt
 test("a later send_agent_prompt arms a new report-up finish notice", async () => {
   const f = await fixture("valid", true);
   await registerPrime(f, false);
-  f.finishConfig.patch({ nativeFinishNotices: false });
+  await f.finishConfig.patch({ nativeFinishNotices: false });
   const offReportUp = observeFixtureReportUp(f);
   const snapshots = Object.create(ProviderSnapshotManager.prototype) as ProviderSnapshotManager;
   vi.spyOn(snapshots, "resolveCreateConfig").mockResolvedValue({
@@ -1333,7 +1353,7 @@ test("a later send_agent_prompt arms a new report-up finish notice", async () =>
 test("a busy parent sends a finish notice to the child's new parent", async () => {
   const f = await fixture("valid", true);
   await registerPrime(f, false);
-  f.finishConfig.patch({ nativeFinishNotices: false });
+  await f.finishConfig.patch({ nativeFinishNotices: false });
   const offReportUp = observeFixtureReportUp(f);
   const snapshots = Object.create(ProviderSnapshotManager.prototype) as ProviderSnapshotManager;
   vi.spyOn(snapshots, "resolveCreateConfig").mockResolvedValue({
@@ -1352,8 +1372,10 @@ test("a busy parent sends a finish notice to the child's new parent", async () =
     ensureWorkspaceForCreate: async () => f.agent.workspaceId!,
   });
   try {
-    const newParent = await f.manager.createAgent(
-      { provider: "codex", cwd: f.directory, model: "gpt-5.4" },
+    // FULCRA(FU-657): a new parent is a saved Codex thread (upstream #8393), as in the fixture.
+    const newParent = await f.manager.resumeAgentFromPersistence(
+      { provider: "codex", sessionId: "thread-new-parent", nativeHandle: "thread-new-parent" },
+      { cwd: f.directory, model: "gpt-5.4" },
       undefined,
       { workspaceId: f.agent.workspaceId },
     );
@@ -2250,8 +2272,9 @@ test("native authenticated creation refuses replaced parent during child launch 
     ).rejects.toThrow("Native report child enrollment refused");
     expect(f.manager.listAgents().map((agent) => agent.id)).toEqual([f.agent.id]);
     expect(f.turnCount()).toBe(0);
+    // FULCRA(FU-657): the fixture parent opens by thread/resume, so only the child starts a thread.
     expect(f.server.requests().filter((request) => request.method === "thread/start")).toHaveLength(
-      2,
+      1,
     );
   } finally {
     await f.cleanup();

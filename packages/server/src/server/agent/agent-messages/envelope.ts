@@ -186,6 +186,9 @@ function projectAgentMessage(item: AgentTimelineItem): AgentTimelineItem | null 
       status: "completed",
       error: null,
       detail: { type: "plain_text", text, icon: "sparkles" },
+      // FULCRA(FU-657): Fulcra finish notices and reports are system envelopes. Keep the submitted
+      // message id, so the receiver checks still find a delivered notice and do not send it again.
+      ...(item.clientMessageId ? { metadata: { submittedMessageId: item.clientMessageId } } : {}),
     };
   }
   const { source } = message;

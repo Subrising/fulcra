@@ -207,6 +207,9 @@ interface ClaudeTimelineConversionScope {
   /** The load generation the parse started in; a rebind since then drops its output. */
   generation: number;
 }
+// This store is module-wide, not per session: every Claude session in the daemon reads the same
+// store. The getters read the scope inside any async work that the parse starts. So code inside
+// the parse must call only its own session, never another session's methods.
 const timelineConversionScope = new AsyncLocalStorage<ClaudeTimelineConversionScope>();
 const CLAUDE_SETTING_SOURCES: NonNullable<ClaudeOptions["settingSources"]> = [
   "user",

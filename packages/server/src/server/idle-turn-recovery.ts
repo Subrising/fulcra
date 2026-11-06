@@ -13,11 +13,25 @@ export const IDLE_TURN_PROMPT = "check your background job output now and finish
 
 const WAITING_LINE = /^[ \t]*(?:\*\*|__|`)?WAITING\b/m;
 
+// FULCRA(FU-657): since upstream v0.15 a prompt from another agent is in the timeline as an
+// "agent_message" tool call, not as a user message. It starts a turn; it is not the turn's own work.
+function isTurnPrompt(item: AgentTimelineItem): boolean {
+  return (
+    item.type === "user_message" || (item.type === "tool_call" && item.name === "agent_message")
+  );
+}
+
+function promptTextOf(item: AgentTimelineItem | undefined): string | undefined {
+  if (item?.type === "user_message") return item.text;
+  if (item?.type === "tool_call") return item.agentMessage?.text;
+  return undefined;
+}
+
 /** Only the latest turn counts. A result from an older turn cannot close current work. */
 export function unfinishedIdleTurn(
   items: readonly AgentTimelineItem[],
 ): { retried: boolean } | null {
-  const start = items.findLastIndex((item) => item.type === "user_message");
+  const start = items.findLastIndex(isTurnPrompt);
   const turn = items.slice(start + 1);
   if (turn.some((item) => item.type === "assistant_message" && finishNoticeWanted(item.text)))
     return null;
@@ -36,7 +50,7 @@ export function unfinishedIdleTurn(
     );
   if (last?.type !== "tool_call" && !waiting) return null;
   const user = items[start];
-  return { retried: user?.type === "user_message" && user.text.trim() === IDLE_TURN_PROMPT };
+  return { retried: promptTextOf(user)?.trim() === IDLE_TURN_PROMPT };
 }
 
 export class IdleTurnRecovery {

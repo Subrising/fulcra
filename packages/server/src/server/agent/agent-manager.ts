@@ -223,6 +223,7 @@ import type { StoredAgentRecord, AgentStorage, FinishNotice } from "./agent-stor
 import type { AgentOwner } from "./agent-owner.js";
 import {
   InMemoryAgentTimelineStore,
+  submittedToolMessageId,
   type SeedAgentTimelineOptions,
 } from "./agent-timeline-store.js";
 import type {
@@ -1495,12 +1496,15 @@ export class AgentManager {
       // All three handles must agree. Never transfer a registered old identity to a new native id.
       const nativeId = agent.session.id;
       const handle = agent.session.describePersistence();
+      // FULCRA(FU-657): since upstream #8393 a new Codex thread has no persistence handle and no
+      // runtime session id until Codex announces its first turn. An absent id is not another id:
+      // a handle that exists must still name this native id, and a stale one still refuses.
       if (
         !nativeId ||
-        handle?.provider !== agent.provider ||
-        handle.sessionId !== nativeId ||
-        agent.persistence?.sessionId !== nativeId ||
-        agent.runtimeInfo?.sessionId !== nativeId
+        (handle !== null &&
+          (handle.provider !== agent.provider || handle.sessionId !== nativeId)) ||
+        (agent.persistence?.sessionId ?? nativeId) !== nativeId ||
+        (agent.runtimeInfo?.sessionId ?? nativeId) !== nativeId
       )
         return null;
       const sequence = this.trustedPlugins.requireSequence(agentId);
@@ -1618,11 +1622,14 @@ export class AgentManager {
       ? await (store.getCommittedPromptRows?.(agentId) ?? store.getCommittedRows(agentId))
       : this.timelineStore.getRows(agentId);
     return new Set(
-      rows.flatMap((row) =>
-        row.item.type === "user_message"
-          ? [row.item.clientMessageId, row.item.messageId].filter((id): id is string => Boolean(id))
-          : [],
-      ),
+      rows.flatMap((row) => {
+        if (row.item.type === "user_message")
+          return [row.item.clientMessageId, row.item.messageId].filter((id): id is string =>
+            Boolean(id),
+          );
+        const agentMessageId = submittedToolMessageId(row.item);
+        return agentMessageId ? [agentMessageId] : [];
+      }),
     );
   }
 
@@ -3472,6 +3479,7 @@ export class AgentManager {
       historyPrimed: true,
     });
     if (options.reportCreation) {
+      const launchedNative = session.id;
       try {
         const child = this.currentReportIdentity(agent.id);
         if (!child) throw new Error("Native report child identity unavailable");
@@ -3485,8 +3493,12 @@ export class AgentManager {
             if (
               current?.session !== session ||
               current.instanceId !== agent.instanceId ||
-              session.id !== agent.persistence?.sessionId ||
-              session.describePersistence()?.sessionId !== agent.persistence?.sessionId
+              // FULCRA(FU-657): before its first Codex turn (#8393) the child has no handle yet. An
+              // absent handle is not a replacement; a different id still refuses the cleanup.
+              !launchedNative ||
+              session.id !== launchedNative ||
+              (agent.persistence?.sessionId ?? launchedNative) !== launchedNative ||
+              (session.describePersistence()?.sessionId ?? launchedNative) !== launchedNative
             )
               throw new Error("Unlinked native child replacement prevents cleanup", {
                 cause: error,
@@ -4871,9 +4883,12 @@ export class AgentManager {
                       current?.session !== sourceSession ||
                       current.instanceId !== source.instanceId ||
                       sourceSession.id !== source.sessionId ||
-                      sourceSession.describePersistence()?.sessionId !== source.sessionId ||
-                      current.persistence?.sessionId !== source.sessionId ||
-                      current.runtimeInfo?.sessionId !== source.sessionId
+                      // FULCRA(FU-657): as in currentReportIdentity, an id that is absent before the
+                      // first Codex turn (#8393) is not another id; a different id still refuses.
+                      (sourceSession.describePersistence()?.sessionId ?? source.sessionId) !==
+                        source.sessionId ||
+                      (current.persistence?.sessionId ?? source.sessionId) !== source.sessionId ||
+                      (current.runtimeInfo?.sessionId ?? source.sessionId) !== source.sessionId
                     )
                       throw new Error("Retiring native identity changed before close");
                   }
