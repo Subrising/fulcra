@@ -173,6 +173,45 @@ describe("ClaudeAgentSession persisted history load", () => {
     rmSync(tempRoot, { recursive: true, force: true });
   });
 
+  // FULCRA(FU-472, FU-657): a daemon with a stored timeline resumes without streamHistory. Resume
+  // must read only session state; the full parse (ensureHistoryReady) waits for streamHistory.
+  test("resume with a stored timeline does not run the full history parse (FU-472)", async () => {
+    // A session with no transcript gives the session class without a history read.
+    const probe = await resume();
+    const fullParse = vi.spyOn(
+      Object.getPrototypeOf(probe) as { ensureHistoryReady: () => Promise<void> },
+      "ensureHistoryReady",
+    );
+    await probe.close();
+    mkdirSync(path.dirname(transcriptPath()), { recursive: true });
+    writeFileSync(
+      transcriptPath(),
+      [
+        { type: "user", uuid: "u1", message: { content: "first" } },
+        { type: "file-history-snapshot", messageId: "u1", snapshot: {} },
+        { type: "assistant", uuid: "a1", message: { content: "first reply" } },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n"),
+    );
+
+    const session = await resume();
+    expect(fullParse).not.toHaveBeenCalled();
+
+    const events: AgentStreamEvent[] = [];
+    for await (const event of session.streamHistory()) events.push(event);
+    expect(fullParse).toHaveBeenCalledTimes(1);
+    expect(
+      events.flatMap((event) =>
+        event.type === "timeline" &&
+        (event.item.type === "user_message" || event.item.type === "assistant_message")
+          ? [event.item.text]
+          : [],
+      ),
+    ).toEqual(["first", "first reply"]);
+    await session.close();
+  });
+
   test("serves unrelated health requests while resuming 32 MiB of ordered history", async () => {
     const startedAt = performance.now();
     mkdirSync(path.dirname(transcriptPath()), { recursive: true });

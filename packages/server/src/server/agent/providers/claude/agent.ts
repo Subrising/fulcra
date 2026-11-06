@@ -71,7 +71,11 @@ import {
 } from "./model-manifest.js";
 import { expandTilde } from "../../../../utils/path.js";
 import { parsePartialJsonObject } from "./partial-json.js";
-import { withClaudeReplayHistory, type ClaudeReplayHistory } from "./transcript-history.js";
+import {
+  withClaudeReplayHistory,
+  withClaudeResumeHistory,
+  type ClaudeReplayHistory,
+} from "./transcript-history.js";
 import { ClaudeSidechainTracker } from "./sidechain-tracker.js";
 import { readClaudeSubagentHandback } from "./subagent-handback.js";
 import { ClaudeTaskState } from "./task-state.js";
@@ -378,6 +382,20 @@ interface AsyncMessageInput<T> {
   push: (item: T) => void;
   end: () => void;
   iterable: AsyncIterable<T>;
+}
+
+/** FULCRA(FU-472): what a history load may change. */
+interface ClaudeHistoryLoadMode {
+  /** Write session state: tasks, user message ids, rewind anchors, restored subagents. */
+  sessionState: boolean;
+  /** Build the persisted timeline that streamHistory yields. */
+  timeline: boolean;
+}
+
+interface ClaudeResumeAnchor {
+  kind: "user" | "assistant";
+  uuid: string;
+  notificationToolUseId: string | null | undefined;
 }
 
 interface ClaudeReplayOwnership {
@@ -1767,7 +1785,9 @@ export class ClaudeAgentClient implements AgentClient {
       resolveBinary: this.resolveBinary,
       rewindSdk: this.rewindSdk,
     });
-    await session.ensureHistoryReady();
+    // FULCRA(FU-472): resume reads only session state. The full parse runs when streamHistory
+    // asks for the timeline, so a resume with a stored timeline never pays for it.
+    await session.ensureResumeStateReady();
     return session;
   }
 
@@ -2502,6 +2522,9 @@ class ClaudeAgentSession implements AgentSession {
   private historyPending = false;
   // Readiness never rejects; history/rebind failures are logged at their owning boundary.
   private historyReady: Promise<void> | null = null;
+  // FULCRA(FU-472): the session whose timeline the resume pass did not build yet.
+  private persistedTimelineSource: string | null = null;
+  private historyTimelineReady: Promise<void> | null = null;
   private historySessionId: string | null = null;
   private replayingHistory = false;
   // Ends native receipt reads when the session closes.
@@ -2775,7 +2798,7 @@ class ClaudeAgentSession implements AgentSession {
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): Promise<{ turnId: string }> {
-    await this.ensureHistoryReady();
+    await this.ensureResumeStateReady();
     if (this.closed) {
       throw new Error("Claude session is closed");
     }
@@ -2995,6 +3018,8 @@ class ClaudeAgentSession implements AgentSession {
     const providerSubagentEvents = this.persistedProviderSubagentEvents;
     this.persistedHistory = [];
     this.persistedProviderSubagentEvents = [];
+    this.persistedTimelineSource = null;
+    this.historyTimelineReady = null;
     this.historyPending = false;
     let replayed = 0;
     for (const entry of history) {
@@ -3322,7 +3347,7 @@ class ClaudeAgentSession implements AgentSession {
     );
     this.closed = true;
     this.historyAbort.abort();
-    await this.ensureHistoryReady();
+    await this.ensureResumeStateReady();
     this.rejectAllPendingPermissions(new Error("Claude session closed"));
     this.cancelCurrentTurn?.();
     this.subscribers.clear();
@@ -3561,7 +3586,7 @@ class ClaudeAgentSession implements AgentSession {
   }
 
   async revertConversation(input: { messageId: string }): Promise<void> {
-    await this.ensureHistoryReady();
+    await this.ensureResumeStateReady();
     const target = await this.resolveConversationRewindTarget(input.messageId);
     if (target.kind === "fresh-session") {
       this.startFreshConversationSession();
@@ -3579,7 +3604,7 @@ class ClaudeAgentSession implements AgentSession {
   }
 
   async revertFiles(input: { messageId: string }): Promise<void> {
-    await this.ensureHistoryReady();
+    await this.ensureResumeStateReady();
     const messageId = await this.resolveClaudeMessageId(input.messageId);
     await revertClaudeFiles({
       query: await this.ensureQuery(),
@@ -3679,7 +3704,7 @@ class ClaudeAgentSession implements AgentSession {
       };
     }
 
-    await this.ensureHistoryReady();
+    await this.ensureResumeStateReady();
     const candidates = this.getRewindCandidateUserMessageIds();
     if (candidates.length === 0) {
       return {
@@ -3756,7 +3781,7 @@ class ClaudeAgentSession implements AgentSession {
   }
 
   private rebindConversationSession(sessionId: string): Promise<void> {
-    const previousReady = this.ensureHistoryReady();
+    const previousReady = this.ensureResumeStateReady();
     const rebind = (async () => {
       await previousReady;
       await this.retireQuery();
@@ -3769,6 +3794,8 @@ class ClaudeAgentSession implements AgentSession {
       this.queryRestartNeeded = true;
       this.persistedHistory = [];
       this.persistedProviderSubagentEvents = [];
+      this.persistedTimelineSource = null;
+      this.historyTimelineReady = null;
       this.historyPending = false;
       this.userMessageIds = [];
       this.emittedUserMessageIds.clear();
@@ -3809,6 +3836,8 @@ class ClaudeAgentSession implements AgentSession {
     this.queryRestartNeeded = true;
     this.persistedHistory = [];
     this.persistedProviderSubagentEvents = [];
+    this.persistedTimelineSource = null;
+    this.historyTimelineReady = null;
     this.historyPending = false;
     this.userMessageIds = [];
     this.emittedUserMessageIds.clear();
@@ -3986,7 +4015,7 @@ class ClaudeAgentSession implements AgentSession {
   }
 
   private async startQuery(launchMode: PermissionMode): Promise<Query> {
-    await this.ensureHistoryReady();
+    await this.ensureResumeStateReady();
     if (this.query && (!this.queryRestartNeeded || this.activeForegroundQuery === this.query)) {
       return this.query;
     }
@@ -5039,6 +5068,8 @@ class ClaudeAgentSession implements AgentSession {
     this.persistence = null;
     this.persistedHistory = [];
     this.persistedProviderSubagentEvents = [];
+    this.persistedTimelineSource = null;
+    this.historyTimelineReady = null;
     this.historyPending = false;
     this.cachedRuntimeInfo = null;
     this.queryRestartNeeded = false;
@@ -6036,16 +6067,35 @@ class ClaudeAgentSession implements AgentSession {
     }
   }
 
-  ensureHistoryReady(): Promise<void> {
+  /** FULCRA(FU-472): session state only. Resume and every live action wait for this. */
+  ensureResumeStateReady(): Promise<void> {
     if (!this.historyReady) {
       this.historyReady = this.historySessionId
-        ? this.loadPersistedHistory(this.historySessionId)
+        ? this.loadResumeState(this.historySessionId)
         : Promise.resolve();
     }
     return this.historyReady;
   }
 
-  private async loadPersistedHistory(sessionId: string): Promise<void> {
+  /** The full parse, with the upstream loader. Only streamHistory asks for it. */
+  ensureHistoryReady(): Promise<void> {
+    if (!this.historyTimelineReady) {
+      this.historyTimelineReady = (async () => {
+        await this.ensureResumeStateReady();
+        const sessionId = this.persistedTimelineSource;
+        this.persistedTimelineSource = null;
+        if (sessionId) await this.loadPersistedTimeline(sessionId);
+      })();
+    }
+    return this.historyTimelineReady;
+  }
+
+  /**
+   * FULCRA(FU-472): one sequential pass over the parent transcript keeps the live session state:
+   * tasks, tool links, user message ids, rewind anchors and restored subagents. It keeps no
+   * records and no timeline. Ported from 0.2.42 onto the upstream sources.
+   */
+  private async loadResumeState(sessionId: string): Promise<void> {
     let historyPath: string | null = null;
     this.replayingHistory = true;
     try {
@@ -6058,9 +6108,107 @@ class ClaudeAgentSession implements AgentSession {
         );
         return;
       }
+      await withClaudeResumeHistory(historyPath, async (history) => {
+        const facts = new ClaudeReplayParentFactsCollector();
+        const anchors: ClaudeResumeAnchor[] = [];
+        // A record that fails to convert ends the parent's state there, as it ends its timeline.
+        // Subagent replay still needs the facts of every record.
+        let conversionError: unknown = null;
+        for await (const entry of history.parentEntries) {
+          facts.observe(entry);
+          if (conversionError) continue;
+          // Task notifications are text, so tasks and tool links do not depend on their owner.
+          this.taskState.observe(entry);
+          try {
+            await this.convertHistoryEntry(entry);
+          } catch (error) {
+            conversionError = error;
+            continue;
+          }
+          if (typeof entry.uuid !== "string") continue;
+          const notificationToolUseId = readTaskNotificationToolUseIdFromHistoryRecord(entry);
+          if (
+            entry.type === "user" &&
+            !isSyntheticHistoryUserEntry(entry) &&
+            !isToolResultUserEntry(entry)
+          ) {
+            anchors.push({ kind: "user", uuid: entry.uuid, notificationToolUseId });
+          } else if (entry.type === "assistant") {
+            anchors.push({ kind: "assistant", uuid: entry.uuid, notificationToolUseId });
+          }
+        }
+        const sidechains = await history.sidechains();
+        const replay = await this.ingestPersistedSidechains(
+          {
+            ...sidechains,
+            // The link scan reads the parent twice; it matters only when workflows exist.
+            parentEntries:
+              sidechains.workflows.length > 0 ? history.rereadParentEntries() : noRecords(),
+          },
+          { sessionState: true, timeline: false },
+          facts.result(),
+        );
+        for (const anchor of anchors) {
+          const id = anchor.notificationToolUseId;
+          if (id && (replay.restoredIds.has(id) || replay.toolOwners.has(id))) continue;
+          if (anchor.kind === "assistant") {
+            this.rememberRewindAssistantAnchor(anchor.uuid);
+            continue;
+          }
+          this.rememberUserMessageId(anchor.uuid);
+          this.rememberRewindUserAnchor(anchor.uuid);
+        }
+        this.persistedTimelineSource = sessionId;
+        if (conversionError) throw conversionError;
+      });
+    } catch (error) {
+      this.logger.warn(
+        { err: error, sessionId, historyPath },
+        "Failed to load Claude history from transcript",
+      );
+    } finally {
+      this.replayingHistory = false;
+    }
+  }
+
+  /**
+   * FULCRA(FU-472): the upstream full parse, for the timeline only. The resume pass already left
+   * the live tool links and session state. A second conversion over the same records would find
+   * their calls started and drop them, so this build converts from empty links and a new task
+   * state. streamHistory runs before the first turn, so no live frame needs the links meanwhile.
+   */
+  private async loadPersistedTimeline(sessionId: string): Promise<void> {
+    const toolUseCache = this.toolUseCache;
+    const subagentHandbackIds = this.subagentHandbackIds;
+    this.toolUseCache = new Map();
+    this.subagentHandbackIds = new Set();
+    try {
+      await this.loadPersistedHistory(sessionId, { sessionState: false, timeline: true });
+    } finally {
+      this.toolUseCache = toolUseCache;
+      this.subagentHandbackIds = subagentHandbackIds;
+    }
+  }
+
+  private async loadPersistedHistory(
+    sessionId: string,
+    mode: ClaudeHistoryLoadMode = { sessionState: true, timeline: true },
+  ): Promise<void> {
+    let historyPath: string | null = null;
+    this.replayingHistory = true;
+    try {
+      if (mode.sessionState) this.taskState.reset();
+      historyPath = await this.resolveHistoryPath(sessionId);
+      if (!historyPath || !(await transcriptExists(historyPath))) {
+        this.logger.info(
+          { sessionId, cwd: this.config.cwd, historyPath },
+          "No Claude transcript to load history from",
+        );
+        return;
+      }
       await withClaudeReplayHistory(historyPath, async (history) => {
-        const replay = await this.ingestPersistedSidechains(history);
-        await this.ingestPersistedHistory(history.parentEntries, replay);
+        const replay = await this.ingestPersistedSidechains(history, mode);
+        await this.ingestPersistedHistory(history.parentEntries, replay, mode);
       });
     } catch (error) {
       this.logger.warn(
@@ -6075,10 +6223,13 @@ class ClaudeAgentSession implements AgentSession {
   private async ingestPersistedHistory(
     entries: Iterable<ClaudeHistoryEntry> | AsyncIterable<ClaudeHistoryEntry>,
     replay: ClaudeReplayOwnership,
+    mode: ClaudeHistoryLoadMode,
   ): Promise<void> {
     const timeline: PersistedTimelineEntry[] = [];
+    // FULCRA(FU-472): a timeline-only build labels tasks with its own state.
+    const taskState = mode.sessionState ? this.taskState : new ClaudeTaskState();
     for await (const entry of entries) {
-      await this.ingestPersistedHistoryEntry(entry, timeline, replay);
+      await this.ingestPersistedHistoryEntry(entry, timeline, replay, taskState, mode);
     }
 
     if (timeline.length > 0) {
@@ -6089,8 +6240,11 @@ class ClaudeAgentSession implements AgentSession {
 
   private async ingestPersistedSidechains(
     history: ClaudeReplayHistory,
+    mode: ClaudeHistoryLoadMode,
+    knownParentFacts?: ClaudeReplayParentFacts,
   ): Promise<ClaudeReplayOwnership> {
-    const parentFacts = await readClaudeReplayParentFacts(history.parentEntries);
+    const parentFacts =
+      knownParentFacts ?? (await readClaudeReplayParentFacts(history.parentEntries));
 
     // Replay produces the same observations the live task protocol produces, then folds them
     // with the same function, so identity and status are derived once for both paths.
@@ -6115,7 +6269,7 @@ class ClaudeAgentSession implements AgentSession {
         convertEntry: (entry) => this.convertHistoryEntry(entry),
       })),
     ];
-    this.taskProtocolSource.restore(subagentReplay.restored);
+    if (mode.sessionState) this.taskProtocolSource.restore(subagentReplay.restored);
     const restoredProviderSubagentIds = new Set(
       observations
         .filter((observation) => observation.kind === "declared")
@@ -6126,7 +6280,7 @@ class ClaudeAgentSession implements AgentSession {
       toolOwners: subagentReplay.toolOwners,
       subagentToolCalls: parentFacts.toolCalls,
     };
-    if (observations.length === 0) return replay;
+    if (observations.length === 0 || !mode.timeline) return replay;
 
     for (const event of foldSubagentObservations(observations)) {
       this.persistedProviderSubagentEvents.push({
@@ -6143,6 +6297,8 @@ class ClaudeAgentSession implements AgentSession {
     entry: ClaudeHistoryEntry,
     timeline: PersistedTimelineEntry[],
     replay: ClaudeReplayOwnership,
+    taskState: ClaudeTaskState,
+    mode: ClaudeHistoryLoadMode,
   ): Promise<void> {
     if (entry.isSidechain) {
       return;
@@ -6171,7 +6327,7 @@ class ClaudeAgentSession implements AgentSession {
       }
       return;
     }
-    const taskSnapshot = this.taskState.observe(entry);
+    const taskSnapshot = taskState.observe(entry);
     const items = [
       ...(taskSnapshot ? [taskSnapshot] : []),
       ...(await this.convertHistoryEntry(entry)).map((item) =>
@@ -6183,13 +6339,7 @@ class ClaudeAgentSession implements AgentSession {
       typeof entry.uuid === "string" &&
       !isSyntheticHistoryUserEntry(entry) &&
       !isToolResultUserEntry(entry);
-    if (isVisibleUserEntry && typeof entry.uuid === "string") {
-      this.rememberUserMessageId(entry.uuid);
-      this.rememberRewindUserAnchor(entry.uuid);
-    }
-    if (entry.type === "assistant" && typeof entry.uuid === "string") {
-      this.rememberRewindAssistantAnchor(entry.uuid);
-    }
+    if (mode.sessionState) this.rememberHistoryAnchor(entry, isVisibleUserEntry);
 
     if (items.length > 0) {
       for (const item of items) {
@@ -6199,6 +6349,15 @@ class ClaudeAgentSession implements AgentSession {
         });
       }
     }
+  }
+
+  private rememberHistoryAnchor(entry: ClaudeHistoryEntry, isVisibleUserEntry: boolean): void {
+    if (typeof entry.uuid !== "string") return;
+    if (isVisibleUserEntry) {
+      this.rememberUserMessageId(entry.uuid);
+      this.rememberRewindUserAnchor(entry.uuid);
+    }
+    if (entry.type === "assistant") this.rememberRewindAssistantAnchor(entry.uuid);
   }
 
   private async resolveHistoryPath(sessionId: string): Promise<string | null> {
@@ -6978,17 +7137,28 @@ function labelReplayedSubagentCard(
 async function readClaudeReplayParentFacts(
   entries: Iterable<ClaudeHistoryEntry> | AsyncIterable<ClaudeHistoryEntry>,
 ): Promise<ClaudeReplayParentFacts> {
-  const toolCalls = new Map<string, { title?: string; description?: string }>();
-  const linksByAgentId = new Map<string, { toolCallId: string }>();
-  const outcomes: Map<string, { status: ProviderSubagentStatus }> = new Map();
-  for await (const entry of entries) {
+  const facts = new ClaudeReplayParentFactsCollector();
+  for await (const entry of entries) facts.observe(entry);
+  return facts.result();
+}
+
+async function* noRecords(): AsyncGenerator<never> {}
+
+/** FULCRA(FU-472): the same facts, one record at a time, so the resume pass keeps no records. */
+class ClaudeReplayParentFactsCollector {
+  private readonly toolCalls = new Map<string, { title?: string; description?: string }>();
+  private readonly linksByAgentId = new Map<string, { toolCallId: string }>();
+  private readonly outcomes = new Map<string, { status: ProviderSubagentStatus }>();
+
+  observe(entry: ClaudeHistoryEntry): void {
+    const { toolCalls, linksByAgentId, outcomes } = this;
     const notification = readTaskNotificationFromHistoryRecord(entry);
     const status = mapTaskStatus(notification?.status ?? undefined);
     if (notification?.toolUseId && status) {
       outcomes.set(notification.toolUseId, { status });
     }
     const content = toObjectRecord(entry.message)?.content;
-    if (!Array.isArray(content)) continue;
+    if (!Array.isArray(content)) return;
     for (const value of content) {
       const block = toObjectRecord(value);
       const declaration = readClaudeReplayTaskDeclaration(entry.type, block);
@@ -7010,11 +7180,15 @@ async function readClaudeReplayParentFacts(
         });
     }
   }
-  return {
-    toolCalls,
-    linksByAgentId,
-    outcomesByToolCallId: new Map([...outcomes].filter(([id]) => toolCalls.has(id))),
-  };
+
+  result(): ClaudeReplayParentFacts {
+    const { toolCalls, linksByAgentId, outcomes } = this;
+    return {
+      toolCalls,
+      linksByAgentId,
+      outcomesByToolCallId: new Map([...outcomes].filter(([id]) => toolCalls.has(id))),
+    };
+  }
 }
 
 function readClaudeReplayTaskDeclaration(

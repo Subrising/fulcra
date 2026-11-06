@@ -24,10 +24,39 @@ interface RecordLocation {
   timestamp: string | null;
 }
 
+// FULCRA(FU-472): Claude Code bookkeeping records that replay never reads. Claude Code writes
+// `type` first, so a byte prefix check skips them before JSON.parse. In a 1.2 GB lead transcript
+// they are 42% of the bytes. Only the resume state pass uses this skip.
+const SKIPPED_RECORD_PREFIXES = [
+  "api-request",
+  "api-request-blob",
+  "api-request-shape",
+  "atis-latch",
+  "cost-state",
+  "file-history-delta",
+  "file-history-snapshot",
+  "isolation-latch",
+  "last-prompt",
+  "mode",
+  "pr-link",
+].map((type) => Buffer.from(`{"type":"${type}",`, "utf8"));
+
+function isSkippedRecord(line: Buffer): boolean {
+  return SKIPPED_RECORD_PREFIXES.some(
+    (prefix) => line.length >= prefix.length && line.subarray(0, prefix.length).equals(prefix),
+  );
+}
+
+function parseLine(line: Buffer, skipBookkeeping: boolean): TranscriptEntry | null {
+  if (skipBookkeeping && isSkippedRecord(line)) return null;
+  return parseRecord(line.toString("utf8"));
+}
+
 /** Chunk in bytes so UTF-8 and multi-chunk records are decoded once, at a line boundary. */
 async function* locatedRecords(
   file: string,
   fd: FileHandle,
+  skipBookkeeping = false,
 ): AsyncGenerator<{ entry: TranscriptEntry; location: RecordLocation }> {
   const stat = await fd.stat();
   // Opening a directory succeeds on some platforms; it must never look like empty history.
@@ -52,7 +81,7 @@ async function* locatedRecords(
     while ((end = buffer.indexOf(10, start)) !== -1 && end < count) {
       pieces.push(buffer.subarray(start, end));
       length += end - start;
-      const entry = parseRecord(Buffer.concat(pieces, length).toString("utf8"));
+      const entry = parseLine(Buffer.concat(pieces, length), skipBookkeeping);
       const location = {
         file,
         offset,
@@ -72,7 +101,7 @@ async function* locatedRecords(
       length += count - start;
     }
   }
-  const entry = parseRecord(Buffer.concat(pieces, length).toString("utf8"));
+  const entry = parseLine(Buffer.concat(pieces, length), skipBookkeeping);
   if (entry)
     yield {
       entry,
@@ -170,6 +199,75 @@ export async function withClaudeReplayHistory<T>(
   }
 }
 
+/**
+ * FULCRA(FU-472): resume keeps only session state, so it reads the parent transcript once, in
+ * order, and keeps no records. Sidechain records in the parent file are kept by location only.
+ * The full replay (withClaudeReplayHistory) runs later, when the timeline is asked for.
+ */
+export interface ClaudeResumeHistory {
+  /** One sequential pass over the parent records. Iterate it once. */
+  parentEntries: AsyncIterable<TranscriptEntry>;
+  /** A new sequential pass over the parent records, for the workflow link scan. */
+  rereadParentEntries(): AsyncIterable<TranscriptEntry>;
+  /** Subagent and workflow sources. Call it after parentEntries is consumed. */
+  sidechains(): Promise<Omit<ClaudeReplayHistory, "parentEntries">>;
+}
+
+export async function withClaudeResumeHistory<T>(
+  historyPath: string,
+  consume: (history: ClaudeResumeHistory) => Promise<T>,
+): Promise<T> {
+  const descriptors = new Map<string, FileHandle>();
+  const parentSidechains = new Map<string, RecordLocation[]>();
+  try {
+    const fd = await fs.open(historyPath, "r");
+    descriptors.set(historyPath, fd);
+    return await consume({
+      parentEntries: {
+        [Symbol.asyncIterator]: () =>
+          assignTaskNotificationReplayIds(parentRecords(historyPath, fd, parentSidechains)),
+      },
+      rereadParentEntries: () => ({
+        async *[Symbol.asyncIterator]() {
+          const again = await fs.open(historyPath, "r");
+          try {
+            yield* assignTaskNotificationReplayIds(parentRecords(historyPath, again, null));
+          } finally {
+            await again.close();
+          }
+        },
+      }),
+      sidechains: async () => {
+        const { parentEntries: _parentEntries, ...rest } = await indexHistory(
+          historyPath,
+          descriptors,
+          parentSidechains,
+        );
+        return rest;
+      },
+    });
+  } finally {
+    await closeReplaySources(descriptors.values());
+  }
+}
+
+async function* parentRecords(
+  file: string,
+  fd: FileHandle,
+  sidechains: Map<string, RecordLocation[]> | null,
+): AsyncGenerator<TranscriptEntry> {
+  for await (const { entry, location } of locatedRecords(file, fd, true)) {
+    if (entry.isSidechain !== true) {
+      yield entry;
+      continue;
+    }
+    if (!sidechains || typeof entry.agentId !== "string") continue;
+    const locations = sidechains.get(entry.agentId) ?? [];
+    locations.push(location);
+    sidechains.set(entry.agentId, locations);
+  }
+}
+
 async function closeReplaySources(descriptors: Iterable<FileHandle>): Promise<void> {
   const results = await Promise.allSettled([...descriptors].map((fd) => fd.close()));
   const failure = results.find((result) => result.status === "rejected");
@@ -179,13 +277,15 @@ async function closeReplaySources(descriptors: Iterable<FileHandle>): Promise<vo
 async function indexHistory(
   historyPath: string,
   descriptors: Map<string, FileHandle>,
+  // FULCRA(FU-472): the resume pass already read the parent file and kept its sidechain records.
+  parentSidechains?: ReadonlyMap<string, RecordLocation[]>,
 ): Promise<ClaudeReplayHistory> {
   const sessionDirectory = path.join(
     path.dirname(historyPath),
     path.basename(historyPath, ".jsonl"),
   );
   const sidechainDirectory = path.join(sessionDirectory, "subagents");
-  const sidechainFiles = [historyPath];
+  const sidechainFiles = parentSidechains ? [] : [historyPath];
   const workflowFiles = new Map<string, string[]>();
   const metaByAgentId = new Map<string, ClaudeSubagentMeta>();
   const directories = [sidechainDirectory];
@@ -216,7 +316,9 @@ async function indexHistory(
     }
   }
   const parentLocations: RecordLocation[] = [];
-  const locationsByAgentId = new Map<string, RecordLocation[]>();
+  const locationsByAgentId = new Map<string, RecordLocation[]>(
+    [...(parentSidechains ?? [])].map(([agentId, locations]) => [agentId, [...locations]]),
+  );
   async function scan(
     file: string,
     visit: (entry: TranscriptEntry, location: RecordLocation) => void,
