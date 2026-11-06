@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -173,12 +174,99 @@ test("FU-678: no file state means no cache; a damaged cache file is ignored", ()
   );
   rmSync(t.dir, { recursive: true });
 });
-test("FU-678: the default probe starts PowerShell hidden and detached", () => {
-  assert.equal(typeof windowsAclProbe, "function");
-  assert.match(
-    readFileSync(new URL("../../orca-organization/server/owned.mjs", import.meta.url), "utf8"),
-    /windowsHide: true,\s*\/\/[^\n]*\n\s*detached: true/,
+test("FU-714: the probe starts PowerShell hidden and NOT detached (detached PowerShell writes no output)", () => {
+  const calls = [];
+  windowsAclProbe("C:\\p714", PRIVATE_MASK, "me", (file, args, options) => {
+    calls.push({ file, args, options });
+    return "SAFE\r\n";
+  });
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].file, /\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/);
+  assert.equal(calls[0].options.windowsHide, true);
+  assert.notEqual(calls[0].options.detached, true);
+  assert.equal(calls[0].options.env.FULCRA_ACL_PATH, "C:\\p714");
+  assert.equal(calls[0].options.env.FULCRA_ACL_OWNER, "me");
+  assert.equal(calls[0].options.env.FULCRA_ACL_MASK, String(PRIVATE_MASK));
+});
+test("FU-714: only a clear SAFE answer passes; empty output, UNSAFE, other text and errors refuse", () => {
+  const answer = (out) => windowsAclProbe("C:\\p714", PRIVATE_MASK, "me", () => out);
+  assert.equal(answer("SAFE"), true);
+  assert.equal(answer("SAFE\r\n"), true);
+  assert.equal(answer(""), false); // what a detached PowerShell returns
+  assert.equal(answer("\r\n"), false);
+  assert.equal(answer("UNSAFE"), false);
+  assert.equal(answer("SAFE\r\nUNSAFE"), false);
+  assert.equal(answer("NOT SAFE"), false);
+  const thrown = windowsAclProbe("C:\\p714", PRIVATE_MASK, "me", () => {
+    throw Object.assign(new Error("timeout"), { code: "ETIMEDOUT" });
+  });
+  assert.equal(thrown, undefined);
+  // privateOwned refuses an empty answer and an error.
+  const s = { mode: 0o700, uid: me, ino: 714, ctimeMs: 1, mtimeMs: 1 };
+  const store = fileStore(undefined);
+  assert.equal(privateOwned(s, "p714e", { platform: "win32", probe: () => false, store }), false);
+  assert.equal(
+    privateOwned(s, "p714u", { platform: "win32", probe: () => undefined, store }),
+    false,
   );
+});
+const win32 = process.platform === "win32";
+/** A folder that only I own and only I, SYSTEM and Administrators may use (as the release stage makes it). */
+function privateWindowsDir(prefix) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const sid = execFileSync("whoami.exe", ["/user", "/fo", "csv", "/nh"], {
+    encoding: "utf8",
+    windowsHide: true,
+  })
+    .trim()
+    .split(",")[1]
+    .replaceAll('"', "");
+  const icacls = (...args) =>
+    execFileSync("icacls.exe", [dir, ...args], { windowsHide: true, stdio: "ignore" });
+  icacls("/setowner", `*${sid}`);
+  icacls(
+    "/inheritance:r",
+    "/grant:r",
+    `*${sid}:(OI)(CI)F`,
+    "*S-1-5-18:(OI)(CI)F",
+    "*S-1-5-32-544:(OI)(CI)F",
+  );
+  return dir;
+}
+test(
+  "FU-714 Windows: a private folder of mine is SAFE with the real PowerShell probe",
+  { skip: !win32 },
+  () => {
+    const dir = privateWindowsDir("fu714-acl-");
+    try {
+      assert.equal(windowsAclProbe(dir, PRIVATE_MASK, "me"), true);
+      assert.equal(windowsAclProbe(dir, WRITE_MASK, "trusted"), true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
+test(
+  "FU-714 Windows: a folder where Everyone may write is refused by the real probe",
+  { skip: !win32 },
+  () => {
+    const dir = privateWindowsDir("fu714-acl-bad-");
+    try {
+      assert.equal(windowsAclProbe(dir, PRIVATE_MASK, "me"), true);
+      execFileSync("icacls.exe", [dir, "/grant", "*S-1-1-0:(OI)(CI)W"], {
+        windowsHide: true,
+        stdio: "ignore",
+      });
+      assert.equal(windowsAclProbe(dir, PRIVATE_MASK, "me"), false);
+      assert.equal(windowsAclProbe(dir, WRITE_MASK, "trusted"), false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
+test("FU-714 Windows: a missing path is an error, never SAFE", { skip: !win32 }, () => {
+  const missing = join(tmpdir(), `fu714-missing-${process.pid}-${Date.now()}`);
+  assert.equal(windowsAclProbe(missing, PRIVATE_MASK, "me"), undefined);
 });
 test("FU-678: no absolute LOCALAPPDATA means no cache file, and a planted file is never read", () => {
   assert.equal(aclCacheFile({}), undefined);
