@@ -44,10 +44,12 @@ test.each(["codex", "claude"] as const)(
       if (result.isError) throw new Error(JSON.stringify(result.content));
       return result.structuredContent;
     };
+    // FU-657: Fulcra compacts list_agents and get_agent_status by default; ask for the full result.
     const list = async (includeArchived: boolean) =>
-      ListSchema.parse(await call("list_agents", { cwd, includeArchived })).agents;
+      ListSchema.parse(await call("list_agents", { cwd, includeArchived, fullResult: true }))
+        .agents;
     const status = async (agentId: string) =>
-      StatusSchema.parse(await call("get_agent_status", { agentId })).snapshot;
+      StatusSchema.parse(await call("get_agent_status", { agentId, fullResult: true })).snapshot;
     try {
       await client.connect();
       await mcp.connect(
@@ -86,9 +88,11 @@ test.each(["codex", "claude"] as const)(
         .soft(inclusive.entries.find((entry) => entry.agent.id === agent.id)?.agent.archivedAt)
         .toBe(archivedAt);
 
-      await client.refreshAgent(agent.id);
-      expect((await status(agent.id)).archivedAt).toBeNull();
-      expect((await list(false)).map((item) => item.id)).toContain(agent.id);
+      // FU-657: Fulcra refuses refresh for an archived agent (restore is `fulcra agent reload`
+      // or Unarchive in the app), so the agent stays archived.
+      await expect(client.refreshAgent(agent.id)).rejects.toThrow("Agent is archived");
+      expect((await status(agent.id)).archivedAt).toBe(archivedAt);
+      expect((await list(false)).map((item) => item.id)).not.toContain(agent.id);
     } finally {
       await mcp.close();
       await client.close();

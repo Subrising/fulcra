@@ -14,6 +14,7 @@ import {
   type WebSocketLike,
 } from "@getpaseo/client/internal/daemon-client";
 import { createTestPaseoDaemon } from "./test-utils/paseo-daemon.js";
+import { expectKeptByCleanupGuard, watchCleanupKeeps } from "./test-utils/cleanup-guard-keep.js";
 
 // The reshaped workspace.create.request forwards its worktree `source`
 // (action/refName/branchName/githubPrNumber/worktreeSlug) into createWorktreeCore.
@@ -229,8 +230,9 @@ test("existing branch changes remain visible after archive and restore", async (
   expect(before.error).toBeNull();
   expect(before.files.map((file) => file.path)).toEqual(["feature.txt"]);
   expect((await client.getCheckoutStatus(cwd)).baseRef).toBe("main");
+  const keeps = watchCleanupKeeps();
   expect((await client.archiveWorkspace(workspace.id)).error).toBeNull();
-  expect(existsSync(cwd)).toBe(false);
+  expectKeptByCleanupGuard(keeps, cwd);
   await client.restoreWorkspace(workspace.id);
   expect(runGit(cwd, "rev-parse", "HEAD")).toBe(head);
   expect((await client.getCheckoutStatus(cwd)).baseRef).toBe("main");

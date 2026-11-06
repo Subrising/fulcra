@@ -8,6 +8,11 @@ import { DaemonClient } from "../test-utils/daemon-client.js";
 import { createTestPaseoDaemon } from "../test-utils/paseo-daemon.js";
 import { resolveDaemonVersion } from "../daemon-version.js";
 import { BuiltinPluginLoader } from "./builtin/index.js";
+import {
+  expectKeptByCleanupGuard,
+  expectOnlyFailedWorktreeAdded,
+  watchCleanupKeeps,
+} from "../test-utils/cleanup-guard-keep.js";
 
 test("a plugin transforms workspace creation once across receipt replays and observes its committed lifecycle", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "paseo-lifecycle-"));
@@ -1120,8 +1125,9 @@ test.each([false, true])(
       expect((await client.fetchWorkspaces()).entries.map((workspace) => workspace.id)).toContain(
         created.workspace!.id,
       );
+      const keeps = watchCleanupKeeps();
       await client.archiveWorkspace(created.workspace!.id);
-      await expect(stat(cwd)).rejects.toMatchObject({ code: "ENOENT" });
+      expectKeptByCleanupGuard(keeps, cwd);
       const hookRecordsBeforeRestore = await readFile(orderFile, "utf8");
       await client.close();
       await daemon.close();
@@ -1143,6 +1149,7 @@ test.each([false, true])(
         cwd: repository,
         encoding: "utf8",
       });
+      const rejectKeeps = watchCleanupKeeps();
       const rejected = await client.createWorkspace({
         source: {
           kind: "worktree",
@@ -1160,16 +1167,20 @@ test.each([false, true])(
         .split("\n")
         .map((line) => JSON.parse(line));
       const failedPath = failedRecords.at(-1).worktree.path;
-      await expect(stat(failedPath)).rejects.toMatchObject({ code: "ENOENT" });
+      // FU-657: the rollback keeps the failed worktree and its git registration (cleanup guard).
+      expectKeptByCleanupGuard(rejectKeeps, failedPath);
       expect((await client.fetchWorkspaces()).entries.map(({ id }) => id).sort()).toEqual(
         beforeFailure.entries.map(({ id }) => id).sort(),
       );
       expect(
-        execFileSync("git", ["worktree", "list", "--porcelain"], {
-          cwd: repository,
-          encoding: "utf8",
-        }),
-      ).toBe(worktreesBeforeFailure);
+        expectOnlyFailedWorktreeAdded(
+          worktreesBeforeFailure,
+          execFileSync("git", ["worktree", "list", "--porcelain"], {
+            cwd: repository,
+            encoding: "utf8",
+          }),
+        ),
+      ).toContain("reject-hook");
     } finally {
       await client.close();
       await daemon.close();
@@ -1334,8 +1345,9 @@ test("the placement example creates a sibling worktree, opens its first agent th
       .filter((entry) => entry.message.startsWith('{"hook":"provider.open"'))
       .map((entry) => JSON.parse(entry.message));
     expect(opened.map((entry) => entry.config.cwd)).toContain(cwd);
+    const keeps = watchCleanupKeeps();
     await client.archiveWorkspace(created.workspace!.id);
-    await expect(stat(cwd)).rejects.toMatchObject({ code: "ENOENT" });
+    expectKeptByCleanupGuard(keeps, cwd);
   } finally {
     await client.close();
     await daemon.close();
@@ -1508,6 +1520,7 @@ test("worktree includes reach the first agent without copying tracked or unignor
     );
     const beforeFailure = await client.fetchWorkspaces();
     const worktreesBeforeFailure = git("worktree", "list", "--porcelain").toString();
+    const keeps = watchCleanupKeeps();
     const failed = await client.createWorkspace({
       source: {
         kind: "worktree",
@@ -1522,7 +1535,13 @@ test("worktree includes reach the first agent without copying tracked or unignor
     expect((await client.fetchWorkspaces()).entries.map(({ id }) => id).sort()).toEqual(
       beforeFailure.entries.map(({ id }) => id).sort(),
     );
-    expect(git("worktree", "list", "--porcelain").toString()).toBe(worktreesBeforeFailure);
+    // FU-657: the rollback keeps the failed worktree and its git registration (cleanup guard).
+    const failedPath = expectOnlyFailedWorktreeAdded(
+      worktreesBeforeFailure,
+      git("worktree", "list", "--porcelain").toString(),
+    );
+    expect(failedPath).toContain("copy-failure");
+    expectKeptByCleanupGuard(keeps, failedPath);
   } finally {
     await client.close();
     await daemon.close();

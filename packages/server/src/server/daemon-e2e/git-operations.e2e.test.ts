@@ -15,6 +15,7 @@ import { createDaemonTestContext, type DaemonTestContext } from "../test-utils/i
 import { withTimeout } from "../../utils/promise-timeout.js";
 import { deriveWorktreeProjectHash } from "../../utils/worktree.js";
 import { isPlatform } from "../../test-utils/platform.js";
+import { expectKeptByCleanupGuard, watchCleanupKeeps } from "../test-utils/cleanup-guard-keep.js";
 
 function tmpCwd(): string {
   return mkdtempSync(path.join(tmpdir(), "daemon-e2e-"));
@@ -630,7 +631,7 @@ test("creates agent in ~/.paseo/worktrees/{hash} when worktree is requested", as
   rmSync(cwd, { recursive: true, force: true });
 }, 60000);
 
-test("archiving a worktree shuts down terminals and removes its final workspace backing", async () => {
+test("archiving a worktree shuts down terminals and keeps its guarded workspace backing (FU-657)", async () => {
   const repoRoot = tmpCwd();
 
   const { execSync } = await import("child_process");
@@ -699,6 +700,7 @@ test("archiving a worktree shuts down terminals and removes its final workspace 
   const beforeArchiveDirectories = ctx.daemon.daemon.terminalManager.listDirectories();
   expect(beforeArchiveDirectories).toContain(agent.cwd);
 
+  const keeps = watchCleanupKeeps();
   const archive = await ctx.client.archivePaseoWorktree({
     worktreePath: agent.cwd,
   });
@@ -706,8 +708,8 @@ test("archiving a worktree shuts down terminals and removes its final workspace 
   expect(archive.success).toBe(true);
   expect(archive.removedAgents).toContain(agent.id);
 
-  // The final workspace reference owns teardown and backing-worktree removal.
-  expect(existsSync(agent.cwd)).toBe(false);
+  // The final workspace reference owns teardown. The cleanup guard keeps the backing worktree.
+  expectKeptByCleanupGuard(keeps, agent.cwd);
   expect(readFileSync(teardownMarkerPath, "utf8").trim()).toBe(agent.cwd);
 
   const afterArchiveDirectories = ctx.daemon.daemon.terminalManager.listDirectories();
