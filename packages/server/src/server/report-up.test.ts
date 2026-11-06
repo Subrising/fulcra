@@ -2076,7 +2076,7 @@ describe("ledger items", () => {
     expect(await readOpenLedgerRows(join(dir, "nowhere"))).toEqual([]);
     // A ledger above the size limit is skipped without being read.
     mkdirSync(join(dir, "huge"));
-    writeFileSync(join(dir, "huge", "OPEN-ITEMS.md"), `${table}${"x".repeat(600 * 1024)}`);
+    writeFileSync(join(dir, "huge", "OPEN-ITEMS.md"), `${table}${"x".repeat(17 * 1024 * 1024)}`);
     expect((await readOpenLedgerRows(dir)).some((row) => row.project === "huge")).toBe(false);
     rmSync(dir, { recursive: true, force: true });
   });
@@ -2089,7 +2089,7 @@ describe("ledger items", () => {
       const file = join(dir, project, "OPEN-ITEMS.md");
       mkdirSync(join(dir, project));
       try {
-        if (kind === "oversized") writeFileSync(file, "x".repeat(600 * 1024));
+        if (kind === "oversized") writeFileSync(file, "x".repeat(17 * 1024 * 1024));
         else mkdirSync(file);
         await expect(readOpenLedgerRows(dir, true)).rejects.toThrow('project "fixture-project"');
         await expect(readOpenLedgerRows(dir, true)).rejects.not.toThrow(dir);

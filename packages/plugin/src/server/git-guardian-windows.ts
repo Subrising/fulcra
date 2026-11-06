@@ -1,3 +1,4 @@
+// FU-678: 0x0800000C = CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_SUSPENDED. FULCRA_GIT_EXE names the real git.exe.
 // A retained Job Object owns Git descendants even after Git itself exits.
 export const WINDOWS_GIT_GUARDIAN = String.raw`
 using System;
@@ -34,8 +35,9 @@ public class FulcraGitGuardian {
    var limit=new ExtendedLimit();limit.Basic.Flags=0x2000;
    if(!SetInformationJobObject(job,9,ref limit,(uint)Marshal.SizeOf(limit)))throw Failure("SetInformationJobObject");
    var startup=new Startup();startup.Size=(uint)Marshal.SizeOf(startup);startup.Flags=0x101;startup.Input=GetStdHandle(-10);startup.Output=GetStdHandle(-11);startup.Error=GetStdHandle(-12);
-   var command=new StringBuilder(Quote("git.exe"));foreach(var arg in args)command.Append(" "+Quote(arg));
-   if(!CreateProcess(null,command,IntPtr.Zero,IntPtr.Zero,true,0x0000000C,IntPtr.Zero,Environment.CurrentDirectory,ref startup,out info))throw Failure("CreateProcess");
+   var exe=Environment.GetEnvironmentVariable("FULCRA_GIT_EXE");if(String.IsNullOrEmpty(exe)||!System.IO.File.Exists(exe))exe="git.exe";
+   var command=new StringBuilder(Quote(exe));foreach(var arg in args)command.Append(" "+Quote(arg));
+   if(!CreateProcess(null,command,IntPtr.Zero,IntPtr.Zero,true,0x0800000C,IntPtr.Zero,Environment.CurrentDirectory,ref startup,out info))throw Failure("CreateProcess");
    if(!AssignProcessToJobObject(job,info.Process)){TerminateProcess(info.Process,1);throw Failure("AssignProcessToJobObject");}
    if(ResumeThread(info.Thread)==0xffffffff)throw Failure("ResumeThread");
    if(WaitForSingleObject(info.Process,deadline)==258){Console.Error.WriteLine("Git command timed out");return 1;}uint code;if(!GetExitCodeProcess(info.Process,out code))throw Failure("GetExitCodeProcess");
