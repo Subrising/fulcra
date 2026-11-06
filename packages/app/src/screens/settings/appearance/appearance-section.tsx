@@ -232,7 +232,7 @@ interface FontFamilyRowProps {
   draft: string;
   withBorder: boolean;
   onChangeDraft: (value: string) => void;
-  onCommit: (value: string) => void;
+  onCommit: (value: string) => string;
 }
 
 function FontFamilyRow({
@@ -246,14 +246,20 @@ function FontFamilyRow({
   onChangeDraft,
   onCommit,
 }: FontFamilyRowProps) {
+<<<<<<< HEAD
   const touch = useTouchTargets();
+=======
+  const inputRef = useRef<EditingTextInputHandle>(null);
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
   const handleCommit = useCallback(() => {
-    onCommit(draft);
+    const committed = onCommit(draft);
+    inputRef.current?.replaceText(committed);
   }, [draft, onCommit]);
 
   // Resync from the committed value when it changes elsewhere.
   useEffect(() => {
     onChangeDraft(value);
+    inputRef.current?.replaceText(value);
     // Only resync on external value changes, not on local keystrokes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
@@ -265,6 +271,7 @@ function FontFamilyRow({
         <Text style={settingsStyles.rowHint}>{hint}</Text>
       </View>
       <TextInput
+        ref={inputRef}
         initialValue={draft}
         onChangeText={onChangeDraft}
         onBlur={handleCommit}
@@ -527,12 +534,13 @@ export function AppearanceSection() {
       const sanitized = sanitizeFontFamily(value);
       if (sanitized === null) {
         setUiFontDraft(settings.uiFontFamily);
-        return;
+        return settings.uiFontFamily;
       }
       setUiFontDraft(sanitized);
       if (sanitized !== settings.uiFontFamily) {
         void updateSettings({ uiFontFamily: sanitized });
       }
+      return sanitized;
     },
     [settings.uiFontFamily, updateSettings],
   );
@@ -542,12 +550,13 @@ export function AppearanceSection() {
       const sanitized = sanitizeFontFamily(value);
       if (sanitized === null) {
         setMonoFontDraft(settings.monoFontFamily);
-        return;
+        return settings.monoFontFamily;
       }
       setMonoFontDraft(sanitized);
       if (sanitized !== settings.monoFontFamily) {
         void updateSettings({ monoFontFamily: sanitized });
       }
+      return sanitized;
     },
     [settings.monoFontFamily, updateSettings],
   );

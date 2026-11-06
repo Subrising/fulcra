@@ -1,4 +1,5 @@
 export const BUILTIN_PROVIDER_ICON_NAMES = [
+  "antigravity",
   "claude",
   "codex",
   "copilot",
@@ -22,6 +23,7 @@ export const ACP_PROVIDER_ICON_NAMES = [
   "crow-cli",
   "cursor",
   "deepagents",
+  "devin",
   "dimcode",
   "dirac",
   "factory-droid",
@@ -31,6 +33,10 @@ export const ACP_PROVIDER_ICON_NAMES = [
   "glm-acp-agent",
   "goose",
   "grok",
+<<<<<<< HEAD
+=======
+  "hermes",
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
   "hoplite",
   "junie",
   "kilo",

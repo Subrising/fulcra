@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import { sessionCost } from "./session-cost.js";
 import { finishNotificationWanted } from "../finish-notice-filter.js";
 import { lastAgentMessageDeliveredAt } from "../agent-message-log.js";
@@ -13,19 +14,17 @@ import { randomUUID } from "node:crypto";
 import { deferredPromptPayload as promptPayload } from "./trusted-operation.js";
 import { TRUSTED_OPERATION, FINAL_INPUT_CHECK } from "./agent-sdk-types.js";
 import type { TrustedOperationHandle } from "../plugins/trusted.js";
+=======
+import { prepareAgentMessage, type AgentPromptSource } from "./agent-messages/index.js";
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
 import type { Logger } from "pino";
 
-import type {
-  AgentPermissionRequest,
-  AgentPromptInput,
-  AgentRunOptions,
-} from "./agent-sdk-types.js";
+import type { AgentPromptInput, AgentRunOptions } from "./agent-sdk-types.js";
 import type { AgentManager, ManagedAgent } from "./agent-manager.js";
 import type { AgentStorage } from "./agent-storage.js";
 import { ensureUnarchivedAgentLoaded } from "./agent-loading.js";
 import { heldSendsFor } from "../held-sends.js";
 import { isStaleProviderSessionError } from "./stale-provider-session-error.js";
-import { getParentAgentIdFromLabels } from "@getpaseo/protocol/agent-labels";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
 
 export type AgentUnarchiveController = Pick<AgentManager, "notifyAgentState" | "unarchiveSnapshot">;
@@ -48,6 +47,8 @@ export type AgentRunController = Pick<
 };
 
 export interface StartAgentRunOptions {
+  /** Called after selecting the run, before consuming its events. */
+  onDispatch?: (disposition: PromptDispatchDisposition) => void;
   replaceRunning?: boolean;
   activeTurnBehavior?: ActiveTurnBehavior;
   runOptions?: AgentRunOptions;
@@ -203,6 +204,26 @@ export async function startAgentRun(
     }),
     options?.runOptions?.[TRUSTED_OPERATION],
   );
+<<<<<<< HEAD
+=======
+  // Out-of-band commands (e.g. /goal pause) must run WITHOUT canceling an
+  // in-flight turn — replaceAgentRun would interrupt the running turn. The
+  // intercept lives at this layer so it covers every prompt entrypoint.
+  if (agentManager.tryRunOutOfBand(agentId, prompt, options?.runOptions)) {
+    options?.onDispatch?.("out_of_band");
+    return { disposition: "out_of_band" };
+  }
+  try {
+    return await startAgentRunInner(agentManager, agentId, prompt, logger, options);
+  } catch (error) {
+    if (!isStaleProviderSessionError(error)) throw error;
+    logger.info({ agentId, err: error }, "Provider session went stale; reopening from persistence");
+    // The live session belongs to a retired plugin runtime. Reload swaps in a
+    // fresh session on the current runtime while preserving history and labels.
+    await agentManager.reloadAgentSession(agentId);
+    return await startAgentRunInner(agentManager, agentId, prompt, logger, options);
+  }
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
 }
 
 async function startAgentRunInner(
@@ -217,6 +238,7 @@ async function startAgentRunInner(
   const snapshot = agentManager.getAgent(agentId);
   const steered = await steerOrReplaceActiveRun(agentManager, agentId, prompt, options);
   if (steered?.disposition === "steered") {
+    options?.onDispatch?.("steered");
     return steered;
   }
   finishCheck?.();
@@ -232,6 +254,7 @@ async function startAgentRunInner(
     },
     "agent.session.start_stream.iterator_returned",
   );
+  options?.onDispatch?.("turn_started");
   void (async () => {
     try {
       try {
@@ -295,27 +318,14 @@ export async function unarchiveAgentState(
   return true;
 }
 
-/**
- * Wrap a body in <paseo-system>…</paseo-system> so the receiving agent
- * recognizes the prompt as system-injected context — not a user turn.
- * Used by chat mentions, schedule fires, and notify-on-finish.
- */
-export function formatSystemNotificationPrompt(reason: string): string {
-  return `<paseo-system>\n${reason}\n</paseo-system>`;
-}
-
-const SYSTEM_ENVELOPE_PATTERN = /^<paseo-system>\n[\s\S]*\n<\/paseo-system>$/;
-
-export function isSystemInjectedEnvelope(text: string): boolean {
-  return SYSTEM_ENVELOPE_PATTERN.test(text);
-}
-
 export interface SendPromptToAgentParams {
+  onDispatch?: StartAgentRunOptions["onDispatch"];
   agentManager: AgentManager;
   agentStorage: AgentStorage;
   agentId: string;
   /** Prompt to dispatch to the provider (may include image blocks or wrapped text). */
   prompt: AgentPromptInput;
+  source?: AgentPromptSource;
   messageId?: string;
   activeTurnBehavior?: ActiveTurnBehavior;
   /** With "steer": never replace a running turn; throws SteerUnavailableError instead. */
@@ -336,10 +346,12 @@ export interface SendPromptToAgentParams {
 }
 
 export interface StartCreatedAgentInitialPromptParams {
+  agentStorage: AgentStorage;
   agentManager: AgentManager;
   agentId: string;
   snapshot?: ManagedAgent;
   prompt: AgentPromptInput | null;
+  source?: AgentPromptSource;
   runOptions?: AgentRunOptions;
   logger: Logger;
 }
@@ -384,6 +396,18 @@ export async function waitForAgentRunStartWithTimeout(
   }
 }
 
+async function resolvePromptSource(
+  source: AgentPromptSource | undefined,
+  manager: Pick<AgentManager, "getAgent">,
+  storage: AgentStorage,
+): Promise<AgentPromptSource | undefined> {
+  if (!source || source.title) return source;
+  const title = (
+    manager.getAgent(source.agentId)?.config.title ?? (await storage.get(source.agentId))?.title
+  )?.trim();
+  return title ? { ...source, title } : source;
+}
+
 /**
  * Load, optionally change mode, and start a prompt. A prompt never restores an
  * archived receiver. All prompt surfaces share this refusal.
@@ -391,6 +415,7 @@ export async function waitForAgentRunStartWithTimeout(
 export async function sendPromptToAgent(
   params: SendPromptToAgentParams,
 ): Promise<{ disposition: PromptDispatchDisposition }> {
+<<<<<<< HEAD
   const finishCheck = finishDispatchChecks.get(params);
   finishCheck?.();
   assertFinalInputCheck(params.runOptions?.[FINAL_INPUT_CHECK]);
@@ -423,6 +448,24 @@ export async function sendPromptToAgent(
         requireActive(await params.agentStorage.get(params.agentId));
         throw error;
       }
+=======
+  const source = await resolvePromptSource(params.source, params.agentManager, params.agentStorage);
+  const delivery = prepareAgentMessage(params.prompt, source, params.messageId);
+  return sendPreparedPromptToAgent({
+    ...params,
+    prompt: delivery.prompt,
+    runOptions: delivery.messageId
+      ? { ...params.runOptions, clientMessageId: delivery.messageId }
+      : params.runOptions,
+  });
+}
+
+/** Dispatch daemon-prepared context without reclassifying it as human input. */
+export async function sendPreparedPromptToAgent(
+  params: Omit<SendPromptToAgentParams, "source" | "messageId">,
+): Promise<{ disposition: PromptDispatchDisposition }> {
+  const unarchive = params.unarchive ?? true;
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
 
       finishCheck?.();
       if (params.sessionMode) {
@@ -489,6 +532,21 @@ export async function sendPromptToAgentAndWaitForStart(
   } finally {
     stop();
   }
+<<<<<<< HEAD
+=======
+
+  if (params.sessionMode) {
+    await params.agentManager.setAgentMode(params.agentId, params.sessionMode);
+  }
+
+  return await startAgentRun(params.agentManager, params.agentId, params.prompt, params.logger, {
+    replaceRunning: true,
+    onDispatch: params.onDispatch,
+    activeTurnBehavior: params.activeTurnBehavior,
+    clearPendingPermissions: params.clearPendingPermissions,
+    runOptions: params.runOptions,
+  });
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
 }
 
 export async function startCreatedAgentInitialPrompt(
@@ -503,14 +561,17 @@ export async function startCreatedAgentInitialPrompt(
     return currentSnapshot;
   }
 
+  const delivery = prepareAgentMessage(
+    params.prompt,
+    await resolvePromptSource(params.source, params.agentManager, params.agentStorage),
+    params.runOptions?.clientMessageId,
+  );
   const dispatchResult = await startAgentRun(
     params.agentManager,
     params.agentId,
-    params.prompt,
+    delivery.prompt,
     params.logger,
-    {
-      runOptions: params.runOptions,
-    },
+    { runOptions: { ...params.runOptions, clientMessageId: delivery.messageId } },
   );
 
   if (dispatchResult.disposition === "turn_started") {
@@ -523,6 +584,7 @@ export async function startCreatedAgentInitialPrompt(
   }
   return refreshedSnapshot;
 }
+<<<<<<< HEAD
 
 export interface SetupFinishNotificationParams {
   agentManager: AgentManager;
@@ -878,3 +940,5 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
     notifySafely("errored");
   }
 }
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.13.2

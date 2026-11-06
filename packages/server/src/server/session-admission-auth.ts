@@ -12,11 +12,14 @@ export async function resolveSessionAdmission(input: {
   credential: WSHelloMessage["auth"];
   passwordHash: string | undefined;
   localCredential: string | null;
-  transport: "direct" | "relay";
 }): Promise<AdmissionResolution> {
+<<<<<<< HEAD
   const { credential, passwordHash, localCredential, transport } = input;
   // Relay identity comes from the paired-device handshake, never a password or anonymous hello.
   if (transport === "relay") return { rejection: "password_required" };
+=======
+  const { credential, passwordHash, localCredential } = input;
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
   if (!passwordHash) {
     return { admission: { principalId: "owner", permissions: OWNER_PERMISSIONS } };
   }

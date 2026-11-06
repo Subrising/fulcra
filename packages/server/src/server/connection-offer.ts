@@ -30,17 +30,26 @@ export function buildOfferEndpoints({ listenHost, port }: BuildOfferEndpointsArg
 export async function createConnectionOfferV3(args: {
   serverId: string;
   daemonPublicKeyB64: string;
+<<<<<<< HEAD
   relay: { endpoint: string; useTls: boolean };
   pairing: ConnectionOffer["pairing"];
   hostLabel?: string;
+=======
+  relay: { endpoint: string; useTls?: boolean };
+  minimumSecurityMode?: "protected";
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
 }): Promise<ConnectionOffer> {
   return ConnectionOfferV3Schema.parse({
     v: 3,
     serverId: args.serverId,
     daemonPublicKeyB64: args.daemonPublicKeyB64,
     relay: args.relay,
+<<<<<<< HEAD
     pairing: args.pairing,
     hostLabel: args.hostLabel,
+=======
+    ...(args.minimumSecurityMode ? { minimumSecurityMode: args.minimumSecurityMode } : {}),
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
   });
 }
 

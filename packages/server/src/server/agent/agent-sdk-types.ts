@@ -16,9 +16,14 @@ import type {
   ProviderOptions,
   ToolPolicy,
 } from "@getpaseo/protocol/agent-types";
+<<<<<<< HEAD
 import type { AgentAttachment, AgentQuotaSnapshot } from "@getpaseo/protocol/messages";
 import type { AgentBackgroundWork } from "@getpaseo/protocol/agent-background-work";
 import type { OwnedProcessIdentity } from "../../utils/tree-kill.js";
+=======
+import type { AgentMessage } from "@getpaseo/protocol/agent-message";
+import type { AgentAttachment } from "@getpaseo/protocol/messages";
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
 import type { PaseoToolCatalog } from "./tools/types.js";
 
 export type {
@@ -386,6 +391,8 @@ interface ToolCallBase {
   name: string;
   detail: ToolCallDetail;
   metadata?: Record<string, unknown>;
+  /** Set when the row is a delivered agent message rather than a provider tool call. */
+  agentMessage?: AgentMessage;
 }
 
 type ToolCallRunningTimelineItem = ToolCallBase & {

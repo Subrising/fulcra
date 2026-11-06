@@ -1,6 +1,10 @@
 {
   "name": "@getpaseo/client",
+<<<<<<< HEAD
   "version": "0.11.4",
+=======
+  "version": "0.13.2",
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
   "description": "Paseo client SDK package",
   "files": [
     "dist",
@@ -25,6 +29,7 @@
       "types": "./dist/daemon-client-websocket-transport.d.ts",
       "default": "./dist/daemon-client-websocket-transport.js"
     },
+<<<<<<< HEAD
     "./relay-v3": {
       "types": "./dist/relay-v3/index.d.ts",
       "default": "./dist/relay-v3/index.js"
@@ -32,6 +37,15 @@
     "./controller-transport": {
       "types": "./dist/controller-transport.d.ts",
       "default": "./dist/controller-transport.js"
+=======
+    "./node": {
+      "types": "./dist/node/index.d.ts",
+      "default": "./dist/node/index.js"
+    },
+    "./internal/hosts": {
+      "types": "./dist/hosts/index.d.ts",
+      "default": "./dist/hosts/index.js"
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
     }
   },
   "publishConfig": {
@@ -47,10 +61,16 @@
     "test": "vitest run"
   },
   "dependencies": {
+<<<<<<< HEAD
     "@getpaseo/protocol": "0.11.4",
     "@getpaseo/relay": "0.11.4",
     "base64-js": "^1.5.1",
     "tweetnacl": "^1.0.3",
+=======
+    "@getpaseo/protocol": "0.13.2",
+    "@getpaseo/relay": "0.13.2",
+    "ws": "^8.20.0",
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
     "zod": "^4.4.3"
   },
   "devDependencies": {

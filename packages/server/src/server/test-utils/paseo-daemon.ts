@@ -37,6 +37,7 @@ interface TestPaseoDaemonOptions {
   relayEndpoint?: string;
   relayUseTls?: boolean;
   relayPublicUseTls?: boolean;
+  relayRequireProtectedSecurity?: boolean;
   daemonStatusRpcCapability?: boolean;
   relayConfigCapability?: boolean;
   agentClients?: Partial<Record<AgentProvider, AgentClient>>;
@@ -215,7 +216,12 @@ async function prepareTestDaemonConfig(
     relayEndpoint: options.relayEndpoint ?? "127.0.0.1:8787",
     relayUseTls: options.relayUseTls,
     relayPublicUseTls: options.relayPublicUseTls,
+<<<<<<< HEAD
     appBaseUrl: "fulcra://pair",
+=======
+    relayRequireProtectedSecurity: options.relayRequireProtectedSecurity,
+    appBaseUrl: "https://app.paseo.sh",
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
     auth: options.auth,
     pushNotificationSender: options.pushNotificationSender,
     serviceProxy: options.serviceProxy,

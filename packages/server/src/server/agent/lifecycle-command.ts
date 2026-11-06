@@ -12,7 +12,7 @@ import type { StoredAgentRecord } from "./agent-storage.js";
 import { SEAT_LABEL } from "@getpaseo/protocol/agent-labels";
 import type { AgentProviderNotice } from "./agent-sdk-types.js";
 
-export type LifecycleAgentSnapshot = Pick<ManagedAgent, "id" | "cwd" | "lifecycle">;
+export type LifecycleAgentSnapshot = Pick<ManagedAgent, "id" | "cwd" | "lifecycle" | "internal">;
 
 export interface LifecycleAgentManager {
   withInput<T>(
@@ -185,7 +185,8 @@ export async function cancelAgentRunCommand(
 export interface ArchiveAgentResult {
   agentId: string;
   archivedAt: string;
-  record: StoredAgentRecord;
+  /** Null for an internal agent, which is closed and leaves no record behind. */
+  record: StoredAgentRecord | null;
 }
 
 export async function archiveAgentCommand(
@@ -193,7 +194,32 @@ export async function archiveAgentCommand(
   agentId: string,
   handle?: TrustedOperationHandle,
 ): Promise<ArchiveAgentResult> {
+<<<<<<< HEAD
   return dependencies.agentManager.withInput(
+=======
+  const liveAgent = dependencies.agentManager.getAgent(agentId);
+  let record: StoredAgentRecord | null;
+  if (liveAgent) {
+    await requestAgentRunCancellation(dependencies, agentId);
+    await dependencies.agentManager.clearAgentAttention(agentId).catch(() => undefined);
+    const archived = await dependencies.agentManager.archiveAgent(agentId);
+    if (liveAgent.internal) {
+      return { agentId, archivedAt: archived.archivedAt, record: null };
+    }
+    record = await dependencies.agentStorage.get(agentId);
+  } else {
+    record = await archiveStoredAgent(dependencies, agentId);
+  }
+
+  if (!record) {
+    throw new Error(`Agent not found in storage after archive: ${agentId}`);
+  }
+  if (!record.archivedAt) {
+    throw new Error(`Agent missing archivedAt after archive: ${agentId}`);
+  }
+
+  return {
+>>>>>>> refs/remotes/upstream/tags/v0.13.2
     agentId,
     "archive",
     undefined,
