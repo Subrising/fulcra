@@ -19,7 +19,7 @@ export function defaultLedgerDir(env: NodeJS.ProcessEnv = process.env): string {
   return env.FULCRA_LEDGER_DIR?.trim() || path.join(homedir(), "shared-vault", "projects");
 }
 
-const MAX_FILE_BYTES = 512 * 1024;
+const MAX_FILE_BYTES = 16 * 1024 * 1024;
 
 /** The rows of one ledger file that are not DONE or MOVED. */
 export function parseOpenRows(project: string, text: string): LedgerRow[] {
