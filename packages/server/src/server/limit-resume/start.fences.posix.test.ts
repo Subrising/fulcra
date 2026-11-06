@@ -366,10 +366,23 @@ test("actual controller journal survives status marker; human takeover without a
     issueProvenance = server.issueProvenance;
     createTrustedContribution({ home: f.home })(server);
   });
-  store.created(f.agent.id, randomUUID(), f.home);
+  const taskId = randomUUID();
+  store.created(f.agent.id, taskId, f.home);
   store.db
     .prepare("UPDATE sessions SET mode='delegated',boot=?,grantedAt=1 WHERE id=?")
     .run(f.host.boot, f.agent.id);
+  // FULCRA(FU-657): since upstream v0.15 (#8393) the new Codex thread has no native id before its first turn, so
+  // the first controller send goes through the controller bootstrap. It needs the controller's own delivered
+  // creation of this agent, as a real controller-created worker has.
+  store.db.prepare("INSERT INTO deliveries VALUES (?,NULL,'create',?,'delivered',?)").run(
+    randomUUID(),
+    JSON.stringify({ provider: "codex", taskId }),
+    JSON.stringify({
+      id: f.agent.id,
+      cwd: f.manager.getAgent(f.agent.id)?.cwd,
+      runtimeInstanceId: f.manager.getAgent(f.agent.id)?.instanceId,
+    }),
+  );
   const message = randomUUID(),
     attempt = randomUUID(),
     prompt = "limited task";
@@ -430,6 +443,8 @@ test("actual controller journal survives status marker; human takeover without a
       }),
     );
     await f.server.waitForTurnStart();
+    // FULCRA(FU-657): real Codex announces the turn; since v0.15 that is when the new thread is saved.
+    f.server.startsTurn({ threadId: "limit-thread", turnId: "limit-turn-1" });
     f.server.completeTurn({
       threadId: "limit-thread",
       status: "failed",

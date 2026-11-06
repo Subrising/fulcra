@@ -271,7 +271,6 @@
               ],
               "server/agent/work-acceptance.ts": ["readFileSync"],
               "server/command-centre-password.ts": ["readFileSync", "statSync"],
-              "server/directory-access.ts": ["statSync"],
               "server/host-links.ts": [
                 "closeSync",
                 "fstatSync",

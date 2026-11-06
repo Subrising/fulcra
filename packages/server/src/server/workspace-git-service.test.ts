@@ -1424,6 +1424,44 @@ describe("WorkspaceGitServiceImpl", () => {
     service.dispose();
   });
 
+  // FULCRA(FU-657): a manual refresh (afterInFlight) after a checkout must not join the older in-flight read.
+  test("a forced refresh during an older forced read reads again and publishes the new branch", async () => {
+    const firstRead = createDeferred<CheckoutStatusGit>();
+    const firstReadStarted = createDeferred<void>();
+    let branch = "main";
+    let reads = 0;
+    const getCheckoutStatus = vi.fn(async (cwd: string) => {
+      reads += 1;
+      if (reads === 1) {
+        firstReadStarted.resolve();
+        return firstRead.promise;
+      }
+      return createCheckoutStatus(cwd, { currentBranch: branch });
+    });
+    const service = createService({ getCheckoutStatus });
+    const store = createWorkspaceRuntimeStore();
+    service.onSnapshotUpdated((snapshot) => store.set(snapshot));
+
+    const openProject = service.getSnapshot(REPO_CWD, { force: true, reason: "open_project" });
+    try {
+      await firstReadStarted.promise;
+      branch = "feature/new";
+      const refresh = service.getSnapshot(REPO_CWD, {
+        force: true,
+        reason: "manual-refresh",
+        afterInFlight: true,
+      });
+      firstRead.resolve(createCheckoutStatus(REPO_CWD));
+      const refreshed = await refresh;
+      expect(refreshed.git.currentBranch).toBe("feature/new");
+      expect(store.get(REPO_CWD)?.git.currentBranch).toBe("feature/new");
+    } finally {
+      firstRead.resolve(createCheckoutStatus(REPO_CWD));
+      await openProject;
+      await service.dispose();
+    }
+  });
+
   test("watches nested repository changes through one recursive checkout subscription", async () => {
     const unsubscribe = vi.fn(async () => {});
     const updateIgnore = vi.fn(async () => {});

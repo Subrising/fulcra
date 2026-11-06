@@ -4022,10 +4022,12 @@ describe("session checkout refresh handling", () => {
     });
 
     expect(github.invalidate).toHaveBeenCalledWith({ cwd: "/tmp/request-worktree" });
+    // FULCRA(FU-657): a manual refresh reads after any in-flight read.
     expect(workspaceGitService.getSnapshot).toHaveBeenCalledWith("/tmp/request-worktree", {
       force: true,
       includeForge: true,
       reason: "manual-refresh",
+      afterInFlight: true,
     });
     expect(checkoutDiffManager.scheduleRefreshForCwd).toHaveBeenCalledWith("/tmp/request-worktree");
     expect(messages).toContainEqual({
@@ -4087,7 +4089,8 @@ describe("session checkout status handling", () => {
       requestId: "request-status",
     });
 
-    expect(workspaceGitService.getSnapshot).toHaveBeenCalledTimes(1);
+    // FULCRA(FU-657): the first request starts a fresh read and answers from the service snapshot.
+    expect(workspaceGitService.getSnapshot).toHaveBeenCalledTimes(2);
     // FU-657: the first request for a checkout nobody observed reads fresh git state.
     expect(workspaceGitService.getSnapshot).toHaveBeenCalledWith("/tmp/service-worktree", {
       force: true,
@@ -4143,7 +4146,8 @@ describe("session checkout status handling", () => {
     });
 
     expect(workspaceRuntimeStore.get).not.toHaveBeenCalled();
-    expect(workspaceGitService.getSnapshot).toHaveBeenCalledTimes(1);
+    // FULCRA(FU-657): a fresh read and the answer read (both from the service).
+    expect(workspaceGitService.getSnapshot).toHaveBeenCalledTimes(2);
     expect(messages).toContainEqual({
       type: "checkout_status_response",
       payload: expect.objectContaining({
@@ -4156,6 +4160,52 @@ describe("session checkout status handling", () => {
         requestId: "request-cold-status",
       }),
     });
+  });
+
+  // FULCRA(FU-657): the first open must not wait for the fresh read (late header and launcher moved
+  // the screen); the fresh result follows as a status update.
+  test("answers the first status read from the cached snapshot, then pushes the fresh read", async () => {
+    const messages: Array<{ type: string; payload?: unknown }> = [];
+    const freshRead = Promise.withResolvers<ReturnType<typeof createWorkspaceGitSnapshot>>();
+    const cached = createWorkspaceGitSnapshot("/tmp/cached-worktree", {
+      git: { currentBranch: "cached-branch" },
+    });
+    const workspaceGitService = {
+      getSnapshot: vi.fn((_cwd: string, options?: { force?: boolean }) =>
+        options?.force ? freshRead.promise : Promise.resolve(cached),
+      ),
+    };
+    const session = createSessionForTest({ workspaceGitService, messages });
+
+    await session.handleMessage({
+      type: "checkout_status_request",
+      cwd: "/tmp/cached-worktree",
+      requestId: "request-cached-status",
+    });
+
+    expect(messages).toContainEqual({
+      type: "checkout_status_response",
+      payload: expect.objectContaining({
+        currentBranch: "cached-branch",
+        requestId: "request-cached-status",
+      }),
+    });
+    expect(messages.some((message) => message.type === "checkout_status_update")).toBe(false);
+
+    freshRead.resolve(
+      createWorkspaceGitSnapshot("/tmp/cached-worktree", {
+        git: { currentBranch: "fresh-branch" },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(messages).toContainEqual({
+        type: "checkout_status_update",
+        payload: expect.objectContaining({
+          cwd: "/tmp/cached-worktree",
+          currentBranch: "fresh-branch",
+        }),
+      }),
+    );
   });
 });
 

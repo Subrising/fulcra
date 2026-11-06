@@ -2146,7 +2146,8 @@ describe("plugin catalog", () => {
         payload: { requestId: request.requestId, plugins: respond(request) },
       }),
     );
-    return { request, plugins: await response };
+    // FULCRA(FU-657): Fulcra's catalog is an object that keeps trusted host fields; read `.plugins`.
+    return { request, plugins: (await response).plugins };
   }
 
   test("reuses retained client bundles the daemon leaves out", async () => {
@@ -4580,7 +4581,9 @@ test("reconnects after relay close with replaced-by-new-connection reason", asyn
 
 test("stops reconnecting after the transport closes for an endpoint security failure", async () => {
   const close = { code: 4002, reason: "legacy security below required minimum" };
-  const error = "Endpoint security handshake failed: legacy security below required minimum";
+  // FULCRA(FU-657): the Fulcra relay channel does not trust close text from the relay, so the
+  // reason reads "Relay connection closed". The refusal (no reconnect) stays the same.
+  const error = "Endpoint security handshake failed: Relay connection closed";
   useHeartbeatClock();
   try {
     let attempts = 0;
@@ -8806,7 +8809,8 @@ test("native queue client leaves ordinary send untouched on an unadvertised host
   const request = nativeQueueRequests(mock)[0];
   expect(request).not.toHaveProperty("nativeQueue");
   nativeQueueResponse(mock, request);
-  await expect(pending).resolves.toBeUndefined();
+  // FULCRA(FU-657): upstream v0.15.0 sendAgentMessage returns a delivery receipt object.
+  await expect(pending).resolves.toEqual({});
 });
 
 test("agent message queue gates explicit queue and stamped steer before sending", async () => {
@@ -10028,7 +10032,8 @@ test.each([false, true])(
     if (!supported) {
       await expect(
         client.sendAgentMessage("recipient", "review", { sourceAgentId: "server::sender" }),
-      ).rejects.toThrow("Update the Paseo host");
+        // FULCRA(FU-657): Fulcra user text does not name Paseo; the refusal is unchanged.
+      ).rejects.toThrow("Update the host to send messages with agent provenance");
       expect(transport.sent).toHaveLength(0);
     }
     const send = client.sendAgentMessage("recipient", "review", {
@@ -10271,13 +10276,17 @@ test("initial acquisition preserves structured transport failures and ordinary o
 // ---------------------------------------------------------------------------
 
 import {
-  createDaemonChannel,
   exportPublicKey,
   generateKeyPair,
   openDaemonSecureChannel,
   type SecureChannel,
   type Transport as RelayWire,
 } from "@getpaseo/relay/e2ee";
+import {
+  createDaemonChannel as createV3DaemonChannel,
+  exportPublicKey as exportV3PublicKey,
+  generateKeyPair as generateV3KeyPair,
+} from "./relay-v3/index.js";
 
 /**
  * An in-memory socket pair: the client side is a DaemonTransport, the daemon
@@ -10398,27 +10407,36 @@ function serveProtectedDaemon(
   })();
 }
 
+// FULCRA(FU-657): the Fulcra relay keeps its v3 device-key channel (see FULCRA(relay-v3) in
+// daemon-client-relay-e2ee-transport.ts), so the daemon side here is the v3 channel, not
+// upstream's legacy Noise construction. The client reports this mode as "legacy".
 test("connects in legacy mode to a daemon that only speaks the legacy construction", async () => {
-  const keys = generateKeyPair();
+  const keys = generateV3KeyPair();
   const modes: string[] = [];
   const client = new DaemonClient({
     url: "ws://relay.test/ws?role=client&serverId=srv_test&v=2",
     clientId: "clsk_security_legacy_daemon",
     e2ee: {
       enabled: true,
-      daemonPublicKeyB64: exportPublicKey(keys.publicKey),
+      daemonPublicKeyB64: exportV3PublicKey(keys.publicKey),
+      getDeviceKeyPair: async () => generateV3KeyPair(),
       onSecurityMode: (mode) => modes.push(mode),
     },
     reconnect: { enabled: false },
     transportFactory: () => {
       const link = createRelayLink();
-      const opened = createDaemonChannel(link.wire, keys, {
-        onmessage: (data) => {
-          if (typeof data !== "string") return;
-          if ((JSON.parse(data) as { type?: string }).type !== "hello") return;
-          void opened.then((ch) => ch.send(serverInfoFrame({ ownedSubscriptions: true })));
+      const opened = createV3DaemonChannel(
+        link.wire,
+        keys,
+        {
+          onmessage: (data) => {
+            if (typeof data !== "string") return;
+            if ((JSON.parse(data) as { type?: string }).type !== "hello") return;
+            void opened.then((ch) => ch.send(serverInfoFrame({ ownedSubscriptions: true })));
+          },
         },
-      });
+        "srv_test",
+      );
       void opened.catch(() => {});
       setTimeout(() => link.open(), 0);
       return link.transport;
@@ -10431,57 +10449,61 @@ test("connects in legacy mode to a daemon that only speaks the legacy constructi
   expect(modes).toEqual(["legacy"]);
 });
 
+// FULCRA(FU-657): upstream latches a negotiated "protected" mode and then refuses legacy. The
+// Fulcra v3 channel never negotiates "protected", so the latch cannot arm. The same refusal is
+// kept here at its source: a client that requires protected security refuses the v3 channel
+// before it sends any hello, and no frame reaches the daemon.
 test("refuses legacy endpoint security on reconnect once the daemon negotiated protected", async () => {
-  const keys = generateKeyPair();
+  const keys = generateV3KeyPair();
   const modes: string[] = [];
   const links: ReturnType<typeof createRelayLink>[] = [];
-  const legacyReceived: unknown[] = [];
+  const daemonReceived: unknown[] = [];
   const client = new DaemonClient({
     url: "ws://relay.test/ws?role=client&serverId=srv_test&v=2",
     clientId: "clsk_security_latch",
     e2ee: {
       enabled: true,
-      daemonPublicKeyB64: exportPublicKey(keys.publicKey),
+      daemonPublicKeyB64: exportV3PublicKey(keys.publicKey),
+      getDeviceKeyPair: async () => generateV3KeyPair(),
+      minimumMode: "protected",
       onSecurityMode: (mode) => modes.push(mode),
     },
-    reconnect: { enabled: true, baseDelayMs: 1, maxDelayMs: 1 },
+    reconnect: { enabled: false },
     transportFactory: () => {
-      const link = createRelayLink();
+      // Every client frame starts with the text hello, so recording text frames proves none left.
+      const link = createRelayLink({
+        toDaemon: (text) => {
+          daemonReceived.push(text);
+          return text;
+        },
+      });
       links.push(link);
-      if (links.length === 1) {
-        serveProtectedDaemon(link, keys, { relayProtectedSecurity: true });
-      } else {
-        // A daemon that only speaks the legacy construction (older release).
-        void createDaemonChannel(link.wire, keys, {
-          onmessage: (data) => legacyReceived.push(data),
-        }).catch(() => {});
-      }
+      void createV3DaemonChannel(
+        link.wire,
+        keys,
+        { onmessage: (data) => daemonReceived.push(data) },
+        "srv_test",
+      ).catch(() => {});
       setTimeout(() => link.open(), 0);
       return link.transport;
     },
   });
   clients.push(client);
 
-  await client.connect();
-  expect(client.getConnectionState().status).toBe("connected");
-  expect(modes).toEqual(["protected"]);
-
-  // The relay drops the session; the client reconnects to a legacy-only daemon.
-  links[0].wire.close(1012, "Server disconnected");
-  await vi.waitFor(() => expect(links).toHaveLength(2));
-  await vi.waitFor(() => expect(links[1].isClosed()).toBe(true));
-  await vi.waitFor(() => expect(client.getConnectionState().status).toBe("disconnected"));
+  await expect(client.connect()).rejects.toThrow();
+  await vi.waitFor(() => expect(links[0]?.isClosed()).toBe(true));
   await new Promise((resolve) => setTimeout(resolve, 20));
 
-  expect(links).toHaveLength(2);
-  expect(modes).toEqual(["protected"]);
-  expect(legacyReceived).toEqual([]);
-  expect(client.lastError).toContain(
-    "Endpoint security handshake failed: daemon offered only legacy endpoint security",
-  );
+  expect(links).toHaveLength(1);
+  expect(modes).toEqual([]);
+  expect(daemonReceived).toEqual([]);
+  expect(client.getConnectionState().status).toBe("disconnected");
 });
 
-test("closes before admission when a protected-capable daemon is reached in legacy mode", async () => {
+// FULCRA(FU-657): not applicable. This downgrade check needs upstream's protected (Noise) channel,
+// which the Fulcra relay does not use. The Fulcra daemon advertises relayProtectedSecurity but
+// speaks only v3, so this check in the client would close every Fulcra relay session.
+test.skip("closes before admission when a protected-capable daemon is reached in legacy mode", async () => {
   const keys = generateKeyPair();
   const daemonReceived: unknown[] = [];
   let attempts = 0;

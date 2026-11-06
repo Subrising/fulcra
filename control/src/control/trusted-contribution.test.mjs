@@ -1212,13 +1212,58 @@ for (const [name, change] of [
     await assert.rejects(f.send());
     assert.equal(f.calls(), 0);
   });
-test("never-turned Codex still requires its native identity", async (t) => {
+// FULCRA(FU-657): since upstream v0.15 (#8393) a new Codex thread has no native id before its first turn, so a
+// controller-created never-turned Codex worker uses the same first-send bootstrap as Claude. Without the
+// controller's own creation it still refuses.
+test("never-turned Codex without a controller creation still requires its native identity", async (t) => {
   const f = await fixture(t);
   neverTurned(f);
   await assert.rejects(f.send());
   assert.equal(f.calls(), 0);
 });
-function createdNeverTurned(f) {
+test("first owned Codex prompt admits a controller-created never-turned instance", async (t) => {
+  const f = await fixture(t);
+  createdNeverTurned(f, "codex");
+  await f.send();
+  assert.equal(f.calls(), 1);
+});
+test("owned Codex prompt refuses missing native identity after a user turn", async (t) => {
+  const f = await fixture(t);
+  createdNeverTurned(f, "codex").lastUserMessageAt = new Date();
+  await assert.rejects(f.send(), /Trusted plugin input hook failed/);
+  assert.equal(f.calls(), 0);
+});
+test("first owned Codex prompt refuses unavailable permission facts", async (t) => {
+  const f = await fixture(t);
+  createdNeverTurned(f, "codex").inFlightPermissionResponses = new Set([1]);
+  await assert.rejects(f.send(), /Trusted plugin input hook failed/);
+  assert.equal(f.calls(), 0);
+});
+test("first owned Codex prompt refuses a creation recorded for another provider", async (t) => {
+  const f = await fixture(t);
+  createdNeverTurned(f, "claude");
+  await assert.rejects(f.send(), /Trusted plugin input hook failed/);
+  assert.equal(f.calls(), 0);
+});
+for (const field of ["instanceId", "nativeSessionId"])
+  test(`first owned Codex prompt refuses changed ${field} between boundaries`, async (t) => {
+    const f = await fixture(t),
+      a = createdNeverTurned(f, "codex");
+    let once = false;
+    f.host.registerV11("first-turn-change", true, (s) =>
+      s.admission.onInput((_a, input) => {
+        if (input.operation.pluginId === OWN_ID && !once) {
+          once = true;
+          if (field === "instanceId") a.instanceId = randomUUID();
+          else a.runtimeInfo.sessionId = randomUUID();
+        }
+        return "allow";
+      }),
+    );
+    await assert.rejects(f.send(), /Trusted plugin input hook failed/);
+    assert.equal(f.calls(), 0);
+  });
+function createdNeverTurned(f, provider = "claude") {
   const a = neverTurned(f),
     create = randomUUID(),
     row = f.store.get(f.id);
@@ -1227,7 +1272,7 @@ function createdNeverTurned(f) {
     JSON.stringify({
       messageId: create,
       taskId: row.task,
-      provider: "claude",
+      provider,
       title: "Created worker",
     }),
     JSON.stringify({ id: f.id, cwd: f.home, runtimeInstanceId: a.instanceId }),

@@ -423,7 +423,16 @@ describe("CheckoutSession", () => {
       });
 
       expect(snapshotCalls).toEqual([
-        { cwd: "/repo", options: { force: true, includeForge: true, reason: "manual-refresh" } },
+        // FULCRA(FU-657): a manual refresh reads after any in-flight read.
+        {
+          cwd: "/repo",
+          options: {
+            force: true,
+            includeForge: true,
+            reason: "manual-refresh",
+            afterInFlight: true,
+          },
+        },
       ]);
       expect(refreshedCwds).toEqual(["/repo"]);
       expect(emitted).toEqual([

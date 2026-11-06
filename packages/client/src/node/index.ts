@@ -132,6 +132,9 @@ export function createHostTransportFactory(
         factory = createRelayE2eeTransportFactory({
           baseFactory: factory,
           daemonPublicKeyB64: socketTarget.offer.daemonPublicKeyB64,
+          // FULCRA(FU-657): the v3 channel binds session keys to the server id; without it the
+          // handshake derives keys the daemon does not share and every relay session fails.
+          serverId: socketTarget.offer.serverId,
           ...(securityFloor ? { minimumMode: securityFloor } : {}),
           onSecurityMode: (mode) => {
             if (mode === "protected") securityFloor = "protected";

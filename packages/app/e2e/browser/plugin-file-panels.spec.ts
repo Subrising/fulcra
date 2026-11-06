@@ -95,7 +95,7 @@ async function editMarkdownThroughPlugin(page: Page) {
 async function openBuiltinMarkdownSource(page: Page, name: string) {
   await page.getByTestId(`workspace-tab-file_${name}`).first().click({ button: "right" });
   await page.getByRole("menuitem", { name: "Open with…" }).hover();
-  await page.getByRole("menuitem", { name: "Markdown — Paseo" }).click();
+  await page.getByRole("menuitem", { name: "Markdown — Fulcra" }).click();
   await page
     .getByTestId("file-preview-mode")
     .filter({ visible: true })

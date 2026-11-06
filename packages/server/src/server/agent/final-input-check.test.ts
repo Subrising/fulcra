@@ -8,6 +8,8 @@ import {
   recordFinalInputHandoff,
   waitForFinalInputHandoff,
   requiresProviderInputHandoff,
+  failFinalInputHandoff,
+  wasFinalInputRefused,
 } from "./final-input-check.js";
 
 test("a handoff timeout revokes a delayed transport check before recovery can retry", async () => {
@@ -144,4 +146,31 @@ test("refusal before handoff leaves commitment unspent", async () => {
   expect(hasFinalInputHandoff(handle)).toBe(false);
   await expect(waitForFinalInputHandoff(handle)).rejects.toThrow("stopped");
   expect(commits).toBe(0);
+});
+
+// FULCRA(FU-657): only a refusal by the check itself drops the rejected prompt row; a later provider failure keeps it.
+test("a check refusal is marked refused; a provider failure after the check passed is not", () => {
+  const refusing = createFinalInputCheck(() => {
+    throw new Error("The receiver session changed");
+  });
+  expect(() => assertFinalInputCheck(refusing)).toThrow("The receiver session changed");
+  failFinalInputHandoff(refusing, new Error("The receiver session changed"));
+  expect(wasFinalInputRefused(refusing)).toBe(true);
+
+  const refusingCommit = createFinalInputCheck(
+    () => undefined,
+    () => {
+      throw new Error("authority moved");
+    },
+  );
+  expect(() => commitFinalInputCheck(refusingCommit)).toThrow("authority moved");
+  expect(wasFinalInputRefused(refusingCommit)).toBe(true);
+
+  const passing = createFinalInputCheck(() => undefined);
+  assertFinalInputCheck(passing);
+  failFinalInputHandoff(passing, new Error("provider start failed"));
+  expect(wasFinalInputRefused(passing)).toBe(false);
+  expect(() => assertFinalInputCheck(passing)).toThrow("provider start failed");
+  expect(wasFinalInputRefused(passing)).toBe(false);
+  expect(wasFinalInputRefused(undefined)).toBe(false);
 });

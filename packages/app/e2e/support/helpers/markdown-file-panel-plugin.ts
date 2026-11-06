@@ -9,7 +9,8 @@ import { expectFileTabOpen, openFileFromExplorer } from "./file-explorer";
 /** A directory plugin whose "Rich Markdown" file panel claims `.md`, next to the built-in. */
 export const MARKDOWN_PANEL_PLUGIN_ID = "file-panel-picker-e2e";
 export const MARKDOWN_PANEL_ID = `plugin:${MARKDOWN_PANEL_PLUGIN_ID}/rich-markdown`;
-export const BUILTIN_MARKDOWN_OPTION = "Markdown — Paseo";
+// FULCRA(FU-657): the builtin plugin owner is "Fulcra" (i18n builtin.owner).
+export const BUILTIN_MARKDOWN_OPTION = "Markdown — Fulcra";
 export const PLUGIN_MARKDOWN_OPTION = `Rich Markdown — ${MARKDOWN_PANEL_PLUGIN_ID}`;
 
 const SOURCE = `import React from "react";

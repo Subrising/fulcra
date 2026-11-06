@@ -1,6 +1,7 @@
 import { limitChildOutput } from "../utils/child-output-limit.js";
 import { spawn } from "node:child_process";
-import { statSync } from "node:fs";
+import { stat } from "node:fs/promises";
+import { setImmediate as yieldToLoop } from "node:timers/promises";
 
 // Whether project and workspace directories can be used, without ever blocking the daemon.
 //
@@ -45,17 +46,32 @@ function isMissingPathError(error: unknown): boolean {
   return error.code === "ENOENT" || error.code === "ENOTDIR";
 }
 
+// FULCRA(FU-657): the in-process check used statSync per path, which blocked the daemon for the whole
+// pass (about 180 ms for 20000 workspaces on Linux CI). Use async stat with the upstream v0.15.0 bounds:
+// two lookups at a time, so libuv's shared threadpool keeps free threads, and a loop turn every 32 paths.
+const IN_PROCESS_CONCURRENCY = 2;
+const IN_PROCESS_YIELD_EVERY = 32;
+
 /** In-process check, for platforms where a lookup never waits on a consent prompt. */
-function inspectInProcess(paths: readonly string[]): Map<string, DirectoryState> {
-  const states = new Map<string, DirectoryState>();
-  for (const target of paths) {
-    try {
-      states.set(target, statSync(target).isDirectory() ? "directory" : "missing");
-    } catch (error) {
-      states.set(target, isMissingPathError(error) ? "missing" : "unreadable");
-    }
-  }
-  return states;
+async function inspectInProcess(paths: readonly string[]): Promise<Map<string, DirectoryState>> {
+  const unique = Array.from(new Set(paths));
+  const results: DirectoryState[] = [];
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(IN_PROCESS_CONCURRENCY, unique.length) }, async () => {
+      let count = 0;
+      while (next < unique.length) {
+        const index = next++;
+        try {
+          results[index] = (await stat(unique[index]!)).isDirectory() ? "directory" : "missing";
+        } catch (error) {
+          results[index] = isMissingPathError(error) ? "missing" : "unreadable";
+        }
+        if (++count % IN_PROCESS_YIELD_EVERY === 0) await yieldToLoop();
+      }
+    }),
+  );
+  return new Map(unique.map((target, index) => [target, results[index]!]));
 }
 
 export interface DirectoryInspectorOptions {

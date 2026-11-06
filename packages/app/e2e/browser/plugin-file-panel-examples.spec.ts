@@ -200,7 +200,7 @@ test("directory examples mount the PDF frame and write Markdown through the file
     });
 
     await openFile(page, "notes.md");
-    await expect(page.getByRole("radio", { name: "Markdown — Paseo", exact: true })).toBeChecked();
+    await expect(page.getByRole("radio", { name: "Markdown — Fulcra", exact: true })).toBeChecked();
     await expect(
       page.getByRole("radio", { name: "Rich Markdown — markdown-panel", exact: true }),
     ).toBeVisible();
@@ -236,7 +236,7 @@ test("directory examples mount the PDF frame and write Markdown through the file
 
     // "Open with…" switches to Paseo's Markdown panel; its Source view is the editor, with the
     // cursor and vim mode in the panel's toolbar.
-    await openWithFromTabMenu(page, "notes.md", "Markdown — Paseo");
+    await openWithFromTabMenu(page, "notes.md", "Markdown — Fulcra");
     await expect(page.getByRole("heading", { name: "Edited by Rich Markdown" })).toBeVisible();
     await selectFileView(page, "Source");
     const source = page.getByTestId("file-source-editor").filter({ visible: true });

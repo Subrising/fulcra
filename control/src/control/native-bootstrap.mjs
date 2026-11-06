@@ -3,9 +3,12 @@
 const refuse = () => {
   throw Error("Orca native admission refused: Unbound first native delivery");
 };
+// FULCRA(FU-657): since upstream v0.15 (#8393) a new Codex thread has no native id until its first turn, as a
+// new Claude session. Only these two providers; every other rule below and in admitBootstrap is unchanged.
+const BOOTSTRAP_PROVIDERS = new Set(["claude", "codex"]);
 export function bootstrapCandidate(agent) {
   return (
-    agent.provider === "claude" &&
+    BOOTSTRAP_PROVIDERS.has(agent.provider) &&
     agent.runtime.status === "known" &&
     agent.runtime.nativeSessionId === null &&
     agent.runtime.lastUserMessageAt === null
@@ -25,7 +28,7 @@ export function admitBootstrap(db, agent, operation, delivery, boot) {
     body = JSON.parse(creation.body),
     result = JSON.parse(creation.result);
   if (
-    body.provider !== "claude" ||
+    body.provider !== agent.provider ||
     body.taskId !== session.task ||
     result.cwd !== session.cwd ||
     result.cwd !== agent.cwd ||
@@ -63,6 +66,22 @@ export function admitBootstrap(db, agent, operation, delivery, boot) {
       boot,
     );
   }
+}
+// FULCRA(FU-657): a Codex app-server knows the new thread id when it prepares the first turn, but the runtime facts
+// show no id until that turn starts (upstream #8393). Only the exact admitted first delivery, attempt and operation
+// of a Codex bootstrap, with no id bound yet and no runtime id, may carry a prepared thread id. Any other change
+// of identity still refuses.
+export function bootstrapTurnIdentity(db, agent, operation, deliveryId, turnNativeId) {
+  if (agent.provider !== "codex" || !bootstrapCandidate(agent) || !turnNativeId) return false;
+  const binding = db.prepare("SELECT * FROM native_bootstrap WHERE session=?").get(agent.id);
+  return Boolean(
+    binding &&
+    binding.nativeId === null &&
+    binding.delivery === deliveryId &&
+    binding.attempt === operation.attemptId &&
+    binding.operation === operation.operationId &&
+    binding.instanceId === agent.runtime.instanceId,
+  );
 }
 export function requireBootstrapBinding(db, agent) {
   const binding = db.prepare("SELECT * FROM native_bootstrap WHERE session=?").get(agent.id);

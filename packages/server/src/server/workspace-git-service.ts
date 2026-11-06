@@ -347,6 +347,12 @@ export type WorkspaceGitSnapshotOptions =
       force: true;
       includeForge?: boolean;
       reason: string;
+      /**
+       * FULCRA(FU-657): read again after an in-flight read instead of joining it. Use it when the caller
+       * changed the checkout just before (a manual refresh): the in-flight read can predate the change,
+       * and with FU-590 an unobserved workspace has no watcher to correct the runtime store later.
+       */
+      afterInFlight?: boolean;
     };
 
 interface WorkspaceGitRefreshRequest {
@@ -3188,7 +3194,8 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
       refreshWorktree: true,
       includeForge: options?.includeForge ?? true,
       reason: options?.reason ?? defaultReason,
-      queueIfBusy: false,
+      // FULCRA(FU-657): afterInFlight queues one follow-up read behind an in-flight read.
+      queueIfBusy: options?.force === true && options.afterInFlight === true,
       movedRemoteRefs: new Set(),
     };
   }

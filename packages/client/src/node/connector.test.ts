@@ -76,12 +76,24 @@ test("direct connector preserves 25 MiB binary frames in both directions", async
   await sending;
 });
 
+// FULCRA(FU-657): Fulcra accepts only v3 pairing offers and keeps the v3 relay channel, so the
+// daemon side of these tests is the v3 channel and the relay URI carries a v3 offer.
 import {
   createDaemonChannel,
   generateKeyPair,
   exportPublicKey,
   type Transport,
-} from "@getpaseo/relay/e2ee";
+} from "../relay-v3/index.js";
+function v3RelayUri(port: string, serverId: string, key: string, extra = ""): string {
+  const query = new URLSearchParams({
+    key,
+    v: "3",
+    pairingId: "A".repeat(22),
+    pairingSecret: "B".repeat(43),
+    pairingExpiresAt: "2099-01-01T00:00:00.000Z",
+  });
+  return `relay://127.0.0.1:${port}/${serverId}?${query.toString()}${extra}`;
+}
 test("encrypted connector rejects overload synchronously and preserves the physical link for sibling traffic", async () => {
   const server = await endpoint();
   const keys = generateKeyPair();
@@ -106,16 +118,21 @@ test("encrypted connector rejects overload synchronously and preserves the physi
         isBinary,
       });
     });
-    ready = createDaemonChannel(wire, keys, {
-      onmessage: (data) => {
-        received.push(data);
+    ready = createDaemonChannel(
+      wire,
+      keys,
+      {
+        onmessage: (data) => {
+          received.push(data);
+        },
       },
-    });
+      "srv_slow",
+    );
   });
   const port = new URL(server.url).port;
   const budget = new HostTransportBudget(4 * 1024 * 1024);
   const transport = createHostTransportFactory(
-    `relay://127.0.0.1:${port}/srv_slow?key=${encodeURIComponent(exportPublicKey(keys.publicKey))}`,
+    v3RelayUri(port, "srv_slow", exportPublicKey(keys.publicKey)),
     budget,
   )({ url: server.url });
   cleanup.push(async () => transport.close());
@@ -160,11 +177,13 @@ test("encrypted connector rejects overload synchronously and preserves the physi
   expect(server.wss.clients.size).toBe(1);
 });
 
-import { openDaemonSecureChannel } from "@getpaseo/relay/e2ee";
+// FULCRA(FU-657): upstream latches a negotiated "protected" mode, which the Fulcra v3 channel never
+// negotiates. The same refusal is kept at its source: an offer that pins protected security makes
+// the connector refuse the v3 channel before any hello, and no frame reaches the daemon.
 test("encrypted connector refuses legacy endpoint security on a later attempt once protected was negotiated", async () => {
   const server = await endpoint();
   const keys = generateKeyPair();
-  const legacyReceived: unknown[] = [];
+  const daemonReceived: unknown[] = [];
   let connections = 0;
   server.wss.on("connection", (socket) => {
     connections += 1;
@@ -176,6 +195,7 @@ test("encrypted connector refuses legacy endpoint security on a later attempt on
       onerror: null,
     };
     socket.on("message", (data, isBinary) => {
+      daemonReceived.push(data);
       const bytes = Buffer.from(data as Buffer);
       wire.onmessage?.({
         data: isBinary
@@ -185,33 +205,23 @@ test("encrypted connector refuses legacy endpoint security on a later attempt on
       });
     });
     socket.on("close", (code, reason) => wire.onclose?.(code, reason.toString()));
-    if (connections === 1) {
-      void openDaemonSecureChannel(wire, { daemonKeyPair: keys }).catch(() => {});
-    } else {
-      // The daemon behind the relay now only speaks the legacy construction.
-      void createDaemonChannel(wire, keys, {
-        onmessage: (data) => legacyReceived.push(data),
-      }).catch(() => {});
-    }
+    void createDaemonChannel(wire, keys, {}, "srv_latch").catch(() => {});
   });
   const port = new URL(server.url).port;
   const factory = createHostTransportFactory(
-    `relay://127.0.0.1:${port}/srv_latch?key=${encodeURIComponent(exportPublicKey(keys.publicKey))}`,
+    v3RelayUri(port, "srv_latch", exportPublicKey(keys.publicKey), "&security=protected"),
   );
 
-  const first = factory({ url: server.url });
-  cleanup.push(async () => first.close());
-  await new Promise<void>((resolve) => first.onOpen(resolve));
-  first.close();
-
-  const second = factory({ url: server.url });
-  cleanup.push(async () => second.close());
-  let opened = false;
-  second.onOpen(() => {
-    opened = true;
-  });
-  const closed = await new Promise<unknown>((resolve) => second.onClose(resolve));
-  expect(closed).toMatchObject({ code: 4002, reason: expect.stringContaining("legacy") });
-  expect(opened).toBe(false);
-  expect(legacyReceived).toEqual([]);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const transport = factory({ url: server.url });
+    cleanup.push(async () => transport.close());
+    let opened = false;
+    transport.onOpen(() => {
+      opened = true;
+    });
+    await new Promise<unknown>((resolve) => transport.onClose(resolve));
+    expect(opened).toBe(false);
+  }
+  expect(connections).toBeGreaterThan(0);
+  expect(daemonReceived).toEqual([]);
 });

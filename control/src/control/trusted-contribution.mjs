@@ -1,5 +1,6 @@
 import {
   bootstrapCandidate,
+  bootstrapTurnIdentity,
   admitBootstrap,
   requireBootstrapBinding,
 } from "./native-bootstrap.mjs";
@@ -515,7 +516,17 @@ export function createTrustedContribution({
           runtime = context.agent.runtime;
         if (
           turn.instanceId !== runtime.instanceId ||
-          turn.nativeSessionId !== runtime.nativeSessionId ||
+          (turn.nativeSessionId !== runtime.nativeSessionId &&
+            !(
+              runtime.nativeSessionId === null &&
+              bootstrapTurnIdentity(
+                db,
+                context.agent,
+                turn.operation,
+                context.id,
+                turn.nativeSessionId,
+              )
+            )) ||
           turn.model !== runtime.model ||
           turn.serviceTier !== runtime.serviceTier
         )
