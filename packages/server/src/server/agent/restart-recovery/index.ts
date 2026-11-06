@@ -6,6 +6,17 @@ interface Dependencies {
   dispatch(agentId: string, prompt: string): Promise<unknown>;
   report(agentId: string, error: unknown): void;
 }
+/**
+ * FULCRA(FU-657 row 4): Fulcra revive-on-restart owns every restart while it is on (the default). The upstream pass
+ * runs only when the owner opts in to it and turns revive off, so one restart never gets two resume prompts.
+ */
+export function upstreamRestartRecoveryEnabled(input: {
+  resumeOnStartup: boolean | undefined;
+  reviveOnRestart: boolean | undefined;
+}): boolean {
+  return input.resumeOnStartup === true && input.reviveOnRestart === false;
+}
+
 export function createRestartRecovery(deps: Dependencies) {
   // Candidates are chosen at startup; each settles once its resume was sent or abandoned.
   const resuming = new Map<string, { promise: Promise<void>; resolve(): void }>();

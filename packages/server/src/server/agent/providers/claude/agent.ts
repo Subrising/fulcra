@@ -7,6 +7,7 @@ import {
   recordFinalInputHandoff,
 } from "../../final-input-check.js";
 import { FINAL_INPUT_CHECK } from "../../agent-sdk-types.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate } from "node:timers/promises";
 import { ClaudeRuntimeSafety } from "./runtime-safety.js";
 import { validateProviderOptions } from "../../provider-options.js";
@@ -195,6 +196,18 @@ import { execCommand } from "../../../../utils/spawn.js";
 import { composeSystemPromptParts } from "../../system-prompt.js";
 
 const fsPromises = promises;
+
+/**
+ * FULCRA(FU-657): the timeline-only history parse converts in its own scope. Its tool links and
+ * handback ids never touch the live maps, so a turn that streams during the parse keeps its own.
+ */
+interface ClaudeTimelineConversionScope {
+  toolUseCache: Map<string, ToolUseCacheEntry>;
+  subagentHandbackIds: Set<string>;
+  /** The load generation the parse started in; a rebind since then drops its output. */
+  generation: number;
+}
+const timelineConversionScope = new AsyncLocalStorage<ClaudeTimelineConversionScope>();
 const CLAUDE_SETTING_SOURCES: NonNullable<ClaudeOptions["settingSources"]> = [
   "user",
   "project",
@@ -2468,10 +2481,16 @@ class ClaudeAgentSession implements AgentSession {
   private pendingModeOverrideNotice: AgentTimelineItem | null = null;
   private planResumeMode: PermissionMode | null = null;
   private availableModes: AgentMode[] = DEFAULT_MODES;
-  private toolUseCache = new Map<string, ToolUseCacheEntry>();
+  private readonly liveToolUseCache = new Map<string, ToolUseCacheEntry>();
+  private get toolUseCache(): Map<string, ToolUseCacheEntry> {
+    return timelineConversionScope.getStore()?.toolUseCache ?? this.liveToolUseCache;
+  }
   private toolUseIndexToId = new Map<number, string>();
   private toolUseInputBuffers = new Map<string, string>();
-  private subagentHandbackIds = new Set<string>();
+  private readonly liveSubagentHandbackIds = new Set<string>();
+  private get subagentHandbackIds(): Set<string> {
+    return timelineConversionScope.getStore()?.subagentHandbackIds ?? this.liveSubagentHandbackIds;
+  }
   private pendingPermissions = new Map<string, PendingPermission>();
   private activeForegroundTurnId: string | null = null;
   private autonomousTurn: AutonomousTurnState | null = null;
@@ -2525,8 +2544,17 @@ class ClaudeAgentSession implements AgentSession {
   // FULCRA(FU-472): the session whose timeline the resume pass did not build yet.
   private persistedTimelineSource: string | null = null;
   private historyTimelineReady: Promise<void> | null = null;
+  // FULCRA(FU-657): a rebind starts a new generation; an older timeline parse keeps no output.
+  private historyLoadGeneration = 0;
   private historySessionId: string | null = null;
-  private replayingHistory = false;
+  private liveReplayingHistory = false;
+  /** A scoped timeline parse is always a replay; it never changes the live flag. */
+  private get replayingHistory(): boolean {
+    return timelineConversionScope.getStore() !== undefined || this.liveReplayingHistory;
+  }
+  private set replayingHistory(value: boolean) {
+    if (timelineConversionScope.getStore() === undefined) this.liveReplayingHistory = value;
+  }
   // Ends native receipt reads when the session closes.
   private readonly historyAbort = new AbortController();
   private turnState: TurnState = "idle";
@@ -3782,6 +3810,11 @@ class ClaudeAgentSession implements AgentSession {
 
   private rebindConversationSession(sessionId: string): Promise<void> {
     const previousReady = this.ensureResumeStateReady();
+    // FULCRA(FU-657): before any await, so a timeline parse that is running or starts in the
+    // window neither keeps old output nor loses its promise to the clear below.
+    this.historyLoadGeneration += 1;
+    this.persistedTimelineSource = null;
+    this.historyTimelineReady = null;
     const rebind = (async () => {
       await previousReady;
       await this.retireQuery();
@@ -3794,8 +3827,6 @@ class ClaudeAgentSession implements AgentSession {
       this.queryRestartNeeded = true;
       this.persistedHistory = [];
       this.persistedProviderSubagentEvents = [];
-      this.persistedTimelineSource = null;
-      this.historyTimelineReady = null;
       this.historyPending = false;
       this.userMessageIds = [];
       this.emittedUserMessageIds.clear();
@@ -6175,19 +6206,24 @@ class ClaudeAgentSession implements AgentSession {
    * FULCRA(FU-472): the upstream full parse, for the timeline only. The resume pass already left
    * the live tool links and session state. A second conversion over the same records would find
    * their calls started and drop them, so this build converts from empty links and a new task
-   * state. streamHistory runs before the first turn, so no live frame needs the links meanwhile.
+   * state. The links live in a scope of this parse only (FU-657): a turn that starts or streams
+   * meanwhile keeps the live links, and its new files are not marked as replayed.
    */
   private async loadPersistedTimeline(sessionId: string): Promise<void> {
-    const toolUseCache = this.toolUseCache;
-    const subagentHandbackIds = this.subagentHandbackIds;
-    this.toolUseCache = new Map();
-    this.subagentHandbackIds = new Set();
-    try {
-      await this.loadPersistedHistory(sessionId, { sessionState: false, timeline: true });
-    } finally {
-      this.toolUseCache = toolUseCache;
-      this.subagentHandbackIds = subagentHandbackIds;
-    }
+    await timelineConversionScope.run(
+      {
+        toolUseCache: new Map(),
+        subagentHandbackIds: new Set(),
+        generation: this.historyLoadGeneration,
+      },
+      () => this.loadPersistedHistory(sessionId, { sessionState: false, timeline: true }),
+    );
+  }
+
+  /** False inside a timeline parse that a rebind made stale (FU-657). */
+  private timelineOutputCurrent(): boolean {
+    const scope = timelineConversionScope.getStore();
+    return scope === undefined || scope.generation === this.historyLoadGeneration;
   }
 
   private async loadPersistedHistory(
@@ -6232,7 +6268,7 @@ class ClaudeAgentSession implements AgentSession {
       await this.ingestPersistedHistoryEntry(entry, timeline, replay, taskState, mode);
     }
 
-    if (timeline.length > 0) {
+    if (timeline.length > 0 && this.timelineOutputCurrent()) {
       this.persistedHistory = [...this.persistedHistory, ...timeline];
       this.historyPending = true;
     }
@@ -6280,7 +6316,7 @@ class ClaudeAgentSession implements AgentSession {
       toolOwners: subagentReplay.toolOwners,
       subagentToolCalls: parentFacts.toolCalls,
     };
-    if (observations.length === 0 || !mode.timeline) return replay;
+    if (observations.length === 0 || !mode.timeline || !this.timelineOutputCurrent()) return replay;
 
     for (const event of foldSubagentObservations(observations)) {
       this.persistedProviderSubagentEvents.push({
@@ -6313,7 +6349,9 @@ class ClaudeAgentSession implements AgentSession {
       ? replay.toolOwners.get(notificationToolUseId)
       : undefined;
     if (notificationOwner) {
-      for (const item of await this.convertHistoryEntry(entry)) {
+      const items = await this.convertHistoryEntry(entry);
+      if (!this.timelineOutputCurrent()) return;
+      for (const item of items) {
         this.persistedProviderSubagentEvents.push({
           type: "provider_subagent",
           provider: "claude",

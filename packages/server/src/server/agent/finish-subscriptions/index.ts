@@ -6,6 +6,7 @@ import type { WaitForFinishResult } from "@getpaseo/client/internal/daemon-clien
 import type { FinishObservationResult } from "./internal/observation-buffer.js";
 import type { AgentMessageDelivery } from "../agent-messages/index.js";
 import { getParentAddressFromLabels } from "@getpaseo/protocol/agent-labels";
+import { finishNotificationWanted } from "../../finish-notice-filter.js";
 import {
   formatFinishNotificationBody,
   finishNotificationEvents,
@@ -175,6 +176,9 @@ export function createFinishSubscriptions(deps: Dependencies): FinishSubscriptio
   ): Promise<boolean> {
     const requests = result.final?.pendingPermissions ?? [];
     const reason = reasonFor(result);
+    // FULCRA(FU-657): the FU-483 rule also holds for a remote child. A plain finished turn without a
+    // result line ends the intent without a wake; errors, permissions and closed chats still go.
+    if (!finishNotificationWanted(reason, result.lastMessage)) return true;
     for (const id of permissions)
       if (!requests.some((request) => request.id === id)) permissions.delete(id);
     const acknowledgments: Promise<unknown>[] = [];

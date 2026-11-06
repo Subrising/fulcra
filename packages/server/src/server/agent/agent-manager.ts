@@ -1201,6 +1201,8 @@ export class AgentManager {
       witness: string;
     } = {
       origin: createNativeReportOrigin(() => {
+        // FULCRA(FU-657): a closed agent leaves the live map; it gets the upstream "not live" error.
+        if (!this.agents.has(agentId)) throw new Error(`Agent is not live: ${agentId}`);
         const current = this.currentReportIdentity(agentId);
         if (
           this.reportLaunches.get(agentId) !== launch ||

@@ -38,7 +38,10 @@ import { ControllerChannel } from "./plugins/controller-channel.js";
 import { createControllerService } from "./plugins/controller-service.js";
 import { initializeTrustedPlugins } from "./plugins/trusted-bootstrap.js";
 import { daemonBootDenyRules, recordDaemonBoot } from "./plugins/daemon-boot.js";
-import { createRestartRecovery } from "./agent/restart-recovery/index.js";
+import {
+  createRestartRecovery,
+  upstreamRestartRecoveryEnabled,
+} from "./agent/restart-recovery/index.js";
 import { sendPromptToAgent } from "./agent/agent-prompt.js";
 import { createIdleRuntimeCleanup } from "./agent/idle-runtime-cleanup/index.js";
 import {
@@ -1324,10 +1327,19 @@ export async function createPaseoDaemon(
     agentStorage,
   );
   await agentStorage.initialize();
+  const upstreamRestartRecovery = () =>
+    upstreamRestartRecoveryEnabled({
+      resumeOnStartup: daemonConfigStore.get().resumeOnStartup,
+      reviveOnRestart: config.reviveOnRestart !== false,
+    });
+  if (daemonConfigStore.get().resumeOnStartup === true && !upstreamRestartRecovery())
+    logger.warn(
+      "agents.resumeOnStartup is ignored while daemon.reviveOnRestart is on: revive-on-restart owns restarts",
+    );
   const restartRecovery = createRestartRecovery({
     storage: agentStorage,
     settings: () => ({
-      enabled: daemonConfigStore.get().resumeOnStartup === true,
+      enabled: upstreamRestartRecovery(),
       prompt: daemonConfigStore.get().resumePrompt ?? "Resume working.",
     }),
     eligible: async (record) =>
@@ -1337,9 +1349,9 @@ export async function createPaseoDaemon(
     report: (agentId, err) => logger.error({ agentId, err }, "Agent restart recovery failed"),
   });
   // FU-657 row 4: Fulcra recovery (revive-on-restart, limit-resume, the controller) owns restarts. The upstream pass
-  // rewrites running records to closed and reads every archived record, so it runs only when the owner opts in.
-  const upstreamRestartRecovery = daemonConfigStore.get().resumeOnStartup === true;
-  if (upstreamRestartRecovery) await restartRecovery.prepareStartup();
+  // rewrites running records to closed and reads every archived record, so it runs only when the owner opts in and
+  // revive-on-restart is off (upstreamRestartRecoveryEnabled).
+  if (upstreamRestartRecovery()) await restartRecovery.prepareStartup();
   logger.info({ elapsed: elapsed() }, "Agent storage initialized");
   await bootstrapWorkspaceRegistries({
     serverId,
@@ -2557,8 +2569,7 @@ export async function createPaseoDaemon(
     await liveRecorder
       ?.stop()
       .catch((err) => logger.warn({ err }, "Could not stop the live record"));
-    if (daemonConfigStore.get().resumeOnStartup === true)
-      await restartRecovery.captureRunningAgents();
+    if (upstreamRestartRecovery()) await restartRecovery.captureRunningAgents();
     await withDetachedJobsPreserved(() =>
       trustedPlugins.shutdownClosure(() => closeAllAgents(logger, agentManager, agentStorage)),
     );

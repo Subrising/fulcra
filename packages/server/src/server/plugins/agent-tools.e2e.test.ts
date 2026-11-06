@@ -245,10 +245,9 @@ test("resume uses the stored title and labels, and close removes the attachment"
     await h.daemon.daemon.agentManager.setTitle(a.id, "Stored title");
     await h.daemon.daemon.agentManager.closeAgent(a.id);
     expect(h.daemon.daemon.agentManager.getPluginTools(a.id)).toEqual([]);
-    // FU-657: the Fulcra native launch check refuses the closed agent's catalog before the
-    // upstream "Agent is not live" check runs.
+    // FU-657: the Fulcra native launch check runs first and refuses a closed agent as not live.
     await expect(catalog.executeTool("plugin_echo", { text: "closed" })).rejects.toThrow(
-      "Native report launch replaced or unavailable",
+      `Agent is not live: ${a.id}`,
     );
     await h.daemon.daemon.agentManager.resumeAgentFromPersistence(handle, a.config, a.id);
     expect(JSON.parse(h.launches.at(-1)!.context!.env!.OPEN_INFO)).toEqual({

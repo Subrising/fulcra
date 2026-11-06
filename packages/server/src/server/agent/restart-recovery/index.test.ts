@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentStorage, parseStoredAgentRecord } from "../agent-storage.js";
 import { createTestLogger } from "../../../test-utils/test-logger.js";
-import { createRestartRecovery } from "./index.js";
+import { createRestartRecovery, upstreamRestartRecoveryEnabled } from "./index.js";
 
 test("recovery saves intent before normalization, clears before dispatch, and resumes each agent independently", async () => {
   const root = await mkdtemp(join(tmpdir(), "restart-recovery-"));
@@ -103,3 +103,17 @@ test("opt-out consumes pending recovery and excludes archived, private, owned an
     await rm(root, { recursive: true, force: true });
   }
 });
+
+// FULCRA(FU-657 row 4): revive-on-restart owns restarts while it is on.
+test.each([
+  [true, true, false],
+  [true, false, true],
+  [false, false, false],
+  [undefined, false, false],
+  [true, undefined, false],
+] as const)(
+  "upstream recovery with resumeOnStartup %s and reviveOnRestart %s is %s",
+  (resumeOnStartup, reviveOnRestart, enabled) => {
+    expect(upstreamRestartRecoveryEnabled({ resumeOnStartup, reviveOnRestart })).toBe(enabled);
+  },
+);

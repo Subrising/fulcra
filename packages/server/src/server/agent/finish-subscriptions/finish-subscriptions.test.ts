@@ -124,7 +124,8 @@ function outcome(status: "idle" | "running" | "closed" | "error" = "closed"): Wa
       },
       ["codex"],
     ),
-    lastMessage: "Partial work saved",
+    // FULCRA(FU-657): a result line, so the FU-483 filter lets the finished notice through.
+    lastMessage: "Partial work saved\nDONE: child saved",
     error: null,
   };
 }
@@ -293,6 +294,18 @@ test("dispatch failure retains intent and retries the ordinary finish notificati
   await expect.poll(async () => (await state.store.list()).length).toBe(0);
 });
 
+// FULCRA(FU-657): FU-483 for remote children. A finished turn without a result line wakes nobody.
+test("a finished remote child without a result line ends its intent without a wake", async () => {
+  const state = await scenario();
+  await state.service.register({ ...intent, serverId: "remote" });
+  await until(() => state.observation.waits.length === 1);
+  const result = outcome("idle");
+  result.lastMessage = "WAITING q123";
+  state.observation.waits[0]!.result.resolve(result);
+  await expect.poll(async () => (await state.store.list()).length).toBe(0);
+  expect(state.delivery.prompts).toEqual([]);
+});
+
 test("error and missing-child notifications never claim successful completion", async () => {
   const state = await scenario();
   await state.service.register(intent);
@@ -318,7 +331,7 @@ test("finish notification limits a long last response and points to activity for
   await state.service.register(intent);
   await until(() => state.observation.waits.length === 1);
   const result = outcome("idle");
-  result.lastMessage = "x".repeat(4100);
+  result.lastMessage = `${"x".repeat(4100)}\nDONE: long`;
   state.observation.waits[0]!.result.resolve(result);
   await until(() => state.delivery.prompts.length === 1);
   expect(state.delivery.prompts[0]).toContain("x".repeat(4000));

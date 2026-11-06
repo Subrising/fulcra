@@ -2201,7 +2201,7 @@ function createToolCatalog(
     {
       title: "Send agent prompt",
       description:
-        "Send a task. Agent callers receive an immediate queued receipt; delivery follows after two quiet seconds per recipient. Completion reports include the target’s last response by default. Paseo supplies caller identity.",
+        'Send a task. An idle agent starts a turn at once. For an agent caller, a busy agent gets the message steered into its running turn; when steering is unavailable, or the agent is paused or at a usage limit, the message is queued for the end of the turn (deliveryStatus "queued"). With notifyOnFinish, the caller gets a finish notice when the target\'s final message has a result line (DONE, BLOCKED, DECISION, QUESTION or RISK), and always for errors, permission requests and closed chats. Paseo supplies caller identity.',
       inputSchema: sendAgentPromptInputSchema,
       outputSchema: {
         success: z.boolean(),

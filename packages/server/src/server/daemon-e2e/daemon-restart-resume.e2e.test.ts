@@ -76,7 +76,7 @@ import { DaemonClient } from "../test-utils/daemon-client.js";
 
 async function restartFixture(
   root: string,
-  settings: { resumeOnStartup?: boolean; resumePrompt?: string } = {},
+  settings: { resumeOnStartup?: boolean; resumePrompt?: string; reviveOnRestart?: boolean } = {},
   fixture: { holdResume?: boolean } = {},
 ) {
   const child = fork(
@@ -114,13 +114,13 @@ async function stopFixture(child: ChildProcess, abrupt: boolean) {
 
 // FU-657 row 9: the upstream durable finish subscription tests were removed. Fulcra keeps its own
 // finish notice path. Row 4: the upstream host restart recovery settings tests were removed.
-// Fulcra revives agents on restart only with agents.resumeOnStartup (default false).
+// The upstream pass runs only with agents.resumeOnStartup and daemon.reviveOnRestart off (FU-657 row 4).
 test("a provider that is slow to reopen does not hold daemon startup", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "resume-background-process-"));
   const processes: ChildProcess[] = [];
   let client: DaemonClient | undefined;
   try {
-    const first = await restartFixture(root, { resumeOnStartup: true });
+    const first = await restartFixture(root, { resumeOnStartup: true, reviveOnRestart: false });
     processes.push(first.child);
     client = new DaemonClient({ url: `ws://127.0.0.1:${first.port}/ws`, appVersion: "0.13.0" });
     await client.connect();
@@ -144,7 +144,11 @@ test("a provider that is slow to reopen does not hold daemon startup", async () 
     client = undefined;
     await stopFixture(first.child, false);
 
-    const second = await restartFixture(root, { resumeOnStartup: true }, { holdResume: true });
+    const second = await restartFixture(
+      root,
+      { resumeOnStartup: true, reviveOnRestart: false },
+      { holdResume: true },
+    );
     processes.push(second.child);
     client = new DaemonClient({ url: `ws://127.0.0.1:${second.port}/ws`, appVersion: "0.13.0" });
     await client.connect();

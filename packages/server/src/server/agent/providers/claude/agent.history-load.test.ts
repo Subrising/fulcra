@@ -212,6 +212,273 @@ describe("ClaudeAgentSession persisted history load", () => {
     await session.close();
   });
 
+  test("a resumed transcript is replayed after the async read", async () => {
+    mkdirSync(path.dirname(transcriptPath()), { recursive: true });
+    const line = JSON.stringify({
+      type: "user",
+      uuid: "u1",
+      sessionId: SESSION_ID,
+      message: { role: "user", content: "hello from the transcript" },
+      timestamp: "2026-10-12T00:00:00.000Z",
+    });
+    const extra = [
+      {
+        type: "assistant",
+        uuid: "a1",
+        message: {
+          content: [
+            { type: "thinking", thinking: "reason" },
+            { type: "text", text: "answer" },
+          ],
+        },
+      },
+      {
+        type: "assistant",
+        message: {
+          content: [
+            { type: "tool_use", id: "read-one", name: "Read", input: { file_path: "source.ts" } },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          content: [{ type: "tool_result", tool_use_id: "read-one", content: "file payload" }],
+        },
+      },
+      {
+        type: "assistant",
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: "todo-one",
+              name: "TodoWrite",
+              input: { todos: [{ content: "Check output", status: "completed" }] },
+            },
+          ],
+        },
+      },
+      {
+        type: "system",
+        subtype: "compact_boundary",
+        compactMetadata: { trigger: "manual", preTokens: 1200 },
+      },
+      { type: "user", isCompactSummary: true, message: { content: "summary" } },
+      { type: "assistant", uuid: "a2", message: { content: "complete 🙂" } },
+    ];
+    writeFileSync(
+      transcriptPath(),
+      [line, "{bad JSON", "null", ...extra.map((entry) => JSON.stringify(entry))].join("\r\n"),
+    );
+    const client = new ClaudeAgentClient({
+      logger: pino({ level: "silent" }),
+      queryFactory: vi.fn(() => {
+        throw new Error("history load must not start a query");
+      }),
+      resolveVersion: async () => "2.1.220",
+    });
+    const session = await client.resumeSession(
+      { provider: "claude", sessionId: SESSION_ID },
+      { cwd },
+    );
+    const items: unknown[] = [];
+    for await (const event of session.streamHistory()) {
+      if (event.type === "timeline") items.push(event.item);
+    }
+    await session.close();
+    expect(JSON.stringify(items)).toContain("hello from the transcript");
+    expect(items).toMatchSnapshot();
+  });
+
+  // chmod does not remove read access on Windows, or for root.
+
+  // FULCRA(FU-657): the timeline parse converts with its own tool links. A turn that starts while
+  // it runs keeps its live tool input, and its new file is not marked as a replayed update.
+  test("a turn that starts during the timeline load keeps its tool input (FU-657)", async () => {
+    const oldPath = path.join(cwd, "old.txt");
+    const newPath = path.join(cwd, "new.txt");
+    writeFileSync(oldPath, "old");
+    const transcript = [
+      { type: "user", message: { content: "Old change" } },
+      {
+        type: "assistant",
+        message: {
+          content: [
+            { type: "tool_use", id: "old-0", name: "FileChange", input: { file_path: oldPath } },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: { content: [{ type: "tool_result", tool_use_id: "old-0", content: "done" }] },
+      },
+    ];
+    mkdirSync(path.dirname(transcriptPath()), { recursive: true });
+    writeFileSync(transcriptPath(), transcript.map((entry) => JSON.stringify(entry)).join("\n"));
+
+    let openGate!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    let parseEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      parseEntered = resolve;
+    });
+    let historyDone: Promise<AgentStreamEvent[]> | undefined;
+    const liveInput = { file_path: newPath };
+    const liveMessages: Array<() => Promise<unknown>> = [
+      async () => ({
+        type: "assistant",
+        message: {
+          content: [{ type: "tool_use", id: "live-0", name: "FileChange", input: liveInput }],
+        },
+      }),
+      async () => {
+        // The timeline parse ends between the live call and its result.
+        openGate();
+        await historyDone;
+        return {
+          type: "user",
+          message: { content: [{ type: "tool_result", tool_use_id: "live-0", content: "done" }] },
+        };
+      },
+      async () => ({ type: "result", subtype: "success", total_cost_usd: 0 }),
+    ];
+    const queryFactory = (() => ({
+      async next() {
+        const step = liveMessages.shift();
+        return step ? { done: false, value: await step() } : { done: true, value: undefined };
+      },
+      close() {},
+      async return() {
+        return { done: true, value: undefined };
+      },
+      async supportedCommands() {
+        return [];
+      },
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+    })) as ClaudeQueryFactory;
+
+    const session = await resume(queryFactory);
+    try {
+      // Hold the timeline-only parse after resume, inside its conversion.
+      const internals = session as unknown as {
+        resolveHistoryPath: (sessionId: string) => Promise<string | null>;
+      };
+      const resolveHistoryPath = internals.resolveHistoryPath.bind(session);
+      internals.resolveHistoryPath = async (sessionId) => {
+        parseEntered();
+        await gate;
+        return resolveHistoryPath(sessionId);
+      };
+      historyDone = (async () => {
+        const history: AgentStreamEvent[] = [];
+        for await (const event of session.streamHistory()) history.push(event);
+        return history;
+      })();
+      await entered;
+
+      const live = await collectSessionTurnEvents(session, "Change the new file");
+      const liveCompleted = live.flatMap((event) =>
+        event.type === "timeline" &&
+        event.item.type === "tool_call" &&
+        event.item.status === "completed"
+          ? [event.item]
+          : [],
+      );
+      expect(liveCompleted).toEqual([
+        {
+          type: "tool_call",
+          callId: "live-0",
+          name: "FileChange",
+          status: "completed",
+          error: null,
+          detail: {
+            type: "unknown",
+            input: liveInput,
+            output: { output: "done", files: [{ path: "new.txt", kind: "add" }] },
+          },
+        },
+      ]);
+
+      const history = await historyDone;
+      expect(
+        history.flatMap((event) =>
+          event.type === "timeline" &&
+          event.item.type === "tool_call" &&
+          event.item.status === "completed"
+            ? [event.item.name]
+            : [],
+        ),
+      ).toEqual(["FileChange"]);
+    } finally {
+      openGate();
+      await session.close();
+    }
+  });
+
+  // FULCRA(FU-657): a rebind starts a new history generation. A timeline parse of the old session
+  // that is still running when the rebind starts keeps none of its output.
+  test("a rebind during a timeline load keeps only the new session's history (FU-657)", async () => {
+    mkdirSync(path.dirname(transcriptPath()), { recursive: true });
+    writeFileSync(
+      transcriptPath(),
+      JSON.stringify({ type: "user", uuid: "old-u", message: { content: "old session" } }),
+    );
+    const newId = "rebound-session";
+    writeFileSync(
+      path.join(path.dirname(transcriptPath()), `${newId}.jsonl`),
+      JSON.stringify({ type: "user", uuid: "new-u", message: { content: "new session" } }),
+    );
+    let openGate!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    let parseEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      parseEntered = resolve;
+    });
+    const session = await resume();
+    const texts = (events: AgentStreamEvent[]) =>
+      events.flatMap((event) =>
+        event.type === "timeline" && event.item.type === "user_message" ? [event.item.text] : [],
+      );
+    try {
+      const internals = session as unknown as {
+        resolveHistoryPath: (sessionId: string) => Promise<string | null>;
+        rebindConversationSession: (sessionId: string) => Promise<void>;
+      };
+      const resolveHistoryPath = internals.resolveHistoryPath.bind(session);
+      internals.resolveHistoryPath = async (sessionId) => {
+        if (sessionId === SESSION_ID) {
+          parseEntered();
+          await gate;
+        }
+        return resolveHistoryPath(sessionId);
+      };
+      const oldLoad = (async () => {
+        const events: AgentStreamEvent[] = [];
+        for await (const event of session.streamHistory()) events.push(event);
+        return events;
+      })();
+      await entered;
+      const rebind = internals.rebindConversationSession(newId);
+      openGate();
+      const during = await oldLoad;
+      await rebind;
+      const after: AgentStreamEvent[] = [];
+      for await (const event of session.streamHistory()) after.push(event);
+      // The new history streams once, from whichever read came after the rebind loaded it.
+      expect([...texts(during), ...texts(after)]).toEqual(["new session"]);
+    } finally {
+      openGate();
+      await session.close();
+    }
+  });
+
   test("serves unrelated health requests while resuming 32 MiB of ordered history", async () => {
     const startedAt = performance.now();
     mkdirSync(path.dirname(transcriptPath()), { recursive: true });

@@ -63,6 +63,8 @@ interface TestPaseoDaemonOptions {
   autoArchiveAfterMerge?: boolean;
   resumeOnStartup?: boolean;
   resumePrompt?: string;
+  /** FULCRA(FU-657 row 4): the upstream restart pass runs only with revive-on-restart off. */
+  reviveOnRestart?: boolean;
   pluginsEnabled?: PaseoDaemonConfig["pluginsEnabled"];
   bundledPluginsDirectory?: string;
   builtinPlugins?: BuiltinPluginLoader;
@@ -247,6 +249,7 @@ async function prepareTestDaemonConfig(
     autoArchiveAfterMerge: options.autoArchiveAfterMerge,
     resumeOnStartup: options.resumeOnStartup,
     resumePrompt: options.resumePrompt,
+    ...(options.reviveOnRestart === undefined ? {} : { reviveOnRestart: options.reviveOnRestart }),
     pluginsEnabled: options.pluginsEnabled,
     bundledPluginsDirectory: options.bundledPluginsDirectory,
     plugins: options.plugins,
