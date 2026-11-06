@@ -10,8 +10,11 @@ afterEach(() => {
 });
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import pino from "pino";
+<<<<<<< HEAD
 import { createClientChannel, type Transport } from "@getpaseo/client/relay-v3";
 import { exportPublicKey, generateKeyPair } from "@getpaseo/relay";
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
 import { startRelayTransport } from "./relay-transport";
 
 function createMockLogger() {
@@ -156,6 +159,7 @@ describe("relay-transport control lifecycle", () => {
     vi.useRealTimers();
   });
 
+<<<<<<< HEAD
   test("releases a stalled encrypted data connection without restarting control", async () => {
     vi.useFakeTimers();
     const home = mkdtempSync(join(tmpdir(), "fulcra-stalled-relay-"));
@@ -191,6 +195,8 @@ describe("relay-transport control lifecycle", () => {
     expect(relay.sockets[2].url).toBe(stalled.url);
   });
 
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
   test("logs relay_control_connected only after first valid control message", () => {
     const logger = createMockLogger();
     const controller = startRelayTransport({
@@ -383,6 +389,7 @@ describe("relay-transport control lifecycle", () => {
     expect(dataSocket.readyState).toBe(3);
   });
 
+<<<<<<< HEAD
   test("encrypted sends wait for the physical data socket callback", async () => {
     const logger = createMockLogger();
     const daemonKeyPair = generateKeyPair();
@@ -470,6 +477,8 @@ describe("relay-transport control lifecycle", () => {
     expect(completed).toBe(true);
   });
 
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
   test("uses relayUseTls for control and data socket URLs", () => {
     const logger = createMockLogger();
     const controller = startRelayTransport({

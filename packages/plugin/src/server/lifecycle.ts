@@ -58,7 +58,14 @@ export interface PluginLifecycleEvents {
     /** Host monotonic order for observations in the same millisecond. */
     observedOrder?: string;
     outcome: PluginTurnOutcome;
+<<<<<<< HEAD
     usage?: AgentUsage;
+=======
+    /**
+     * @deprecated Always empty. Fetch history on demand with
+     * context.paseo.agents.ref(agent.id).timeline.refetch({ direction: "tail", limit: 20 }).
+     */
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
     timeline: readonly AgentTimelineItem[];
   };
   "agent.permission_requested": { agent: PluginHookAgent; request: AgentPermissionRequest };

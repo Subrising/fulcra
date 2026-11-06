@@ -48,10 +48,26 @@ export interface RelayHostConnection {
   relayEndpoint: string;
   useTls?: boolean;
   daemonPublicKeyB64: string;
+<<<<<<< HEAD
   deviceId?: string;
+=======
+  /**
+   * Pinned once this daemon identity has negotiated protected endpoint
+   * security, or when its pairing offer required it. Never cleared by a
+   * connection failure; a new daemon identity is a different connection.
+   */
+  minimumSecurityMode?: "protected";
+}
+
+export interface RoutedHostConnection {
+  id: string;
+  type: "routed";
+  originServerId: string;
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
 }
 
 export type HostConnection =
+  | RoutedHostConnection
   | DirectTcpHostConnection
   | DirectSocketHostConnection
   | DirectPipeHostConnection
@@ -131,6 +147,8 @@ function hostConnectionEquals(left: HostConnection, right: HostConnection): bool
     return false;
   }
 
+  if (left.type === "routed" && right.type === "routed")
+    return left.originServerId === right.originServerId;
   if (left.type === "directTcp" && right.type === "directTcp") {
     return left.endpoint === right.endpoint && (left.useTls ?? false) === (right.useTls ?? false);
   }
@@ -187,7 +205,69 @@ function upsertHostConnectionById(
     replaced = true;
   }
   if (!replaced) next.push(connection);
-  return next;
+  // A pin is never lost: the replaced record counts as much as the incoming one.
+  return shareRelaySecurityPin(next, [...connections, connection]);
+}
+
+/**
+ * The security pin belongs to the daemon identity, not to one relay address.
+ * Once any relay route to a key is pinned, by a strict offer or a learned
+ * handshake, every route to that key is pinned.
+ */
+function shareRelaySecurityPin(
+  connections: HostConnection[],
+  pinSources: HostConnection[],
+): HostConnection[] {
+  const pinnedKeys = new Set<string>();
+  for (const connection of pinSources) {
+    if (connection.type === "relay" && connection.minimumSecurityMode === "protected") {
+      pinnedKeys.add(connection.daemonPublicKeyB64);
+    }
+  }
+  return connections.map((connection) =>
+    connection.type === "relay" &&
+    connection.minimumSecurityMode !== "protected" &&
+    pinnedKeys.has(connection.daemonPublicKeyB64)
+      ? { ...connection, minimumSecurityMode: "protected" as const }
+      : connection,
+  );
+}
+
+function relaySecurityPinEquals(left: HostConnection, right: HostConnection): boolean {
+  const pinOf = (connection: HostConnection) =>
+    connection.type === "relay" ? connection.minimumSecurityMode : undefined;
+  return pinOf(left) === pinOf(right);
+}
+
+/**
+ * Records that the relay daemon identity `daemonPublicKeyB64` negotiated
+ * protected endpoint security. Every relay route to that identity is pinned.
+ * Returns the same array when nothing changes.
+ */
+export function pinRelayProtectedSecurityInProfiles(input: {
+  profiles: HostProfile[];
+  serverId: string;
+  daemonPublicKeyB64: string;
+  now?: string;
+}): HostProfile[] {
+  const now = input.now ?? new Date().toISOString();
+  let changed = false;
+  const next = input.profiles.map((host) => {
+    if (host.serverId !== input.serverId) return host;
+    const connections = host.connections.map((connection) => {
+      if (
+        connection.type !== "relay" ||
+        connection.daemonPublicKeyB64 !== input.daemonPublicKeyB64 ||
+        connection.minimumSecurityMode === "protected"
+      ) {
+        return connection;
+      }
+      changed = true;
+      return { ...connection, minimumSecurityMode: "protected" as const };
+    });
+    return changed ? { ...host, connections, updatedAt: now } : host;
+  });
+  return changed ? next : input.profiles;
 }
 
 /**
@@ -241,6 +321,7 @@ function hasProfileChanged(input: {
     connections,
   } = input;
   return (
+<<<<<<< HEAD
     (pairedRelay && Boolean(previous.pairingRequired)) ||
     matchingCount > 1 ||
     previous.serverId !== serverId ||
@@ -250,6 +331,23 @@ function hasProfileChanged(input: {
     !hostLifecycleEquals(previous.lifecycle, lifecycle) ||
     (password !== undefined && password !== previous.password) ||
     connectionsDiffer(previous.connections, connections)
+=======
+    input.matchingCount > 1 ||
+    previous.serverId !== input.serverId ||
+    (input.password !== undefined && input.password !== previous.password) ||
+    input.createdAt !== previous.createdAt ||
+    input.label !== previous.label ||
+    input.preferredConnectionId !== previous.preferredConnectionId ||
+    !hostLifecycleEquals(previous.lifecycle, input.lifecycle) ||
+    connections.length !== previous.connections.length ||
+    connections.some((candidate, index) => {
+      const old = previous.connections[index];
+      // Identity equality decides profile matching; the pin is policy on top of it.
+      return (
+        !old || !hostConnectionEquals(candidate, old) || !relaySecurityPinEquals(candidate, old)
+      );
+    })
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
   );
 }
 
@@ -276,9 +374,11 @@ export function upsertHostConnectionInProfiles(input: {
   const matchingIndexes = existing.reduce<number[]>((matches, daemon, index) => {
     if (
       daemon.serverId === serverId ||
-      daemon.connections.some((existingConnection) =>
-        hostConnectionEquals(existingConnection, normalizedConnection),
-      )
+      // A routed candidate names its origin; its destination belongs to the host profile.
+      (normalizedConnection.type !== "routed" &&
+        daemon.connections.some((existingConnection) =>
+          hostConnectionEquals(existingConnection, normalizedConnection),
+        ))
     ) {
       matches.push(index);
     }
@@ -412,6 +512,7 @@ export function relayConnectionFromOffer(offer: ConnectionOffer): RelayHostConne
     relayEndpoint,
     useTls,
     daemonPublicKeyB64: offer.daemonPublicKeyB64.trim(),
+    ...(offer.minimumSecurityMode ? { minimumSecurityMode: offer.minimumSecurityMode } : {}),
   };
 }
 
@@ -445,6 +546,7 @@ export function createRemoteSshHostConnection(input: {
 }
 
 const StoredHostConnectionSchema = z.discriminatedUnion("type", [
+  z.strictObject({ id: z.string(), type: z.literal("routed"), originServerId: z.string().min(1) }),
   z.strictObject({
     id: z.string().optional(),
     type: z.literal("directTcp"),
@@ -475,7 +577,11 @@ const StoredHostConnectionSchema = z.discriminatedUnion("type", [
     relayEndpoint: z.string(),
     useTls: z.boolean().optional(),
     daemonPublicKeyB64: z.string(),
+<<<<<<< HEAD
     deviceId: z.string().optional(),
+=======
+    minimumSecurityMode: z.literal("protected").optional(),
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
   }),
 ]);
 const StoredHostProfileSchema = z.strictObject({
@@ -494,6 +600,7 @@ export const StoredHostRegistrySchema = z.array(StoredHostProfileSchema);
 type StoredHostConnection = z.infer<typeof StoredHostConnectionSchema>;
 
 function normalizeStoredConnection(connection: StoredHostConnection): HostConnection | null {
+  if (connection.type === "routed") return connection;
   if (connection.type === "directTcp") {
     try {
       const endpoint = normalizeHostPort(connection.endpoint);
@@ -539,7 +646,13 @@ function normalizeStoredConnection(connection: StoredHostConnection): HostConnec
         relayEndpoint,
         ...(useTls !== undefined ? { useTls } : {}),
         daemonPublicKeyB64,
+<<<<<<< HEAD
         ...(connection.deviceId ? { deviceId: connection.deviceId } : {}),
+=======
+        ...(connection.minimumSecurityMode
+          ? { minimumSecurityMode: connection.minimumSecurityMode }
+          : {}),
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
       };
     } catch {
       return null;

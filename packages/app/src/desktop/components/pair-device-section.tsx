@@ -175,7 +175,6 @@ export function PairDeviceSection({ serverId, onClose }: PairDeviceSectionProps)
         type: "svg",
         errorCorrectionLevel: "M",
         margin: 1,
-        width: 480,
       }),
     enabled: Boolean(pairingQuery.data?.url),
     dataShape: "value",
@@ -943,7 +942,8 @@ function PairingQr({ svg, isError }: { svg: string | null; isError: boolean }) {
     return (
       <SvgXml
         xml={svg}
-        style={styles.qrImage}
+        width="100%"
+        height="100%"
         accessibilityRole="image"
         accessibilityLabel={t("pairing.device.qrAccessibility")}
       />
@@ -1036,6 +1036,7 @@ const styles = StyleSheet.create((theme) => ({
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.palette.white,
   },
+<<<<<<< HEAD
   qrImage: {
     width: "100%",
     height: "100%",
@@ -1048,6 +1049,8 @@ const styles = StyleSheet.create((theme) => ({
     borderLeftColor: theme.colors.border,
   },
   grantWarning: { color: theme.colors.palette.amber[500], fontSize: theme.fontSize.sm },
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
   linkRow: {
     flexDirection: "row",
     alignItems: "center",

@@ -62,16 +62,24 @@ interface FakeAgentSessionOptions {
   sessionId?: string;
   memoryMarker?: string | null;
   closeSession?: () => Promise<void>;
-  onStartTurn?: (prompt: AgentPromptInput) => void;
+  onStartTurn?: (prompt: AgentPromptInput, config: AgentSessionConfig) => void;
+  beforeTurnComplete?: (prompt: AgentPromptInput) => Promise<void>;
+  historyEvents?: readonly AgentStreamEvent[];
 }
 
 export interface TestAgentClientOptions {
+<<<<<<< HEAD
   accountLabel?: string;
   response?: (prompt: string) => string;
   beforeCreateSession?: () => Promise<void>;
+=======
+  beforeCreateSession?: (config: AgentSessionConfig) => Promise<void>;
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
   closeSession?: () => Promise<void>;
-  onStartTurn?: (prompt: AgentPromptInput) => void;
+  onStartTurn?: (prompt: AgentPromptInput, config: AgentSessionConfig) => void;
+  beforeTurnComplete?: (prompt: AgentPromptInput) => Promise<void>;
   supportsMcpServers?: boolean;
+  historyEvents?: readonly AgentStreamEvent[];
 }
 
 function createDeferred<T>(): Deferred<T> {
@@ -344,7 +352,9 @@ class FakeAgentSession implements AgentSession {
   private activeForegroundTurnId: string | null = null;
 
   private readonly closeSession: (() => Promise<void>) | undefined;
-  private readonly onStartTurn: ((prompt: AgentPromptInput) => void) | undefined;
+  private readonly onStartTurn: TestAgentClientOptions["onStartTurn"];
+  private readonly beforeTurnComplete: ((prompt: AgentPromptInput) => Promise<void>) | undefined;
+  private readonly historyEvents: readonly AgentStreamEvent[] | undefined;
 
   private readonly testAccountLabel?: string;
   private readonly response?: (prompt: string) => string;
@@ -362,6 +372,8 @@ class FakeAgentSession implements AgentSession {
     this.memoryMarker = options.memoryMarker ?? null;
     this.closeSession = options.closeSession;
     this.onStartTurn = options.onStartTurn;
+    this.beforeTurnComplete = options.beforeTurnComplete;
+    this.historyEvents = options.historyEvents;
     this.historyPath = path.join(
       tmpdir(),
       "paseo-fake-provider-history",
@@ -460,9 +472,13 @@ class FakeAgentSession implements AgentSession {
     commitFinalInputCheck(options?.[FINAL_INPUT_CHECK]);
     const turnId = `fake-turn-${this.nextTurnOrdinal++}`;
     this.activeForegroundTurnId = turnId;
+<<<<<<< HEAD
     if (options?.clientMessageId) this.acceptedInputs.add(options.clientMessageId);
     this.onStartTurn?.(prompt);
     recordFinalInputHandoff(options?.[FINAL_INPUT_CHECK]);
+=======
+    this.onStartTurn?.(prompt, this.config);
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
 
     void this.emitTurnEvents(prompt, options?.clientMessageId);
 
@@ -827,6 +843,7 @@ class FakeAgentSession implements AgentSession {
         this.notifySubscribers(assistantChunkB);
       }
 
+      await this.beforeTurnComplete?.(prompt);
       const completed: AgentStreamEvent = {
         type: "turn_completed",
         provider: this.providerName,
@@ -853,6 +870,10 @@ class FakeAgentSession implements AgentSession {
   }
 
   async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
+    if (this.historyEvents) {
+      yield* this.historyEvents;
+      return;
+    }
     let contents: string;
     try {
       contents = await readFile(this.historyPath, "utf8");
@@ -1264,15 +1285,20 @@ class FakeAgentClient implements AgentClient {
     config: AgentSessionConfig,
     _launchContext?: AgentLaunchContext,
   ): Promise<AgentSession> {
-    await this.options.beforeCreateSession?.();
+    await this.options.beforeCreateSession?.(config);
     return new FakeAgentSession({
       providerName: this.provider,
       config: { ...config },
       supportsMcpServers: this.options.supportsMcpServers,
       closeSession: this.options.closeSession,
       onStartTurn: this.options.onStartTurn,
+<<<<<<< HEAD
       accountLabel: this.options.accountLabel,
       response: this.options.response,
+=======
+      beforeTurnComplete: this.options.beforeTurnComplete,
+      historyEvents: this.options.historyEvents,
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
     });
   }
 
@@ -1298,8 +1324,13 @@ class FakeAgentClient implements AgentClient {
       memoryMarker: typeof marker === "string" ? marker : null,
       closeSession: this.options.closeSession,
       onStartTurn: this.options.onStartTurn,
+<<<<<<< HEAD
       accountLabel: this.options.accountLabel,
       response: this.options.response,
+=======
+      beforeTurnComplete: this.options.beforeTurnComplete,
+      historyEvents: this.options.historyEvents,
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
     });
   }
 

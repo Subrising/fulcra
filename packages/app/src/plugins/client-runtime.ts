@@ -27,7 +27,11 @@ export function createPluginClientRuntime(
   const device = getPluginDevice();
   return {
     ...capabilities,
+<<<<<<< HEAD
     ...(device ? { device } : {}),
+=======
+    i18n: installation.i18n,
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
     playAudio: createPlayAudio(audio, installation.lifetime.signal),
     hosts: createPluginHosts(getHostRuntimeStore(), installation.lifetime.signal),
     addComposerPill(contribution) {

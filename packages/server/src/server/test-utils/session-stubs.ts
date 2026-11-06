@@ -1,3 +1,4 @@
+import { createAgentMessageDelivery } from "../agent/agent-messages/index.js";
 import pino from "pino";
 import { randomUUID } from "node:crypto";
 import { afterEach, vi } from "vitest";
@@ -34,6 +35,7 @@ export function asSessionLogger(stub: {
 export function asAgentManager(stub: {
   [K in keyof SessionOptions["agentManager"]]?: unknown;
 }): SessionOptions["agentManager"] {
+<<<<<<< HEAD
   return createStub<SessionOptions["agentManager"]>(
     withTrustedSurface({
       listProviderSubagentActivity: () => [],
@@ -51,6 +53,13 @@ export function asAgentManager(stub: {
       ...stub,
     }),
   );
+=======
+  return createStub<SessionOptions["agentManager"]>({
+    listProviderSubagentActivity: () => [],
+    getRetiredInternalAgent: () => null,
+    ...stub,
+  });
+>>>>>>> refs/remotes/upstream/tags/v0.13.0
 }
 
 export function asAgentStorage(stub: {
@@ -332,4 +341,16 @@ export function createTestCreationService(): SessionOptions["creationService"] {
   const directory = join(tmpdir(), `session-creation-${randomUUID()}`);
   creationDirectories.push(directory);
   return new CreationService(directory, pino({ level: "silent" }));
+}
+
+/** Session fixtures without agent-originated sends still own the delivery lifetime. */
+export function createAgentMessageDeliveryStub(): SessionOptions["agentMessages"] {
+  return createAgentMessageDelivery({
+    dispatch: async () => {
+      throw new Error("Unexpected agent message in session fixture");
+    },
+    onError: (error) => {
+      throw error;
+    },
+  });
 }

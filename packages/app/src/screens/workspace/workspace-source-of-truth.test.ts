@@ -15,6 +15,8 @@ import { selectSidebarConversationLabels } from "@/hooks/sidebar-conversation-la
 
 function createWorkspaceDescriptor(input: Partial<WorkspaceDescriptor> = {}): WorkspaceDescriptor {
   return {
+    createdAt: null,
+    lastUserMessageAt: null,
     id: "/repo/main",
     projectId: "remote:github.com/getpaseo/paseo",
     projectDisplayName: "getpaseo/paseo",
