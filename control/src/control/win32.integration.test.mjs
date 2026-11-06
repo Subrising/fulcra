@@ -108,7 +108,8 @@ test(
         true,
         "read-only is not a write right",
       );
-      assert.equal(windowsAclProbe(path.join(root, "missing"), 0, "me"), false);
+      // An unreadable path is an error, not an answer: undefined (refuses, never saved).
+      assert.equal(windowsAclProbe(path.join(root, "missing"), 0, "me"), undefined);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
