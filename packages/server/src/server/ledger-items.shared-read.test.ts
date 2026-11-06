@@ -58,7 +58,7 @@ describe("readOpenLedgerRowsShared", () => {
     dir = await mkdtemp(path.join(os.tmpdir(), "ledger-shared-"));
     await mkdir(path.join(dir, "gamma"));
     const file = path.join(dir, "gamma", "OPEN-ITEMS.md");
-    await writeFile(file, "x".repeat(512 * 1024 + 1));
+    await writeFile(file, "x".repeat(16 * 1024 * 1024 + 1));
     const t0 = 3_000_000;
     await expect(readOpenLedgerRowsShared(dir, true, t0)).rejects.toThrow(/size limit/);
     await writeFile(file, ledger(["GA-1"]));

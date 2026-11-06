@@ -396,7 +396,7 @@ export function createProgressBoard(
     try {
       const file = path.join(root, name, "OPEN-ITEMS.md"),
         stat = fs.lstatSync(file);
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2097152) return;
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 16777216) return;
       const rows = parseLedger(fs.readFileSync(file, "utf8")).items;
       const at = new Date().toISOString();
       rows.forEach((item) => track(name, item, at, watchedChange));
@@ -608,7 +608,7 @@ export function createProgressBoard(
       try {
         if (!names.includes(name)) throw Error("No ledger");
         const stat = fs.lstatSync(file);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2097152)
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 16777216)
           throw Error("Invalid ledger");
         signature = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
         if (ledgers.get(name)?.signature !== signature) {
