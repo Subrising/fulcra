@@ -17,6 +17,18 @@ const theme = vi.hoisted(() => ({ current: null as unknown }));
 // against whichever real theme is current, and `uniProps` mappings are applied, as on device.
 vi.mock("react-native-unistyles", async () => {
   const ReactModule = await import("react");
+  // The breakpoints of src/styles/unistyles.ts, read from the test viewport.
+  const BREAKPOINTS: [string, number][] = [
+    ["xl", 1200],
+    ["lg", 992],
+    ["md", 600],
+    ["sm", 576],
+  ];
+  const runtime = () => {
+    const width = window.innerWidth;
+    const breakpoint = BREAKPOINTS.find(([, min]) => width >= min)?.[0] ?? "xs";
+    return { themeName: "dark", breakpoint, screen: { width, height: window.innerHeight } };
+  };
   const resolve = <T,>(styles: T | ((t: unknown) => T)): T =>
     typeof styles === "function" ? (styles as (t: unknown) => T)(theme.current) : styles;
   return {
@@ -31,12 +43,15 @@ vi.mock("react-native-unistyles", async () => {
       ({ uniProps, ...props }: Record<string, unknown> & { uniProps?: (t: unknown) => object }) =>
         ReactModule.createElement(Component, {
           ...props,
-          ...(uniProps ? uniProps(theme.current) : {}),
+          // FU-657: upstream density icons read the runtime breakpoint (uniProps(theme, rt)).
+          ...(uniProps
+            ? (uniProps as (t: unknown, rt: unknown) => object)(theme.current, runtime())
+            : {}),
         }),
     UnistylesRuntime: { setTheme: () => undefined, themeName: "light" },
     useUnistyles: () => ({
       theme: theme.current,
-      rt: { themeName: "dark", screen: { width: 1440, height: 900 } },
+      rt: runtime(),
     }),
   };
 });

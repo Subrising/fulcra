@@ -11,7 +11,7 @@ import { useAgentStreamTail } from "@/agent-stream/use-agent-stream-tail";
 import { useSessionStore } from "@/stores/session-store";
 import type { StreamItem } from "@/types/stream";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RetainedPanelActivity, useRetainedPanelActive } from "@/components/retained-panel";
 import { RetainedChatContent as NativeChat } from "./retained-chat-content.native";
 import { RetainedChatContent as WebChat } from "./retained-chat-content.web";
@@ -42,6 +42,22 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useAssistantFileLinkActions, type InlinePathTarget } from "@/assistant-file-links";
 
+// FULCRA(FU-657): Fulcra's host repair banner and plugin navigation bring expo-router into this graph.
+// The browser project excludes expo-router from the optimizer (pairing tests), so its CommonJS build has
+// no named exports here. These chats never navigate.
+vi.mock("expo-router", () => ({
+  router: {
+    push: () => undefined,
+    replace: () => undefined,
+    back: () => undefined,
+    canGoBack: () => false,
+  },
+  useLocalSearchParams: () => ({}),
+  useGlobalSearchParams: () => ({}),
+  usePathname: () => "/",
+  useSegments: () => [],
+  useRouter: () => ({ push: () => undefined, replace: () => undefined, back: () => undefined }),
+}));
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 const SHEET_PANE_HOST: SheetPaneHost = {
   workspaceKey: "host:workspace",
