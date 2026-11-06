@@ -424,8 +424,11 @@ test.describe("Session touch targets", () => {
       ]) {
         await page.setViewportSize({ width, height });
         await openAgentRoute(page, agent);
+        // FULCRA(FU-702): under 390 px Context is a menu row, so wait for the menu button there.
         await expect(
-          page.getByRole("button", { name: "Context", exact: true }).first(),
+          width < 390
+            ? page.getByTestId("workspace-header-menu-trigger")
+            : page.getByRole("button", { name: "Context", exact: true }).first(),
         ).toBeVisible();
         expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
         await record(width, height, "workspace");
@@ -474,7 +477,9 @@ test.describe("Session touch targets", () => {
         await page.getByTestId("sessions-search-clear").tap();
         await page.locator('[data-testid^="agent-row-"][role="button"]').first().tap();
         await expect(
-          page.getByRole("button", { name: "Context", exact: true }).first(),
+          width < 390
+            ? page.getByTestId("workspace-header-menu-trigger")
+            : page.getByRole("button", { name: "Context", exact: true }).first(),
         ).toBeVisible();
       }
       await writeFile(
