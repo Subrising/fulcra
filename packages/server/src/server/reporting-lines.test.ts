@@ -248,6 +248,50 @@ describe("reporting lines", () => {
     expect(send(otherWorker, linked)).toEqual({ allowed: true, why: "direct link" });
   });
 
+  it("FU-691 lets any lead, and nobody else, send to the one Mac ops lead", async () => {
+    const seated = { "fulcra.seat": "main-assistant", "fulcra.reports-to": "owner" };
+    const mainSeat = agent("main-s", "Main assistant", seated);
+    const ops = agent("ops-1", "Fulcra lead", {
+      "fulcra.reports-to": "role:main-assistant",
+      "fulcra.seat": "mac-ops",
+    });
+    const roleLead = agent("lead-r", "FMC lead", { "fulcra.reports-to": "role:main-assistant" });
+    const idLead = agent("lead-i", "Ship It lead", { "fulcra.reports-to": "main-s" });
+    const fmcWorker = agent("work-f", "FMC worker", { "fulcra.reports-to": "lead-r" });
+    const loose = agent("loose-r", "Remote", {});
+    const all = [mainSeat, ops, roleLead, idLead, fmcWorker, loose];
+    const store = (agents: LineAgent[]): LineStore => ({
+      get: async (id) => agents.find((a) => a.id === id) ?? null,
+      list: async () => agents,
+    });
+    const check = (agents: LineAgent[], from: LineAgent, to: LineAgent, serverId?: string) =>
+      decideSend(store(agents), { agentId: from.id, serverId }, to.id, MINI);
+    const allowed = { allowed: true, why: "mac ops lead" };
+    expect(await check(all, roleLead, ops)).toEqual(allowed);
+    expect(await check(all, idLead, ops)).toEqual(allowed);
+    // The main assistant is the lead of the leads; ops reports to it, so its send is the "child" rule.
+    expect(await check(all, mainSeat, ops)).toEqual({ allowed: true, why: "child" });
+    // A worker still goes through its own lead.
+    expect(await check(all, fmcWorker, ops)).toEqual({
+      allowed: false,
+      reason: "Send this to your lead, FMC lead (lead-r).",
+    });
+    // The rule is only toward the seat: the ops lead does not gain a line to other leads' workers.
+    expect((await check(all, ops, fmcWorker))?.allowed).toBe(false);
+    // A chat without the seat is not reachable this way, and two holders are not guessed between.
+    const unseated = all.map((a) =>
+      a.id === ops.id ? { ...a, labels: { ...a.labels, "fulcra.seat": "" } } : a,
+    );
+    expect((await check(unseated, roleLead, ops))?.allowed).toBe(false);
+    const twin = agent("ops-2", "Old ops", { "fulcra.seat": "mac-ops" });
+    expect((await check([...all, twin], roleLead, ops))?.allowed).toBe(false);
+    // An archived holder does not count.
+    const archived = { ...twin, archivedAt: "2026-11-06" };
+    expect(await check([...all, archived], roleLead, ops)).toEqual(allowed);
+    // A chat on another computer is not a lead here.
+    expect((await check(all, loose, ops, BOOK))?.allowed).toBe(false);
+  });
+
   it("does not refuse a chat with no recorded line, and follows a created chat's parent", () => {
     expect(send(agent("loose", "Scratch"), main)).toEqual({
       allowed: true,

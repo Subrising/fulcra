@@ -4,7 +4,11 @@ import { dirname, basename } from "node:path";
 import { noticePaused, noticePauseVersion, NoticePausedError } from "./notice-pause.js";
 import { leadEventsFor, withLeadEvent } from "./lead-events.js";
 import { createHash, randomUUID } from "node:crypto";
-import { DIRECT_LINK_LABEL, MAIN_ASSISTANT_ROLE } from "@getpaseo/protocol/agent-labels";
+import {
+  DIRECT_LINK_LABEL,
+  MAC_OPS_LEAD_ROLE,
+  MAIN_ASSISTANT_ROLE,
+} from "@getpaseo/protocol/agent-labels";
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import type { Logger } from "pino";
@@ -35,6 +39,7 @@ import {
   findRoleHolder,
   lineStoreOf,
   reportsTo,
+  soleHolder,
   type LineAgent,
 } from "./reporting-lines.js";
 import { tellSenderUndelivered } from "./undelivered-notice.js";
@@ -156,8 +161,12 @@ export class QueuedAgentMessages {
   private readonly instances = new Map<string, string>();
   private readonly closedInstances = new Set<string>();
   private readonly unsubscribe: () => void;
+  private readonly clearDeliveryProbe: () => void;
 
   constructor(private readonly deps: Deps) {
+    this.clearDeliveryProbe =
+      deps.agentManager.setInputDeliveryProbe?.((agentId) => this.isDelivering(agentId)) ??
+      (() => undefined);
     for (const agent of deps.agentManager.listAgents())
       if (agent.instanceId) this.instances.set(agent.id, agent.instanceId);
     this.unsubscribe = deps.agentManager.subscribe(
@@ -484,6 +493,7 @@ export class QueuedAgentMessages {
     this.pauseWatcher?.close();
     for (const listener of this.deliveryListeners) listener();
     this.unsubscribe();
+    this.clearDeliveryProbe();
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
     await Promise.all(this.pendingDrains);
@@ -588,6 +598,11 @@ export class QueuedAgentMessages {
       });
     }
     return true;
+  }
+
+  /** FU-694: true while a drain writes input to this agent or reads its native receipt. */
+  isDelivering(agentId: string): boolean {
+    return this.draining.has(agentId);
   }
 
   private kick(agentId: string): void {
@@ -730,6 +745,7 @@ export class QueuedAgentMessages {
       const senderAgent = remote ? null : (agents.get(sender.agentId) ?? null);
       const holder = findRoleHolder([...agents.values()], MAIN_ASSISTANT_ROLE);
       const mainAssistantId = holder && "id" in holder ? holder.id : null;
+      const macOpsLeadId = soleHolder([...agents.values()], MAC_OPS_LEAD_ROLE);
       const identity = (agent: LineAgent | null) =>
         agent
           ? [
@@ -744,6 +760,7 @@ export class QueuedAgentMessages {
         identity(target),
         holder,
         identity(mainAssistantId ? (agents.get(mainAssistantId) ?? null) : null),
+        macOpsLeadId,
       ]);
       let reason: string | null = null;
       if (!target || target.archivedAt) reason = closedReceiverReason(target);
@@ -757,6 +774,7 @@ export class QueuedAgentMessages {
           senderParent: null,
           localServerId: record.localServerId,
           mainAssistantId,
+          macOpsLeadId,
         });
         if (!decision.allowed) reason = decision.reason;
       }

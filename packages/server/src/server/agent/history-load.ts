@@ -188,12 +188,18 @@ export async function* readHistoryLines(
   endOffset?: number,
 ): AsyncGenerator<HistoryLine> {
   if (endOffset === 0) return;
+  // FU-694: a stream built with an aborted signal rejects the reader and then emits a second,
+  // unheard "error" that kills the daemon. Stop before the stream exists.
+  signal?.throwIfAborted();
   const stream = file.createReadStream({
     autoClose: false,
     highWaterMark: 64 * 1024,
     signal,
     ...(endOffset === undefined ? {} : { end: endOffset - 1 }),
   });
+  // FU-694: the reader sees each failure through the iterator. A late abort "error" must not
+  // become an uncaught exception after the iterator has stopped listening.
+  stream.on("error", () => {});
   let pieces: Buffer[] = [];
   let bytes = 0;
   let offset = 0;

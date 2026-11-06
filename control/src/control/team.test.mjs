@@ -272,6 +272,39 @@ test("a seat credential cannot change the team", async (t) => {
   );
 });
 
+test("FU-691: the Mac ops lead seat is the one seat a team line sets, held by one chat", async (t) => {
+  const lead = randomUUID();
+  const other = randomUUID();
+  const main = randomUUID();
+  const w = world(t, {
+    snapshots: { [lead]: chat(), [other]: chat(), [main]: chat() },
+    labels: { [main]: { "fulcra.seat": "main-assistant" } },
+  });
+  const r = await w.dispatch("team-line", { sessionId: lead, seat: "mac-ops", note: NOTE });
+  assert.deepEqual(r.labels, { "fulcra.seat": "mac-ops" });
+  await assert.rejects(
+    w.dispatch("team-line", { sessionId: other, seat: "mac-ops", note: NOTE }),
+    /Another chat holds the Mac ops lead seat/,
+  );
+  await assert.rejects(
+    async () => w.dispatch("team-line", { sessionId: other, seat: "main-assistant", note: NOTE }),
+    /Invalid controller command input/,
+  );
+  await assert.rejects(
+    w.dispatch("team-line", { sessionId: main, seat: "mac-ops", note: NOTE }),
+    /main assistant cannot also hold/,
+  );
+  await assert.rejects(
+    w.dispatch("team-line", { sessionId: main, seat: "", note: NOTE }),
+    /does not hold the Mac ops lead seat/,
+  );
+  await w.dispatch("team-line", { sessionId: lead, seat: "", note: NOTE });
+  await w.dispatch("team-line", { sessionId: other, seat: "mac-ops", note: NOTE });
+  assert.equal(w.labels[lead]["fulcra.seat"], "");
+  assert.equal(w.labels[other]["fulcra.seat"], "mac-ops");
+  assert.equal(w.labels[main]["fulcra.seat"], "main-assistant");
+});
+
 test("a reporting line is written on the chat as labels and recorded with who asked", async (t) => {
   const lead = randomUUID();
   const w = world(t, { snapshots: { [lead]: chat() } });

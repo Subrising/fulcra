@@ -519,6 +519,7 @@ test.each(["present", "absent", "unknown"] as const)(
       logger: f.logger,
     });
     cleanup.push(() => restored.close());
+    const receiptReadsWhileDelivering: boolean[] = [];
     // The observer sees the old writer stop. An absent native receipt may then be retried once.
     await f.host.daemon(() => f.manager.closeAgent(f.target.id));
     await f.storage.upsert({ ...saved, lastStatus: "idle" });
@@ -532,7 +533,11 @@ test.each(["present", "absent", "unknown"] as const)(
       entered();
       await loading;
       const receiver = await resume(...args);
-      receiver.session!.getInputReceipt = async () => outcome;
+      receiver.session!.getInputReceipt = async () => {
+        // FU-694: an account switch refuses while this receipt read runs.
+        receiptReadsWhileDelivering.push(restored.isDelivering(f.target.id));
+        return outcome;
+      };
       return receiver;
     });
     await restored.start();
@@ -565,6 +570,8 @@ test.each(["present", "absent", "unknown"] as const)(
       await warm;
     }
     await delivery;
+    expect(receiptReadsWhileDelivering.length).toBeGreaterThan(0);
+    expect(receiptReadsWhileDelivering.every(Boolean)).toBe(true);
     if (outcome === "unknown") expect(deliveryResult).toContain("uncertain");
     else expect(deliveryResult).toBe("delivered");
     await vi.waitFor(async () => {

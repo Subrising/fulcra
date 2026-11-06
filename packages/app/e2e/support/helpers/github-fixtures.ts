@@ -65,20 +65,61 @@ export interface LocalGhPrFixture {
   cleanup(): Promise<void>;
 }
 
+// FU-695: the clone and push URLs carry the GitHub token. A failed command puts its arguments and git's own output
+// into the error, so every fixture error is rebuilt with the token masked. The original error is not kept as the
+// cause, because it still holds the token.
+const knownTokens = new Set<string>();
+
+export function redactGithubSecrets(text: string): string {
+  let out = text.replace(/(x-access-token:)[^@\s/]+@/gi, "$1***@");
+  out = out.replace(/\b(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g, "***");
+  for (const token of knownTokens) out = out.split(token).join("***");
+  return out;
+}
+
+function rememberToken(token: string): string {
+  if (token) knownTokens.add(token);
+  return token;
+}
+
+function outputText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Buffer.isBuffer(value)) return value.toString("utf8");
+  return "";
+}
+
+export function runFixtureCommand(
+  command: "gh" | "git",
+  args: string[],
+  opts?: { cwd?: string },
+): string {
+  try {
+    return execFileSync(command, args, {
+      cwd: opts?.cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  } catch (error) {
+    const failure = error as { message?: unknown; stderr?: unknown; status?: unknown };
+    const stderr = outputText(failure.stderr).trim();
+    const message = [
+      `${command} ${args.join(" ")} failed (exit ${String(failure.status ?? "unknown")})`,
+      stderr,
+    ]
+      .filter(Boolean)
+      .join(": ");
+    // The original error holds the token, so it is not attached as the cause (FU-695).
+    // oxlint-disable-next-line preserve-caught-error
+    throw new Error(redactGithubSecrets(message));
+  }
+}
+
 function gh(args: string[], opts?: { cwd?: string }): string {
-  return execFileSync("gh", args, {
-    cwd: opts?.cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
+  return runFixtureCommand("gh", args, opts);
 }
 
 function git(args: string[], cwd: string): string {
-  return execFileSync("git", args, {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
+  return runFixtureCommand("git", args, { cwd });
 }
 
 async function seedPr(args: {
@@ -196,7 +237,7 @@ export async function createTempGithubRepo(options: {
 
   const owner = gh(["api", "user", "--jq", ".login"]);
   const fullName = `${owner}/${repoName}`;
-  const token = gh(["auth", "token"]);
+  const token = rememberToken(gh(["auth", "token"]));
   const authedUrl = `https://x-access-token:${token}@github.com/${fullName}.git`;
 
   // Switch remote to authed URL for subsequent pushes
@@ -267,15 +308,19 @@ export async function createTempGithubRepo(options: {
 export async function cloneGithubRepoDefaultBranchOnly(
   repo: Pick<GhRepoFixture, "fullName" | "name" | "defaultBranch">,
 ): Promise<GhDefaultBranchClone> {
-  const token = gh(["auth", "token"]);
+  const token = rememberToken(gh(["auth", "token"]));
   const authedUrl = `https://x-access-token:${token}@github.com/${repo.fullName}.git`;
   const clonePath = await mkdtemp(path.join("/tmp", `${repo.name}-${repo.defaultBranch}-only-`));
 
-  execFileSync(
-    "git",
-    ["clone", "--quiet", "--single-branch", "--branch", repo.defaultBranch, authedUrl, clonePath],
-    { stdio: ["ignore", "pipe", "pipe"] },
-  );
+  runFixtureCommand("git", [
+    "clone",
+    "--quiet",
+    "--single-branch",
+    "--branch",
+    repo.defaultBranch,
+    authedUrl,
+    clonePath,
+  ]);
   git(["config", "user.email", "paseo-e2e@users.noreply.github.com"], clonePath);
   git(["config", "user.name", "Paseo E2E"], clonePath);
   git(["config", "commit.gpgsign", "false"], clonePath);

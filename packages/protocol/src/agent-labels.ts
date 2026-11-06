@@ -15,6 +15,9 @@ export const SEAT_LABEL = "fulcra.seat";
 export const MAIN_ASSISTANT_ROLE = "main-assistant";
 export const ROLE_REF_PREFIX = "role:";
 export const MAIN_ASSISTANT_REF = `${ROLE_REF_PREFIX}${MAIN_ASSISTANT_ROLE}`;
+// FU-691: the seat of the Mac ops lead (the Fulcra lead). Every lead may send to its one holder with no direct link.
+// Only the controller writes it, on a "team-line" request from the owner or the main assistant.
+export const MAC_OPS_LEAD_ROLE = "mac-ops";
 const OPEN_AGENT_TAB_LABEL_PREFIX = "paseo.open-agent-tab.";
 
 export function getOpenAgentTabLabel(clientId: string): string {

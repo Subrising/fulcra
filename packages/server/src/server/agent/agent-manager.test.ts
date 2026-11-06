@@ -4317,6 +4317,31 @@ test("update-7: a reconnect restarts a session whose provider turn failed; a pla
   }
 });
 
+test("FU-694: an account switch waits while queued input is delivered to the session", async () => {
+  const f = await quietMcpFixture();
+  try {
+    const state = await f.manager.getAgentMcpRefreshState(f.created.id);
+    const expected = {
+      provider: state!.provider,
+      sessionId: state!.sessionId!,
+      configRevision: state!.configRevision,
+    };
+    let delivering = true;
+    f.manager.setInputDeliveryProbe((agentId) => delivering && agentId === f.created.id);
+    expect(
+      await f.manager.refreshAgentMcp({ ...f.input, expected, changes: {}, reconnect: true }),
+    ).toMatchObject({ outcome: "refused", reason: "busy" });
+    expect(f.client.sessions[0].closeCount).toBe(0);
+    delivering = false;
+    expect(
+      await f.manager.refreshAgentMcp({ ...f.input, expected, changes: {}, reconnect: true }),
+    ).toMatchObject({ outcome: "refreshed" });
+  } finally {
+    f.manager.setInputDeliveryProbe(null);
+    await f.cleanup();
+  }
+});
+
 test("FU-496: a reconnect refuses an idle session that still owns background work", async () => {
   const f = await quietMcpFixture();
   try {

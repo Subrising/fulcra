@@ -119,6 +119,29 @@ describe("ClaudeAgentSession persisted history load", () => {
     await expect(receipt("missing-batch")).rejects.toThrow();
   });
 
+  test("a receipt read during or after close never throws out of the process (FU-694)", async () => {
+    const file = transcriptPath();
+    mkdirSync(path.dirname(file), { recursive: true });
+    const line =
+      JSON.stringify({ type: "user", uuid: "other", message: { content: "x".repeat(200) } }) + "\n";
+    writeFileSync(file, line.repeat(40_000));
+    const uncaught: unknown[] = [];
+    const onUncaught = (error: unknown) => uncaught.push(error);
+    process.on("uncaughtException", onUncaught);
+    try {
+      const session = await resume();
+      for await (const event of session.streamHistory()) void event;
+      const during = session.getInputReceipt!("pending-batch");
+      await session.close();
+      expect(await during).toBe("unknown");
+      expect(await session.getInputReceipt!("pending-batch")).toBe("unknown");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(uncaught).toEqual([]);
+    } finally {
+      process.off("uncaughtException", onUncaught);
+    }
+  });
+
   test("replay skips Claude Code request copies of earlier messages", async () => {
     mkdirSync(path.dirname(transcriptPath()), { recursive: true });
     const toolUse = {
@@ -1167,6 +1190,40 @@ describe("bounded history readers", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+test("an aborted history read rejects once and leaves no uncaught stream error (FU-694)", async () => {
+  const { readHistoryLines } = await import("../../history-load.js");
+  const root = mkdtempSync(path.join(os.tmpdir(), "history-abort-"));
+  const file = path.join(root, "input.jsonl");
+  writeFileSync(file, '{"a":1}\n'.repeat(200_000));
+  const uncaught: unknown[] = [];
+  const onUncaught = (error: unknown) => uncaught.push(error);
+  process.on("uncaughtException", onUncaught);
+  try {
+    for (const when of ["before", "during"] as const) {
+      const controller = new AbortController();
+      if (when === "before") controller.abort();
+      const handle = await open(file, "r");
+      try {
+        await expect(
+          (async () => {
+            for await (const line of readHistoryLines(handle, false, controller.signal)) {
+              void line;
+              controller.abort();
+            }
+          })(),
+        ).rejects.toMatchObject({ name: "AbortError" });
+      } finally {
+        await handle.close();
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(uncaught).toEqual([]);
+  } finally {
+    process.off("uncaughtException", onUncaught);
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("shared replay data survives one consumer cancel and releases the last lease", async () => {

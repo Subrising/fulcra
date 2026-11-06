@@ -32,6 +32,8 @@ const refuse = (message) => {
 };
 const name = (v) => (typeof v === "string" ? v.trim() : "");
 const SEAT_LABEL = "fulcra.seat";
+// FU-691: keep equal to MAC_OPS_LEAD_ROLE in packages/protocol/src/agent-labels.ts.
+const MAC_OPS_LEAD = "mac-ops";
 const MAIN_ASSISTANT = "main-assistant";
 const SYSTEM_ACTOR = JSON.stringify({
   principal: "controller",
@@ -83,7 +85,8 @@ export class Team {
     if (a.seat !== undefined) labels["fulcra.seat"] = a.seat;
     if (a.directLink !== undefined) labels["fulcra.direct-link"] = a.directLink;
     if (!Object.keys(labels).length) refuse("Say which line to set.");
-    if (a.seat !== undefined)
+    // FU-691: the one seat set here is the Mac ops lead ("" clears it). The main assistant label follows the seat.
+    if (a.seat !== undefined && a.seat !== MAC_OPS_LEAD && a.seat !== "")
       refuse("The main assistant label follows the seat. Use Make main assistant instead.");
     if (a.reportsTo === a.sessionId || a.directLink === a.sessionId)
       refuse("A chat cannot report to itself or link to itself.");
@@ -92,6 +95,7 @@ export class Team {
       refuse("Fulcra is not connected to this computer's chats. Try again in a moment.");
     const snapshot = await native.snapshot?.(a.sessionId).catch(() => null);
     if (native.snapshot && !snapshot) refuse("That chat is not on this computer.");
+    if (a.seat !== undefined) await this.checkMacOpsSeat(a, snapshot);
     await native.setLabels(a.sessionId, labels);
     const at = this.record(
       "line",
@@ -101,6 +105,25 @@ export class Team {
       `${a.note} ${JSON.stringify(labels)}`.slice(0, 2000),
     );
     return { sessionId: a.sessionId, labels, at };
+  }
+
+  /** FU-691: one chat holds the Mac ops lead seat. A clear touches only that seat, never the main assistant's. */
+  async checkMacOpsSeat(a, snapshot) {
+    const current = snapshot?.labels?.[SEAT_LABEL] ?? "";
+    if (a.seat === "") {
+      if (current !== MAC_OPS_LEAD) refuse("That chat does not hold the Mac ops lead seat.");
+      return;
+    }
+    if (current === MAIN_ASSISTANT)
+      refuse("The main assistant cannot also hold the Mac ops lead seat.");
+    const native = this.control.native;
+    if (typeof native.labelled !== "function")
+      refuse("Fulcra is not connected to this computer's chats. Try again in a moment.");
+    const holders = (await native.labelled(SEAT_LABEL, MAC_OPS_LEAD)).filter(
+      (id) => id !== a.sessionId,
+    );
+    if (holders.length)
+      refuse(`Another chat holds the Mac ops lead seat (${holders[0]}). Clear it first.`);
   }
 
   /**

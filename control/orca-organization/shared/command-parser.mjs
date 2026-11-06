@@ -515,9 +515,11 @@ methods(
       directLink: opt(either(one(""), uuid)),
       note: reason,
       reportsTo: opt(either(one(""), lineRef)),
+      // FU-691: the Mac ops lead seat; "" clears it. The main assistant seat has its own command.
+      seat: opt(one("", "mac-ops")),
       sessionId: uuid,
     }),
-    (v) => v.reportsTo !== undefined || v.directLink !== undefined,
+    (v) => v.reportsTo !== undefined || v.directLink !== undefined || v.seat !== undefined,
   ),
 );
 methods("roles-allowance-set", seatCommand({ ...roleChange, maxSessions: num(0, 32), role, seat }));
