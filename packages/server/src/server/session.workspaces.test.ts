@@ -597,6 +597,7 @@ function createSessionForWorkspaceTests(
   };
   const agentManager = asAgentManager({
     subscribe: () => () => {},
+    setInputDeliveryProbe: () => () => {},
     listAgents: () => [],
     listProviderSubagentActivity: () => [],
     getAgent: () => null,
