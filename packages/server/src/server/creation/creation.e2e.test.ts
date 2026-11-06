@@ -345,6 +345,9 @@ test.each(["agent", "workspace"] as const)(
     });
     try {
       await client.connect();
+      // FULCRA(FU-657): Fulcra keeps the 0.2.42 rule. The caller gets the first-turn error, and the agent stays
+      // registered with the rejected prompt and the error row (daemon-client "createAgent fails when the initial
+      // turn cannot start").
       const submit = async () => {
         const common = {
           idempotencyKey: "rejected-first-prompt",
@@ -356,17 +359,15 @@ test.each(["agent", "workspace"] as const)(
           source: { kind: "directory", path: directory },
           agent,
         });
-        expect(result.error).toBeNull();
+        if (result.error) throw new Error(result.error);
         return result.agent!;
       };
-      const created = await submit();
-      expect(created).toMatchObject({ status: "error", lastError: rejection });
+      await expect(submit()).rejects.toThrow(rejection);
       expect(snapshots.map((snapshot) => snapshot.phase)).not.toContain("prompt_started");
-      expect(snapshots.at(-1)).toMatchObject({
-        phase: "completed",
-        error: null,
-        agent: { id: created.id },
-      });
+      expect(snapshots.at(-1)).toMatchObject({ phase: "failed", error: rejection });
+      const [listed] = (await client.fetchAgents()).entries;
+      const created = listed.agent;
+      expect(created).toMatchObject({ status: "error", lastError: rejection });
       const expectedTimeline = [
         {
           type: "user_message",
@@ -380,7 +381,10 @@ test.each(["agent", "workspace"] as const)(
         (await client.fetchAgentTimeline(created.id)).entries.map((entry) => entry.item),
       ).toEqual(expectedTimeline);
       expect(streamed).toEqual(expectedTimeline);
-      expect((await submit()).id).toBe(created.id);
+      expect(snapshots.at(-1)).toMatchObject({ agentId: created.id });
+      // The retry replays the failed receipt: same agent, no second session or prompt.
+      await expect(submit()).rejects.toThrow(rejection);
+      expect(snapshots.at(-1)).toMatchObject({ phase: "failed", agentId: created.id });
       expect(
         (await client.fetchAgentTimeline(created.id)).entries.map((entry) => entry.item),
       ).toEqual(expectedTimeline);

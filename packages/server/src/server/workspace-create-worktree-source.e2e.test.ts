@@ -519,9 +519,14 @@ function createDivergentBases(repoDir: string): void {
 }
 
 async function archiveAndRestoreWorkspace({ client, workspace, cwd }: RestorableWorkspace) {
+  // FULCRA(FU-657): the Fulcra cleanup guard keeps the archived worktree directory (KEEP receipt),
+  // so recovery unarchives the kept directory instead of restoring a removed one.
+  const keeps = watchCleanupKeeps();
   expect((await client.archiveWorkspace(workspace.id)).error).toBeNull();
-  expect(existsSync(cwd)).toBe(false);
-  expect(await client.inspectWorkspaceRecovery(workspace.id)).toMatchObject({ action: "restore" });
+  expectKeptByCleanupGuard(keeps, cwd);
+  expect(await client.inspectWorkspaceRecovery(workspace.id)).toMatchObject({
+    action: "unarchive",
+  });
   await client.restoreWorkspace(workspace.id);
 }
 

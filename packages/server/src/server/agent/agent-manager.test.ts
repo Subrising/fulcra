@@ -39,7 +39,8 @@ import {
   type AgentManagerOptions,
   type ManagedAgent,
 } from "./agent-manager.js";
-import { NATIVE_QUEUED_FINAL } from "./agent-sdk-types.js";
+import { FINAL_INPUT_CHECK, NATIVE_QUEUED_FINAL } from "./agent-sdk-types.js";
+import { createFinalInputCheck, recordFinalInputHandoff } from "./final-input-check.js";
 import {
   registerNativeQueuedProvider,
   submitNativeQueuedDispatch,
@@ -18467,4 +18468,72 @@ test("an out-of-band command racing idle cleanup waits for the resumed runtime",
   expect(await command).toEqual({ disposition: "out_of_band" });
   expect(h.commands).toEqual(["/maintenance"]);
   expect(h.prompts).toEqual([]);
+});
+
+// FULCRA(FU-657): queued sends and notices read a submitted row as "delivered", so a final-checked prompt keeps the
+// upstream "rejected" row only when it really reached the provider.
+describe("rejected prompt rows for final-checked input", () => {
+  async function rejectedRow(
+    failStart: (options: AgentRunOptions | undefined) => void,
+    options: (messageId: string) => AgentRunOptions,
+  ): Promise<boolean> {
+    const workdir = mkdtempSync(join(tmpdir(), "agent-manager-rejected-row-"));
+    const client = new (class extends TestAgentClient {
+      override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+        return new (class extends TestAgentSession {
+          override async startTurn(_prompt?: AgentPromptInput, runOptions?: AgentRunOptions) {
+            failStart(runOptions);
+            return super.startTurn();
+          }
+        })(config);
+      }
+    })();
+    const manager = new AgentManager({ clients: { codex: client }, logger });
+    try {
+      const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+        workspaceId: undefined,
+      });
+      const messageId = randomUUID();
+      await expect(manager.runAgent(agent.id, "notice", options(messageId))).rejects.toThrow();
+      return manager.hasSubmittedFinishMessageNow(agent.id, messageId);
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  }
+  const prepareRefusal = () => {
+    throw new Error("Prepared turn changed");
+  };
+  const passing = () => undefined;
+  const refusing = () => {
+    throw new Error("The receiver session changed");
+  };
+  const handoffThenFail = (runOptions: AgentRunOptions | undefined) => {
+    recordFinalInputHandoff(runOptions?.[FINAL_INPUT_CHECK]);
+    throw new Error("Provider failed after taking the input");
+  };
+  function checked(check: () => void, managerOnly = false) {
+    return (messageId: string): AgentRunOptions => ({
+      clientMessageId: messageId,
+      [FINAL_INPUT_CHECK]: createFinalInputCheck(check, undefined, managerOnly),
+    });
+  }
+  function unchecked(messageId: string): AgentRunOptions {
+    return { clientMessageId: messageId };
+  }
+
+  test("a provider prepare refusal before the handoff leaves no row", async () => {
+    expect(await rejectedRow(prepareRefusal, checked(passing))).toBe(false);
+  });
+  test("a refused final check leaves no row", async () => {
+    expect(await rejectedRow(passing, checked(refusing))).toBe(false);
+  });
+  test("a failure after a real provider handoff keeps the rejected row", async () => {
+    expect(await rejectedRow(handoffThenFail, checked(passing))).toBe(true);
+  });
+  test("a manager-only check keeps the row when the provider call itself rejects", async () => {
+    expect(await rejectedRow(prepareRefusal, checked(passing, true))).toBe(true);
+  });
+  test("an unchecked prompt keeps the upstream rejected row", async () => {
+    expect(await rejectedRow(prepareRefusal, unchecked)).toBe(true);
+  });
 });

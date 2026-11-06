@@ -4,8 +4,6 @@ interface State {
   beforeHandoff?: () => void;
   committed: boolean;
   failure?: unknown;
-  /** FULCRA(FU-657): true only when the check itself (or its pre-handoff commit) refused the input. */
-  refused: boolean;
   managerOnly: boolean;
   promise: Promise<void>;
   handoffConfirmed: () => boolean;
@@ -57,7 +55,6 @@ export function createFinalInputCheck(
     beforeHandoff,
     managerOnly,
     committed: false,
-    refused: false,
     promise,
     handoffConfirmed: () => outcome === "confirmed",
     resolve,
@@ -77,18 +74,14 @@ export function assertFinalInputCheck(handle: object | undefined): void {
   if (!handle) return;
   const state = checks.get(handle);
   if (!state) throw new Error("Private final input check unavailable");
-  if (state.failure) {
-    state.reject(state.failure);
-    throw state.failure;
-  }
   try {
+    if (state.failure) throw state.failure;
     const result: unknown = state.check();
     if (result && typeof result === "object" && "then" in result) {
       void Promise.resolve(result).catch(() => {});
       throw new Error("Private final input check must be synchronous");
     }
   } catch (error) {
-    state.refused = true;
     state.reject(error);
     throw error;
   }
@@ -110,7 +103,6 @@ export function commitFinalInputCheck(handle: object | undefined): void {
     }
     state.committed = true;
   } catch (error) {
-    state.refused = true;
     state.reject(error);
     throw error;
   }
@@ -128,10 +120,6 @@ export function failFinalInputHandoff(handle: object | undefined, error: unknown
 }
 export function finalInputFailure(handle: object | undefined): unknown {
   return handle ? checks.get(handle)?.failure : undefined;
-}
-/** FULCRA(FU-657): the check refused this input before any provider handoff (not a later provider failure). */
-export function wasFinalInputRefused(handle: object | undefined): boolean {
-  return Boolean(handle && checks.get(handle)?.refused);
 }
 /** Read the native receipt without waiting for the dispatch reply or changing its timeout. */
 export function hasFinalInputHandoff(handle: object | undefined): boolean {

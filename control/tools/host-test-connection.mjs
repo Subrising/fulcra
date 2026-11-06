@@ -78,6 +78,12 @@ export async function controllerTestConnection({ host, manager, storage, logger,
         });
     },
   };
+  // FULCRA(FU-657): since upstream v0.15 the client sends every frame through its chunked transport, which a real
+  // connect creates. This in-memory fixture never connects, so it passes frames straight to the transport above.
+  daemon.chunkedTransport = {
+    send: (frame) => daemon.transport.send(frame),
+    close() {},
+  };
   const issueProvenance = async (binding) => {
     const reply = await channel.receive(child, {
       type: "issue-provenance",

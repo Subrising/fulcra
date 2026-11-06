@@ -1420,7 +1420,11 @@ test(
       finish.resolve();
     });
     const b = await daemon({
-      agentClients: createTestAgentClients({ beforeTurnComplete: () => finish.promise }),
+      agentClients: createTestAgentClients({
+        beforeTurnComplete: () => finish.promise,
+        // FULCRA(FU-657): FU-483 sends a finish notice only for a final message with a result line.
+        response: () => "DONE: the remote work is finished.",
+      }),
     });
     const clients = () =>
       createTestAgentClients({
@@ -1523,7 +1527,11 @@ test(
       }),
     });
     const b = await daemon({
-      agentClients: createTestAgentClients({ beforeTurnComplete: () => finish.promise }),
+      agentClients: createTestAgentClients({
+        beforeTurnComplete: () => finish.promise,
+        // FULCRA(FU-657): FU-483 sends a finish notice only for a final message with a result line.
+        response: () => "DONE: the remote work is finished.",
+      }),
     });
     const origin = await api(a);
     const destination = await api(b);

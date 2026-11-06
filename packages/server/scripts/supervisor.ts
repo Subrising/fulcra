@@ -415,7 +415,9 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
             });
             answering = false;
             missedTicks = 0;
-            requestRestart("worker_unresponsive", false);
+            // FULCRA(FU-657): a hung-worker restart keeps terminals, as before the merge (main had no kill
+            // intent here). Only an explicit kill restart closes them.
+            requestRestart("worker_unresponsive", true);
           };
           if (missedTicks >= hardCapMissedTicks) {
             restartUnresponsive({ reason: "hard_cap" });

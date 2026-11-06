@@ -100,10 +100,22 @@ async function fixture(t, realCodex = false, provider = "codex") {
     message = randomUUID(),
     attempt = randomUUID(),
     text = "Write an owned report";
-  store.created(id, randomUUID(), home);
+  const taskId = randomUUID();
+  store.created(id, taskId, home);
   store.db
     .prepare("UPDATE sessions SET mode='delegated',boot=?,grantedAt=1 WHERE id=?")
     .run(host.boot, id);
+  // FULCRA(FU-657): since upstream v0.15 (#8393) a real Codex thread has no native id before its first turn, so
+  // the first controller send uses the first-send bootstrap. That needs the controller's own delivered creation,
+  // as a real controller-created worker has.
+  if (realCodex)
+    store.db
+      .prepare("INSERT INTO deliveries VALUES (?,NULL,'create',?,'delivered',?)")
+      .run(
+        randomUUID(),
+        JSON.stringify({ provider, taskId }),
+        JSON.stringify({ id, cwd: home, runtimeInstanceId: manager.getAgent(id).instanceId }),
+      );
   const row = store.get(id);
   const result = { generation: row.generation, nativeAttemptId: attempt, expectedLastUserAt: null };
   store.db
@@ -259,6 +271,11 @@ test("altered send options cannot be substituted for journal text-only shape", a
   assert.equal(f.calls(), 0);
 });
 
+// FULCRA(FU-657): since upstream v0.15 (#8393) a real Codex thread is saved only after its first turn. The quota
+// wait tests are about the receipt, not the first send, so they start from a saved thread, as before the merge.
+function savedThread(f) {
+  f.manager.getAgent(f.id).runtimeInfo.sessionId = "owned-thread";
+}
 async function queued(f) {
   const a = f.manager.getAgent(f.id),
     row = f.store.get(f.id),
@@ -294,6 +311,7 @@ async function queued(f) {
 }
 test("real Codex quota read failure commits attempt-bound no-dispatch receipt", async (t) => {
   const f = await fixture(t, true);
+  savedThread(f);
   await queued(f);
   f.failQuota();
   await assert.rejects(f.send());
@@ -744,6 +762,7 @@ for (const [name, change] of [
 test("public real Codex quota failure preserves the attempt-bound receipt", async (t) => {
   const f = await fixture(t, true),
     connection = await wire(t, f);
+  savedThread(f);
   await queued(f);
   f.failQuota();
   await assert.rejects(
@@ -1263,6 +1282,57 @@ for (const field of ["instanceId", "nativeSessionId"])
     await assert.rejects(f.send(), /Trusted plugin input hook failed/);
     assert.equal(f.calls(), 0);
   });
+// FULCRA(FU-657): the real Codex app-server prepares the first turn with its new thread id while the runtime facts
+// still show none (upstream #8393). The turn check accepts that id only on the bound first delivery.
+test("first owned real Codex prompt passes the prepared-turn check with its new thread id", async (t) => {
+  const f = await fixture(t, true);
+  assert.equal(f.manager.getAgent(f.id).runtimeInfo?.sessionId ?? null, null);
+  await f.send();
+  assert.equal(f.calls(), 1);
+  assert.equal(
+    f.store.db.prepare("SELECT nativeId FROM native_bootstrap_prepared WHERE session=?").get(f.id)
+      ?.nativeId,
+    "owned-thread",
+  );
+});
+test("a second owned delivery cannot reuse the unbound real Codex first-send bootstrap", async (t) => {
+  const f = await fixture(t, true);
+  await f.send();
+  assert.equal(f.calls(), 1);
+  const message = randomUUID(),
+    attempt = randomUUID(),
+    text = "A second owned report";
+  f.store.db
+    .prepare("INSERT INTO deliveries VALUES (?,?,'send',?,'intent',?)")
+    .run(
+      message,
+      f.id,
+      JSON.stringify({ sessionId: f.id, messageId: message, text }),
+      JSON.stringify({ ...f.result, nativeAttemptId: attempt }),
+    );
+  const token = f.api.issueProvenance({
+    agentId: f.id,
+    kind: "prompt",
+    messageId: "orca-control:" + message,
+    attemptId: attempt,
+    payloadDigest: payloadDigest(f.id, "prompt", "orca-control:" + message, sendPayload(text)),
+  });
+  await assert.rejects(
+    f.host.rpc(token, () =>
+      sendPromptToAgent({
+        agentManager: f.manager,
+        agentStorage: f.storage,
+        agentId: f.id,
+        logger: f.logger,
+        prompt: text,
+        messageId: "orca-control:" + message,
+        clearPendingPermissions: true,
+        activeTurnBehavior: "interrupt",
+      }),
+    ),
+  );
+  assert.equal(f.calls(), 1);
+});
 function createdNeverTurned(f, provider = "claude") {
   const a = neverTurned(f),
     create = randomUUID(),

@@ -14,6 +14,7 @@ import {
   FileTransferOpcode,
   TerminalStreamOpcode,
 } from "@getpaseo/protocol/binary-frames/index";
+import { NOTIFY_LABEL } from "@getpaseo/protocol/notification-policy";
 import { DaemonClient } from "./test-utils/daemon-client.js";
 import { createTestPaseoDaemon } from "./test-utils/paseo-daemon.js";
 import {
@@ -1171,6 +1172,9 @@ test("notification ownership is separate from data demand and another socket's f
       cwd: daemon.staticDir,
       workspaceId: workspace.id,
       title: "Attention",
+      // FULCRA(FU-657): the Fulcra notification policy ("primes" by default) keeps a worker quiet. The
+      // "Notify me" override lets this test check notification ownership, not the policy.
+      labels: { [NOTIFY_LABEL]: "on" },
     });
     const observer = await SubscriptionPeer.connect(daemon.port, "attention-sources");
     const passive = await SubscriptionPeer.connect(daemon.port, "attention-sources");
@@ -1807,6 +1811,8 @@ test("legacy event subscribers retain notifications without the new notification
       provider: "codex",
       cwd: daemon.staticDir,
       workspaceId: workspace.id,
+      // FULCRA(FU-657): the Fulcra notification policy keeps a worker quiet unless "Notify me" is on.
+      labels: { [NOTIFY_LABEL]: "on" },
     });
     legacy = await SubscriptionPeer.connect(daemon.port, "legacy-notifications", {
       owned_subscriptions: false,

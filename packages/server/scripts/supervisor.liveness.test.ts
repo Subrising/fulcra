@@ -8,7 +8,7 @@ import { expect, test } from "vitest";
 // FU-74: on 11 Oct the daemon worker's main thread blocked. It answered nothing and ignored SIGTERM, and the
 // supervisor kept it, because its heartbeat went one way only. The worker now answers each heartbeat; a worker that
 // stops answering is restarted, with a forced kill when it does not exit in time.
-async function runSupervised(worker: string, finish: string, timings = "") {
+async function runSupervised(worker: string, finish: string, timings = "", extraOptions = "") {
   const home = await mkdtemp(path.join(tmpdir(), "paseo-liveness-"));
   const workerPath = path.join(home, "worker.mjs");
   const runnerPath = path.join(home, "runner.mjs");
@@ -32,6 +32,7 @@ async function runSupervised(worker: string, finish: string, timings = "") {
         ${finish}
       },
       onWorkerExit: () => record(null),
+      ${extraOptions}
     });
   `,
   );
@@ -96,10 +97,22 @@ test("a worker that stops answering heartbeats is killed and replaced", async ()
   );
   expect(result.output).toContain("worker_unresponsive. Stopping worker for restart");
   // The blocked worker ignores the graceful request; the deadline kills it.
-  // FULCRA(FU-657): since upstream v0.15 a restart with kill intent (keepTerminals false, as the
-  // liveness restart sends) logs "exited" and closes terminals; a plain crash logs "crashed".
-  expect(result.output).toContain("Worker exited (SIGKILL). Restarting worker");
+  expect(result.output).toContain("Worker crashed (SIGKILL). Restarting worker");
   expect(result.events, result.output).toEqual(["first", null, "second", null]);
+  expect(result.code).toBe(0);
+}, 30_000);
+
+// FULCRA(FU-657): a hung-worker restart keeps terminals, as before the merge. Cleanup runs only at the final
+// supervisor exit, never between the hung worker and its replacement.
+test("a hung-worker restart keeps terminals", async () => {
+  const result = await runSupervised(
+    ANSWERING_WORKER,
+    `if (listen === "second") controller.requestShutdown("test_done");`,
+    "",
+    `cleanupTerminals: async () => { await record("cleanup"); },`,
+  );
+  expect(result.output).toContain("worker_unresponsive. Stopping worker for restart");
+  expect(result.events, result.output).toEqual(["first", null, "second", null, "cleanup"]);
   expect(result.code).toBe(0);
 }, 30_000);
 

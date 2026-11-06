@@ -73,9 +73,9 @@ import {
   assertFinalInputCheck,
   failFinalInputHandoff,
   FinalInputWithdrawnError,
+  hasFinalInputHandoff,
   recordManagerInputHandoff,
   requiresProviderInputHandoff,
-  wasFinalInputRefused,
 } from "./final-input-check.js";
 import { checkReportPublication } from "../report-publication.js";
 import {
@@ -6963,6 +6963,8 @@ export class AgentManager {
     options?: AgentRunOptions;
   }): Promise<string> {
     const { agent, agentId, pendingRun, prompt, options } = params;
+    // FULCRA(FU-657): set when the provider call begins; decides if a rejected prompt row is kept.
+    let providerInvoked = false;
     try {
       const previousAdmission = options?.[CODEX_TURN_ADMISSION];
       const handle = options?.[TRUSTED_OPERATION];
@@ -7047,6 +7049,7 @@ export class AgentManager {
             !["codex", "claude"].includes(agent.provider)
           )
             throw new Error("Final-checked notification provider unavailable");
+          providerInvoked = true;
           return nativeDispatch(() => agent.session.startTurn(prompt, turnOptions));
         },
         promptPayload(prompt, options),
@@ -7077,10 +7080,17 @@ export class AgentManager {
       this.runs.settleForegroundStart(pendingRun, { status: "failed", error: errorMsg });
       try {
         // A terminal rejection belongs after the submitted prompt even though no provider turn exists.
-        // FULCRA(FU-657): an input that its final check refused is not recorded. Queued sends and notices read a
-        // submitted row as "delivered" (hasSubmittedFinishMessageNow), so a refusal must leave none. A provider
-        // failure after the check passed keeps the upstream rejected row.
-        if (options?.clientMessageId && !wasFinalInputRefused(options?.[FINAL_INPUT_CHECK])) {
+        // FULCRA(FU-657): queued sends and notices read a submitted row as "delivered" (hasSubmittedFinishMessageNow),
+        // so a final-checked input keeps the upstream rejected row only when it really reached the provider: after
+        // the provider handoff for native checks, or after the provider call began for manager-only checks. Any
+        // refusal before that point (the check, validate(), provider prepare checks, a closed transport) leaves none.
+        const finalCheck = options?.[FINAL_INPUT_CHECK];
+        const reachedProvider =
+          !finalCheck ||
+          (requiresProviderInputHandoff(finalCheck)
+            ? hasFinalInputHandoff(finalCheck)
+            : providerInvoked);
+        if (options?.clientMessageId && reachedProvider) {
           await this.recordSubmittedPrompt(agent, prompt, options.clientMessageId, "rejected", {
             messageId: options.clientMessageId,
           });

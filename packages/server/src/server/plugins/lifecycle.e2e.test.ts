@@ -221,11 +221,27 @@ export default function contribute(server) {
           hook: "agent.permission.before",
           event: { request: { input: { command: "rm -f permission.txt" } } },
         },
+        // FULCRA(FU-657): Fulcra sends the turn timeline (report-up reads it; upstream sends []).
+        // The denied Bash call ends turn 0 unfinished, so Fulcra idle-turn recovery runs one
+        // continuation turn (IDLE_TURN_PROMPT).
         {
           hook: "agent.turn.after",
-          event: { outcome: { kind: "completed" }, timeline: [] },
+          event: {
+            turnId: "fake-turn-0",
+            outcome: { kind: "completed" },
+            timeline: expect.any(Array),
+          },
         },
-        { hook: "agent.turn.before", event: { agent: { id: agent.id } } },
+        {
+          hook: "agent.turn.after",
+          event: {
+            turnId: "fake-turn-1",
+            outcome: { kind: "completed" },
+            timeline: expect.any(Array),
+          },
+        },
+        { hook: "agent.turn.before", event: { agent: { id: agent.id }, turnId: "fake-turn-0" } },
+        { hook: "agent.turn.before", event: { agent: { id: agent.id }, turnId: "fake-turn-1" } },
       ]);
     const page = await client.fetchAgentTimeline(agent.id, { direction: "tail", limit: 20 });
     expect(page.entries.length).toBeGreaterThan(0);
@@ -555,6 +571,13 @@ test("reloading a plugin leaves a completed plugin-provider agent without an err
   });
   expect(JSON.stringify(timeline.entries)).not.toContain("Provider connection closed");
 
+  // FULCRA(FU-657): plugin reload retires the provider runtime and closes its agents (upstream). Fulcra
+  // refuses a send to a closed session; the caller reloads the session first, then sends.
+  expect((await daemon.daemon.agentStorage.get(agent.id))?.lastStatus).toBe("closed");
+  await expect(client.sendMessage(agent.id, "after reload")).rejects.toThrow(
+    "session closed: reload it or start a new worker",
+  );
+  await client.refreshAgent(agent.id);
   await client.sendMessage(agent.id, "after reload");
   expect((await client.waitForFinish(agent.id, 30_000)).status).toBe("idle");
 }, 60_000);
@@ -804,17 +827,21 @@ export default function(server) {
       cwd: root,
       modeId: "bypassPermissions",
     });
+    // FULCRA(FU-657): billing compaction drops calls older than the oldest API account. Fixed
+    // 2026-10-17 times fell before the account this test creates, so the rows vanished. Use times
+    // after the account was created.
+    const legacyAt = Date.now();
     await recordAccountCost(pool, {
       id: `turn:${legacy.id}:legacy-one`,
       accountId: account,
       costUsd: 4,
-      at: "2026-10-17T01:00:00Z",
+      at: new Date(legacyAt).toISOString(),
     });
     await recordAccountCost(pool, {
       id: `turn:${legacy.id}:legacy-two`,
       accountId: account,
       costUsd: 5.65,
-      at: "2026-10-17T02:00:00Z",
+      at: new Date(legacyAt + 1000).toISOString(),
     });
     const observed = await client.listProviderUsage({ agentId: legacy.id, observationOnly: true });
     expect(observed.sessionCost).toMatchObject({ totalUsd: 9.65, lastTurnUsd: 5.65 });

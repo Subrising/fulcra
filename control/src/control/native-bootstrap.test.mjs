@@ -7,6 +7,7 @@ import path from "node:path";
 import { ControlStore } from "./store.mjs";
 import {
   admitBootstrap,
+  bindBootstrapAfterRestart,
   bootstrapCandidate,
   bootstrapTurnIdentity,
   requireBootstrapBinding,
@@ -168,4 +169,35 @@ test("a Claude first send may not carry a prepared native id", (t) => {
   const f = fixture(t);
   admitBootstrap(f.db, f.agent, f.operation, f.delivery, "boot");
   assert.equal(bootstrapTurnIdentity(f.db, f.agent, f.operation, "first", "native"), false);
+});
+test("a saved prepared thread id refuses a different one and binds only itself", (t) => {
+  const f = fixture(t, { provider: "codex" });
+  admitBootstrap(f.db, f.agent, f.operation, f.delivery, "boot");
+  assert.equal(bootstrapTurnIdentity(f.db, f.agent, f.operation, "first", "thread"), true);
+  assert.equal(
+    f.db.prepare("SELECT nativeId FROM native_bootstrap_prepared WHERE session='worker'").get()
+      .nativeId,
+    "thread",
+  );
+  assert.equal(bootstrapTurnIdentity(f.db, f.agent, f.operation, "first", "thread"), true);
+  assert.equal(bootstrapTurnIdentity(f.db, f.agent, f.operation, "first", "other"), false);
+  f.db.exec("UPDATE deliveries SET state='delivered' WHERE id='first'");
+  const observed = {
+    id: "worker",
+    runtimeInstanceId: "instance",
+    boot: "boot",
+    lastPromptId: "first",
+    lastUserAt: "2026-09-28T00:00:00Z",
+  };
+  reconcileBootstrap(f.db, { ...observed, nativeId: "other" });
+  assert.equal(f.db.prepare("SELECT nativeId FROM native_bootstrap").get().nativeId, null);
+  bindBootstrapAfterRestart(f.db, {
+    session: "worker",
+    delivery: "first",
+    previousBoot: "boot",
+    nativeId: "other",
+  });
+  assert.equal(f.db.prepare("SELECT nativeId FROM native_bootstrap").get().nativeId, null);
+  reconcileBootstrap(f.db, { ...observed, nativeId: "thread" });
+  assert.equal(f.db.prepare("SELECT nativeId FROM native_bootstrap").get().nativeId, "thread");
 });
