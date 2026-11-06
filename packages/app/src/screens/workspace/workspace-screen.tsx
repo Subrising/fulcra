@@ -66,7 +66,7 @@ import { SplitContainer } from "@/components/split-container";
 import { RetainedPanel } from "@/components/retained-panel";
 import { WorkspaceActions } from "@/git/workspace-actions";
 import { WorkspaceOpenInEditorButton } from "@/workspace/open-in-editor/button";
-import { ContextButton } from "@/context/launcher";
+import { ContextButton, useContextInMenu } from "@/context/launcher";
 import { WorkspaceScriptsButton } from "@/screens/workspace/scripts";
 import { ImportSessionSheet } from "@/components/import-session-sheet";
 import { useNavigateToImportedAgent } from "@/hooks/use-import-session";
@@ -3389,6 +3389,7 @@ function WorkspaceScreenContent({
       handleOpenUrlInBrowserTab,
     ],
   );
+  const contextInMenu = useContextInMenu();
   const compactWorkspaceHeader = useMemo(
     () =>
       isMobile ? (
@@ -3404,7 +3405,10 @@ function WorkspaceScreenContent({
         >
           {/* FULCRA(FU-657): the compact header keeps the Fulcra Context button. Plugin header
               buttons are rows of the workspace menu here (upstream v0.15.0), not header buttons. */}
-          <ContextButton serverId={normalizedServerId} workspaceId={normalizedWorkspaceId} />
+          {/* FULCRA(FU-702): under 390 px the Context action is a row of the workspace menu. */}
+          {contextInMenu ? null : (
+            <ContextButton serverId={normalizedServerId} workspaceId={normalizedWorkspaceId} />
+          )}
           <MobileWorkspaceTabSwitcher
             tabs={tabs}
             activeTabKey={activeTabKey}
@@ -3442,10 +3446,12 @@ function WorkspaceScreenContent({
             onCopyWorkspacePath={handleCopyWorkspacePath}
             onCopyBranchName={handleCopyBranchName}
             onOpenSetupTab={handleOpenSetupTab}
+            showContext={contextInMenu}
           />
         </CompactWorkspaceHeader>
       ) : null,
     [
+      contextInMenu,
       activeTabKey,
       canOpenImportSheet,
       compactHeaderScripts,
