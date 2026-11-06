@@ -6,6 +6,7 @@ import { getServerId } from "../support/helpers/server-id";
 import { expectOpenTabCount } from "../support/helpers/sheet";
 import {
   closeCompactWorkspaceMenu,
+  compactWorkspaceMenu,
   goBackInMenu,
   menuRow,
   openCompactWorkspaceMenu,
@@ -49,7 +50,7 @@ async function openNamedWorkspace(page: Page, names: typeof labels.long) {
   }
 }
 
-async function expectHeaderContentsFit(page: Page, info: TestInfo, long: boolean, width: number) {
+async function expectHeaderContentsFit(page: Page, info: TestInfo, long: boolean) {
   const menu = page.getByTestId("menu-button").filter({ visible: true });
   const title = page.getByTestId("workspace-header-title");
   const project = page.getByTestId("workspace-header-subtitle");
@@ -80,16 +81,14 @@ async function expectHeaderContentsFit(page: Page, info: TestInfo, long: boolean
     for (const box of [bounds.title!, bounds.project!, bounds.badge!, bounds.icon!]) {
       expect(box.x + box.width).toBeLessThan(bounds.trigger!.x);
     }
-    // FULCRA(FU-657): the compact header also carries the Fulcra Context button (48 px target). At
-    // 320 px that leaves the project row about 12 px, so even a short project name truncates there.
-    // The 20 px floor and the short-name check apply from 390 px.
-    const roomy = width >= 390;
-    expect(bounds.project!.width).toBeGreaterThan(roomy ? 20 : 0);
+    // FULCRA(FU-702): under 390 px the Context action sits in the menu, so the project row keeps
+    // room for a short name at every width.
+    expect(bounds.project!.width).toBeGreaterThan(20);
     // Long labels truncate instead of squeezing the host icon.
     expect(bounds.icon!.width).toBe(bounds.icon!.height);
     expect(bounds.badge!.x).toBeGreaterThan(bounds.project!.x + bounds.project!.width);
     expect(bounds.titleTruncated).toBe(long);
-    expect(bounds.projectTruncated).toBe(long || !roomy);
+    expect(bounds.projectTruncated).toBe(long);
   }).toPass({ timeout: 5_000 });
   await info.attach("header-bounds", {
     body: JSON.stringify(await measure(), null, 2),
@@ -103,7 +102,7 @@ for (const width of [320, 390]) {
       await page.setViewportSize({ width, height: 844 });
       const workspace = await openNamedWorkspace(page, labels[kind]);
       try {
-        await expectHeaderContentsFit(page, info, kind === "long", width);
+        await expectHeaderContentsFit(page, info, kind === "long");
       } finally {
         await workspace.cleanup();
       }
@@ -194,3 +193,36 @@ test("compact header menu runs, shows, and stops workspace scripts", async ({ pa
     await workspace.cleanup();
   }
 });
+
+// FULCRA(FU-702): under 390 px the Context action is a row of the workspace menu, not a header button.
+for (const width of [320, 375, 390]) {
+  test(`Context action is ${width < 390 ? "in the menu" : "in the header"} at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 844 });
+    const workspace = await openNamedWorkspace(page, labels.short);
+    try {
+      const headerButton = page.getByRole("button", { name: "Context", exact: true });
+      const noSideScroll = await page.evaluate(
+        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+      );
+      expect(noSideScroll).toBe(true);
+      if (width >= 390) {
+        await expect(headerButton.filter({ visible: true })).toHaveCount(1);
+        await openCompactWorkspaceMenu(page);
+        await expect(page.getByTestId("workspace-header-context")).toHaveCount(0);
+        return;
+      }
+      await expect(headerButton.filter({ visible: true })).toHaveCount(0);
+      await openCompactWorkspaceMenu(page);
+      const row = page.getByTestId("workspace-header-context");
+      await expect(row).toBeVisible();
+      const box = await row.boundingBox();
+      expect(box!.height).toBeGreaterThanOrEqual(48);
+      await row.click();
+      await expect(compactWorkspaceMenu(page)).toBeHidden({ timeout: 10_000 });
+    } finally {
+      await workspace.cleanup();
+    }
+  });
+}
