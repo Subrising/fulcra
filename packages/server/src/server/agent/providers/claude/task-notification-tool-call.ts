@@ -123,6 +123,37 @@ function collectUserContentParts(content: TaskNotificationUserContent): string[]
   return parts;
 }
 
+function containsMarker(value: unknown): boolean {
+  return typeof value === "string" && value.includes(TASK_NOTIFICATION_MARKER);
+}
+
+/**
+ * FULCRA(FU-472): a cheap check before the zod parse. It returns false only for records that the
+ * parsers below always reject: a notification is a user record whose text or input holds the
+ * marker, a system task_notification record, or a queue record whose content holds the marker.
+ * Replay calls the parsers for every transcript record, so this keeps zod off most of them.
+ */
+function mayBeTaskNotificationRecord(record: unknown): boolean {
+  if (record === null || typeof record !== "object" || Array.isArray(record)) return true;
+  const { type, subtype, content, message } = record as Record<string, unknown>;
+  if (type === "system") return subtype === "task_notification";
+  if (type === "queue-operation") return containsMarker(content);
+  if (type !== "user") return false;
+  const userContent =
+    message !== null && typeof message === "object"
+      ? (message as Record<string, unknown>).content
+      : undefined;
+  if (typeof userContent === "string") return containsMarker(userContent);
+  if (!Array.isArray(userContent)) return false;
+  return userContent.some(
+    (block) =>
+      block !== null &&
+      typeof block === "object" &&
+      (containsMarker((block as Record<string, unknown>).text) ||
+        containsMarker((block as Record<string, unknown>).input)),
+  );
+}
+
 function extractUserContentText(content: unknown): string | null {
   const parsedContent = TaskNotificationUserContentSchema.safeParse(content);
   if (!parsedContent.success) {
@@ -175,6 +206,7 @@ function parseTaskNotificationFromUserContent(
 }
 
 function parseTaskNotificationFromSystemRecord(record: unknown): TaskNotificationEnvelope | null {
+  if (!mayBeTaskNotificationRecord(record)) return null;
   const parsedRecord = TaskNotificationHistoryRecordSchema.safeParse(record);
   if (!parsedRecord.success) {
     return null;
@@ -226,6 +258,10 @@ export async function* assignTaskNotificationReplayIds<T>(
 ): AsyncGenerator<T> {
   const occurrences = new Map<string, Map<string, number>>();
   for await (const entry of entries) {
+    if (!mayBeTaskNotificationRecord(entry)) {
+      yield entry;
+      continue;
+    }
     const record = TaskNotificationHistoryRecordSchema.safeParse(entry);
     if (!record.success) {
       yield entry;
@@ -379,6 +415,7 @@ function toTaskNotificationToolCall(
 }
 
 export function isTaskNotificationUserContent(content: unknown): boolean {
+  if (!mayBeTaskNotificationRecord({ type: "user", message: { content } })) return false;
   const rawText = extractUserContentText(content);
   if (!rawText) {
     return false;
@@ -413,6 +450,7 @@ export function readTaskNotificationToolUseIdFromHistoryRecord(record: unknown):
 export function readTaskNotificationFromHistoryRecord(
   record: unknown,
 ): TaskNotificationEnvelope | null {
+  if (!mayBeTaskNotificationRecord(record)) return null;
   const parsedRecord = TaskNotificationHistoryRecordSchema.safeParse(record);
   if (!parsedRecord.success) return null;
   if (parsedRecord.data.type === "user" && parsedRecord.data.message) {
