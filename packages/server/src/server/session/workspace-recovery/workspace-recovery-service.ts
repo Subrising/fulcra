@@ -165,6 +165,7 @@ export function createWorkspaceRecoveryService(deps: {
     await retainLegacyCleanup();
 
     let previousWorktreePath = workspace.worktreeRoot;
+    let hasRecordedWorktreePath = Boolean(previousWorktreePath);
     if (!previousWorktreePath) {
       // COMPAT(worktreeRestoreMissingWorktreeRoot): records created before v0.1.110
       // lack durable backing placement; remove filesystem discovery after 2027-01-17.
@@ -175,6 +176,7 @@ export function createWorkspaceRecoveryService(deps: {
       previousWorktreePath = ownership.allowed
         ? (ownership.worktreePath ?? workspace.cwd)
         : workspace.cwd;
+      hasRecordedWorktreePath = ownership.allowed;
     }
 
     let recreatedWorktreePath: string;
@@ -183,9 +185,10 @@ export function createWorkspaceRecoveryService(deps: {
         cwd: sourceRepoRoot,
         worktreeSlug: basename(previousWorktreePath),
         source,
-        runSetup: false,
+
         paseoHome: deps.paseoHome,
         worktreesRoot: deps.worktreesRoot,
+        ...(hasRecordedWorktreePath ? { worktreePath: previousWorktreePath } : {}),
       });
       recreatedWorktreePath = result.worktreePath;
     } catch (error) {

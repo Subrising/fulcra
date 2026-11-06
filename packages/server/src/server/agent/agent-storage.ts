@@ -123,8 +123,10 @@ const STORED_AGENT_SCHEMA = z.object({
   title: z.string().nullable().optional(),
   labels: z.record(z.string(), z.string()).default({}),
   lastStatus: AgentStatusSchema.default("closed"),
+  resumeOnStartup: z.boolean().optional(),
   lastModeId: z.string().nullable().optional(),
   config: SERIALIZABLE_CONFIG_SCHEMA,
+  launchEnv: z.record(z.string(), z.string()).optional(),
   runtimeInfo: z
     .object({
       provider: z.string(),
@@ -736,6 +738,7 @@ export class AgentStorage {
       if (existing && existing.archivedAt !== undefined) {
         record.archivedAt = existing.archivedAt;
       }
+<<<<<<< HEAD
       if (existing) {
         record.finishNotice = existing.finishNotice;
         record.previousFinishNotices = existing.previousFinishNotices;
@@ -748,6 +751,10 @@ export class AgentStorage {
       ) {
         record.interruptedTurn = existing.interruptedTurn;
       }
+=======
+      record.resumeOnStartup =
+        existing?.resumeOnStartup && agent.lifecycle !== "idle" && agent.lifecycle !== "error";
+>>>>>>> refs/remotes/upstream/tags/v0.15.0
       return record;
     });
   }

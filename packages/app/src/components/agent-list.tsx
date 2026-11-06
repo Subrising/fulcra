@@ -1,12 +1,15 @@
+<<<<<<< HEAD
 import { useContainerWidthBelow } from "@/hooks/use-container-width";
 import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { SessionAccountInfo } from "@/sessions/session-account-info";
 import { sessionAccount } from "@/sessions/session-account";
+=======
+import { Modal } from "@/components/ui/modal";
+>>>>>>> refs/remotes/upstream/tags/v0.15.0
 import {
   View,
   Text,
   Pressable,
-  Modal,
   RefreshControl,
   FlatList,
   type ListRenderItem,
@@ -58,6 +61,8 @@ const DATE_SECTION_ORDER = [
   "thisMonth",
   "older",
 ] as const satisfies readonly DateSectionKey[];
+
+const HISTORY_MATCH_OPTIONS = { typoTolerant: true } as const;
 
 type FlatListItem =
   | { type: "header"; key: string; section: DateSectionKey }
@@ -228,10 +233,18 @@ function SessionRow({
   const pendingPermissionCount = agent.pendingPermissionCount ?? 0;
   const ranges = useMemo(
     () => ({
+<<<<<<< HEAD
       workspace: findHighlightRanges(search ?? "", workspaceName),
       title: findHighlightRanges(search ?? "", labels.title),
       branch: findHighlightRanges(search ?? "", branch),
       project: findHighlightRanges(search ?? "", projectName),
+=======
+      // History search matches typo-tolerantly on the daemon, so the marks do too.
+      workspace: findHighlightRanges(search ?? "", workspaceName, HISTORY_MATCH_OPTIONS),
+      title: findHighlightRanges(search ?? "", agent.title ?? "", HISTORY_MATCH_OPTIONS),
+      branch: findHighlightRanges(search ?? "", branch, HISTORY_MATCH_OPTIONS),
+      project: findHighlightRanges(search ?? "", projectName, HISTORY_MATCH_OPTIONS),
+>>>>>>> refs/remotes/upstream/tags/v0.15.0
     }),
     [search, workspaceName, labels.title, branch, projectName],
   );

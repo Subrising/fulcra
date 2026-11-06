@@ -1,11 +1,11 @@
 import { preparePluginCatalog } from "./bundle-trust";
 import { useVoiceAudioEngineOptional } from "@/contexts/voice-context";
-import { pluginSettingsKey } from "./settings/use-settings";
 import { useEffect } from "react";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { useHostFeatureAvailability } from "@/runtime/host-features";
 import { useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { pluginRegistry } from "./registry";
+<<<<<<< HEAD
 import { sha256Hex } from "./catalog-hash";
 
 // FULCRA(plugin-host): one failed catalog read (a slow or dropped network on the phone, a host that is still starting)
@@ -13,6 +13,9 @@ import { sha256Hex } from "./catalog-hash";
 // tried again by itself, 2 s, 4 s, 8 s ... up to 30 s apart, 6 times in all.
 export const CATALOG_READ_RETRIES = 6;
 export const catalogRetryDelay = (attempt: number) => Math.min(2000 * 2 ** attempt, 30_000);
+=======
+import { syncPluginCatalog } from "./catalog-sync-model";
+>>>>>>> refs/remotes/upstream/tags/v0.15.0
 
 export function PluginCatalogSync({
   serverId,
@@ -26,6 +29,7 @@ export function PluginCatalogSync({
   const supported = useHostFeatureAvailability(serverId, "plugins");
   const paging = useHostFeatureAvailability(serverId, "pluginCatalogPaging");
 
+<<<<<<< HEAD
   useEffect(() => {
     let cancelled = false;
     let refreshQueue = Promise.resolve();
@@ -158,6 +162,20 @@ export function PluginCatalogSync({
         .catch((error) => console.warn("[Plugins] Failed to release catalog", error));
     };
   }, [audio, client, connected, serverId, supported, paging]);
+=======
+  useEffect(
+    () =>
+      syncPluginCatalog({
+        serverId,
+        client,
+        audio,
+        connected,
+        supported,
+        registry: pluginRegistry,
+      }),
+    [audio, client, connected, serverId, supported],
+  );
+>>>>>>> refs/remotes/upstream/tags/v0.15.0
 
   useEffect(() => () => pluginRegistry.removeHost(serverId), [serverId]);
   return null;

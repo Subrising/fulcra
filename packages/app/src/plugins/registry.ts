@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 // FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
 import {
   controllerPluginIdFromTrustedReports,
@@ -5,6 +6,10 @@ import {
   reportedControllerPluginId,
 } from "@getpaseo/protocol/bundled-controller";
 import { isPluginBundleTrusted, PLUGIN_TRUST_EXPLANATION } from "./bundle-trust";
+=======
+import { PluginTranslationRuntime } from "@getpaseo/plugin/client/host";
+import { i18n } from "@/i18n/i18next";
+>>>>>>> refs/remotes/upstream/tags/v0.15.0
 import type { AudioEngine } from "@/audio";
 import { useMemo, useSyncExternalStore } from "react";
 import { QueryClient } from "@tanstack/react-query";
@@ -48,6 +53,7 @@ export class PluginRegistry {
   // one query cache (and its fleet payload) behind for every reinstall while sidebar rows were mounted.
   private readonly queryClients = new Map<string, QueryClient>();
   private readonly evaluationErrors = new Map<string, string>();
+<<<<<<< HEAD
   // Hosts whose catalog question has been answered, however it was answered: loaded, declared
   // unsupported, or asked and failed. Routing needs "we do not know yet" to be distinct from
   // "there is nothing", and it must not stay unknown forever on a host that will never reply.
@@ -57,9 +63,14 @@ export class PluginRegistry {
     string,
     { client: DaemonClient; trustedPlugins: TrustedCatalogPlugins }
   >();
+=======
+  /** The client each host's installations were bound to; their Paseo API and RPCs call it. */
+  private readonly clientByHost = new Map<string, DaemonClient>();
+>>>>>>> refs/remotes/upstream/tags/v0.15.0
 
   constructor(
     private readonly dependencies: {
+      localeSource: import("@getpaseo/plugin/client/host").PluginLocaleSource;
       version: string | null;
       createRuntime: typeof createPluginClientRuntime;
     },
@@ -137,6 +148,7 @@ export class PluginRegistry {
       trustedPlugins: options.trustedPlugins,
     });
     const previous = this.byHost.get(serverId) ?? [];
+<<<<<<< HEAD
     const previousUntrusted = new Map(this.untrusted);
     for (const [key, item] of this.untrusted)
       if (item.serverId === serverId) this.untrusted.delete(key);
@@ -172,11 +184,21 @@ export class PluginRegistry {
       });
     }
 
+=======
+    const previousErrors = this.hostEvaluationErrors(serverId);
+    // Installations call the client they were created with, so a new client replaces them all.
+    const sameClient = this.clientByHost.get(serverId) === options.client;
+    this.clientByHost.set(serverId, options.client);
+>>>>>>> refs/remotes/upstream/tags/v0.15.0
     const previousTimelineBundles = previous
       .filter((plugin) => plugin.timelineTransformers.length > 0)
       .map((plugin) => `${plugin.id}\0${plugin.clientBundle}`);
     const preserved = catalog.flatMap((entry) => {
+<<<<<<< HEAD
       if (!isPluginBundleTrusted(entry)) return [];
+=======
+      if (!sameClient) return [];
+>>>>>>> refs/remotes/upstream/tags/v0.15.0
       const existing = previous.find(
         (plugin) =>
           plugin.id !== options.replacePluginId &&
@@ -209,6 +231,8 @@ export class PluginRegistry {
         const client = options.client;
         installation = {
           lifetime: new AbortController(),
+          locale: this.dependencies.localeSource.getLocale(),
+          i18n: new PluginTranslationRuntime(this.dependencies.localeSource),
           paseo: createPaseoApi(client),
           invoke: (method, input) =>
             // L46: never send a Command Centre read the relay cannot authenticate; say why instead.
@@ -225,6 +249,7 @@ export class PluginRegistry {
           settingsScreens: [],
           sidebarItems: { header: [], footer: [] },
           legacySidebarItems: [],
+          filePanels: [],
           workspacePanels: [],
           commandCenterItems: [],
           clientSlashCommands: [],
@@ -233,6 +258,7 @@ export class PluginRegistry {
           timelineTransformers: [],
           timelineRenderers: [],
         };
+<<<<<<< HEAD
         if (entry.id !== options.replacePluginId) {
           this.reconnectState.restore(
             serverId,
@@ -246,6 +272,13 @@ export class PluginRegistry {
           installation,
           options.audio ?? SILENT_AUDIO,
         );
+=======
+        const unsubscribeTranslations = installation.i18n.subscribe(() => this.publish());
+        installation.lifetime.signal.addEventListener("abort", unsubscribeTranslations, {
+          once: true,
+        });
+        const runtime = this.dependencies.createRuntime(installation, options.audio);
+>>>>>>> refs/remotes/upstream/tags/v0.15.0
         const evaluated = runPluginClientBundle(entry.id, entry.clientBundle, runtime, () =>
           this.publish(),
         );
@@ -279,6 +312,7 @@ export class PluginRegistry {
         return [installation];
       } catch (error) {
         installation?.lifetime.abort();
+        installation?.i18n.dispose();
         void installation?.paseo
           .dispose()
           .catch((failure) => console.warn(`[Plugins] API cleanup failed for ${key}`, failure));
@@ -295,8 +329,18 @@ export class PluginRegistry {
     }
     this.reconnectState.removeHost(serverId);
     this.byHost.set(serverId, installed);
+<<<<<<< HEAD
     this.catalogSettled.add(serverId);
     this.publish();
+=======
+    // An unchanged catalog keeps the snapshot, so timeline projections cached against the
+    // installed transformers stay valid across a reconnect.
+    const unchanged =
+      installed.length === previous.length &&
+      installed.every((plugin, index) => plugin === previous[index]) &&
+      this.hostEvaluationErrors(serverId) === previousErrors;
+    if (!unchanged) this.publish();
+>>>>>>> refs/remotes/upstream/tags/v0.15.0
     const installedTimelineBundles = installed
       .filter((plugin) => plugin.timelineTransformers.length > 0)
       .map((plugin) => `${plugin.id}\0${plugin.clientBundle}`);
@@ -352,9 +396,11 @@ export class PluginRegistry {
       if (key.startsWith(`${serverId}/`)) this.evaluationErrors.delete(key);
     }
     this.byHost.delete(serverId);
+    this.clientByHost.delete(serverId);
     this.publish();
   }
 
+<<<<<<< HEAD
   private queryClientFor(key: string): QueryClient {
     let client = this.queryClients.get(key);
     if (!client) {
@@ -362,12 +408,20 @@ export class PluginRegistry {
       this.queryClients.set(key, client);
     }
     return client;
+=======
+  private hostEvaluationErrors(serverId: string): string {
+    const prefix = `${serverId}/`;
+    return JSON.stringify(
+      [...this.evaluationErrors].filter(([key]) => key.startsWith(prefix)).sort(),
+    );
+>>>>>>> refs/remotes/upstream/tags/v0.15.0
   }
 
   private dispose(plugin: InstalledPlugin): void {
     if (this.disposed.has(plugin)) return;
     this.disposed.add(plugin);
     plugin.lifetime.abort();
+    plugin.i18n.dispose();
     plugin.queryClient.clear();
     try {
       void Promise.resolve(plugin.cleanup()).catch((error) => {
@@ -382,6 +436,9 @@ export class PluginRegistry {
     this.untrustedSnapshot = [...this.untrusted.values()];
     this.snapshot = [...this.byHost.values()]
       .flat()
+      // A new presentation snapshot invalidates label selectors without replacing the installation lifetime.
+      // eslint-disable-next-line no-map-spread
+      .map((plugin) => ({ ...plugin, locale: plugin.i18n.locale }))
       .sort((left, right) =>
         `${left.serverId}/${left.id}`.localeCompare(`${right.serverId}/${right.id}`),
       );
@@ -392,6 +449,15 @@ export class PluginRegistry {
 const SILENT_AUDIO: Pick<AudioEngine, "play"> = { play: async () => 0 };
 
 export const pluginRegistry = new PluginRegistry({
+  localeSource: {
+    getLocale: () => i18n.resolvedLanguage ?? i18n.language,
+    subscribe: (listener) => {
+      i18n.on("languageChanged", listener);
+      return () => {
+        i18n.off("languageChanged", listener);
+      };
+    },
+  },
   version: resolveAppVersion(),
   createRuntime: createPluginClientRuntime,
 });

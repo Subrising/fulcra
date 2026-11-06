@@ -6,6 +6,7 @@ import { useIsCompactFormFactor } from "@/constants/layout";
 import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Link2 } from "lucide-react-native";
 import type { HostProfile } from "@/types/host-connection";
 import { useHosts, useHostMutations } from "@/runtime/host-runtime";
+<<<<<<< HEAD
 import {
   parseConnectionUri,
   serializeConnectionUri,
@@ -15,9 +16,14 @@ import {
   buildConnectionFailureCopy,
   type DirectConnectionLabels,
 } from "@/utils/direct-connection-error-copy";
+=======
+import { parseConnectionUri, serializeConnectionUri } from "@/utils/daemon-endpoints";
+import { buildConnectionFailureCopy } from "./connection-failure-copy";
+>>>>>>> refs/remotes/upstream/tags/v0.15.0
 import { AdaptiveModalSheet, AdaptiveTextInput, type SheetHeader } from "./adaptive-modal-sheet";
 import { Button } from "@/components/ui/button";
 import { PairingTargetTracker } from "./pair-link-credentials";
+import { buildDirectConnectionUri } from "./direct-connection-host";
 
 const FLEX_ONE_STYLE = { flex: 1 } as const;
 
@@ -128,37 +134,11 @@ const styles = StyleSheet.create((theme) => ({
   },
 }));
 
-function isIpv6Host(host: string): boolean {
-  return host.includes(":") && !host.startsWith("[") && !host.endsWith("]");
-}
-
-function buildConnectionUriFromDraft(
-  draft: DirectConnectionDraft,
-  labels: DirectConnectionLabels,
-): string {
-  const host = draft.host.trim();
-  const port = Number(draft.port.trim());
-  if (!host) {
-    throw new Error(labels.hostRequired);
-  }
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error(labels.invalidPort);
-  }
-
-  return serializeConnectionUriForStorage({
-    host,
-    port,
-    isIpv6: isIpv6Host(host),
-    useTls: draft.useTls,
-    ...(draft.password ? { password: draft.password } : {}),
-  });
-}
-
 function prepareDirectConnection(
   draft: DirectConnectionDraft,
   labels: DirectConnectionLabels,
 ): PreparedDirectConnection {
-  const parsed = parseConnectionUri(buildConnectionUriFromDraft(draft, labels));
+  const parsed = parseConnectionUri(buildDirectConnectionUri(draft, labels));
   const endpoint = parsed.isIpv6
     ? `[${parsed.host}]:${parsed.port}`
     : `${parsed.host}:${parsed.port}`;
@@ -414,7 +394,7 @@ function AddHostModalContent({ visible, onClose, onCancel, onSaved }: AddHostMod
       advancedTarget.current = new PairingTargetTracker("", true);
       try {
         setAdvancedUri(
-          buildConnectionUriFromDraft({ host, port, useTls, password }, directConnectionLabels),
+          buildDirectConnectionUri({ host, port, useTls, password }, directConnectionLabels),
         );
       } catch {
         setAdvancedUri("");
@@ -499,6 +479,7 @@ function AddHostModalContent({ visible, onClose, onCancel, onSaved }: AddHostMod
         accessibilityRole="checkbox"
         accessibilityLabel={t("pairing.direct.fields.useSsl")}
         accessibilityState={useTlsAccessibilityState}
+        aria-checked={useTls}
         testID="direct-ssl-toggle"
       >
         <View style={checkboxStyle}>

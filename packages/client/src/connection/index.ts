@@ -125,7 +125,12 @@ export class ConnectionSubscriptions extends OwnedSubscriptions {
 // Protocol support belongs to the installed client. Browser hosting and archive confirmation need
 // resources supplied by the app. Keep this exhaustive as the protocol evolves.
 export const DEFAULT_CLIENT_CAPABILITIES = {
+<<<<<<< HEAD
   [CLIENT_CAPS.archiveConfirmation]: false,
+=======
+  [CLIENT_CAPS.terminalChunkedReplay]: true,
+  [CLIENT_CAPS.binaryChunkingV1]: true,
+>>>>>>> refs/remotes/upstream/tags/v0.15.0
   [CLIENT_CAPS.helloRejection]: true,
   [CLIENT_CAPS.ownedSubscriptions]: true,
   [CLIENT_CAPS.allProviders]: true,
@@ -143,6 +148,7 @@ export const DEFAULT_CLIENT_CAPABILITIES = {
   [CLIENT_CAPS.timelineNotifications]: true,
   [CLIENT_CAPS.pluginTimelineItems]: true,
   [CLIENT_CAPS.workspaceSetupBlocked]: true,
+  [CLIENT_CAPS.workspaceSetupObservation]: true,
   [CLIENT_CAPS.explicitEventSubscriptions]: true,
 } satisfies Record<
   Exclude<

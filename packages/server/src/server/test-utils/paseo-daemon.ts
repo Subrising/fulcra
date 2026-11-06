@@ -37,6 +37,7 @@ interface TestPaseoDaemonOptions {
   relayEndpoint?: string;
   relayUseTls?: boolean;
   relayPublicUseTls?: boolean;
+  relayRequireProtectedSecurity?: boolean;
   daemonStatusRpcCapability?: boolean;
   relayConfigCapability?: boolean;
   agentClients?: Partial<Record<AgentProvider, AgentClient>>;
@@ -45,7 +46,8 @@ interface TestPaseoDaemonOptions {
   staticDir?: string;
   cleanup?: boolean;
   openai?: PaseoOpenAIConfig;
-  speech?: PaseoSpeechConfig;
+  // localModelsDir defaults to the local provider's modelsDir, then to a dir under paseoHome.
+  speech?: Omit<PaseoSpeechConfig, "localModelsDir"> & { localModelsDir?: string };
   voiceLlmProvider?: PaseoDaemonConfig["voiceLlmProvider"];
   voiceLlmProviderExplicit?: boolean;
   voiceLlmModel?: string | null;
@@ -59,6 +61,8 @@ interface TestPaseoDaemonOptions {
   projectDispatch?: PaseoDaemonConfig["projectDispatch"];
   agentProfiles?: AgentProfile[];
   autoArchiveAfterMerge?: boolean;
+  resumeOnStartup?: boolean;
+  resumePrompt?: string;
   pluginsEnabled?: PaseoDaemonConfig["pluginsEnabled"];
   bundledPluginsDirectory?: string;
   builtinPlugins?: BuiltinPluginLoader;
@@ -215,14 +219,27 @@ async function prepareTestDaemonConfig(
     relayEndpoint: options.relayEndpoint ?? "127.0.0.1:8787",
     relayUseTls: options.relayUseTls,
     relayPublicUseTls: options.relayPublicUseTls,
+<<<<<<< HEAD
     appBaseUrl: "fulcra://pair",
+=======
+    relayRequireProtectedSecurity: options.relayRequireProtectedSecurity,
+    appBaseUrl: "https://app.paseo.sh",
+>>>>>>> refs/remotes/upstream/tags/v0.15.0
     auth: options.auth,
     pushNotificationSender: options.pushNotificationSender,
     serviceProxy: options.serviceProxy,
     webUi: options.webUi,
     trustedProxies: options.trustedProxies,
     openai: options.openai,
-    speech: options.speech,
+    speech: options.speech
+      ? {
+          ...options.speech,
+          localModelsDir:
+            options.speech.localModelsDir ??
+            options.speech.local?.modelsDir ??
+            path.join(paseoHome, "models", "local-speech"),
+        }
+      : undefined,
     voiceLlmProvider: options.voiceLlmProvider ?? null,
     voiceLlmProviderExplicit: options.voiceLlmProviderExplicit ?? false,
     voiceLlmModel: options.voiceLlmModel ?? null,
@@ -232,6 +249,8 @@ async function prepareTestDaemonConfig(
     projectDispatch: options.projectDispatch,
     agentProfiles: options.agentProfiles,
     autoArchiveAfterMerge: options.autoArchiveAfterMerge,
+    resumeOnStartup: options.resumeOnStartup,
+    resumePrompt: options.resumePrompt,
     pluginsEnabled: options.pluginsEnabled,
     bundledPluginsDirectory: options.bundledPluginsDirectory,
     plugins: options.plugins,

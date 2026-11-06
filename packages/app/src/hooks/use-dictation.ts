@@ -475,7 +475,7 @@ export function useDictation(options: UseDictationOptions): UseDictationResult {
     volume: audio.volume,
     duration,
     error,
-    status,
+    status: status === "recording" && audio.isPaused ? "paused" : status,
     startDictation,
     cancelDictation,
     confirmDictation,

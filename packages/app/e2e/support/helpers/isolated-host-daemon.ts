@@ -1,4 +1,11 @@
-import { spawn, execFileSync, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { promisify } from "node:util";
+import {
+  spawn,
+  execFile,
+  execFileSync,
+  type ChildProcess,
+  type SpawnOptions,
+} from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
@@ -7,8 +14,12 @@ import { assertTestHome } from "../../../../../scripts/test-support/test-home.cj
 import { withDisabledE2ESpeechEnv } from "./speech-env";
 import { killProcessTree, spawnTsx } from "./spawn-node";
 
+<<<<<<< HEAD
 // A killed daemon's child can still write into its home while it is removed (ENOTEMPTY).
 const REMOVE_TREE = { recursive: true, force: true, maxRetries: 5, retryDelay: 200 } as const;
+=======
+const execFileAsync = promisify(execFile);
+>>>>>>> refs/remotes/upstream/tags/v0.15.0
 
 export interface IsolatedHostDaemon {
   serverId: string;
@@ -158,7 +169,28 @@ export async function startIsolatedHostDaemon(
   const serverDir = publishedPackageRoot
     ? path.join(publishedPackageRoot, "node_modules", "@getpaseo", "server")
     : path.resolve(__dirname, "../../../../server");
+<<<<<<< HEAD
   assertTestHome(paseoHome, "an e2e daemon");
+=======
+  let child: ChildProcess | null = null;
+  const stopDaemon = async (): Promise<void> => {
+    // The CLI owns graceful shutdown, forced cleanup and detached terminal
+    // reaping. Keep its ESM graph out of Playwright's transforming loader.
+    await execFileAsync(
+      process.execPath,
+      [
+        path.resolve(__dirname, "../../../../cli/dist/index.js"),
+        "daemon",
+        "stop",
+        "--home",
+        paseoHome,
+        "--force",
+      ],
+      { timeout: 30_000 },
+    );
+    await killProcessTree(child);
+  };
+>>>>>>> refs/remotes/upstream/tags/v0.15.0
   const spawnDaemon = async (): Promise<ChildProcess> => {
     const spawnOptions: SpawnOptions = {
       cwd: serverDir,
@@ -180,22 +212,28 @@ export async function startIsolatedHostDaemon(
       stdio: ["ignore", "ignore", "pipe"],
       detached: false,
     };
+<<<<<<< HEAD
     const child =
       publishedPackageRoot || process.env.E2E_USE_BUILT_DAEMON === "1"
         ? spawn(process.execPath, ["dist/scripts/supervisor-entrypoint.js"], spawnOptions)
         : spawnTsx("scripts/supervisor-entrypoint.ts", ["--dev"], spawnOptions);
+=======
+    const spawned = publishedPackageRoot
+      ? spawn(process.execPath, ["dist/scripts/supervisor-entrypoint.js"], spawnOptions)
+      : spawnTsx("scripts/supervisor-entrypoint.ts", ["--dev"], spawnOptions);
+>>>>>>> refs/remotes/upstream/tags/v0.15.0
 
+    child = spawned;
     let stderr = "";
-    child.stderr?.on("data", (chunk: Buffer) => {
+    spawned.stderr?.on("data", (chunk: Buffer) => {
       stderr += chunk.toString("utf8");
       stderr = stderr.split("\n").slice(-40).join("\n");
     });
 
     try {
-      await waitForServer(port, child);
-      return child;
+      await waitForServer(port, spawned);
+      return spawned;
     } catch (error) {
-      await killProcessTree(child);
       throw new Error(
         `${error instanceof Error ? error.message : String(error)}\nDaemon stderr:\n${stderr}`,
         { cause: error },
@@ -203,6 +241,7 @@ export async function startIsolatedHostDaemon(
     }
   };
 
+<<<<<<< HEAD
   // The free port is released before the daemon binds it. Another process can take
   // it in between, so a first start that finds the port in use tries a new one.
   const spawnFirstDaemon = async (): Promise<ChildProcess> => {
@@ -220,7 +259,12 @@ export async function startIsolatedHostDaemon(
   let child: ChildProcess;
   try {
     child = await spawnFirstDaemon();
+=======
+  try {
+    await spawnDaemon();
+>>>>>>> refs/remotes/upstream/tags/v0.15.0
   } catch (error) {
+    await stopDaemon();
     if (!options.preserveHome) {
       await rm(paseoHome, REMOVE_TREE);
     }
@@ -235,23 +279,27 @@ export async function startIsolatedHostDaemon(
     serverId,
     port,
     paseoHome,
+<<<<<<< HEAD
     skillsHome,
     getPid: () => child.pid,
+=======
+    getPid: () => child?.pid,
+>>>>>>> refs/remotes/upstream/tags/v0.15.0
     restart: async () => {
       if (closed) throw new Error(`Cannot restart closed isolated daemon ${serverId}`);
-      await killProcessTree(child);
-      child = await spawnDaemon();
+      await stopDaemon();
+      await spawnDaemon();
     },
     close: async () => {
       if (closed) return;
-      closed = true;
-      await killProcessTree(child);
+      await stopDaemon();
       if (!options.preserveHome) {
         await rm(paseoHome, REMOVE_TREE);
       }
       if (publishedPackageRoot) {
         await rm(publishedPackageRoot, REMOVE_TREE);
       }
+      closed = true;
     },
   };
 }
