@@ -107,7 +107,8 @@ test("bridge preserves tool failure messages and classifies invalid requests as 
     for (const [tool, body, expected] of [
       [
         "create_agent",
-        JSON.stringify({ title: "Probe", provider: "opencode", initialPrompt: "Reply OK" }),
+        // FULCRA(FU-657): Fulcra accepts a bare provider; "opencode/" (empty model) is the invalid input.
+        JSON.stringify({ title: "Probe", provider: "opencode/", initialPrompt: "Reply OK" }),
         400,
       ],
       ["create_agent", "{", 400],

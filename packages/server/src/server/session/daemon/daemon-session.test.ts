@@ -300,6 +300,8 @@ describe("DaemonSession", () => {
             // Empty, never assumed available: the probe established nothing. Every other
             // field is real and is still delivered, unlike the listing-rejects path above.
             providers: [],
+            // FULCRA(FU-657): the v0.15 status payload always carries the unconfirmed-cleanup list.
+            terminalCleanupUnconfirmed: [],
           },
         },
       ]);

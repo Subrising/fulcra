@@ -6,7 +6,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { daemonChildExecArgv } from "./child-exec-argv.js";
 import { resolveWorkerExecArgv as pluginHostExecArgv } from "./plugins/runtime.js";
 import { resolveWorkerExecArgv as speechWorkerExecArgv } from "./speech/providers/local/worker-client.js";
-import { resolveWorkerExecArgv as terminalWorkerExecArgv } from "../terminal/worker-terminal-manager.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { buildSelfNodeCommand } from "./paseo-env.js";
 
 const packagedUrl = "file:///app/dist/server/server/module.js";
 const sourceUrl = "file:///repo/packages/server/src/server/module.ts";
@@ -50,9 +52,20 @@ describe("daemon child execArgv (FU-466)", () => {
     expect(pluginHostExecArgv(sourceUrl)[0]).toBe("--disable-sigusr1");
   });
 
-  it("terminal worker: resolveWorkerExecArgv gives a packaged child --disable-sigusr1", () => {
-    expect(terminalWorkerExecArgv(packagedUrl)).toEqual(["--disable-sigusr1"]);
-    expect(terminalWorkerExecArgv(sourceUrl)[0]).toBe("--disable-sigusr1");
+  // FULCRA(FU-657): upstream v0.15 starts the terminal worker through a detached launcher
+  // (terminal-worker-launch.ts -> buildSelfNodeCommand), and the launcher spawns the worker with its
+  // own process.execArgv. resolveWorkerExecArgv is gone, so check both links of that chain.
+  it("terminal worker: the launcher command starts with --disable-sigusr1 and the worker inherits it", () => {
+    expect(buildSelfNodeCommand(["worker.mjs", "--launch"]).args).toEqual([
+      "--disable-sigusr1",
+      "worker.mjs",
+      "--launch",
+    ]);
+    const launcher = readFileSync(
+      fileURLToPath(new URL("../terminal/terminal-worker-process.ts", import.meta.url)),
+      "utf8",
+    );
+    expect(launcher).toMatch(/spawn\(\s*process\.execPath,\s*\[\s*\.\.\.process\.execArgv,/);
   });
 
   it("speech worker: resolveWorkerExecArgv gives a packaged child --disable-sigusr1", () => {
@@ -107,7 +120,9 @@ describe("daemon child execArgv (FU-466)", () => {
   it.skipIf(process.platform === "win32")(
     "a forked child ignores SIGUSR1 and opens no inspector",
     async () => {
-      expect(await inspectorUrlAfterSigusr1(terminalWorkerExecArgv(packagedUrl))).toBeUndefined();
+      // FULCRA(FU-657): the terminal worker gets its flags from buildSelfNodeCommand now.
+      const flags = buildSelfNodeCommand([]).args;
+      expect(await inspectorUrlAfterSigusr1(flags)).toBeUndefined();
     },
   );
 

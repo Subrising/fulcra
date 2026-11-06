@@ -279,15 +279,18 @@ describe("relay connection URI", () => {
 });
 
 describe("relay connection URI security mode", () => {
+  // FULCRA(FU-657): Fulcra pairs only with v3 offers (one-time pairing grant). The upstream cases
+  // use v2 offers, which Fulcra refuses with "Update Fulcra to pair"; the security checks are kept.
+  const pairedOffer = {
+    v: 3 as const,
+    serverId: "srv_test",
+    daemonPublicKeyB64: Buffer.alloc(32, 1).toString("base64"),
+    pairing: { id: "A".repeat(22), secret: "B".repeat(43), expiresAt: "2099-01-01T00:00:00.000Z" },
+    relay: { endpoint: "relay.example.com:443", useTls: true },
+  };
   test("round-trips a protected minimum security mode", () => {
     const uri = serializeRelayConnectionUri({
-      offer: {
-        v: 2,
-        serverId: "srv_test",
-        daemonPublicKeyB64: "key",
-        relay: { endpoint: "relay.example.com:443", useTls: true },
-        minimumSecurityMode: "protected",
-      },
+      offer: { ...pairedOffer, minimumSecurityMode: "protected" },
     });
 
     expect(new URL(uri).searchParams.get("security")).toBe("protected");
@@ -296,12 +299,7 @@ describe("relay connection URI security mode", () => {
 
   test("omits the security parameter when the offer has no minimum", () => {
     const uri = serializeRelayConnectionUri({
-      offer: {
-        v: 2,
-        serverId: "srv_test",
-        daemonPublicKeyB64: "key",
-        relay: { endpoint: "relay.example.com:443", useTls: true },
-      },
+      offer: pairedOffer,
     });
 
     expect(new URL(uri).searchParams.has("security")).toBe(false);

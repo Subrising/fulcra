@@ -2234,7 +2234,7 @@ export const ko: TranslationResources = {
         alwaysUseFilename: "{{filename}}에 항상 사용",
         option: "{{title}} — {{owner}}",
         builtin: {
-          owner: "Paseo",
+          owner: "Fulcra",
           markdown: "Markdown",
           html: "HTML",
           image: "이미지",

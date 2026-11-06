@@ -1677,7 +1677,9 @@ test.each([false, true])(
   },
 );
 
-test("interrupting OMP during image conversion cancels the admitted turn and permits a follow-up", async () => {
+// FULCRA(FU-657): Fulcra materializes images synchronously in a confined root, so no conversion is in flight
+// to interrupt or close; the upstream scenario cannot occur.
+test.skip("interrupting OMP during image conversion cancels the admitted turn and permits a follow-up", async () => {
   const runtime = new FakeOmp();
   const client = new OmpAgentClient({ logger: createTestLogger(), runtime });
   const session = await client.createSession({ provider: "omp", cwd: process.cwd() });
@@ -1712,7 +1714,9 @@ test("interrupting OMP during image conversion cancels the admitted turn and per
   ]);
 });
 
-test("closing OMP during image conversion rejects its pending start", async () => {
+// FULCRA(FU-657): Fulcra materializes images synchronously in a confined root, so no conversion is in flight
+// to interrupt or close; the upstream scenario cannot occur.
+test.skip("closing OMP during image conversion rejects its pending start", async () => {
   const runtime = new FakeOmp();
   const client = new OmpAgentClient({ logger: createTestLogger(), runtime });
   const session = await client.createSession({ provider: "omp", cwd: process.cwd() });

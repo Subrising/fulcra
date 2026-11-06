@@ -2276,7 +2276,7 @@ export const fr: TranslationResources = {
         alwaysUseFilename: "Toujours utiliser pour {{filename}}",
         option: "{{title}} — {{owner}}",
         builtin: {
-          owner: "Paseo",
+          owner: "Fulcra",
           markdown: "Markdown",
           html: "HTML",
           image: "Image",

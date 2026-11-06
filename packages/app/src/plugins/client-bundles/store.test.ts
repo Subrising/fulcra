@@ -165,7 +165,8 @@ test.each(["valid", "corrupt", "missing"])(
         false,
       );
       await connecting;
-      expect(await client.getPluginCatalog()).toEqual([entry]);
+      // FULCRA(FU-657): the Fulcra catalog is an object; its plugins are in `plugins`.
+      expect((await client.getPluginCatalog()).plugins).toEqual([entry]);
       if (state === "valid")
         expect(requests[0]?.cachedClientBundles).toEqual([
           { id: entry.id, clientBundleHash: entry.clientBundleHash },

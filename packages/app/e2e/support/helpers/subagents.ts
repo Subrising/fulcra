@@ -456,7 +456,7 @@ export async function delegateFleetThroughMcp() {
       a,
       b,
       close,
-      async expectCompletion(child: typeof local) {
+      async expectCompletion(child: typeof local, count = 1) {
         await expect
           .poll(async () => {
             const timeline = await a.fetchAgentTimeline(parent.id, {
@@ -474,7 +474,7 @@ export async function delegateFleetThroughMcp() {
                   message.text.includes(`Server: ${child.serverId}`),
               ).length;
           })
-          .toBe(1);
+          .toBe(count);
       },
     };
   } catch (error) {

@@ -73,6 +73,7 @@ import {
   assertFinalInputCheck,
   failFinalInputHandoff,
   FinalInputWithdrawnError,
+  hasFinalInputHandoff,
   recordManagerInputHandoff,
   requiresProviderInputHandoff,
 } from "./final-input-check.js";
@@ -7076,7 +7077,10 @@ export class AgentManager {
       this.runs.settleForegroundStart(pendingRun, { status: "failed", error: errorMsg });
       try {
         // A terminal rejection belongs after the submitted prompt even though no provider turn exists.
-        if (options?.clientMessageId) {
+        // FULCRA(FU-657): a final-checked input that never reached the provider is not recorded. Queued sends and
+        // notices read a submitted row as "delivered" (hasSubmittedFinishMessageNow), so a refusal must leave none.
+        const finalCheck = options?.[FINAL_INPUT_CHECK];
+        if (options?.clientMessageId && (!finalCheck || hasFinalInputHandoff(finalCheck))) {
           await this.recordSubmittedPrompt(agent, prompt, options.clientMessageId, "rejected", {
             messageId: options.clientMessageId,
           });

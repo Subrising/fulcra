@@ -71,7 +71,12 @@ async function fixture(nativeHooks = false) {
   let session!: CodexAppServerAgentSession;
   const accountEnv = { FULCRA_ACCOUNT_ID: "fixture-account-A" };
   const client = createTestAgentClient("codex");
+  let created = false;
   client.createSession = async (config) => {
+    // FULCRA(FU-657): since v0.15 a Codex thread is saved only after its first turn, so a reload
+    // of a never-run thread creates a new session. The first app-server is closed by then.
+    if (created) server = makeServer();
+    created = true;
     session = new CodexAppServerAgentSession(
       config,
       null,
@@ -272,7 +277,8 @@ test.each(["disable", "opt-out", "stop"])(
       expect(JSON.parse(await readFile(limitResumeFilePath(f.home), "utf8")).entries).toHaveLength(
         1,
       );
-      if (kind === "disable") f.config.patch({ autoResumeOnLimit: false });
+      // FULCRA(FU-657): upstream v0.15 made DaemonConfigStore.patch() async.
+      if (kind === "disable") await f.config.patch({ autoResumeOnLimit: false });
       if (kind === "opt-out")
         await f.manager.setLabels(f.agent.id, { [LIMIT_RESUME_OPT_OUT_LABEL]: "off" });
       if (kind === "stop") service.stop();

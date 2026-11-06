@@ -36,6 +36,9 @@ async function runSupervisorWith(workerScript: string, timeoutMs = 8_000) {
     runSupervisor({
       name: "TerminalCleanupTest", startupMessage: "starting", restartOnCrash: true,
       resolveWorkerEntry: () => ${JSON.stringify(workerPath)}, workerArgs: [], workerExecArgv: [],
+      // FULCRA(FU-657): Fulcra's stop deadline is 30 s (FU-74), upstream's 10 s; keep the forced kill
+      // inside this test's time limit.
+      timings: { terminationGraceMs: 2_000 },
       cleanupTerminals: async () => {
         appendFileSync(${JSON.stringify(eventsPath)}, JSON.stringify("cleanup") + "\\n");
       },

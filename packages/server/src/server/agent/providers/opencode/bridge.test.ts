@@ -203,8 +203,10 @@ describe("OpenCodeBridge", () => {
             sessionID: "bound",
             ask: async () => undefined,
           }),
-        ).resolves.toMatchObject({ output: expect.stringContaining('"deliveryStatus": "queued"') });
-        await agentMessages.waitForDispatch(child.id, new AbortController().signal);
+          // FULCRA(FU-657): an agent caller starts an idle receiver's turn at once (no upstream two-second queue).
+        ).resolves.toMatchObject({
+          output: expect.stringContaining('"disposition": "turn_started"'),
+        });
       } finally {
         await dispose();
       }
@@ -498,7 +500,8 @@ describe("OpenCodeBridge", () => {
         ["caller"],
       );
       try {
-        const input = { provider: "codex", title: "Invalid provider", initialPrompt: "Hello" };
+        // FULCRA(FU-657): Fulcra accepts a bare provider; an empty model after the slash is the invalid input.
+        const input = { provider: "codex/", title: "Invalid provider", initialPrompt: "Hello" };
         const response = await fetch(
           `${options.baseUrl}/_internal/opencode/sessions/caller/tools/create_agent`,
           {
@@ -518,7 +521,7 @@ describe("OpenCodeBridge", () => {
         ).rejects.toMatchObject({
           status: 400,
           message: expect.stringContaining(
-            "Invalid tool input: provider: provider must be provider/model, for example codex/gpt-5.4",
+            "Invalid tool input: provider: provider must be provider or provider/model, for example codex/gpt-5.4",
           ),
         });
       } finally {

@@ -290,8 +290,10 @@ describe("explicit run cwd workspace precedence", () => {
   it("honors parsed --cwd over caller and ambient placement while retaining caller identity", async () => {
     const client = fakeClient();
     await parsedRun(["--cwd", "/fixtures/requested"]);
+    // FULCRA(FU-657): since upstream #5039 the new workspace also names its calling chat.
     expect(client.createWorkspace).toHaveBeenCalledWith({
       source: { kind: "directory", path: "/fixtures/requested" },
+      callerAgentId: "caller-agent",
     });
     expectOnlyDirectoryLookup(client);
     expect(client.createAgent).toHaveBeenCalledWith(

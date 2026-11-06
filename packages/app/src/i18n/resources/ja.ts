@@ -2250,7 +2250,7 @@ export const ja: TranslationResources = {
         alwaysUseFilename: "{{filename}} に常に使用",
         option: "{{title}} — {{owner}}",
         builtin: {
-          owner: "Paseo",
+          owner: "Fulcra",
           markdown: "Markdown",
           html: "HTML",
           image: "画像",

@@ -51,11 +51,12 @@ test("8,13: only the owner can change dispatch templates, approvals or the globa
         ),
       ),
     ).rejects.toThrow("Only the owner");
-    f.manager.trustedPlugins.rpc(undefined, () =>
+    // FULCRA(FU-657): upstream v0.15 made DaemonConfigStore.patch() and reload() async.
+    await f.manager.trustedPlugins.rpc(undefined, () =>
       store.patch({ projectDispatch: parsed, ledgerDispatchEnabled: true }),
     );
     expect(loadConfig(f.root, { env: {} }).ledgerDispatchEnabled).toBe(true);
-    f.manager.trustedPlugins.rpc(undefined, () =>
+    await f.manager.trustedPlugins.rpc(undefined, () =>
       store.patch({ projectDispatch: {}, ledgerDispatchEnabled: false }),
     );
     expect(store.get().projectDispatch).toEqual({});
@@ -122,7 +123,8 @@ test("8: an agent cannot enable dispatch through a file edit followed by daemon 
       ),
     ).rejects.toThrow("Only the owner");
     expect(store.get().ledgerDispatchEnabled).toBe(false);
-    f.manager.trustedPlugins.rpc(undefined, () => store.reload());
+    // FULCRA(FU-657): upstream v0.15 made DaemonConfigStore.patch() and reload() async.
+    await f.manager.trustedPlugins.rpc(undefined, () => store.reload());
     expect(store.get().ledgerDispatchEnabled).toBe(true);
   } finally {
     await f.cleanup();

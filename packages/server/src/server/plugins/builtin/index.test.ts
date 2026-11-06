@@ -107,7 +107,8 @@ export default function contribute() { void payload; return () => {}; }`,
     const second = await client.getPluginCatalog();
 
     expect(second).toEqual(first);
-    expect(second[0]?.clientBundle).toContain("x".repeat(1_000_000));
+    // FULCRA(plugin-host): the catalog reply carries trust reports beside the plugin list.
+    expect(second.plugins[0]?.clientBundle).toContain("x".repeat(1_000_000));
     expect(responseBytes).toHaveLength(2);
     expect(responseBytes[0]).toBeGreaterThan(1_000_000);
     expect(responseBytes[1]).toBeLessThan(500);

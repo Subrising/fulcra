@@ -467,8 +467,9 @@ async function resolveEntryPaths(directory: string): Promise<{
   if (client || server) return { client, server };
   const legacyEntry = await findEntry(directory, ["index.ts", "index.tsx"]);
   if (legacyEntry) {
+    // FULCRA(FU-657): upstream v0.15 moved this check here with Paseo text; keep the Fulcra text.
     throw new Error(
-      "This plugin was made for an older version of Paseo and cannot run on Paseo v0.8. Ask its author to update it. Plugin authors can follow the migration guide: https://paseo.sh/docs/plugins/migration",
+      "This plugin was made for the plugin API before 0.8 and cannot run on this version of Fulcra. Ask its author to update it.",
     );
   }
   throw new Error(

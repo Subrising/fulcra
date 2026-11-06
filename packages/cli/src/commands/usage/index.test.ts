@@ -271,7 +271,8 @@ it("propagates connection and request failures", async () => {
 describe("usage CLI registration", () => {
   it("registers default, ls and inspect with the accepted selectors", () => {
     const usage = createCli().commands.find((command) => command.name() === "usage")!;
-    expect(usage.commands.map((command) => command.name())).toEqual(["ls", "inspect"]);
+    // FULCRA(FU-657): Fulcra adds "usage events" (its own usage event list) after the upstream commands.
+    expect(usage.commands.map((command) => command.name())).toEqual(["ls", "inspect", "events"]);
     expect(usage.helpInformation()).toContain("--agent <id>");
     expect(usage.commands[0]!.helpInformation()).toContain("--refresh");
     expect(usage.commands[1]!.helpInformation()).toContain("<report-id>");

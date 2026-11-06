@@ -44,8 +44,8 @@ async function createWorkspaceFiles() {
   cleanupPaths.push(tempDir);
   const repoDir = path.join(tempDir, "repo");
   run(tempDir, ["init", "-b", "main", repoDir]);
-  run(repoDir, ["config", "user.email", "test@getpaseo.local"]);
-  run(repoDir, ["config", "user.name", "Paseo Test"]);
+  run(repoDir, ["config", "user.email", "fulcra@users.noreply.github.com"]);
+  run(repoDir, ["config", "user.name", "Fulcra"]);
   writeFileSync(path.join(repoDir, "README.md"), "workspace journey\n");
   run(repoDir, ["add", "README.md"]);
   run(repoDir, ["-c", "commit.gpgsign=false", "commit", "-m", "initial"]);
@@ -202,6 +202,8 @@ async function createUnobservedWorkspace(archiveBarrier?: Promise<void>) {
     logger,
     paseoHome,
     daemonConfigStore: { get: () => ({ autoArchiveAfterMerge: true }) },
+    // FULCRA(FU-657): archiving runs inside the trusted-plugin daemon scope.
+    agentManager: { trustedPlugins: { daemon: <T>(operation: () => T) => operation() } },
     workspaceGitService: service,
     getAutoArchivedChangeRequestUrl: async () => null,
     listActiveWorkspaces: async () =>

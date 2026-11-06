@@ -38,6 +38,9 @@ async function installDesktopBridge(
             daemon: { manageBuiltInDaemon: false, keepRunningAfterQuit: true },
           };
         }
+        // FULCRA(FU-657): Fulcra checks every loopback connection through the desktop bridge before it
+        // opens the socket (command-centre-transport.ts). Without a true answer the host never comes online.
+        if (command === "desktop_daemon_connection_check") return true;
         return null;
       },
     };

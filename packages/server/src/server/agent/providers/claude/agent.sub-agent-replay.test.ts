@@ -270,7 +270,8 @@ describe("ClaudeAgentSession persisted subagent replay", () => {
       events.push(event);
     }
     await session.close();
-    expect(events).toMatchSnapshot();
+    // FULCRA(FU-657): no whole-replay snapshot. Since v0.15 the upstream cases replay up to
+    // 100,000 events through this helper, and each case asserts its own result.
     return events;
   }
 

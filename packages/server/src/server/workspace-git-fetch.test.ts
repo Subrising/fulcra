@@ -213,7 +213,11 @@ test.skipIf(process.platform === "win32")(
     await withAuthenticatedRemote(async ({ cwd, run, root }) => {
       for (let attempt = 0; attempt < 2; attempt++) {
         const result = await fetchWorkspaceGitRemote(cwd, { onRefSnapshot() {} }, run);
-        expect(String(result.error)).toContain("terminal prompts disabled");
+        // FULCRA(FU-657): Fulcra's git runner sets credential.interactive=false and clears askPass, so git
+        // reports "unable to get password from user"; its fetch policy then pauses the retry.
+        expect(String(result.error)).toMatch(
+          /terminal prompts disabled|unable to get password from user|Git fetch is paused/,
+        );
       }
       await expect(readFile(join(root, "prompts"), "utf8")).rejects.toMatchObject({
         code: "ENOENT",

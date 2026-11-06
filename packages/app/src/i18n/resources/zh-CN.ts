@@ -2190,7 +2190,7 @@ export const zhCN: TranslationResources = {
         alwaysUseFilename: "始终用于 {{filename}}",
         option: "{{title}} — {{owner}}",
         builtin: {
-          owner: "Paseo",
+          owner: "Fulcra",
           markdown: "Markdown",
           html: "HTML",
           image: "图片",

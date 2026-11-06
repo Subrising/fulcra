@@ -25,6 +25,8 @@ test("B1: a pre-V1.1b client must still accept an owner server_info (no Command 
   });
   const payload = Reflect.get(server, "buildServerInfoStatusPayload").call(server, {
     getPermissions: () => [...OWNER_PERMISSIONS],
+    // FULCRA(FU-657): upstream v0.15 server_info carries the host source ID from the session.
+    getHostSourceId: () => "fixture-source",
   });
   // The supplied proof required toContain here, contradicting its frozen-parser assertion.
   expect(payload.permissions).not.toContain("command-centre.manage");

@@ -96,7 +96,9 @@ test("a worker that stops answering heartbeats is killed and replaced", async ()
   );
   expect(result.output).toContain("worker_unresponsive. Stopping worker for restart");
   // The blocked worker ignores the graceful request; the deadline kills it.
-  expect(result.output).toContain("Worker crashed (SIGKILL). Restarting worker");
+  // FULCRA(FU-657): since upstream v0.15 a restart with kill intent (keepTerminals false, as the
+  // liveness restart sends) logs "exited" and closes terminals; a plain crash logs "crashed".
+  expect(result.output).toContain("Worker exited (SIGKILL). Restarting worker");
   expect(result.events, result.output).toEqual(["first", null, "second", null]);
   expect(result.code).toBe(0);
 }, 30_000);

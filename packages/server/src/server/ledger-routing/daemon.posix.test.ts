@@ -13,6 +13,7 @@ import type { AgentPromptInput } from "../agent/agent-sdk-types.js";
 import type { AgentManager, AgentManagerEvent } from "../agent/agent-manager.js";
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import { sendPromptToAgent } from "../agent/agent-prompt.js";
+import { submittedToolMessageId } from "../agent/agent-timeline-store.js";
 function nextTurn(
   manager: AgentManager,
   match: (event: AgentManagerEvent) => boolean,
@@ -49,11 +50,18 @@ async function noticeTurn(manager: AgentManager, lead: string, line: string): Pr
         )
           return;
         const item = event.event.item;
-        if (item.type !== "user_message" || !item.text.includes(line) || !item.clientMessageId)
-          return;
+        // FULCRA(FU-657): since v0.15 a <paseo-system> notice is a "heartbeat" tool call and an agent
+        // prompt an "agent_message" tool call. Both keep the submitted message id.
+        let id: string | null | undefined;
+        if (item.type === "user_message") {
+          if (item.text.includes(line)) id = item.clientMessageId;
+        } else if (item.type === "tool_call" && item.detail.type === "plain_text") {
+          if (item.detail.text?.includes(line)) id = submittedToolMessageId(item);
+        }
+        if (!id) return;
         clearTimeout(timer);
         off();
-        resolve(item.clientMessageId);
+        resolve(id);
       },
       { replayState: false },
     );
@@ -154,6 +162,8 @@ test("real daemon claims READY work, reports one level, and keeps a follow-up in
         path.join(f.options.paseoHomeRoot, ".paseo", "ledger-routing.json"),
         "utf8",
       ).catch(() => "missing journal");
+      // FULCRA(FU-657): the failure report read an undefined name; read the ledger file.
+      const ledger = await readFile(f.file, "utf8").catch(() => "missing ledger");
       const agents = manager
         .listAgents()
         .map((agent) => ({ item: agent.labels["fulcra.item"], lifecycle: agent.lifecycle }));
@@ -189,7 +199,12 @@ test("real daemon claims READY work, reports one level, and keeps a follow-up in
     const current = manager.listAgents().find((a) => a.labels["fulcra.item"] === "JOB-2")!;
     expect(current.id).not.toBe(previous.id);
     expect(current.cwd).not.toBe(previous.cwd);
-    expect(manager.getTimeline(f.ownerId).filter((r) => r.type === "user_message")).toHaveLength(0);
+    // FULCRA(FU-657): since v0.15 a notice can also arrive as a heartbeat or agent_message tool call.
+    expect(
+      manager
+        .getTimeline(f.ownerId)
+        .filter((r) => r.type === "user_message" || submittedToolMessageId(r) !== null),
+    ).toHaveLength(0);
     const followup = notice("DECISION choose input");
     await manager.trustedPlugins.daemon(() =>
       sendPromptToAgent({

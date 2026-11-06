@@ -3602,7 +3602,9 @@ test("reserves the Pi turn while an image prompt is materialized", async () => {
   expect(pi.latestSession().prompts).toHaveLength(1);
 });
 
-test("interrupting Pi during image conversion cancels the admitted turn and permits a follow-up", async () => {
+// FULCRA(FU-657): Fulcra materializes images synchronously in a confined root, so no conversion is in flight
+// to interrupt or close; the upstream scenario cannot occur.
+test.skip("interrupting Pi during image conversion cancels the admitted turn and permits a follow-up", async () => {
   const { pi, session } = await createSession();
   onTestFinished(() => session.close());
   const events: AgentStreamEvent[] = [];
@@ -3635,7 +3637,9 @@ test("interrupting Pi during image conversion cancels the admitted turn and perm
   ]);
 });
 
-test("closing Pi during image conversion rejects its pending start", async () => {
+// FULCRA(FU-657): Fulcra materializes images synchronously in a confined root, so no conversion is in flight
+// to interrupt or close; the upstream scenario cannot occur.
+test.skip("closing Pi during image conversion rejects its pending start", async () => {
   const { pi, session } = await createSession();
   const first = session.startTurn([
     {

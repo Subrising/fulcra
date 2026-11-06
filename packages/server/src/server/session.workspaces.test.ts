@@ -10059,12 +10059,24 @@ test("workspace PR status survives session cleanup and reconnect", async () => {
     cwd,
     requestId: "open-1",
   });
+  // FULCRA(FU-657): handleMessage returns before the request settles (v0.15); wait for the status reply
+  // so the forced status read finishes before the workspace subscription starts observing.
+  await vi.waitFor(() => {
+    expect(filterByType(emitted1, "checkout_status_response")).toHaveLength(1);
+  });
   await session1.handleMessage({
     type: "fetch_workspaces_request",
     requestId: "sub-1",
     subscribe: { subscriptionId: "sub-1" },
   });
+  // FULCRA(FU-657): handleMessage returns before the request settles (v0.15); wait for the response.
+  await vi.waitFor(() => {
+    expect(filterByType(emitted1, "fetch_workspaces_response")).toHaveLength(1);
+  });
   expect(filterByType(emitted1, "rpc_error")).toEqual([]);
+  // FULCRA(FU-657): the opened checkout already holds a forge-less snapshot, so subscribing skips the
+  // initial forge refresh (FU-590: no background work). A forced forge refresh stands in for the PR poll.
+  gitService.onWorkspaceStateMayHaveChanged(cwd);
   // The observed checkout reaches the shared runtime store; that store outlives the session.
   await vi.waitFor(
     () => {
@@ -10093,6 +10105,10 @@ test("workspace PR status survives session cleanup and reconnect", async () => {
     type: "fetch_workspaces_request",
     requestId: "sub-2",
     subscribe: { subscriptionId: "sub-2" },
+  });
+  // FULCRA(FU-657): wait for the response; handleMessage returns before it settles.
+  await vi.waitFor(() => {
+    expect(filterByType(emitted2, "fetch_workspaces_response")).toHaveLength(1);
   });
   const response = filterByType(emitted2, "fetch_workspaces_response")[0];
   const entry = response?.payload.entries.find((e) => e.id === workspace.workspaceId);

@@ -66,6 +66,15 @@
             },
             "injectIntoAgents": {
               "type": "boolean"
+            },
+            "injectLabels": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "type": "string"
+              }
             }
           },
           "additionalProperties": {}
@@ -99,6 +108,43 @@
               "type": "integer",
               "exclusiveMinimum": 0,
               "maximum": 9007199254740991
+            },
+            "backgroundFetch": {
+              "type": "boolean"
+            },
+            "backgroundFetchIntervalMs": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "additionalProperties": false
+        },
+        "memoryGuard": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "swapUsedPercent": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "freeMemoryPercent": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "swapDiskFreeGB": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000
+            },
+            "warnAllowAvailableGB": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000
             }
           },
           "additionalProperties": false
@@ -106,154 +152,34 @@
         "autoArchiveAfterMerge": {
           "type": "boolean"
         },
+        "explainDailyLimit": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "notificationMode": {
+          "type": "string",
+          "enum": ["all", "primes", "off"]
+        },
         "enableTerminalAgentHooks": {
           "type": "boolean"
         },
-        "appendSystemPrompt": {
-          "type": "string"
+        "reportUpOnTurnEnd": {
+          "type": "boolean"
         },
-        "terminalProfiles": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string"
-              },
-              "name": {
-                "type": "string"
-              },
-              "command": {
-                "type": "string"
-              },
-              "args": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "icon": {
-                "type": "string"
-              }
-            },
-            "required": ["id", "name", "command"],
-            "additionalProperties": {}
-          }
-        },
-        "agentProfiles": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string"
-              },
-              "name": {
-                "type": "string"
-              },
-              "icon": {
-                "type": "string"
-              },
-              "color": {
-                "type": "string"
-              },
-              "provider": {
-                "type": "string"
-              },
-              "model": {
-                "type": "string"
-              },
-              "modeId": {
-                "type": "string"
-              },
-              "thinkingOptionId": {
-                "type": "string"
-              },
-              "featureValues": {
-                "type": "object",
-                "propertyNames": {
-                  "type": "string"
-                },
-                "additionalProperties": {}
-              },
-              "notes": {
-                "type": "string"
-              }
-            },
-            "required": ["id", "name", "provider"],
-            "additionalProperties": {}
-          }
-        },
-        "cors": {
-          "type": "object",
-          "properties": {
-            "allowedOrigins": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          },
-          "additionalProperties": false
-        },
-        "relay": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "boolean"
-            },
-            "requireProtectedSecurity": {
-              "description": "Admit only relay clients that negotiate protected endpoint security (replay protection). Defaults to false; older clients still connect while it is off.",
-              "type": "boolean"
-            },
-            "endpoint": {
-              "type": "string"
-            },
-            "publicEndpoint": {
-              "type": "string"
-            },
-            "useTls": {
-              "type": "boolean"
-            },
-            "publicUseTls": {
-              "type": "boolean"
-            }
-          },
-          "additionalProperties": false
-        },
-        "serviceProxy": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "description": "Compatibility shim. false suppresses optional service proxy listen/public layers only; localhost proxying remains enabled.",
-              "type": "boolean"
-            },
-            "listen": {
-              "description": "Optional service-only listener address. Presence enables the standalone service proxy listener.",
-              "type": "string"
-            },
-            "publicBaseUrl": {
-              "description": "Optional public base URL for service host aliases.",
-              "type": "string",
-              "format": "uri"
-            }
-          },
-          "additionalProperties": false
-        },
-        "auth": {
-          "type": "object",
-          "properties": {
-            "password": {
-              "type": "string",
-              "pattern": "^\\$2[aby]\\$\\d{2}\\$[./A-Za-z0-9]{53}$"
-            }
-          },
-          "additionalProperties": false
+        "nativeFinishNotices": {
+          "type": "boolean"
         },
         "receiptRetentionMs": {
           "type": "integer",
           "exclusiveMinimum": 21600000,
           "maximum": 9007199254740991
+        },
+        "eventDispatcherEnabled": {
+          "type": "boolean"
+        },
+        "ledgerDispatchEnabled": {
+          "type": "boolean"
         },
         "projectDispatch": {
           "type": "object",
@@ -416,8 +342,187 @@
             "additionalProperties": false
           }
         },
-        "ledgerDispatchEnabled": {
+        "idleLeadNudge": {
           "type": "boolean"
+        },
+        "idleLeadNudgeSkipOwners": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "idleLeadNudgeMinIntervalMinutes": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "reviveOnRestart": {
+          "type": "boolean"
+        },
+        "idleSleepMinutes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10080
+        },
+        "idleSleepProviders": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "autoArchiveClosedAfterHours": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 8760
+        },
+        "autoResumeOnLimit": {
+          "type": "boolean"
+        },
+        "appendSystemPrompt": {
+          "type": "string"
+        },
+        "terminalProfiles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "command": {
+                "type": "string"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "icon": {
+                "type": "string"
+              }
+            },
+            "required": ["id", "name", "command"],
+            "additionalProperties": {}
+          }
+        },
+        "agentProfiles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "icon": {
+                "type": "string"
+              },
+              "color": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "modeId": {
+                "type": "string"
+              },
+              "thinkingOptionId": {
+                "type": "string"
+              },
+              "featureValues": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              },
+              "notes": {
+                "type": "string"
+              }
+            },
+            "required": ["id", "name", "provider"],
+            "additionalProperties": {}
+          }
+        },
+        "cors": {
+          "type": "object",
+          "properties": {
+            "allowedOrigins": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "relay": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "pairingOfferTtlSeconds": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "requireProtectedSecurity": {
+              "description": "Admit only relay clients that negotiate protected endpoint security (replay protection). Defaults to false; older clients still connect while it is off.",
+              "type": "boolean"
+            },
+            "endpoint": {
+              "type": "string"
+            },
+            "publicEndpoint": {
+              "type": "string"
+            },
+            "useTls": {
+              "type": "boolean"
+            },
+            "publicUseTls": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "serviceProxy": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "description": "Compatibility shim. false suppresses optional service proxy listen/public layers only; localhost proxying remains enabled.",
+              "type": "boolean"
+            },
+            "listen": {
+              "description": "Optional service-only listener address. Presence enables the standalone service proxy listener.",
+              "type": "string"
+            },
+            "publicBaseUrl": {
+              "description": "Optional public base URL for service host aliases.",
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          "additionalProperties": false
+        },
+        "auth": {
+          "type": "object",
+          "properties": {
+            "password": {
+              "type": "string",
+              "pattern": "^\\$2[aby]\\$\\d{2}\\$[./A-Za-z0-9]{53}$"
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -426,7 +531,14 @@
       "type": "object",
       "properties": {
         "baseUrl": {
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -494,6 +606,24 @@
           }
         ]
       }
+    },
+    "integrations": {
+      "type": "object",
+      "properties": {
+        "oauthClientIds": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{1,31}$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        }
+      },
+      "additionalProperties": false
     },
     "worktrees": {
       "type": "object",
@@ -675,6 +805,79 @@
                     "items": {
                       "type": "string"
                     }
+                  },
+                  "allowedTools": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "create_agent",
+                        "send_agent_prompt",
+                        "list_agents",
+                        "get_agent_status",
+                        "get_agent_activity",
+                        "archive_agent",
+                        "update_agent",
+                        "cancel_agent",
+                        "list_pending_permissions",
+                        "respond_to_permission",
+                        "supervisor_inbox",
+                        "supervisor_acknowledge",
+                        "browser_list_tabs",
+                        "browser_new_tab",
+                        "browser_snapshot",
+                        "browser_click",
+                        "browser_fill",
+                        "browser_wait",
+                        "browser_type",
+                        "browser_keypress",
+                        "browser_navigate",
+                        "browser_back",
+                        "browser_forward",
+                        "browser_reload",
+                        "browser_screenshot",
+                        "browser_upload",
+                        "browser_hover",
+                        "browser_select",
+                        "browser_drag",
+                        "browser_logs",
+                        "browser_evaluate",
+                        "browser_scroll",
+                        "browser_resize",
+                        "browser_close_tab",
+                        "list_terminals",
+                        "create_terminal",
+                        "capture_terminal",
+                        "send_terminal_keys",
+                        "kill_terminal",
+                        "create_schedule",
+                        "list_schedules",
+                        "inspect_schedule",
+                        "update_schedule",
+                        "pause_schedule",
+                        "resume_schedule",
+                        "delete_schedule",
+                        "run_schedule_once",
+                        "schedule_logs",
+                        "create_heartbeat",
+                        "delete_heartbeat",
+                        "create_workspace",
+                        "list_workspaces",
+                        "rename_workspace",
+                        "archive_workspace",
+                        "list_workspace_scripts",
+                        "start_workspace_script",
+                        "stop_workspace_script",
+                        "list_providers",
+                        "list_models",
+                        "list_profiles",
+                        "inspect_provider",
+                        "produce_artifact",
+                        "kill_agent",
+                        "set_agent_mode",
+                        "speak"
+                      ]
+                    }
                   }
                 }
               },
@@ -763,6 +966,16 @@
                   "additionalProperties": false
                 }
               ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "history": {
+          "type": "object",
+          "properties": {
+            "retention": {
+              "type": "string",
+              "enum": ["keep", "purge"]
             }
           },
           "additionalProperties": false
@@ -912,6 +1125,11 @@
               "properties": {
                 "provider": {
                   "type": "string"
+                },
+                "pauseMs": {
+                  "type": "integer",
+                  "minimum": 500,
+                  "maximum": 15000
                 }
               },
               "additionalProperties": false

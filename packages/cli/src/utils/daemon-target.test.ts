@@ -50,16 +50,19 @@ test("endpoint descriptions redact pairing material and credentials", () => {
 });
 
 test("a pairing offer without a URL prefix still redacts its key", () => {
+  // FULCRA(FU-657): Fulcra pairs only with v3 offers over TLS (one-time pairing grant).
   const offer = {
-    v: 2,
+    v: 3,
     serverId: "srv_example",
-    daemonPublicKeyB64: "example-secret",
-    relay: { endpoint: "localhost:6767", useTls: false },
+    daemonPublicKeyB64: Buffer.alloc(32, 7).toString("base64"),
+    pairing: { id: "A".repeat(22), secret: "B".repeat(43), expiresAt: "2099-01-01T00:00:00.000Z" },
+    relay: { endpoint: "relay.example.com:443", useTls: true },
   };
   const host = `#offer=${Buffer.from(JSON.stringify(offer)).toString("base64url")}`;
-  expect(describeDaemonTarget({ kind: "endpoint", host })).toBe(
-    "relay://localhost:6767/srv_example",
-  );
+  const described = describeDaemonTarget({ kind: "endpoint", host });
+  expect(described).toBe("relay://relay.example.com:443/srv_example");
+  expect(described).not.toContain(offer.daemonPublicKeyB64);
+  expect(described).not.toContain(offer.pairing.secret);
 });
 
 test("malformed endpoint diagnostics never expose the supplied credential", () => {

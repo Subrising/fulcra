@@ -248,7 +248,9 @@ test.each(["text", "reasoning"] as const)(
         return undefined;
       });
     await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(settled).toBe(false);
+    // FULCRA(FU-657): Fulcra materializes images synchronously (confined root), so the snapshot settles
+    // before the live suffix arrives; the ordering below is still checked.
+    expect(settled).toBe(true);
     const delta = timeline.delta({ ...part, delta: "Hello world" });
     if (delta) emitted.push(delta);
     await snapshot;

@@ -16,7 +16,10 @@ export async function runSettingsScrollRegression(page, resizeWindow) {
     await page.mouse.wheel(0, 2000);
     await expect.poll(offset).toBeGreaterThan(0);
     const saved = await offset();
-    for (const title of ["Providers", "Terminals", "Providers", "Terminals"]) {
+    // FULCRA(FU-657): Fulcra lists Providers higher among the host sections and names the menu
+    // rows in plain words, so after the scroll to the end the two bottom host sections that stay
+    // in view are Workspaces and Terminal profiles.
+    for (const title of ["Workspaces", "Terminal profiles", "Workspaces", "Terminal profiles"]) {
       const button = page
         .locator('[data-testid="settings-sidebar"]:visible')
         .getByRole("button", { name: title, exact: true });
@@ -29,11 +32,14 @@ export async function runSettingsScrollRegression(page, resizeWindow) {
       observations.push({ title, offset: await offset() });
     }
     const detail = page.locator('[data-testid="settings-detail-scroll-body"]:visible');
-    await page.getByRole("button", { name: "Providers", exact: true }).click();
+    // FULCRA(FU-657): the Providers row is labelled "AI providers" in Fulcra.
+    await page.getByRole("button", { name: "AI providers", exact: true }).click();
+    // Opening Providers can scroll it into view; the detail scroll must not move the sidebar after that.
+    const beforeDetail = await offset();
     await detail.hover();
     await page.mouse.wheel(0, 1000);
     await expect.poll(() => detail.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
-    await expect.poll(offset).toBe(saved);
+    await expect.poll(offset).toBe(beforeDetail);
     observations.push({
       independentDetailOffset: await detail.evaluate((node) => node.scrollTop),
       sidebarOffset: await offset(),
@@ -43,7 +49,8 @@ export async function runSettingsScrollRegression(page, resizeWindow) {
     await expect.poll(offset).toBe(0);
     await page.mouse.wheel(0, 60);
     await expect.poll(offset).toBe(60);
-    for (const title of ["Sidebar", "Appearance", "Sidebar"]) {
+    // FULCRA(FU-657): Fulcra has no Appearance section (it is part of General); Chat display sits next to Sidebar.
+    for (const title of ["Sidebar", "Chat display", "Sidebar"]) {
       const button = page
         .getByRole("navigation", { name: "Settings" })
         .getByRole("button", { name: title, exact: true });

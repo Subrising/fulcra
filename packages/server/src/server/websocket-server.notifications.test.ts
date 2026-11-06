@@ -518,6 +518,7 @@ it.each(["all", "primes", "off"] as const)(
     const { server } = createServer(undefined, mode);
     const payload = asInternals<WebSocketServerInternals>(server).buildServerInfoStatusPayload({
       getPermissions: () => [],
+      getHostSourceId: () => "fixture-source",
     });
     expect(payload.features?.notificationPolicy).toBe(true);
     expect(payload.features?.pooledAccountUsageObservation).toBe(true);

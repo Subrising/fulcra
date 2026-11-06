@@ -140,7 +140,11 @@ test("daemon starts with an ignored proxy and writes one redacted warning to dae
   const home = await mkdtemp(path.join(os.tmpdir(), "daemon-invalid-proxy-"));
   const env = Object.fromEntries(
     Object.entries(process.env).filter(
-      ([key]) => !["http_proxy", "https_proxy"].includes(key.toLowerCase()),
+      // FULCRA(FU-657): a developer shell that runs a Command Centre daemon sets FULCRA_COMMAND_CENTRE=1;
+      // this test starts a plain daemon, so it must not inherit that switch.
+      ([key]) =>
+        !["http_proxy", "https_proxy"].includes(key.toLowerCase()) &&
+        key !== "FULCRA_COMMAND_CENTRE",
     ),
   );
   const worker = fork(fileURLToPath(new URL("../daemon-worker.ts", import.meta.url)), [], {

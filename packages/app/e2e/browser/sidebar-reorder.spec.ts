@@ -310,9 +310,10 @@ async function expectStatusBucketsRetainActiveOverflow(
   await selectSidebarStatusGrouping(page);
   const done = page.getByTestId("sidebar-status-group-rows-done");
   const doneRows = done.locator('[data-testid^="sidebar-workspace-row-"]');
-  await expect(doneRows).toHaveCount(7);
-  await revealWorkspaces(done, "Show more");
+  // FULCRA(FU-657): status groups keep 20 rows per host before "Show more" (J15), where upstream
+  // keeps 7 for the whole group. All 12 Done rows of this one host show without a reveal.
   await expect(doneRows).toHaveCount(12);
+  await expect(done.getByLabel("Show more", { exact: true })).toHaveCount(0);
   await seed.client.sendAgentMessage(agent.id, "status overflow");
   await seed.client.waitForFinish(agent.id, 15_000);
   await expect(
@@ -323,8 +324,6 @@ async function expectStatusBucketsRetainActiveOverflow(
   await expect(doneRows).toHaveCount(11);
   await seed.client.clearWorkspaceAttention(seed.workspaceId);
   await expect(doneRows).toHaveCount(12);
-  await revealWorkspaces(done, "Show less");
-  await expect(doneRows).toHaveCount(7);
   const activeAgents: Array<{ id: string }> = [];
   for (const workspaceId of ids.slice(0, 8)) {
     activeAgents.push(
@@ -346,7 +345,7 @@ async function expectStatusBucketsRetainActiveOverflow(
   await expect(attention.locator('[data-testid^="sidebar-workspace-row-"]')).toHaveCount(8);
   await expect(attention.getByLabel("Show more", { exact: true })).toHaveCount(0);
   for (const workspaceId of ids.slice(0, 8)) await seed.client.clearWorkspaceAttention(workspaceId);
-  await expect(doneRows).toHaveCount(7);
+  await expect(doneRows).toHaveCount(12);
   await selectProjectGrouping(page);
   await expectWorkspaceOrder(rows, ids.slice(0, 7));
 }

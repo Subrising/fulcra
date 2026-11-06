@@ -86,7 +86,9 @@ function fixture(setup: (server: TrustedPluginServerV11) => void = () => undefin
   return { host, api, manager, live, provider, permission, token };
 }
 
-test("P1: changed text/options and caller digest cannot reach actual manager provider work", () => {
+// FULCRA(FU-657): upstream v0.15 made AgentManager.tryRunOutOfBand async; the fence now rejects
+// the returned Promise instead of throwing synchronously. The checks are unchanged.
+test("P1: changed text/options and caller digest cannot reach actual manager provider work", async () => {
   const f = fixture((server) =>
     server.admission.onInput((_agent, input) =>
       input.provenance?.pluginId === "orca-organization-next" ? "allow" : "deny",
@@ -96,16 +98,16 @@ test("P1: changed text/options and caller digest cannot reach actual manager pro
   const approved = promptPayload("approved", options);
   const send = (token: string, text: string, extra = {}) =>
     f.host.rpc(token, () => f.manager.tryRunOutOfBand(id, text, { ...options, ...extra }));
-  expect(send(f.token(approved), "approved")).toBe(false);
+  await expect(send(f.token(approved), "approved")).resolves.toBe(false);
   expect(f.provider).toHaveBeenCalledExactlyOnceWith("approved");
   f.provider.mockClear();
   const changed = f.token(approved);
-  expect(() => send(changed, "altered")).toThrow(/provenance|payload/i);
-  expect(() => send(changed, "approved")).toThrow(/provenance|replayed/i);
-  expect(() => send(f.token(approved), "approved", { maxThinkingTokens: 42 })).toThrow(
+  await expect(send(changed, "altered")).rejects.toThrow(/provenance|payload/i);
+  await expect(send(changed, "approved")).rejects.toThrow(/provenance|replayed/i);
+  await expect(send(f.token(approved), "approved", { maxThinkingTokens: 42 })).rejects.toThrow(
     /provenance|payload/i,
   );
-  expect(() =>
+  await expect(
     send(f.token(approved), "altered", {
       payloadDigest: canonicalTrustedPayload({
         agentId: id,
@@ -114,7 +116,7 @@ test("P1: changed text/options and caller digest cannot reach actual manager pro
         payload: approved,
       }),
     }),
-  ).toThrow();
+  ).rejects.toThrow();
   expect(f.provider).not.toHaveBeenCalled();
 });
 
@@ -190,7 +192,8 @@ test("P2: changed same-ID request during guard and duplicate rewritten submissio
 
 test.each(["model", "nativeSessionId", "serviceTier", "instanceId", "lastUserMessageAt"] as const)(
   "P3: changed %s refuses prepared intent",
-  (field) => {
+  // FULCRA(FU-657): tryRunOutOfBand is async since upstream v0.15; the refusal is a rejection.
+  async (field) => {
     const expected = {
       status: "known",
       instanceId: "44444444-4444-4444-8444-444444444444",
@@ -212,7 +215,7 @@ test.each(["model", "nativeSessionId", "serviceTier", "instanceId", "lastUserMes
       f.live.provider = "codex";
       (f.live.features as unknown[]).push({ id: "fast_mode", type: "toggle", value: true });
     }
-    expect(() => f.manager.tryRunOutOfBand(id, "work")).toThrow();
+    await expect(f.manager.tryRunOutOfBand(id, "work")).rejects.toThrow();
     expect(f.provider).not.toHaveBeenCalled();
   },
 );
@@ -236,7 +239,8 @@ test("P4: authoritative parent human fence refuses worker send, permission and M
       promptPayload("human"),
     ),
   );
-  expect(() => f.manager.tryRunOutOfBand(id, "worker")).toThrow();
+  // FULCRA(FU-657): tryRunOutOfBand is async since upstream v0.15; the refusal is a rejection.
+  await expect(f.manager.tryRunOutOfBand(id, "worker")).rejects.toThrow();
   await expect(
     f.manager.respondToPermission(id, "request", { behavior: "allow" }),
   ).rejects.toThrow();
@@ -423,17 +427,18 @@ test("P7: captured Book catalog with automatic policy preserves all admission fe
   ).toBe(false);
 });
 
-test("P1: an unverified controller prefix is denied and advances the human fence", () => {
+// FULCRA(FU-657): tryRunOutOfBand is async since upstream v0.15; the refusal is a rejection.
+test("P1: an unverified controller prefix is denied and advances the human fence", async () => {
   const f = fixture((server) =>
     server.admission.onInput((_agent, input) =>
       input.provenance?.pluginId === "orca-organization-next" ? "allow" : "deny",
     ),
   );
-  expect(() =>
+  await expect(
     f.host.rpc(undefined, () =>
       f.manager.tryRunOutOfBand(id, "work", { clientMessageId: "orca-control:forged" }),
     ),
-  ).toThrow();
+  ).rejects.toThrow();
   expect(f.host.requireSequence(id).humanAt).toBe(1);
   expect(f.provider).not.toHaveBeenCalled();
 });
@@ -588,7 +593,8 @@ test.each(["legacy-first", "modern-first"])(
   },
 );
 
-test("R1 minor 1: strict prompt and index validation activates only for V1.1", () => {
+// FULCRA(FU-657): tryRunOutOfBand is async since upstream v0.15; results are awaited.
+test("R1 minor 1: strict prompt and index validation activates only for V1.1", async () => {
   const host = new TrustedPlugins();
   hosts.push(host);
   expect(() => host.initializeKnownAgents(["legacy-id"])).not.toThrow();
@@ -605,11 +611,13 @@ test("R1 minor 1: strict prompt and index validation activates only for V1.1", (
     session: { tryHandleOutOfBand: provider },
   });
   Reflect.get(manager, "timelineStore").initialize(id);
-  expect(() => manager.tryRunOutOfBand(id, { text: "legacy" } as never)).not.toThrow();
+  await expect(manager.tryRunOutOfBand(id, { text: "legacy" } as never)).resolves.toBeTypeOf(
+    "boolean",
+  );
   expect(provider).toHaveBeenCalled();
   expect(() => host.registerV11("modern", true, noop)).toThrow();
   const f = fixture();
-  expect(() => f.manager.tryRunOutOfBand(id, { text: "legacy" } as never)).toThrow();
+  await expect(f.manager.tryRunOutOfBand(id, { text: "legacy" } as never)).rejects.toThrow();
   expect(f.provider).not.toHaveBeenCalled();
 });
 

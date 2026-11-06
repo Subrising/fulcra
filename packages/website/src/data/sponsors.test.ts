@@ -6,8 +6,9 @@ import { SPONSORS, sponsorHref } from "./sponsors";
 const REPO_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
 const WEBSITE_PUBLIC = fileURLToPath(new URL("../../public", import.meta.url));
 // Each README invites sponsors to the sponsor page in its own language, where the website has one.
+// FULCRA(FU-657): Fulcra replaces the English README.md with its own, which has no Paseo sponsor
+// table. The upstream translated READMEs keep theirs and are still checked.
 const READMES = [
-  { readme: "README.md", sponsorPage: "https://paseo.sh/sponsor" },
   { readme: "README.zh-CN.md", sponsorPage: "https://paseo.sh/zh-CN/sponsor" },
   { readme: "README.ja.md", sponsorPage: "https://paseo.sh/sponsor" },
   { readme: "README.ko.md", sponsorPage: "https://paseo.sh/sponsor" },

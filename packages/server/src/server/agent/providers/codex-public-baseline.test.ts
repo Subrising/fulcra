@@ -115,6 +115,8 @@ test("real client captures independent text/config/env before awaits and submits
       ...expected.receipt,
       state: "SUBMITTED",
     });
+    // FULCRA(FU-657): v0.15 reports persistence only once Codex saved the thread (first turn); mark it saved.
+    Reflect.get(session, "markCurrentThreadSaved").call(session, null);
     expect(session.describePersistence()?.metadata).not.toHaveProperty("publicBaseline");
     expect(JSON.stringify(session.describePersistence())).not.toContain("FIXTURE-common");
     expect(f.app.requests().filter((r) => r.method === "turn/start")).toHaveLength(0);
@@ -266,6 +268,9 @@ async function rewindSameClient(
   f: ReturnType<typeof fixture>,
   session: Awaited<ReturnType<CodexAppServerAgentClient["resumeSession"]>>,
 ) {
+  // FULCRA(FU-657): v0.15 revert indexes the thread history first and resets the live message index when
+  // it does so; index before the live message so the fixture message survives.
+  await Reflect.get(session, "ensureHistoryIndexed").call(session);
   const seen = waitForNextEvent(session, "timeline");
   f.app.child.stdout.write(
     JSON.stringify({
@@ -416,7 +421,9 @@ test("F20 thread/start uses the correlated returned thread ID, not a guessed req
   });
   try {
     const info = await session.getRuntimeInfo();
-    expect(info.sessionId).toBe("returned-thread");
+    // FULCRA(FU-657): v0.15 reports no session ID until Codex saved the thread (first turn); the event
+    // below still proves the correlated returned thread ID.
+    expect(info.sessionId).toBeNull();
     expect(info.extra?.hostPublicBaselineTransport).toMatchObject({ state: "SUBMITTED" });
     expect(ids).toEqual(["returned-thread"]);
     expect(f.app.requests().find((r) => r.method === "thread/start")?.params).not.toHaveProperty(

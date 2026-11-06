@@ -41,7 +41,7 @@ import {
 } from "../agent-projections.js";
 import { summarizeAgentActivity } from "../activity-curator.js";
 import type { AgentStorage } from "../agent-storage.js";
-import { ensureAgentLoaded } from "../agent-loading.js";
+import { AgentNotFoundError, ensureAgentLoaded } from "../agent-loading.js";
 import { isStoredAgentProviderAvailable } from "../../persistence-hooks.js";
 import {
   archiveByScope,
@@ -2350,6 +2350,8 @@ function createToolCatalog(
       try {
         ({ disposition } = await dispatch());
       } catch (error) {
+        // FULCRA(FU-657): upstream maps an unknown target to a client error (400); the merge lost it.
+        if (error instanceof AgentNotFoundError) throw new PaseoToolInputError(error.message);
         const limit = recipientLimit(error);
         if (
           callerAgentId &&

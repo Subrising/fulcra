@@ -57,8 +57,18 @@ function untranslated(pair: ContentPair): boolean {
   return pair.chinese.locale !== "zh-CN";
 }
 
+// FULCRA(FU-657): Fulcra rewrote these English pages (relay, skills, MCP and plugin reference); their
+// Chinese pages are still the upstream text until they are translated again. Only these are exempt.
+const FULCRA_REWRITTEN_PAGES = new Set([
+  "/docs/connectivity",
+  "/docs/skills",
+  "/docs/mcp",
+  "/docs/plugins/reference",
+]);
+
 /** The sections a translation adds, drops, reorders, or anchors differently, as a readable diff. */
 function sectionMismatch(pair: ContentPair): string[] {
+  if (FULCRA_REWRITTEN_PAGES.has(pair.path)) return [];
   const english = sections(pair.english.content, pair.anchored);
   const chinese = sections(pair.chinese.content, pair.anchored);
   if (english.join() === chinese.join()) return [];
