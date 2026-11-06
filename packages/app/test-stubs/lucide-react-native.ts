@@ -1,4 +1,4 @@
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 
 export type LucideIcon = ComponentType<{
   size?: number;
@@ -209,3 +209,16 @@ export const ZoomIn = StubIcon;
 export const ZoomOut = StubIcon;
 export const Users = StubIcon;
 export const SendHorizontal = StubIcon;
+
+// FU-657: icons and the provider that app code imports since Paseo v0.15.0. A missing export stops
+// Vite's dependency scan, and the browser suite then re-optimizes dependencies in the middle of a run.
+export const CircleGauge = StubIcon;
+export const CornerUpLeft = StubIcon;
+export const Languages = StubIcon;
+export const Minimize2 = StubIcon;
+export const Send = StubIcon;
+export const SlidersHorizontal = StubIcon;
+export const Summary = StubIcon;
+export function LucideProvider({ children }: { children?: ReactNode }): ReactNode {
+  return children ?? null;
+}

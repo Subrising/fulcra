@@ -1,10 +1,12 @@
-import { createUsageCommand } from "./commands/usage.js";
+import { createUsageCommand as createUsageEventsParentCommand } from "./commands/usage.js";
 import { createCheckCommand } from "./commands/check/index.js";
+import { createHostCommand } from "./commands/host/index.js";
 import { pairCommand } from "./commands/daemon/pair.js";
 import { Command, Option } from "commander";
 import { createAgentCommand } from "./commands/agent/index.js";
 import { createDaemonCommand } from "./commands/daemon/index.js";
 import { createPermitCommand } from "./commands/permit/index.js";
+import { createUsageCommand } from "./commands/usage/index.js";
 import { createProviderCommand } from "./commands/provider/index.js";
 import { createPluginCommand } from "./commands/plugin/index.js";
 import { createAccountCommand } from "./commands/account.js";
@@ -63,6 +65,7 @@ export function createCli(): Command {
   addDaemonHostOption(program);
 
   program.addCommand(createCheckCommand());
+  program.addCommand(createHostCommand());
 
   // Primary agent commands (top-level)
   addJsonAndDaemonHostOptions(addLsOptions(program.command("ls"))).action(withOutput(runLsCommand));
@@ -158,7 +161,13 @@ export function createCli(): Command {
   program.addCommand(createProviderCommand());
   program.addCommand(createPluginCommand());
   program.addCommand(createAccountCommand());
-  program.addCommand(createUsageCommand());
+  const usageCommand = createUsageCommand();
+  // FULCRA(usage): the daemon event counts live under `usage events`.
+  const usageEventsCommand = createUsageEventsParentCommand().commands.find(
+    (command) => command.name() === "events",
+  );
+  if (usageEventsCommand) usageCommand.addCommand(usageEventsCommand);
+  program.addCommand(usageCommand);
   program.addCommand(createAskCommand());
 
   // Speech model commands

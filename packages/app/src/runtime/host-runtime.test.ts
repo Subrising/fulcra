@@ -1,3 +1,4 @@
+import { hostKeyFingerprint } from "@getpaseo/client/relay-v3";
 import { PairingRequiredError } from "@getpaseo/client/internal/daemon-client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppStateStatus } from "react-native";
@@ -12,6 +13,7 @@ import type {
   FetchAgentsOptions,
 } from "@getpaseo/client/internal/daemon-client";
 import { DaemonAuthenticationError } from "@getpaseo/client/internal/daemon-client";
+import type { HostDirectory } from "@getpaseo/protocol/hosts";
 import type { ConnectionOffer } from "@getpaseo/protocol/connection-offer";
 import type { SessionOutboundMessage } from "@getpaseo/protocol/messages";
 import type { AgentPermissionRequest } from "@getpaseo/protocol/agent-types";
@@ -28,6 +30,7 @@ import {
   type HostRuntimeControllerDeps,
   type HostRuntimeStorage,
 } from "./host-runtime";
+import type { HostConfirmationRequest } from "./host-confirmation";
 import type { ReplicaRow, ReplicaRowStore } from "./replica-cache/row-store";
 
 import { subscriptionFixture } from "./subscription-fixture";
@@ -52,6 +55,10 @@ it("requests the managed connection credential through desktop main without a we
 });
 
 class FakeDaemonClient {
+  supportsBackgroundWorkspaces(): boolean {
+    return false;
+  }
+  relaySecurityFloor: "legacy" | "protected" | undefined = undefined;
   private state: ConnectionState = { status: "idle" };
   private listeners = new Set<(status: ConnectionState) => void>();
   private error: string | null = null;
@@ -133,6 +140,7 @@ class FakeDaemonClient {
     if (response) await response;
     const failure = this.sendAgentMessageFailures.shift();
     if (failure) throw failure;
+    return {};
   }
 
   async waitForSentMessages(count: number): Promise<void> {
@@ -155,20 +163,48 @@ class FakeDaemonClient {
     }
   }
 
+  get isConnected(): boolean {
+    return this.state.status === "connected";
+  }
+
   getConnectionState(): ConnectionState {
     return this.state;
   }
 
+  public connectedHosts = false;
+  public hostDirectory: Promise<HostDirectory> = Promise.resolve({
+    self: { serverId: "srv_test", label: "test" },
+    hosts: [],
+  });
+
+  observeHosts() {
+    return subscriptionFixture(this.hostDirectory, () => () => {});
+  }
+
   public ownedSubscriptions = true;
+  private daemonVersion: string | null = "0.8.0";
 
   getLastServerInfoMessage(): ReturnType<DaemonClient["getLastServerInfoMessage"]> {
+    if (this.daemonVersion === null) return null;
     return {
       status: "server_info",
       serverId: "srv_test",
       hostname: "test",
-      version: "0.8.0",
-      features: { ownedSubscriptions: this.ownedSubscriptions },
+      version: this.daemonVersion,
+      features: {
+        ownedSubscriptions: this.ownedSubscriptions,
+        connectedHosts: this.connectedHosts,
+      },
     };
+  }
+
+  // Like the real client, the server info is cleared while disconnected and replaced by the
+  // restarted daemon's handshake before the client reports connected again.
+  daemonRestartsAs(version: string): void {
+    this.daemonVersion = null;
+    this.setConnectionState({ status: "disconnected", reason: "Connection lost" });
+    this.daemonVersion = version;
+    this.setConnectionState({ status: "connected" });
   }
 
   subscribeConnectionStatus(listener: (status: ConnectionState) => void): () => void {
@@ -311,6 +347,11 @@ class Deferred<T> {
   reject(error: Error): void {
     this.rejectPromise(error);
   }
+}
+
+function relayPinOf(host: HostProfile | undefined): "protected" | undefined {
+  const connection = host?.connections[0];
+  return connection?.type === "relay" ? connection.minimumSecurityMode : undefined;
 }
 
 async function waitForHostOnline(store: HostRuntimeStore, serverId: string): Promise<void> {
@@ -514,6 +555,67 @@ function makeConnectedProbeClient(latencyMs: number): FakeDaemonClient {
   client.setConnectionState({ status: "connected" });
   client.ping = async () => ({ rttMs: latencyMs });
   return client;
+}
+
+/**
+ * Answers every host confirmation the store asks, the way the sheet does, and
+ * records each request.
+ */
+function answerHostConfirmations(
+  store: HostRuntimeStore,
+  answer: boolean | ((request: HostConfirmationRequest, index: number) => boolean),
+): HostConfirmationRequest[] {
+  const requests: HostConfirmationRequest[] = [];
+  store.subscribeHostConfirmation(() => {
+    const pending = store.getPendingHostConfirmation();
+    if (!pending) return;
+    requests.push(pending);
+    store.answerHostConfirmation(
+      pending.id,
+      typeof answer === "function" ? answer(pending, requests.length - 1) : answer,
+    );
+  });
+  return requests;
+}
+
+function requirePendingConfirmation(store: HostRuntimeStore): HostConfirmationRequest {
+  const pending = store.getPendingHostConfirmation();
+  if (!pending) throw new Error("Expected a pending host confirmation");
+  return pending;
+}
+
+function createPairingStore(
+  input: {
+    hostname?: string;
+    password?: string;
+    connectAttempts?: string[];
+    serverIdForHost?: (host: HostProfile) => string;
+    storage?: HostRuntimeStorage;
+    probeSecurityFloor?: "legacy" | "protected";
+  } = {},
+): HostRuntimeStore {
+  return new HostRuntimeStore({
+    claimRelayDevice: async () => "dev_testdevice000001",
+    storage: input.storage ?? createMemoryHostRuntimeStorage(),
+    deps: {
+      createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
+      connectToDaemon: async ({ host, connection }) => {
+        input.connectAttempts?.push(connection.id);
+        if (input.password && host.password !== input.password) {
+          throw new DaemonAuthenticationError("password_required");
+        }
+        const client = makeConnectedProbeClient(5);
+        client.relaySecurityFloor = input.probeSecurityFloor;
+        return {
+          client: client as unknown as DaemonClient,
+          serverId: input.serverIdForHost?.(host) ?? host.serverId,
+          hostname: input.hostname ?? "paired",
+        };
+      },
+      getClientId: async () => "cid_pairing",
+      readInitialConnectionHint: () => null,
+    },
+  });
 }
 
 function createMemoryHostRuntimeStorage(entries: Record<string, string> = {}): HostRuntimeStorage {
@@ -723,6 +825,87 @@ describe("HostRuntimeController", () => {
     );
 
     expect(createdClients.map((entry) => entry.connection)).toEqual([oldRelay, newRelay]);
+    expect(createdClients[0]?.client.isDisposed()).toBe(true);
+    expect(controller.getSnapshot().client).toBe(createdClients[1]?.client);
+  });
+
+  it("keeps the active relay client when its security pin is learned", async () => {
+    const relay: HostConnection = {
+      id: "relay:wss:relay.paseo.sh:443",
+      type: "relay",
+      relayEndpoint: "relay.paseo.sh:443",
+      useTls: true,
+      daemonPublicKeyB64: "pk_a",
+      deviceId: "dev_fixture",
+    };
+    const createdClients: FakeDaemonClient[] = [];
+    const controller = new HostRuntimeController({
+      host: makeHost({ connections: [relay], preferredConnectionId: relay.id }),
+      deps: {
+        createClient: () => {
+          const client = new FakeDaemonClient();
+          createdClients.push(client);
+          return client as unknown as DaemonClient;
+        },
+        connectToDaemon: async ({ host, connection }) => ({
+          client: makeConnectedProbeClient(5) as unknown as DaemonClient,
+          serverId: host.serverId,
+          hostname: connection.id,
+        }),
+        getClientId: async () => "cid_test_runtime",
+      },
+    });
+
+    await controller.activateConnection({ connectionId: relay.id });
+    // The client negotiated protected itself; the pin it reported is already enforced.
+    createdClients[0]!.relaySecurityFloor = "protected";
+    await controller.updateHost(
+      makeHost({
+        connections: [{ ...relay, minimumSecurityMode: "protected" }],
+        preferredConnectionId: relay.id,
+      }),
+    );
+
+    expect(createdClients).toHaveLength(1);
+    expect(createdClients[0]?.isDisposed()).toBe(false);
+    expect(controller.getSnapshot().client).toBe(createdClients[0]);
+  });
+
+  it("replaces the active legacy relay client when a strict offer pins its connection", async () => {
+    const relay: HostConnection = {
+      id: "relay:wss:relay.paseo.sh:443",
+      type: "relay",
+      relayEndpoint: "relay.paseo.sh:443",
+      useTls: true,
+      daemonPublicKeyB64: "pk_a",
+      deviceId: "dev_fixture",
+    };
+    const createdClients: Array<{ client: FakeDaemonClient; connection: HostConnection }> = [];
+    const controller = new HostRuntimeController({
+      host: makeHost({ connections: [relay], preferredConnectionId: relay.id }),
+      deps: {
+        createClient: ({ connection }) => {
+          const client = new FakeDaemonClient();
+          createdClients.push({ client, connection });
+          return client as unknown as DaemonClient;
+        },
+        connectToDaemon: async ({ host, connection }) => ({
+          client: makeConnectedProbeClient(5) as unknown as DaemonClient,
+          serverId: host.serverId,
+          hostname: connection.id,
+        }),
+        getClientId: async () => "cid_test_runtime",
+      },
+    });
+
+    await controller.activateConnection({ connectionId: relay.id });
+    expect(createdClients[0]?.client.relaySecurityFloor).toBeUndefined();
+    const pinned: HostConnection = { ...relay, minimumSecurityMode: "protected" };
+    await controller.updateHost(
+      makeHost({ connections: [pinned], preferredConnectionId: relay.id }),
+    );
+
+    expect(createdClients.map((entry) => entry.connection)).toEqual([relay, pinned]);
     expect(createdClients[0]?.client.isDisposed()).toBe(true);
     expect(controller.getSnapshot().client).toBe(createdClients[1]?.client);
   });
@@ -1006,6 +1189,50 @@ describe("HostRuntimeController", () => {
     });
     expect(activeClient.latencyMeasurements()).toEqual([]);
   });
+
+  it.each([12, null])(
+    "falls back to relay when the direct client disconnects with heartbeat RTT %s",
+    async (heartbeatRtt) => {
+      useHostRuntimeClock();
+      const clients: FakeDaemonClient[] = [];
+      const latencies: Record<string, number | Error> = {
+        "direct:lan:6767": 12,
+        "relay:relay.example.test:443": 65,
+      };
+      const controller = new HostRuntimeController({
+        host: makeHost(),
+        deps: makeDeps(latencies, clients),
+      });
+
+      await controller.start({ autoProbe: false });
+      expect(controller.getSnapshot().activeConnectionId).toBe("direct:lan:6767");
+      expect(controller.getSnapshot().connectionStatus).toBe("online");
+
+      const directClient = clients[0];
+      directClient.heartbeatReportsRtt(heartbeatRtt);
+      directClient.clearLatencyMeasurements();
+      latencies["direct:lan:6767"] = new Error("LAN unreachable");
+      directClient.setConnectionState({ status: "disconnected", reason: "network changed" });
+      expect(controller.getSnapshot().connectionStatus).toBe("error");
+      expect(directClient.getLastLivenessRttMs()).toBe(heartbeatRtt);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await controller.runProbeCycleNow();
+
+      const snapshot = controller.getSnapshot();
+      expect(snapshot.activeConnectionId).toBe("relay:relay.example.test:443");
+      expect(snapshot.connectionStatus).toBe("online");
+      expect(snapshot.probeByConnectionId).toEqual(
+        new Map([
+          ["direct:lan:6767", { status: "unavailable", latencyMs: null }],
+          ["relay:relay.example.test:443", { status: "available", latencyMs: 65 }],
+        ]),
+      );
+      expect(directClient.isDisposed()).toBe(true);
+      expect(directClient.latencyMeasurements()).toEqual([]);
+      await controller.stop();
+    },
+  );
 
   it("does not create a probe client for the selected connection while it reconnects", async () => {
     useHostRuntimeClock();
@@ -1725,6 +1952,103 @@ describe("HostRuntimeController", () => {
 });
 
 describe("HostRuntimeStore", () => {
+  it.each([false, true])(
+    "keeps B and C distinct with routed and direct candidates (B direct first: %s)",
+    async (directFirst) => {
+      const directory = new Deferred<HostDirectory>();
+      const origin = new FakeDaemonClient();
+      origin.setConnectionState({ status: "connected" });
+      origin.connectedHosts = true;
+      origin.hostDirectory = directory.promise;
+      const store = new HostRuntimeStore({
+        storage: createMemoryHostRuntimeStorage(),
+        deps: {
+          createClient: ({ host }) =>
+            (host.serverId === "srv_a"
+              ? origin
+              : new FakeDaemonClient()) as unknown as DaemonClient,
+          connectToDaemon: async ({ host }) => ({
+            client: (host.serverId === "srv_a"
+              ? origin
+              : makeConnectedProbeClient(5)) as unknown as DaemonClient,
+            serverId: host.serverId,
+            hostname: host.label,
+          }),
+          getClientId: async () => "cid_fleet_candidates",
+        },
+      });
+      const addDirectB = () =>
+        store.upsertDirectConnection({
+          serverId: "srv_b",
+          endpoint: "b:6767",
+          label: "My B",
+        });
+      try {
+        if (directFirst) await addDirectB();
+        await store.upsertDirectConnection({
+          serverId: "srv_c",
+          endpoint: "c:6767",
+          label: "My C",
+        });
+        await store.upsertDirectConnection({ serverId: "srv_a", endpoint: "a:6767" });
+        await waitForHostOnline(store, "srv_a");
+        directory.resolve({
+          self: { serverId: "srv_a", label: "A" },
+          hosts: ["b", "c"].map((target) => ({
+            registrationId: `reg_${target}`,
+            serverId: `srv_${target}`,
+            label: `Fleet ${target.toUpperCase()}`,
+            source: { id: "user", key: target },
+            metadata: {},
+            enabled: true,
+            status: "online" as const,
+            targetDescription: `${target}:6767`,
+            lastOnlineAt: null,
+            nextRetryAt: null,
+            error: null,
+          })),
+        });
+        await vi.waitFor(() =>
+          expect(store.getHosts()).toContainEqual(
+            expect.objectContaining({
+              serverId: "srv_b",
+              connections: expect.arrayContaining([
+                { id: "via:srv_a", type: "routed", originServerId: "srv_a" },
+              ]),
+            }),
+          ),
+        );
+        await waitForHostOnline(store, "srv_b");
+        if (!directFirst) await addDirectB();
+        const targets = store.getHosts().filter((host) => host.serverId === "srv_b");
+        expect(targets).toHaveLength(1);
+        expect(targets[0]?.connections).toEqual(
+          expect.arrayContaining([
+            { id: "via:srv_a", type: "routed", originServerId: "srv_a" },
+            { id: "direct:b:6767", type: "directTcp", endpoint: "b:6767", useTls: false },
+          ]),
+        );
+        expect(targets[0]?.connections).toHaveLength(2);
+        expect(targets[0]?.label).toBe(directFirst ? "My B" : "Fleet B");
+        expect(store.getSnapshot("srv_b")?.connectionStatus).toBe("online");
+        expect(store.getHosts()).toHaveLength(3);
+        const targetC = store.getHosts().find((host) => host.serverId === "srv_c");
+        expect(targetC).toMatchObject({
+          serverId: "srv_c",
+          label: "My C",
+          connections: [
+            { id: "direct:c:6767", type: "directTcp", endpoint: "c:6767", useTls: false },
+            { id: "via:srv_a", type: "routed", originServerId: "srv_a" },
+          ],
+        });
+        await waitForHostOnline(store, "srv_c");
+        expect(store.getSnapshot("srv_c")?.connectionStatus).toBe("online");
+      } finally {
+        store.syncHosts([]);
+      }
+    },
+  );
+
   it.each(["active", "inactive", "background"] as const)(
     "connects only while the app is visible (mounted %s)",
     async (currentState) => {
@@ -2269,6 +2593,37 @@ describe("HostRuntimeStore", () => {
 
     store.syncHosts([]);
     expect(useSessionStore.getState().sessions[host.serverId]).toBeUndefined();
+  });
+
+  it("shows the restarted daemon's version after the same client reconnects", async () => {
+    const host = makeHost({
+      serverId: "srv_restarted",
+      connections: [{ id: "direct:lan:6767", type: "directTcp", endpoint: "lan:6767" }],
+    });
+    const fakeClient = new FakeDaemonClient();
+    fakeClient.setConnectionState({ status: "connected" });
+    const store = new HostRuntimeStore({
+      deps: {
+        createClient: () => fakeClient as unknown as DaemonClient,
+        connectToDaemon: async ({ host: hostProfile }) => ({
+          client: fakeClient as unknown as DaemonClient,
+          serverId: hostProfile.serverId,
+          hostname: hostProfile.label ?? null,
+        }),
+        getClientId: async () => "cid_test_runtime",
+      },
+    });
+
+    store.syncHosts([host]);
+    await waitForHostOnline(store, host.serverId);
+    expect(useSessionStore.getState().sessions[host.serverId]?.serverInfo?.version).toBe("0.8.0");
+
+    fakeClient.daemonRestartsAs("0.9.1");
+
+    expect(store.getSnapshot(host.serverId)?.client).toBe(fakeClient);
+    expect(useSessionStore.getState().sessions[host.serverId]?.serverInfo?.version).toBe("0.9.1");
+
+    store.syncHosts([]);
   });
 
   it("drains snapshot and buffered running transitions exactly once", async () => {
@@ -3787,6 +4142,97 @@ describe("HostRuntimeStore", () => {
     store.syncHosts([]);
   });
 
+  it("keeps a strict offer's security pin through both pairing paths and a reload", async () => {
+    const storage = createMemoryHostRuntimeStorage();
+    const store = createPairingStore({ storage });
+    answerHostConfirmations(store, true);
+    const strictOffer = (serverId: string): ConnectionOffer => ({
+      ...makeOffer({ serverId, daemonPublicKeyB64: Buffer.alloc(32, serverId).toString("base64") }),
+      minimumSecurityMode: "protected",
+    });
+
+    await store.importConnectionLink(encodeOfferUrl(strictOffer("srv_import")), "openProject");
+    await store.beginLinkPairing().submit(encodeOfferUrl(strictOffer("srv_pair")));
+
+    const pinOf = (hosts: HostProfile[], serverId: string) =>
+      relayPinOf(hosts.find((host) => host.serverId === serverId));
+    expect(pinOf(store.getHosts(), "srv_import")).toBe("protected");
+    expect(pinOf(store.getHosts(), "srv_pair")).toBe("protected");
+
+    await waitForHostOnline(store, "srv_pair");
+    const persisted = JSON.parse((await storage.getItem("@paseo:daemon-registry")) ?? "[]");
+    expect(pinOf(persisted, "srv_import")).toBe("protected");
+    expect(pinOf(persisted, "srv_pair")).toBe("protected");
+    store.syncHosts([]);
+
+    const reloaded = createPairingStore({ storage });
+    const registryLoaded = onceHostListMatches(reloaded, () => reloaded.isHostRegistryLoaded());
+    reloaded.boot();
+    await registryLoaded;
+    expect(pinOf(reloaded.getHosts(), "srv_import")).toBe("protected");
+    expect(pinOf(reloaded.getHosts(), "srv_pair")).toBe("protected");
+
+    reloaded.syncHosts([]);
+  });
+
+  it("learns the security pin from an adopted probe client and keeps it across a reload", async () => {
+    const relay: HostConnection = {
+      id: "relay:relay.paseo.sh:443",
+      type: "relay",
+      relayEndpoint: "relay.paseo.sh:443",
+      daemonPublicKeyB64: "pk_saved",
+      deviceId: "dev_fixture",
+    };
+    const host = makeHost({
+      serverId: "srv_saved",
+      connections: [relay],
+      preferredConnectionId: relay.id,
+    });
+    const storage = createMemoryHostRuntimeStorage({
+      "@paseo:daemon-registry": JSON.stringify([host]),
+      "@paseo:e2e": "1",
+    });
+    const store = createPairingStore({ storage, probeSecurityFloor: "protected" });
+
+    store.boot();
+    await waitForHostOnline(store, "srv_saved");
+    const pinned = onceHostListMatches(
+      store,
+      () => relayPinOf(store.getHosts()[0]) === "protected",
+    );
+    await pinned;
+
+    const activeClient = store.getSnapshot("srv_saved")?.client as unknown as FakeDaemonClient;
+    expect(activeClient.relaySecurityFloor).toBe("protected");
+    expect(activeClient.isDisposed()).toBe(false);
+    const persisted = JSON.parse((await storage.getItem("@paseo:daemon-registry")) ?? "[]");
+    expect(persisted[0]?.connections[0]?.minimumSecurityMode).toBe("protected");
+    store.syncHosts([]);
+
+    const reloaded = createPairingStore({ storage, probeSecurityFloor: "legacy" });
+    const registryLoaded = onceHostListMatches(reloaded, () => reloaded.isHostRegistryLoaded());
+    reloaded.boot();
+    await registryLoaded;
+    expect(relayPinOf(reloaded.getHosts()[0])).toBe("protected");
+
+    reloaded.syncHosts([]);
+  });
+
+  it("learns the security pin for a host paired from an old offer once it goes online", async () => {
+    const storage = createMemoryHostRuntimeStorage();
+    const store = createPairingStore({ storage, probeSecurityFloor: "protected" });
+    answerHostConfirmations(store, true);
+
+    await store.beginLinkPairing().submit(encodeOfferUrl(makeOffer()));
+    await waitForHostOnline(store, "srv_offer");
+    await onceHostListMatches(store, () => relayPinOf(store.getHosts()[0]) === "protected");
+
+    const persisted = JSON.parse((await storage.getItem("@paseo:daemon-registry")) ?? "[]");
+    expect(persisted[0]?.connections[0]?.minimumSecurityMode).toBe("protected");
+
+    store.syncHosts([]);
+  });
+
   it("probes a pairing link immediately and saves only after admission", async () => {
     const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
@@ -3813,6 +4259,297 @@ describe("HostRuntimeStore", () => {
     const result = await store.probeAndUpsertConnectionFromOfferUrl(offerUrl, "correct-password");
     expect(result.serverId).toBe("srv_offer");
     expect(store.getHosts()[0]?.password).toBe("correct-password");
+    store.syncHosts([]);
+  });
+
+  it("asks before a pairing link adds a new host, and Cancel saves and connects nothing", async () => {
+    const connectAttempts: string[] = [];
+    const store = createPairingStore({ connectAttempts });
+    const requests = answerHostConfirmations(store, false);
+    const offerUrl = encodeOfferUrl(makeOffer());
+    const otherServerUrl = encodeOfferUrl(
+      makeOffer({ serverId: "srv_other", relay: { endpoint: "relay.example:443", useTls: true } }),
+    );
+
+    // `#offer=` in the app URL, then a QR scan, then the pair-link and add-host modals.
+    await expect(store.importConnectionLink(offerUrl, "openProject")).resolves.toEqual({
+      status: "cancelled",
+    });
+    await expect(store.importConnectionLink(offerUrl, "hostRoot")).resolves.toEqual({
+      status: "cancelled",
+    });
+    await expect(store.beginLinkPairing().submit(offerUrl)).resolves.toEqual({
+      status: "cancelled",
+    });
+    await expect(store.beginLinkPairing().submit(otherServerUrl)).resolves.toEqual({
+      status: "cancelled",
+    });
+
+    expect(requests).toEqual([
+      ...Array.from({ length: 3 }, () => ({
+        id: expect.any(Number),
+        serverId: "srv_offer",
+        keyFingerprint: hostKeyFingerprint(makeOffer().daemonPublicKeyB64),
+        relayEndpoint: "relay.example.test:443",
+        kind: "newHost",
+      })),
+      {
+        id: expect.any(Number),
+        serverId: "srv_other",
+        keyFingerprint: hostKeyFingerprint(makeOffer().daemonPublicKeyB64),
+        relayEndpoint: "relay.example:443",
+        kind: "newHost",
+      },
+    ]);
+    expect(store.getHosts()).toEqual([]);
+    expect(connectAttempts).toEqual([]);
+    store.syncHosts([]);
+  });
+
+  it("connects a saved host from a matching pairing link without asking", async () => {
+    const store = createPairingStore();
+    const requests = answerHostConfirmations(store, true);
+    const offerUrl = encodeOfferUrl(makeOffer());
+    await store.beginLinkPairing().submit(offerUrl);
+    expect(requests).toHaveLength(1);
+
+    await expect(store.importConnectionLink(offerUrl, "openProject")).resolves.toEqual({
+      status: "connected",
+      serverId: "srv_offer",
+    });
+    await expect(store.importConnectionLink(offerUrl, "hostRoot")).resolves.toEqual({
+      status: "connected",
+      serverId: "srv_offer",
+    });
+    await expect(store.beginLinkPairing().submit(offerUrl)).resolves.toMatchObject({
+      status: "connected",
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(store.getHosts()).toHaveLength(1);
+    store.syncHosts([]);
+  });
+
+  it("asks when a pairing link changes a saved host's relay", async () => {
+    const store = createPairingStore();
+    const requests = answerHostConfirmations(store, (_request, index) => index === 0);
+    await store.beginLinkPairing().submit(encodeOfferUrl(makeOffer()));
+    const savedHosts = store.getHosts();
+
+    // A changed key or a TLS downgrade is refused before any question (Fulcra relay pin).
+    const changedLinks = [
+      makeOffer({ relay: { endpoint: "relay.example:443", useTls: true } }),
+      makeOffer({ relay: { endpoint: "relay.other.test:443", useTls: true } }),
+    ].map(encodeOfferUrl);
+    for (const link of changedLinks) {
+      await expect(store.importConnectionLink(link, "openProject")).resolves.toEqual({
+        status: "cancelled",
+      });
+      await expect(store.beginLinkPairing().submit(link)).resolves.toEqual({
+        status: "cancelled",
+      });
+    }
+
+    expect(requests.map((request) => request.kind)).toEqual([
+      "newHost",
+      ...Array.from({ length: 4 }, () => "changedConnection"),
+    ]);
+    expect(store.getHosts()).toEqual(savedHosts);
+    store.syncHosts([]);
+  });
+
+  it("asks once per pairing flow and link when the host asks for a password", async () => {
+    const store = createPairingStore({ password: "correct-password" });
+    const requests = answerHostConfirmations(store, (_request, index) => index < 2);
+    const offerUrl = encodeOfferUrl(makeOffer());
+    const pairing = store.beginLinkPairing();
+
+    await expect(pairing.submit(offerUrl)).rejects.toThrow("Password required");
+    await expect(pairing.submit(offerUrl, "wrong-password")).rejects.toThrow();
+    expect(requests).toHaveLength(1);
+
+    // A new pairing flow for the same link asks again.
+    await expect(store.beginLinkPairing().submit(offerUrl, "wrong-password")).rejects.toThrow();
+    expect(requests).toHaveLength(2);
+
+    await expect(pairing.submit(offerUrl, "correct-password")).resolves.toMatchObject({
+      status: "connected",
+    });
+    expect(requests).toHaveLength(2);
+    expect(store.getHosts()[0]).toMatchObject({
+      serverId: "srv_offer",
+      password: "correct-password",
+    });
+
+    // A different link in the same flow asks again.
+    const otherRelayUrl = encodeOfferUrl(
+      makeOffer({ relay: { endpoint: "relay.example:443", useTls: true } }),
+    );
+    await expect(pairing.submit(otherRelayUrl, "correct-password")).resolves.toEqual({
+      status: "cancelled",
+    });
+    expect(requests).toHaveLength(3);
+    store.syncHosts([]);
+  });
+
+  it("continues a scanned link's password retry without asking again", async () => {
+    const store = createPairingStore({ password: "correct-password" });
+    const requests = answerHostConfirmations(store, true);
+    const link = encodeOfferUrl(makeOffer({ serverId: "srv_pair" }));
+
+    const outcome = await store.importConnectionLink(link, "hostRoot");
+    expect(outcome).toMatchObject({ status: "password_required", link });
+    expect(store.getHosts()).toHaveLength(0);
+    if (outcome.status !== "password_required") throw new Error("expected password_required");
+
+    await outcome.pairing.submit(outcome.link, "correct-password");
+    expect(requests).toHaveLength(1);
+    expect(store.getHosts()[0]).toMatchObject({
+      serverId: "srv_pair",
+      password: "correct-password",
+    });
+    store.syncHosts([]);
+  });
+
+  it("keeps a host confirmation pending until it is answered, and a newer one cancels it", async () => {
+    const store = createPairingStore();
+    const first = store.importConnectionLink(encodeOfferUrl(makeOffer()), "openProject");
+    await vi.waitFor(() =>
+      expect(store.getPendingHostConfirmation()).toMatchObject({ serverId: "srv_offer" }),
+    );
+
+    const second = store.importConnectionLink(
+      encodeOfferUrl(makeOffer({ serverId: "srv_second" })),
+      "openProject",
+    );
+    await expect(first).resolves.toEqual({ status: "cancelled" });
+    await vi.waitFor(() =>
+      expect(store.getPendingHostConfirmation()).toMatchObject({ serverId: "srv_second" }),
+    );
+
+    store.answerHostConfirmation(requirePendingConfirmation(store).id, true);
+    await expect(second).resolves.toEqual({ status: "connected", serverId: "srv_second" });
+    expect(store.getPendingHostConfirmation()).toBeNull();
+    expect(store.getHosts().map((host) => host.serverId)).toEqual(["srv_second"]);
+    store.syncHosts([]);
+  });
+
+  it("ignores an answer for a host confirmation that a newer one replaced", async () => {
+    const store = createPairingStore();
+    const first = store.importConnectionLink(encodeOfferUrl(makeOffer()), "openProject");
+    await vi.waitFor(() =>
+      expect(store.getPendingHostConfirmation()).toMatchObject({ serverId: "srv_offer" }),
+    );
+    const firstRequest = requirePendingConfirmation(store);
+    const second = store.importConnectionLink(
+      encodeOfferUrl(makeOffer({ serverId: "srv_second" })),
+      "openProject",
+    );
+    await expect(first).resolves.toEqual({ status: "cancelled" });
+
+    // Connect tapped on the first sheet as the second link arrives.
+    store.answerHostConfirmation(firstRequest.id, true);
+
+    const secondRequest = requirePendingConfirmation(store);
+    expect(secondRequest.serverId).toBe("srv_second");
+    store.answerHostConfirmation(secondRequest.id, false);
+    await expect(second).resolves.toEqual({ status: "cancelled" });
+    expect(store.getHosts()).toEqual([]);
+  });
+
+  it("waits for saved hosts to load before deciding whether a pairing link asks", async () => {
+    const savedHost = makeHost({
+      serverId: "srv_offer",
+      connections: [
+        {
+          id: "relay:wss:relay.example.test:443",
+          type: "relay",
+          relayEndpoint: "relay.example.test:443",
+          useTls: true,
+          daemonPublicKeyB64: makeOffer().daemonPublicKeyB64,
+          deviceId: "dev_testdevice000001",
+        },
+      ],
+    });
+    const store = createPairingStore({
+      storage: createMemoryHostRuntimeStorage({
+        "@paseo:daemon-registry": JSON.stringify([savedHost]),
+        "@paseo:e2e": "1",
+      }),
+    });
+    const requests = answerHostConfirmations(store, true);
+
+    await expect(
+      store.importConnectionLink(encodeOfferUrl(makeOffer()), "openProject"),
+    ).resolves.toEqual({ status: "connected", serverId: "srv_offer" });
+
+    expect(requests).toEqual([]);
+    expect(store.getHosts().map((host) => host.serverId)).toEqual(["srv_offer"]);
+    store.syncHosts([]);
+  });
+
+  it("adds hosts by address and the default localhost without asking", async () => {
+    const store = createPairingStore({
+      serverIdForHost: (host) =>
+        host.connections[0]?.type === "directTcp" ? `srv_${host.connections[0].endpoint}` : "",
+    });
+    const requests = answerHostConfirmations(store, false);
+
+    await store.boot();
+    await store.probeAndUpsertDirectConnection({ endpoint: "10.0.0.5:6767" });
+
+    expect(requests).toEqual([]);
+    expect(store.getHosts().map((host) => host.serverId)).toEqual([
+      "srv_localhost:6767",
+      "srv_10.0.0.5:6767",
+    ]);
+    store.syncHosts([]);
+  });
+
+  it("authenticates Remote SSH probes with the entered daemon password and stores it verbatim", async () => {
+    const store = createPairingStore({
+      password: " s3cret ",
+      serverIdForHost: (host) => (host.connections[0]?.type === "remoteSsh" ? "srv_ssh" : ""),
+    });
+    answerHostConfirmations(store, false);
+
+    await store.boot();
+    await store.probeAndUpsertRemoteSshConnection({
+      host: "deploy@example.com",
+      password: " s3cret ",
+    });
+
+    const host = store.getHosts().find((entry) => entry.serverId === "srv_ssh");
+    expect(host?.password).toBe(" s3cret ");
+    expect(host?.connections[0]).toMatchObject({
+      type: "remoteSsh",
+      host: "deploy@example.com",
+    });
+
+    // The fix promises the saved password is sent on every connection: a later
+    // cycle must authenticate from the stored profile alone.
+    await store.runProbeCycleNow("srv_ssh");
+    await waitForHostOnline(store, "srv_ssh");
+    store.syncHosts([]);
+  });
+
+  it("rejects Remote SSH probes without the daemon password, the way the daemon does", async () => {
+    const store = createPairingStore({
+      password: "s3cret",
+      serverIdForHost: (host) => (host.connections[0]?.type === "remoteSsh" ? "srv_ssh" : ""),
+    });
+    answerHostConfirmations(store, false);
+
+    await store.boot();
+    const failure = await store
+      .probeAndUpsertRemoteSshConnection({ host: "deploy@example.com" })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(failure).toBeInstanceOf(DaemonAuthenticationError);
+    expect((failure as DaemonAuthenticationError).reason).toBe("password_required");
+    expect(store.getHosts().find((entry) => entry.serverId === "srv_ssh")).toBeUndefined();
     store.syncHosts([]);
   });
 
@@ -4172,6 +4909,38 @@ describe("HostRuntimeStore initial connection hint bootstrap", () => {
     expect(store.getSnapshot("srv_deep")?.connectionStatus).toBe("error");
     store.syncHosts([]);
   });
+  it("stops connecting to a host removed while its first probe is pending", async () => {
+    useHostRuntimeClock();
+    const firstProbe = createDeferred<void>();
+    let connectCalls = 0;
+    const store = new HostRuntimeStore({
+      storage: createMemoryHostRuntimeStorage(),
+      deps: {
+        createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
+        connectToDaemon: async ({ host }) => {
+          connectCalls += 1;
+          if (connectCalls === 1) await firstProbe.promise;
+          return {
+            client: makeConnectedProbeClient(5) as unknown as DaemonClient,
+            serverId: host.serverId,
+            hostname: host.label ?? null,
+          };
+        },
+        getClientId: async () => "cid_test_removed_host",
+      },
+    });
+    await store.upsertDirectConnection({ serverId: "srv_removed", endpoint: "lan:6767" });
+    await vi.waitFor(() => expect(connectCalls).toBe(1));
+
+    await store.removeHost("srv_removed");
+    firstProbe.resolve();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(connectCalls).toBe(1);
+    expect(store.getSnapshot("srv_removed")).toBeNull();
+    expect(useSessionStore.getState().sessions["srv_removed"]).toBeUndefined();
+  });
+
   it("saves and reconnects a rejected saved host after changing its password", async () => {
     const store = humanConfirmedStore({
       storage: createMemoryHostRuntimeStorage(),

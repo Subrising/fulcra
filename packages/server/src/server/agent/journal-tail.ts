@@ -1,5 +1,5 @@
 import { timelineItemIdentity } from "@getpaseo/protocol/timeline-identity";
-import { TimelineProjection, selectProjectedTimelinePage } from "./timeline-projection.js";
+import { TimelineProjection } from "./timeline-projection.js";
 import type { AgentTimelineFetchResult, AgentTimelineRow } from "./agent-timeline-store-types.js";
 
 export type JournalTailRecord =
@@ -155,8 +155,7 @@ export class JournalTailWindow {
       .sort((left, right) => left.seq - right.seq);
     const projection = new TimelineProjection();
     for (const row of window) projection.append(row);
-    const page = selectProjectedTimelinePage({
-      rows: projection.getRows(),
+    const page = projection.selectPage({
       bounds: { minSeq, maxSeq: this.nextSeq - 1 },
       direction,
       cursorSeq: beforeSeq,

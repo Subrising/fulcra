@@ -2,13 +2,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import pino from "pino";
 
 import type { PaseoSpeechConfig } from "../bootstrap.js";
+import type { LocalSpeechModelId } from "./providers/local/models.js";
 import type { InitializedLocalSpeech } from "./providers/local/runtime.js";
 import type { SpeechToTextProvider, TextToSpeechProvider } from "./speech-provider.js";
 import type { TurnDetectionProvider } from "./turn-detection-provider.js";
-import { createSpeechService, findMissingRequiredLocalModels } from "./speech-runtime.js";
+import {
+  createSpeechService,
+  findMissingRequiredLocalModels,
+  LocalSpeechModelInUseError,
+} from "./speech-runtime.js";
 
-const { ensureLocalSpeechModelsMock, initializeLocalSpeechServicesMock } = vi.hoisted(() => ({
-  ensureLocalSpeechModelsMock: vi.fn(async () => ({})),
+const { ensureSherpaOnnxModelMock, initializeLocalSpeechServicesMock } = vi.hoisted(() => ({
+  ensureSherpaOnnxModelMock: vi.fn(async (_options: { signal?: AbortSignal }) => ""),
   initializeLocalSpeechServicesMock: vi.fn<(args: unknown) => Promise<InitializedLocalSpeech>>(),
 }));
 
@@ -34,9 +39,11 @@ vi.mock("./providers/openai/runtime.js", () => ({
   validateOpenAiCredentialRequirements: () => {},
 }));
 
-vi.mock("./providers/local/models.js", () => ({
-  ensureLocalSpeechModels: ensureLocalSpeechModelsMock,
-  listMissingLocalSpeechModels: vi.fn(async ({ modelIds }: { modelIds: string[] }) => modelIds),
+// FULCRA(speech-vad): keep the real install check. The VAD readiness test needs real files on disk.
+vi.mock("./providers/local/sherpa/model-downloader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./providers/local/sherpa/model-downloader.js")>()),
+  ensureSherpaOnnxModel: ensureSherpaOnnxModelMock,
+  deleteSherpaOnnxModel: vi.fn(async () => {}),
 }));
 
 function createStubStt(id: string): SpeechToTextProvider {
@@ -68,6 +75,8 @@ function createStubTurnDetection(id: string): TurnDetectionProvider {
 
 function rejectWhenAborted(signal?: AbortSignal): Promise<never> {
   return new Promise((_resolve, reject) => {
+    // Silero VAD is provisioned before the model download starts, so stop() can abort first.
+    if (signal?.aborted) return reject(signal.reason);
     signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
   });
 }
@@ -75,6 +84,7 @@ function rejectWhenAborted(signal?: AbortSignal): Promise<never> {
 function createSpeechConfig(providers: PaseoSpeechConfig["providers"]): PaseoSpeechConfig {
   return {
     providers,
+    localModelsDir: "/tmp/missing-local-speech-models",
     sttLanguages: {
       dictation: "en",
       voice: "en",
@@ -84,8 +94,8 @@ function createSpeechConfig(providers: PaseoSpeechConfig["providers"]): PaseoSpe
 
 describe("createSpeechService readiness", () => {
   beforeEach(() => {
-    ensureLocalSpeechModelsMock.mockReset();
-    ensureLocalSpeechModelsMock.mockResolvedValue({});
+    ensureSherpaOnnxModelMock.mockReset();
+    ensureSherpaOnnxModelMock.mockResolvedValue("");
     initializeLocalSpeechServicesMock.mockReset();
   });
 
@@ -169,7 +179,7 @@ describe("createSpeechService readiness", () => {
 
   it("aborts and joins an in-flight model download when stopped", async () => {
     let downloadSignal: AbortSignal | undefined;
-    ensureLocalSpeechModelsMock.mockImplementation(({ signal }: { signal?: AbortSignal }) => {
+    ensureSherpaOnnxModelMock.mockImplementation(({ signal }: { signal?: AbortSignal }) => {
       downloadSignal = signal;
       return rejectWhenAborted(signal);
     });
@@ -201,7 +211,8 @@ describe("createSpeechService readiness", () => {
     });
     runtime.start();
     await runtime.ready;
-    expect(ensureLocalSpeechModelsMock).toHaveBeenCalledOnce();
+    // Silero VAD is provisioned first (Fulcra), so the model download starts a little after ready.
+    await vi.waitFor(() => expect(ensureSherpaOnnxModelMock).toHaveBeenCalledOnce());
 
     await runtime.stop();
 
@@ -236,4 +247,98 @@ it("detects VAD-only absence even when every selected STT component is complete"
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+describe("createSpeechService settings changes", () => {
+  const dictationOnly = createSpeechConfig({
+    dictationStt: { provider: "local", enabled: true, explicit: true },
+    voiceTurnDetection: { provider: "local", enabled: false, explicit: true },
+    voiceStt: { provider: "local", enabled: false, explicit: true },
+    voiceTts: { provider: "local", enabled: false, explicit: true },
+  });
+  const nothingEnabled = createSpeechConfig({
+    dictationStt: { provider: "local", enabled: false, explicit: true },
+    voiceTurnDetection: { provider: "local", enabled: false, explicit: true },
+    voiceStt: { provider: "local", enabled: false, explicit: true },
+    voiceTts: { provider: "local", enabled: false, explicit: true },
+  });
+
+  function localSpeech(input: {
+    dictationStt: SpeechToTextProvider | null;
+    defaultModelIds: LocalSpeechModelId[];
+  }): InitializedLocalSpeech {
+    return {
+      turnDetectionService: null,
+      sttService: null,
+      ttsService: null,
+      dictationSttService: input.dictationStt,
+      localVoiceTtsProvider: null,
+      localModelConfig: {
+        modelsDir: "/tmp/missing-local-speech-models",
+        defaultModelIds: input.defaultModelIds,
+      },
+      availability: { configured: true, modelsDir: "/tmp/missing-local-speech-models" },
+      cleanup: () => {},
+    };
+  }
+
+  beforeEach(() => {
+    ensureSherpaOnnxModelMock.mockReset();
+    ensureSherpaOnnxModelMock.mockResolvedValue("");
+    initializeLocalSpeechServicesMock.mockReset();
+  });
+
+  it("applies new providers without a restart", async () => {
+    initializeLocalSpeechServicesMock.mockResolvedValue(
+      localSpeech({ dictationStt: createStubStt("dictation-local"), defaultModelIds: [] }),
+    );
+    const runtime = createSpeechService({
+      logger: pino({ level: "silent" }),
+      speechConfig: dictationOnly,
+    });
+    runtime.start();
+    await runtime.ready;
+    expect(runtime.getReadiness().dictation.available).toBe(true);
+
+    const disabled = new Promise<void>((resolve) => {
+      runtime.onReadinessChange((snapshot) => {
+        if (snapshot.dictation.reasonCode === "disabled") resolve();
+      });
+    });
+    initializeLocalSpeechServicesMock.mockResolvedValue(
+      localSpeech({ dictationStt: null, defaultModelIds: [] }),
+    );
+    runtime.reconfigure({ speechConfig: nothingEnabled });
+    await disabled;
+
+    expect(runtime.resolveDictationStt()).toBeNull();
+    await runtime.stop();
+  });
+
+  it("refuses to delete a model an enabled feature uses", async () => {
+    initializeLocalSpeechServicesMock.mockResolvedValue(
+      localSpeech({
+        dictationStt: createStubStt("dictation-local"),
+        defaultModelIds: ["parakeet-tdt-0.6b-v2-int8"],
+      }),
+    );
+    ensureSherpaOnnxModelMock.mockImplementation(({ signal }) => rejectWhenAborted(signal));
+    const runtime = createSpeechService({
+      logger: pino({ level: "silent" }),
+      speechConfig: dictationOnly,
+    });
+    runtime.start();
+    await runtime.ready;
+
+    const models = await runtime.listLocalModels();
+    expect(models.filter((model) => model.inUse).map((model) => model.spec.id)).toEqual([
+      "parakeet-tdt-0.6b-v2-int8",
+    ]);
+    await expect(runtime.deleteLocalModel("parakeet-tdt-0.6b-v2-int8")).rejects.toBeInstanceOf(
+      LocalSpeechModelInUseError,
+    );
+    await expect(runtime.deleteLocalModel("kokoro-int8-en-v0_19")).resolves.toBeUndefined();
+
+    await runtime.stop();
+  });
 });

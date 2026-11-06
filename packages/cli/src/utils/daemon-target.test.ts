@@ -1,6 +1,11 @@
+import { parseHostTarget } from "@getpaseo/protocol/host-target";
 import { test, expect } from "vitest";
 import { selectDaemonTarget, describeDaemonTarget } from "./daemon-target.js";
-import { resolveDaemonCredential, resolveClientPaseoHome } from "./client.js";
+import {
+  resolveDaemonCredential,
+  resolveClientPaseoHome,
+  buildDaemonConnectionCommandError,
+} from "./client.js";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -44,6 +49,34 @@ test("endpoint descriptions redact pairing material and credentials", () => {
   ).not.toContain("private");
 });
 
+test("a pairing offer without a URL prefix still redacts its key", () => {
+  // FULCRA(FU-657): Fulcra pairs only with v3 offers over TLS (one-time pairing grant).
+  const offer = {
+    v: 3,
+    serverId: "srv_example",
+    daemonPublicKeyB64: Buffer.alloc(32, 7).toString("base64"),
+    pairing: { id: "A".repeat(22), secret: "B".repeat(43), expiresAt: "2099-01-01T00:00:00.000Z" },
+    relay: { endpoint: "relay.example.com:443", useTls: true },
+  };
+  const host = `#offer=${Buffer.from(JSON.stringify(offer)).toString("base64url")}`;
+  const described = describeDaemonTarget({ kind: "endpoint", host });
+  expect(described).toBe("relay://relay.example.com:443/srv_example");
+  expect(described).not.toContain(offer.daemonPublicKeyB64);
+  expect(described).not.toContain(offer.pairing.secret);
+});
+
+test("malformed endpoint diagnostics never expose the supplied credential", () => {
+  const target = { kind: "endpoint" as const, host: "alice:example-secret@localhost:6767" };
+  expect(describeDaemonTarget(target)).not.toContain("example-secret");
+  for (const message of [
+    `Invalid connection ${target.host}`,
+    `Cannot connect to daemon at ${target.host}`,
+  ]) {
+    const diagnostic = buildDaemonConnectionCommandError({ target, error: new Error(message) });
+    expect(JSON.stringify(diagnostic)).not.toContain("example-secret");
+  }
+});
+
 test("CLI selects an explicit password before a matching local credential and never sends the latter remotely", async () => {
   const home = await mkdtemp(join(tmpdir(), "paseo-cli-credential-"));
   const previousPassword = process.env.PASEO_PASSWORD;
@@ -66,4 +99,35 @@ test("CLI selects an explicit password before a matching local credential and ne
     else process.env.PASEO_PASSWORD = previousPassword;
     await rm(home, { recursive: true, force: true });
   }
+});
+
+test.each(["/tmp/paseo.sock", "\\\\.\\pipe\\paseo", "localhost:6767", "[::1]:6767", "6767"])(
+  "validated bare target %s keeps its spelling in command hints",
+  (host) => {
+    expect(describeDaemonTarget({ kind: "endpoint", host })).toBe(host);
+  },
+);
+
+test("validated URI command hints preserve their transport address without credentials", () => {
+  const ssh = describeDaemonTarget({
+    kind: "endpoint",
+    host: "ssh://deploy@build-box:2222?daemonPort=7777&password=example-secret",
+  });
+  expect(ssh).not.toContain("example-secret");
+  expect(parseHostTarget(ssh)).toMatchObject({
+    kind: "ssh",
+    ssh: { host: "deploy@build-box", sshPort: 2222, daemonPort: 7777 },
+  });
+  const ws = describeDaemonTarget({
+    kind: "endpoint",
+    host: "wss://example.test/custom-ws?authorization=example-secret",
+  });
+  expect(ws).not.toContain("example-secret");
+  expect(new URL(ws).pathname).toBe("/custom-ws");
+  expect(
+    describeDaemonTarget({
+      kind: "endpoint",
+      host: "tcp://localhost:6767?daemonPort=example-secret&ssl=example-secret",
+    }),
+  ).not.toContain("example-secret");
 });

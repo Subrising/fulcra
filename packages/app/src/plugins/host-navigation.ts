@@ -62,7 +62,7 @@ export function usePluginHostNavigation(
           return "changes-unavailable" as const;
         const target = readChangesWorkspace(targetServerId, agentId);
         if (!target) return "changes-unavailable" as const;
-        const { workspace, workspaceId } = target;
+        const { workspaceId } = target;
         // Synchronous dispatch, re-read the actual client before touching the route/layout.
         if (runtime.getSnapshot(targetServerId)?.client !== snapshot.client)
           return "host-unavailable" as const;
@@ -70,7 +70,6 @@ export function usePluginHostNavigation(
         openExplorerSidebarView({
           isCompact,
           workspaceKey: buildWorkspaceTabPersistenceKey({ serverId: targetServerId, workspaceId }),
-          checkout: { serverId: targetServerId, cwd: workspace.workspaceDirectory, isGit: true },
           view: "changes",
         });
         return "requested" as const;

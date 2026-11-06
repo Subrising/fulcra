@@ -1,5 +1,5 @@
 import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
-import { useMemo, type ReactElement } from "react";
+import { Fragment, useMemo, type ReactElement } from "react";
 import { useTranslation } from "react-i18next";
 import { Text } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -22,6 +22,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import type { FilePanelOpenWithMenu } from "@/file-panels";
 import type { WorkspaceTabMenuEntry } from "@/screens/workspace/workspace-tab-menu";
 import type { Theme } from "@/styles/theme";
 
@@ -101,10 +102,13 @@ export function MobileTabTrailingAccessory({
   menuTestIDBase,
   presentationLabel,
   menuEntries,
+  openWith,
 }: {
   menuTestIDBase: string;
   presentationLabel: string;
   menuEntries: WorkspaceTabMenuEntry[];
+  /** A file tab's "Open with…" row and its page. */
+  openWith?: FilePanelOpenWithMenu;
 }): ReactElement {
   const { t } = useTranslation();
   const touch = useTouchTargets();
@@ -124,15 +128,16 @@ export function MobileTabTrailingAccessory({
         align="end"
         width={220}
         sheetTitle={presentationLabel}
+        pages={openWith?.pages}
         testID={menuTestIDBase}
       >
-        {menuEntries.map((entry) =>
-          entry.kind === "separator" ? (
-            <DropdownMenuSeparator key={entry.key} />
-          ) : (
-            <MobileTabDropdownMenuItem key={entry.key} entry={entry} />
-          ),
-        )}
+        {menuEntries.map((entry) => {
+          if (entry.kind === "separator") return <DropdownMenuSeparator key={entry.key} />;
+          if (entry.kind === "file-panel-open-with") {
+            return <Fragment key={entry.key}>{openWith?.trigger}</Fragment>;
+          }
+          return <MobileTabDropdownMenuItem key={entry.key} entry={entry} />;
+        })}
       </DropdownMenuContent>
     </DropdownMenu>
   );

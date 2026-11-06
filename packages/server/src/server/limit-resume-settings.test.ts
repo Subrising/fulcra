@@ -43,7 +43,7 @@ afterEach(() => {
 
 test.each([false, true])(
   "mutable preference %s is sidecar-only and survives return to new reader",
-  (enabled) => {
+  async (enabled) => {
     const root = home();
     const config = {
       version: 1 as const,
@@ -53,7 +53,8 @@ test.each([false, true])(
     savePersistedConfig(root, config);
     const before = readFileSync(path.join(root, "config.json"), "utf8");
     const store = new DaemonConfigStore(root, initial());
-    expect(store.patch({ autoResumeOnLimit: enabled }).autoResumeOnLimit).toBe(enabled);
+    // FULCRA(FU-657): upstream v0.15 made DaemonConfigStore.patch() async.
+    expect((await store.patch({ autoResumeOnLimit: enabled })).autoResumeOnLimit).toBe(enabled);
     expect(readFileSync(path.join(root, "config.json"), "utf8")).toBe(before);
     expect(readLimitResumeSetting(root)).toBe(enabled);
     expect(readPersistedConfig(root).daemon?.autoResumeOnLimit).toBe(enabled);
@@ -115,10 +116,11 @@ test("newer sidecar wins over migrated/stale main value and unrelated saves", ()
   ).toBeUndefined();
 });
 
-test("stale store and unrelated config updates preserve preferences and identities", () => {
+test("stale store and unrelated config updates preserve preferences and identities", async () => {
+  // FULCRA(FU-657): upstream v0.15 made DaemonConfigStore.patch() async.
   const root = home();
   const store = new DaemonConfigStore(root, initial());
-  store.patch({ autoResumeOnLimit: false });
+  await store.patch({ autoResumeOnLimit: false });
   const baseline = loadPersistedConfig(root);
   savePersistedConfig(root, {
     ...baseline,
@@ -126,9 +128,9 @@ test("stale store and unrelated config updates preserve preferences and identiti
     integrations: { oauthClientIds: { drive: "fixture-public-client" } },
   });
   const before = readFileSync(path.join(root, "config.json"), "utf8");
-  store.patch({ autoResumeOnLimit: true });
+  await store.patch({ autoResumeOnLimit: true });
   expect(readFileSync(path.join(root, "config.json"), "utf8")).toBe(before);
-  store.patch({ appendSystemPrompt: "unrelated update" });
+  await store.patch({ appendSystemPrompt: "unrelated update" });
   expect(readLimitResumeSetting(root)).toBe(true);
   expect(loadPersistedConfig(root).integrations).toEqual({
     oauthClientIds: { drive: "fixture-public-client" },
@@ -136,15 +138,16 @@ test("stale store and unrelated config updates preserve preferences and identiti
   expect(loadPersistedConfig(root).daemon?.listen).toBe("127.0.0.1:9999");
 });
 
-test("failed live application restores the prior preference without rewriting main", () => {
+test("failed live application restores the prior preference without rewriting main", async () => {
+  // FULCRA(FU-657): upstream v0.15 made DaemonConfigStore.patch() async.
   const root = home();
   const store = new DaemonConfigStore(root, initial());
-  store.patch({ autoResumeOnLimit: false });
+  await store.patch({ autoResumeOnLimit: false });
   const before = readFileSync(path.join(root, "config.json"), "utf8");
   store.onApply(() => {
     throw new Error("application refused");
   });
-  expect(() => store.patch({ autoResumeOnLimit: true })).toThrow("application refused");
+  await expect(store.patch({ autoResumeOnLimit: true })).rejects.toThrow("application refused");
   expect(store.get().autoResumeOnLimit).toBe(false);
   expect(new DaemonConfigStore(root, initial()).get().autoResumeOnLimit).toBe(false);
   expect(readFileSync(path.join(root, "config.json"), "utf8")).toBe(before);
@@ -197,7 +200,7 @@ const oldApp =
 const oldExecutable = path.join(oldApp, "Contents/MacOS/Fulcra");
 test.runIf(process.platform === "darwin" && existsSync(oldExecutable))(
   "exact candidate13 reader accepts all six combined preferences and binary rollback/return",
-  () => {
+  async () => {
     const asar = path.join(oldApp, "Contents/Resources/app.asar");
     expect(createHash("sha256").update(readFileSync(asar)).digest("hex")).toBe(
       "c45c1ff45c6916620560140fa229a5157016a13031bc9011caac7d52f96d9114",
@@ -255,7 +258,10 @@ catch(error) { console.log(JSON.stringify({accepted:false,message:error.message}
     for (const { mode, enabled } of (["all", "off", "primes"] as const).flatMap((selectedMode) =>
       [false, true].map((selectedResume) => ({ mode: selectedMode, enabled: selectedResume })),
     )) {
-      expect(store.patch({ notificationMode: mode, autoResumeOnLimit: enabled })).toMatchObject({
+      // FULCRA(FU-657): upstream v0.15 made DaemonConfigStore.patch() async.
+      expect(
+        await store.patch({ notificationMode: mode, autoResumeOnLimit: enabled }),
+      ).toMatchObject({
         notificationMode: mode,
         autoResumeOnLimit: enabled,
       });

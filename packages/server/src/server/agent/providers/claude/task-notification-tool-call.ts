@@ -12,6 +12,7 @@ const OptionalNonEmptyTrimmedStringSchema = z.preprocess(
 );
 
 const TaskNotificationEnvelopeSchema = z.object({
+  notificationId: z.string().optional(),
   messageId: z.string().nullable(),
   taskId: z.string().nullable(),
   toolUseId: z.string().nullable(),
@@ -35,7 +36,9 @@ const TaskNotificationUserContentSchema = z.union([
 
 const TaskNotificationHistoryRecordSchema = z
   .object({
+    notificationId: z.string().optional(),
     type: z.string().optional(),
+    operation: z.string().optional(),
     subtype: z.string().optional(),
     uuid: z.string().optional(),
     message_id: z.string().optional(),
@@ -52,6 +55,7 @@ const TaskNotificationHistoryRecordSchema = z
 const MapTaskNotificationUserContentToToolCallInputSchema = z.object({
   content: z.unknown(),
   messageId: z.string().optional().nullable(),
+  notificationId: z.string().optional(),
 });
 
 export type TaskNotificationEnvelope = z.infer<typeof TaskNotificationEnvelopeSchema>;
@@ -119,6 +123,37 @@ function collectUserContentParts(content: TaskNotificationUserContent): string[]
   return parts;
 }
 
+function containsMarker(value: unknown): boolean {
+  return typeof value === "string" && value.includes(TASK_NOTIFICATION_MARKER);
+}
+
+/**
+ * FULCRA(FU-472): a cheap check before the zod parse. It returns false only for records that the
+ * parsers below always reject: a notification is a user record whose text or input holds the
+ * marker, a system task_notification record, or a queue record whose content holds the marker.
+ * Replay calls the parsers for every transcript record, so this keeps zod off most of them.
+ */
+function mayBeTaskNotificationRecord(record: unknown): boolean {
+  if (record === null || typeof record !== "object" || Array.isArray(record)) return true;
+  const { type, subtype, content, message } = record as Record<string, unknown>;
+  if (type === "system") return subtype === "task_notification";
+  if (type === "queue-operation") return containsMarker(content);
+  if (type !== "user") return false;
+  const userContent =
+    message !== null && typeof message === "object"
+      ? (message as Record<string, unknown>).content
+      : undefined;
+  if (typeof userContent === "string") return containsMarker(userContent);
+  if (!Array.isArray(userContent)) return false;
+  return userContent.some(
+    (block) =>
+      block !== null &&
+      typeof block === "object" &&
+      (containsMarker((block as Record<string, unknown>).text) ||
+        containsMarker((block as Record<string, unknown>).input)),
+  );
+}
+
 function extractUserContentText(content: unknown): string | null {
   const parsedContent = TaskNotificationUserContentSchema.safeParse(content);
   if (!parsedContent.success) {
@@ -155,6 +190,7 @@ function parseTaskNotificationFromUserContent(
   }
 
   return TaskNotificationEnvelopeSchema.parse({
+    notificationId: parsedInput.data.notificationId,
     messageId: toNonEmptyString(parsedInput.data.messageId),
     taskId: readTaskNotificationTagValue({ text: rawText, tagName: "task-id" }),
     toolUseId:
@@ -170,6 +206,7 @@ function parseTaskNotificationFromUserContent(
 }
 
 function parseTaskNotificationFromSystemRecord(record: unknown): TaskNotificationEnvelope | null {
+  if (!mayBeTaskNotificationRecord(record)) return null;
   const parsedRecord = TaskNotificationHistoryRecordSchema.safeParse(record);
   if (!parsedRecord.success) {
     return null;
@@ -186,6 +223,7 @@ function parseTaskNotificationFromSystemRecord(record: unknown): TaskNotificatio
   const rawText = toNonEmptyString(systemRecord.content);
 
   return TaskNotificationEnvelopeSchema.parse({
+    notificationId: systemRecord.notificationId,
     messageId: toNonEmptyString(systemRecord.uuid) ?? toNonEmptyString(systemRecord.message_id),
     taskId:
       toNonEmptyString(systemRecord.task_id) ??
@@ -212,25 +250,82 @@ function parseTaskNotificationFromSystemRecord(record: unknown): TaskNotificatio
   });
 }
 
+/** Normalize notification identity for one transcript traversal. Queue bookkeeping and delivery
+ * are separate records of the same occurrence; each source counts repeated identical bodies
+ * independently so the second event is not merged with the first. */
+export async function* assignTaskNotificationReplayIds<T>(
+  entries: AsyncIterable<T>,
+): AsyncGenerator<T> {
+  const occurrences = new Map<string, Map<string, number>>();
+  for await (const entry of entries) {
+    if (!mayBeTaskNotificationRecord(entry)) {
+      yield entry;
+      continue;
+    }
+    const record = TaskNotificationHistoryRecordSchema.safeParse(entry);
+    if (!record.success) {
+      yield entry;
+      continue;
+    }
+    const data = record.data;
+    const envelope =
+      data.type === "user"
+        ? parseTaskNotificationFromUserContent({ content: data.message?.content })
+        : parseTaskNotificationFromSystemRecord(data);
+    if (!envelope?.taskId || !data.type) {
+      yield entry;
+      continue;
+    }
+    const signature = taskNotificationReplaySignature(envelope);
+    const source = data.type === "queue-operation" ? `queue-${data.operation}` : data.type;
+    const counts = occurrences.get(signature) ?? new Map<string, number>();
+    const occurrence = (counts.get(source) ?? 0) + 1;
+    counts.set(source, occurrence);
+    occurrences.set(signature, counts);
+    yield { ...entry, notificationId: `task_notification_${signature}_${occurrence}` };
+  }
+}
+
+function taskNotificationReplaySignature(envelope: TaskNotificationEnvelope): string {
+  // Known fields are canonical across XML user/queue records and structured system records.
+  // Keep the remaining body too: Monitor events share a summary but carry different <event>s.
+  const remainder = (envelope.rawText ?? "")
+    .replace(/<\/?task-notification>/gi, "")
+    .replace(
+      /<(task-id|tool-use-id|tool_use_id|status|summary|output-file|output_file)>[\s\S]*?<\/\1>/gi,
+      "",
+    )
+    .trim();
+  return createHash("sha1")
+    .update(
+      JSON.stringify([
+        envelope.taskId,
+        envelope.toolUseId,
+        envelope.status,
+        envelope.summary,
+        envelope.outputFile,
+        remainder,
+      ]),
+    )
+    .digest("hex");
+}
+
 function normalizeTaskNotificationCallIdSegment(segment: string): string | null {
   const normalized = segment.trim().replace(/[^a-zA-Z0-9._:-]+/g, "_");
   return normalized.length > 0 ? normalized : null;
 }
 
 function buildTaskNotificationCallId(envelope: TaskNotificationEnvelope): string {
+  if (envelope.notificationId) return envelope.notificationId;
   const messageSegment = envelope.messageId
     ? normalizeTaskNotificationCallIdSegment(envelope.messageId)
     : null;
-  if (messageSegment) {
-    return `task_notification_${messageSegment}`;
-  }
+  if (messageSegment) return `task_notification_${messageSegment}`;
 
   const taskSegment = envelope.taskId
     ? normalizeTaskNotificationCallIdSegment(envelope.taskId)
     : null;
-  if (taskSegment) {
-    return `task_notification_${taskSegment}`;
-  }
+  if (taskSegment) return `task_notification_${taskSegment}`;
 
   const seed =
     [envelope.status, envelope.summary, envelope.outputFile, envelope.rawText]
@@ -320,6 +415,7 @@ function toTaskNotificationToolCall(
 }
 
 export function isTaskNotificationUserContent(content: unknown): boolean {
+  if (!mayBeTaskNotificationRecord({ type: "user", message: { content } })) return false;
   const rawText = extractUserContentText(content);
   if (!rawText) {
     return false;
@@ -348,19 +444,22 @@ export function mapTaskNotificationSystemRecordToToolCall(
 }
 
 export function readTaskNotificationToolUseIdFromHistoryRecord(record: unknown): string | null {
+  return readTaskNotificationFromHistoryRecord(record)?.toolUseId ?? null;
+}
+
+export function readTaskNotificationFromHistoryRecord(
+  record: unknown,
+): TaskNotificationEnvelope | null {
+  if (!mayBeTaskNotificationRecord(record)) return null;
   const parsedRecord = TaskNotificationHistoryRecordSchema.safeParse(record);
-  if (!parsedRecord.success) {
-    return null;
-  }
+  if (!parsedRecord.success) return null;
   if (parsedRecord.data.type === "user" && parsedRecord.data.message) {
-    return (
-      parseTaskNotificationFromUserContent({
-        content: parsedRecord.data.message.content,
-        messageId: parsedRecord.data.uuid ?? parsedRecord.data.message_id,
-      })?.toolUseId ?? null
-    );
+    return parseTaskNotificationFromUserContent({
+      content: parsedRecord.data.message.content,
+      messageId: parsedRecord.data.uuid ?? parsedRecord.data.message_id,
+    });
   }
-  return parseTaskNotificationFromSystemRecord(record)?.toolUseId ?? null;
+  return parseTaskNotificationFromSystemRecord(record);
 }
 
 export function coerceTaskNotificationHistoryRecordToSystemMessage(

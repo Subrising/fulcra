@@ -12,6 +12,13 @@ import {
   toAgentPersistenceHandle,
 } from "../persistence-hooks.js";
 
+export class AgentNotFoundError extends Error {
+  constructor(agentId: string) {
+    super(`Agent not found: ${agentId}`);
+    this.name = "AgentNotFoundError";
+  }
+}
+
 interface PendingAgentInitialization {
   promise: Promise<ManagedAgent>;
   options: { broadcastTimeline: boolean };
@@ -103,7 +110,7 @@ export async function ensureAgentLoaded(
     const record = await deps.agentStorage.get(agentId);
     deps.requireRecord?.(record);
     if (!record) {
-      throw new Error(`Agent not found: ${agentId}`);
+      throw new AgentNotFoundError(agentId);
     }
 
     const validProviders = deps.validProviders ?? deps.agentManager.getRegisteredProviderIds();
@@ -144,6 +151,7 @@ export async function ensureAgentLoaded(
         owner: record.owner,
         // An existing record keeps its stored mode, missing or not; only brand-new sessions get the default.
         fromStoredRecord: true,
+        env: record.launchEnv,
       });
       deps.logger.info({ agentId, provider: record.provider }, "Agent created from stored config");
     }

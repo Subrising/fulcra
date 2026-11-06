@@ -49,10 +49,20 @@ export function findClaudeModel(
   return getClaudeModels().find((model) => model.id === normalizedModelId);
 }
 
+export function getClaudeContextWindowMaxTokens(
+  modelId: string | null | undefined,
+): number | undefined {
+  if (modelId?.trim().toLowerCase().endsWith("[1m]")) {
+    return 1_000_000;
+  }
+  return findClaudeModel(modelId)?.contextWindowMaxTokens;
+}
+
 /**
  * The Claude catalog: the models Claude Code reported (runtimeModels) overlaid with the manifest, or the
- * manifest alone when there is no report (the probe failed or timed out). Models named in Claude
- * settings.json are appended either way.
+ * manifest alone when there is no report (the probe failed or timed out). Models that need discovery
+ * (Mythos) are offered only when Claude Code reported them. Models named in Claude settings.json are
+ * appended either way.
  */
 export async function getClaudeModelsWithSettings(
   logger: Logger,
@@ -62,7 +72,12 @@ export async function getClaudeModelsWithSettings(
   signal?: AbortSignal,
 ): Promise<AgentModelDefinition[]> {
   signal?.throwIfAborted();
-  const manifestModels = getClaudeModels(claudeCodeVersion);
+  const discoveredModelIds = new Set(
+    (runtimeModels ?? [])
+      .map((model) => normalizeClaudeRuntimeModelId(model.resolvedModel ?? model.value))
+      .filter((id): id is string => id !== null),
+  );
+  const manifestModels = getClaudeManifestModels(claudeCodeVersion, discoveredModelIds);
   const baseModels = runtimeModels?.length
     ? mergeClaudeRuntimeCatalog({ runtimeModels, manifestModels })
     : manifestModels;
@@ -83,7 +98,10 @@ export async function getClaudeModelsWithSettings(
       }
       continue;
     }
-    models.push(model);
+    const manifestModel = getClaudeModels(claudeCodeVersion).find(
+      (candidate) => candidate.id === model.id,
+    );
+    models.push({ ...manifestModel, ...model });
   }
 
   return models;

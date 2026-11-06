@@ -165,6 +165,27 @@ it("preserves a relayed sender and the explicit notice opt-out", async () => {
   ]);
 });
 
+// FULCRA(FU-657): 0.2.43 hosts lack --behavior; steer and queue travel as their older flags.
+it.each([
+  ["steer", ["--steer"]],
+  ["queue", ["--queue"]],
+  ["interrupt", ["--behavior", "interrupt"]],
+] as const)(
+  "relays an explicit --behavior %s as flags an older host knows",
+  async (behavior, flags) => {
+    await sshSend({
+      route,
+      agentId: "target",
+      prompt: "explicit",
+      sender: { agentId: "sender", serverId: "original" },
+      localServerId: "relay",
+      localHost: "relay host",
+      options: { daemonTarget: { kind: "instance", home: "/local" }, behavior },
+    });
+    expect(JSON.parse(wire).flags).toEqual(["--from", "sender@original", ...flags]);
+  },
+);
+
 it("relays the source host's own-lead check to the destination (FU-402)", async () => {
   await sshSend({
     route,

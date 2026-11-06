@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { afterEach, describe, expect, test } from "vitest";
 import pino from "pino";
 import net from "node:net";
@@ -264,8 +265,14 @@ describe("ConnectionOfferV3 (daemon E2E)", () => {
         cause: err,
       });
     } finally {
-      proc.kill();
-      await rm(tempHome, { recursive: true, force: true });
+      // Wait for the supervisor to exit before the home is removed. A worker that still writes
+      // into it makes rm fail with ENOTEMPTY.
+      if (proc.exitCode === null && proc.signalCode === null) {
+        const exited = once(proc, "exit");
+        proc.kill();
+        await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 5000).unref())]);
+      }
+      await rm(tempHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }, 30000);
 });

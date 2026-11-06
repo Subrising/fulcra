@@ -74,7 +74,9 @@ function CatalogTile({ entry, width, installing, onInstall }: CatalogTileProps) 
         )}
       </View>
       <View style={styles.details}>
-        <Text style={styles.name}>{entry.title}</Text>
+        <Text style={styles.name} numberOfLines={1}>
+          {entry.title}
+        </Text>
         <View style={styles.metaRow}>
           {/* The catalog is the ACP registry, so every entry it offers is an ACP provider. */}
           <StatusBadge label={t("providerCatalog.types.acp")} size="xs" />

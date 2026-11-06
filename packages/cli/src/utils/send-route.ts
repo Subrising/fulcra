@@ -133,8 +133,11 @@ function relayFlags(input: {
     ...(sender?.outboundParent ? ["--outbound-parent", sender.outboundParent] : []),
     ...(sender?.refusal ? ["--outbound-refusal", sender.refusal] : []),
     ...(options.notifyOnFinish === false ? ["--no-notify-on-finish"] : []),
-    ...(options.steer ? ["--steer"] : []),
-    ...(options.queue ? ["--queue"] : []),
+    ...(options.steer || options.behavior === "steer" ? ["--steer"] : []),
+    ...(options.queue || options.behavior === "queue" ? ["--queue"] : []),
+    // FULCRA(FU-657): 0.2.43 hosts know only --steer and --queue. No older flag means interrupt,
+    // so an explicit interrupt keeps --behavior: an older host refuses it instead of queueing.
+    ...(options.behavior === "interrupt" ? ["--behavior", "interrupt"] : []),
   ];
 }
 

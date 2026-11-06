@@ -256,7 +256,10 @@ async function measure(page: Page) {
       })
       .map((el) => el.textContent?.slice(0, 60) ?? "");
     // Every visible sidebar control, including the footer outside the scroll, and every page header button.
-    const header = document.querySelector('[data-testid="composer-dock-header"]');
+    // FULCRA(FU-657): upstream v0.15.0 draws the phone header as islands (compact-header), not the composer-dock header.
+    const header = document.querySelector(
+      '[data-testid="composer-dock-header"], [data-testid="compact-header"]',
+    );
     const headerButtons = header
       ? [...header.querySelectorAll<HTMLElement>('[role="button"], button')]
       : [];

@@ -183,6 +183,8 @@ it("projects labels into the actual sidebar entries while respecting newer autho
   const projected = applySidebarConversationLabels(model(), labels());
   const full: WorkspaceDescriptor = {
     ...workspace(),
+    createdAt: null,
+    lastUserMessageAt: null,
     projectRootPath: "/tasks/" + uuid,
     workspaceDirectory: "/tasks/" + uuid,
     workspaceKind: "checkout",

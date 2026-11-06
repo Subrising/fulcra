@@ -25,7 +25,7 @@ test("Draft and catalog availability preserves permissions and requires a concre
     const payload = ServerInfoStatusPayloadSchema.parse(
       Reflect.get(server, "buildServerInfoStatusPayload").call(
         server,
-        { getPermissions: () => ["workspace.read"] },
+        { getPermissions: () => ["workspace.read"], getHostSourceId: () => "fixture-source" },
         true,
       ),
     );

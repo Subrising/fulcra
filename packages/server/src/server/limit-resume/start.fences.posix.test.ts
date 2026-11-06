@@ -71,7 +71,12 @@ async function fixture(nativeHooks = false) {
   let session!: CodexAppServerAgentSession;
   const accountEnv = { FULCRA_ACCOUNT_ID: "fixture-account-A" };
   const client = createTestAgentClient("codex");
+  let created = false;
   client.createSession = async (config) => {
+    // FULCRA(FU-657): since v0.15 a Codex thread is saved only after its first turn, so a reload
+    // of a never-run thread creates a new session. The first app-server is closed by then.
+    if (created) server = makeServer();
+    created = true;
     session = new CodexAppServerAgentSession(
       config,
       null,
@@ -272,7 +277,8 @@ test.each(["disable", "opt-out", "stop"])(
       expect(JSON.parse(await readFile(limitResumeFilePath(f.home), "utf8")).entries).toHaveLength(
         1,
       );
-      if (kind === "disable") f.config.patch({ autoResumeOnLimit: false });
+      // FULCRA(FU-657): upstream v0.15 made DaemonConfigStore.patch() async.
+      if (kind === "disable") await f.config.patch({ autoResumeOnLimit: false });
       if (kind === "opt-out")
         await f.manager.setLabels(f.agent.id, { [LIMIT_RESUME_OPT_OUT_LABEL]: "off" });
       if (kind === "stop") service.stop();
@@ -360,10 +366,23 @@ test("actual controller journal survives status marker; human takeover without a
     issueProvenance = server.issueProvenance;
     createTrustedContribution({ home: f.home })(server);
   });
-  store.created(f.agent.id, randomUUID(), f.home);
+  const taskId = randomUUID();
+  store.created(f.agent.id, taskId, f.home);
   store.db
     .prepare("UPDATE sessions SET mode='delegated',boot=?,grantedAt=1 WHERE id=?")
     .run(f.host.boot, f.agent.id);
+  // FULCRA(FU-657): since upstream v0.15 (#8393) the new Codex thread has no native id before its first turn, so
+  // the first controller send goes through the controller bootstrap. It needs the controller's own delivered
+  // creation of this agent, as a real controller-created worker has.
+  store.db.prepare("INSERT INTO deliveries VALUES (?,NULL,'create',?,'delivered',?)").run(
+    randomUUID(),
+    JSON.stringify({ provider: "codex", taskId }),
+    JSON.stringify({
+      id: f.agent.id,
+      cwd: f.manager.getAgent(f.agent.id)?.cwd,
+      runtimeInstanceId: f.manager.getAgent(f.agent.id)?.instanceId,
+    }),
+  );
   const message = randomUUID(),
     attempt = randomUUID(),
     prompt = "limited task";
@@ -424,6 +443,8 @@ test("actual controller journal survives status marker; human takeover without a
       }),
     );
     await f.server.waitForTurnStart();
+    // FULCRA(FU-657): real Codex announces the turn; since v0.15 that is when the new thread is saved.
+    f.server.startsTurn({ threadId: "limit-thread", turnId: "limit-turn-1" });
     f.server.completeTurn({
       threadId: "limit-thread",
       status: "failed",

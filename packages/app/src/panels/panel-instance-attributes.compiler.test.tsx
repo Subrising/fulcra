@@ -12,6 +12,7 @@ import React from "react";
 import { act } from "@testing-library/react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it } from "vitest";
+import * as workspaceTabsModel from "@/workspace-tabs/model";
 
 const require = createRequire(import.meta.url);
 type PanelAttributesModule = typeof import("./panel-instance-attributes");
@@ -35,6 +36,8 @@ function loadModule(compile: boolean): PanelAttributesModule {
   const module = { exports: {} as Record<string, unknown> };
   const load = (name: string) => {
     if (name === "@/panels/pane-context") return { usePaneContext: () => ({}) };
+    // FULCRA(FU-657): the Fulcra module also reads the tab persistence key from this model.
+    if (name === "@/workspace-tabs/model") return workspaceTabsModel;
     return require(name);
   };
   new Function("require", "module", "exports", result.code)(load, module, module.exports);

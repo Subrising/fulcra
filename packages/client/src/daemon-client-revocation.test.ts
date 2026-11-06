@@ -7,7 +7,10 @@ function expectedPairingRequired(trusted: boolean, code: number, wasConnected: b
 }
 
 // Test client state independently; channel/transport tests prove this marker's provenance.
-vi.mock("./daemon-client-relay-e2ee-transport.js", () => ({
+// FULCRA(FU-657): upstream v0.15.0 added describeEndpointSecurityClose to this module; keep the
+// real exports so the close path runs the real security classifier, and replace only the factory.
+vi.mock("./daemon-client-relay-e2ee-transport.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./daemon-client-relay-e2ee-transport.js")>()),
   createRelayE2eeTransportFactory: (args: { baseFactory: unknown }) => args.baseFactory,
 }));
 

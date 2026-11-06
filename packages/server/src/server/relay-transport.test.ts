@@ -383,6 +383,78 @@ describe("relay-transport control lifecycle", () => {
     expect(dataSocket.readyState).toBe(3);
   });
 
+  test("passes stable relay external session metadata when attaching data socket", async () => {
+    const logger = createMockLogger();
+    const daemonKeyPair = generateKeyPair();
+    const deviceKeyPair = generateKeyPair();
+    const home = mkdtempSync(join(tmpdir(), "fulcra-transport-test-"));
+    homes.push(home);
+    const registry = new DeviceRegistry(home);
+    registry.add(exportPublicKey(deviceKeyPair.publicKey), "Test phone");
+    const deviceGate = new RelayDeviceGate(new OfferStore(home), registry);
+    const attachedMetadata: unknown[] = [];
+    let resolveAttached: (() => void) | undefined;
+    const attached = new Promise<void>((resolve) => {
+      resolveAttached = resolve;
+    });
+    const controller = startRelayTransport({
+      logger: logger as unknown as pino.Logger,
+      attachSocket: async (_socket, metadata) => {
+        attachedMetadata.push(metadata);
+        resolveAttached?.();
+      },
+      relayEndpoint: "relay.paseo.sh:443",
+      relayUseTls: true,
+      serverId: "srv_test",
+      daemonKeyPair,
+      deviceGate,
+      createWebSocket: relay.createWebSocket,
+    });
+    controllers.push(controller);
+
+    const control = relay.sockets[0];
+    control.open();
+    control.message(JSON.stringify({ type: "sync", connectionIds: [] }), false);
+    control.message(JSON.stringify({ type: "connected", connectionId: "clt_test" }), false);
+
+    const dataSocket = relay.sockets[1];
+    dataSocket.open();
+    const clientTransport: Transport = {
+      send: (data) => dataSocket.message(data, data instanceof ArrayBuffer),
+      close: () => undefined,
+      onmessage: null,
+      onclose: null,
+      onerror: null,
+    };
+    dataSocket.onSend = (data) => {
+      clientTransport.onmessage?.({
+        data: data instanceof Uint8Array ? data.slice().buffer : data,
+        isBinary: data instanceof ArrayBuffer || data instanceof Uint8Array,
+      });
+    };
+    let resolveClientOpen: (() => void) | undefined;
+    const clientOpen = new Promise<void>((resolve) => {
+      resolveClientOpen = resolve;
+    });
+    const clientChannel = await createClientChannel(
+      clientTransport,
+      exportPublicKey(daemonKeyPair.publicKey),
+      { onopen: () => resolveClientOpen?.() },
+      { deviceKeyPair, serverId: "srv_test" },
+    );
+    await clientOpen;
+    await clientChannel.send(JSON.stringify({ type: "hello" }));
+    await attached;
+
+    expect(attachedMetadata).toEqual([
+      expect.objectContaining({
+        transport: "relay",
+        externalSessionKey: "session:clt_test",
+        relayConnectionId: "clt_test",
+      }),
+    ]);
+  });
+
   test("encrypted sends wait for the physical data socket callback", async () => {
     const logger = createMockLogger();
     const daemonKeyPair = generateKeyPair();

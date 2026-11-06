@@ -423,7 +423,16 @@ describe("CheckoutSession", () => {
       });
 
       expect(snapshotCalls).toEqual([
-        { cwd: "/repo", options: { force: true, includeForge: true, reason: "manual-refresh" } },
+        // FULCRA(FU-657): a manual refresh reads after any in-flight read.
+        {
+          cwd: "/repo",
+          options: {
+            force: true,
+            includeForge: true,
+            reason: "manual-refresh",
+            afterInFlight: true,
+          },
+        },
       ]);
       expect(refreshedCwds).toEqual(["/repo"]);
       expect(emitted).toEqual([
@@ -1879,7 +1888,7 @@ it("creates a PR from a restored exact base using the host metadata and a forge 
   try {
     git(root, "init", "-b", "main", repo);
     git(repo, "config", "user.name", "Test");
-    git(repo, "config", "user.email", "test@example.com");
+    git(repo, "config", "user.email", "paseo-e2e@users.noreply.github.com");
     git(repo, "commit", "--allow-empty", "-m", "base");
     git(root, "init", "--bare", remote);
     git(repo, "remote", "add", "origin", remote);
@@ -1890,7 +1899,6 @@ it("creates a PR from a restored exact base using the host metadata and a forge 
       paseoHome,
       worktreeSlug: "restored-pr",
       source: { kind: "branch-off", baseBranch: baseRef, branchName: "restored-pr" },
-      runSetup: false,
     });
     writeFileSync(join(created.worktreePath, "feature.txt"), "feature\n");
     git(created.worktreePath, "add", ".");
@@ -1906,7 +1914,6 @@ it("creates a PR from a restored exact base using the host metadata and a forge 
       paseoHome,
       worktreeSlug: "restored-pr",
       source: { kind: "restore", branchName: created.branchName, baseRef },
-      runSetup: false,
     });
     const requests: Array<Parameters<ForgeService["createPullRequest"]>[0]> = [];
     const service: ForgeService = {

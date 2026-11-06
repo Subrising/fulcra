@@ -6,6 +6,7 @@ import {
   seedMockAgentWorkspace,
   type MockAgentWorkspace,
 } from "../support/helpers/mock-agent";
+import { expectOpenTabCount } from "../support/helpers/sheet";
 import { getServerId } from "../support/helpers/server-id";
 import { closeMobileAgentSidebar, openMobileAgentSidebar } from "../support/helpers/sidebar";
 
@@ -179,12 +180,16 @@ async function addFinishedAgent(workspace: MockAgentWorkspace) {
 async function openCompactWorkspace(page: Page, workspace: MockAgentWorkspace) {
   await page.setViewportSize({ width: 390, height: 844 });
   await openAgentRoute(page, workspace);
+  await expect(page.getByText("Finish this turn.", { exact: true })).toBeVisible();
   await openMobileAgentSidebar(page);
 }
 
 async function markUnreadThenResumeChat(page: Page, workspaceId: string) {
   await test.step("interacting with the visible chat clears manual unread", async () => {
     await markAsUnread(page, workspaceId);
+    // FULCRA(FU-657): the close button sits in the first row, which scrolls with the list (FU-62, left-sidebar.tsx),
+    // so scroll back up to it as a user does.
+    await page.getByTestId("sidebar-close").scrollIntoViewIfNeeded();
     await closeMobileAgentSidebar(page);
     await page.getByRole("textbox", { name: "Message agent..." }).click();
     await openMobileAgentSidebar(page);
@@ -226,4 +231,46 @@ test("manual unread survives leaving the current workspace on compact layout", a
   await leaveMarkedWorkspaceAndReopenOnCompact(page, workspaces);
   await markUnreadThenResumeChat(page, workspaces.subject.workspaceId);
   await completeTurnAndLeaveOnCompact(page, workspaces);
+});
+
+async function reopenMarkedWorkspaceAfterBackgroundTurn(page: Page, workspace: MockAgentWorkspace) {
+  const route = page.url();
+  // End this app session before the turn, so its cached transcript cannot contain the new prompt.
+  await page.goto("about:blank");
+  await workspace.client.sendAgentMessage(
+    workspace.agentId,
+    "A turn completed while the app was closed.",
+  );
+  await workspace.client.waitForFinish(workspace.agentId, 20_000);
+  // Reopen the ordinary workspace route, without an agent open intent that would repair focus.
+  await page.goto(route);
+  await expect(page.getByRole("button", { name: /Switch tabs/ })).toBeVisible();
+}
+
+async function expectRestoredCompactChat(page: Page) {
+  await expectOpenTabCount(page, 1);
+  await expect(
+    page.getByText("A turn completed while the app was closed.", { exact: true }),
+  ).toBeVisible();
+}
+
+test("reopening a marked unread workspace restores only its agent tab and current history on compact layout", async ({
+  page,
+  workspaces,
+}) => {
+  test.setTimeout(120_000);
+  await test.step("open a finished chat with one main tab", async () => {
+    await openCompactWorkspace(page, workspaces.subject);
+    await closeMobileAgentSidebar(page);
+    await expectOpenTabCount(page, 1);
+    await expect(page.getByText("Finish this turn.", { exact: true })).toBeVisible();
+  });
+  await test.step("mark the current workspace unread, then close and reopen the app", async () => {
+    await openMobileAgentSidebar(page);
+    await markAsUnread(page, workspaces.subject.workspaceId);
+    await reopenMarkedWorkspaceAfterBackgroundTurn(page, workspaces.subject);
+  });
+  await test.step("restore the main tab without Explorer entries and load its latest history", async () => {
+    await expectRestoredCompactChat(page);
+  });
 });

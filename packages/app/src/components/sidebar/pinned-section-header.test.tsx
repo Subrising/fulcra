@@ -46,7 +46,7 @@ vi.mock("@/components/ui/button", () => ({
     </button>
   ),
 }));
-import { PinnedHostConnectionNotice } from "./pinned-section-header";
+import { PinnedHostConnectionNotice } from "./pinned-host-connection-notice";
 afterEach(cleanup);
 beforeEach(() => {
   f.status = "offline";

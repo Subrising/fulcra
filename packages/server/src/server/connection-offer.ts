@@ -33,6 +33,7 @@ export async function createConnectionOfferV3(args: {
   relay: { endpoint: string; useTls: boolean };
   pairing: ConnectionOffer["pairing"];
   hostLabel?: string;
+  minimumSecurityMode?: "protected";
 }): Promise<ConnectionOffer> {
   return ConnectionOfferV3Schema.parse({
     v: 3,
@@ -41,6 +42,7 @@ export async function createConnectionOfferV3(args: {
     relay: args.relay,
     pairing: args.pairing,
     hostLabel: args.hostLabel,
+    ...(args.minimumSecurityMode ? { minimumSecurityMode: args.minimumSecurityMode } : {}),
   });
 }
 

@@ -233,23 +233,20 @@ function createMcpRecordingAgentClients(recorder: LaunchRecorder) {
   };
 }
 
-async function assertAgentNotRunning(options: {
-  client: McpClient;
-  agentId: string;
-}): Promise<void> {
-  const statusResult = await options.client.callTool({
-    name: "get_agent_status",
-    args: { agentId: options.agentId, fullResult: true },
-  });
-  const payload = getStructuredContent(statusResult);
-  if (!payload) {
-    throw new Error("get_agent_status returned no structured payload");
-  }
-  const status = payload.status;
-  expect(["idle", "error"]).toContain(status);
-  if (status === "running" || status === "initializing") {
-    throw new Error(`Agent still running after blocking create_agent (status=${status})`);
-  }
+async function waitForAgentFinish(options: { client: McpClient; agentId: string }): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const result = await options.client.callTool({
+          // Fulcra compacts get_agent_status by default; the status needs the full result.
+          name: "get_agent_status",
+          args: { agentId: options.agentId, fullResult: true },
+        });
+        return getStructuredContent(result)?.status;
+      },
+      { timeout: 10000 },
+    )
+    .toBe("idle");
 }
 
 describe("agent MCP end-to-end (offline)", () => {
@@ -472,7 +469,6 @@ describe("agent MCP end-to-end (offline)", () => {
           provider: "claude/claude-test-model",
           mode: "bypassPermissions",
           initialPrompt,
-          background: false,
         },
       });
 
@@ -480,7 +476,7 @@ describe("agent MCP end-to-end (offline)", () => {
       agentId = typeof payload?.agentId === "string" ? payload.agentId : null;
       expect(agentId).toBeTruthy();
 
-      await assertAgentNotRunning({ client, agentId: agentId! });
+      await waitForAgentFinish({ client, agentId: agentId! });
 
       if (existsSync(filePath)) {
         const contents = await readFile(filePath, "utf8");
@@ -573,7 +569,6 @@ describe("agent MCP end-to-end (offline)", () => {
           provider: "claude/claude-test-model",
           mode: "bypassPermissions",
           initialPrompt: "reply with done and stop",
-          background: true,
         },
       });
       const payload = getStructuredContent(result);
@@ -708,7 +703,6 @@ describe("agent MCP end-to-end (offline)", () => {
           arguments: {
             agentId: childId,
             prompt: "fixture second child task",
-            background: true,
             notifyOnFinish: true,
           },
         });
@@ -1170,7 +1164,6 @@ describe("agent MCP end-to-end (offline)", () => {
           provider: "claude/claude-test-model",
           mode: "bypassPermissions",
           initialPrompt: "reply with done and stop",
-          background: true,
         },
       });
       const payload = getStructuredContent(result);
@@ -1194,7 +1187,6 @@ describe("agent MCP end-to-end (offline)", () => {
           provider: "claude/claude-test-model",
           mode: "bypassPermissions",
           initialPrompt: "reply with done and stop",
-          background: true,
         },
       });
       const disabledPayload = getStructuredContent(disabledResult);
@@ -1262,7 +1254,6 @@ describe("agent MCP end-to-end (offline)", () => {
           provider: "claude/claude-test-model",
           mode: "bypassPermissions",
           initialPrompt: "reply with done and stop",
-          background: true,
         },
       });
       const payload = getStructuredContent(result);
@@ -1277,67 +1268,6 @@ describe("agent MCP end-to-end (offline)", () => {
       });
       const injectedAgent = daemon.agentManager.getAgent(agentId!);
       expect(injectedAgent?.config.mcpServers?.paseo).toBeUndefined();
-    } finally {
-      if (agentId) {
-        await client.callTool({ name: "kill_agent", args: { agentId } });
-      }
-      await client.close();
-      await daemon.stop();
-      await rm(paseoHome, { recursive: true, force: true });
-      await rm(staticDir, { recursive: true, force: true });
-      await rm(agentCwd, { recursive: true, force: true });
-    }
-  }, 30_000);
-
-  test("create_agent with background initialPrompt reflects running state once the first turn starts", async () => {
-    const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-home-"));
-    const staticDir = await mkdtemp(path.join(os.tmpdir(), "paseo-static-"));
-    const agentCwd = await mkdtemp(path.join(os.tmpdir(), "paseo-agent-cwd-"));
-    const port = await getAvailablePort();
-
-    const daemonConfig: PaseoDaemonConfig = {
-      listen: `127.0.0.1:${port}`,
-      paseoHome,
-      corsAllowedOrigins: [],
-      hostnames: true,
-      mcpEnabled: true,
-      staticDir,
-      mcpDebug: false,
-      agentClients: createTestAgentClients(),
-      agentStoragePath: path.join(paseoHome, "agents"),
-    };
-
-    const daemon = await createPaseoDaemon(daemonConfig, pino({ level: "silent" }));
-    await daemon.start();
-
-    const client = await createMcpClient(`http://127.0.0.1:${port}/mcp/agents`);
-
-    let agentId: string | null = null;
-    try {
-      const result = await client.callTool({
-        name: "create_agent",
-        args: {
-          cwd: agentCwd,
-          title: "MCP background create",
-          provider: "codex/gpt-5.4-mini",
-          mode: "full-access",
-          initialPrompt: "Run exactly: sleep 30",
-          background: true,
-        },
-      });
-
-      const payload = getStructuredContent(result);
-      agentId = typeof payload?.agentId === "string" ? payload.agentId : null;
-      expect(agentId).toBeTruthy();
-      expect(payload?.status).toBe("running");
-
-      const statusResult = await client.callTool({
-        name: "get_agent_status",
-        args: { agentId, fullResult: true },
-      });
-      const statusPayload = getStructuredContent(statusResult);
-      expect(statusPayload?.status).toBe("running");
-      expect(statusPayload?.snapshot).toMatchObject({ id: agentId, status: "running" });
     } finally {
       if (agentId) {
         await client.callTool({ name: "kill_agent", args: { agentId } });
@@ -1494,7 +1424,6 @@ describe("agent MCP end-to-end (offline)", () => {
 
     const client = await createMcpClient(`http://127.0.0.1:${port}/mcp/agents`);
 
-    let agentId: string | null = null;
     try {
       const result = await client.callTool({
         name: "create_agent",
@@ -1504,29 +1433,13 @@ describe("agent MCP end-to-end (offline)", () => {
           provider: "codex/gpt-5.4-mini",
           mode: "full-access",
           initialPrompt: "Run exactly: sleep 30",
-          background: true,
         },
       });
 
-      const payload = getStructuredContent(result);
-      agentId = typeof payload?.agentId === "string" ? payload.agentId : null;
-      expect(agentId).toBeTruthy();
-
-      await assertAgentNotRunning({ client, agentId: agentId! });
-      const statusResult = await client.callTool({
-        name: "get_agent_status",
-        args: { agentId, fullResult: true },
-      });
-      const statusPayload = getStructuredContent(statusResult);
-      expect(statusPayload?.status).toBe("error");
-      const snapshot = statusPayload?.snapshot;
-      const lastError =
-        snapshot && typeof snapshot === "object" ? Reflect.get(snapshot, "lastError") : undefined;
-      expect(lastError).toContain("Initial turn failed to start");
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain("Initial turn failed to start");
+      expect(getStructuredContent(result)?.agentId).toBeUndefined();
     } finally {
-      if (agentId) {
-        await client.callTool({ name: "kill_agent", args: { agentId } });
-      }
       await client.close();
       await daemon.stop();
       await rm(paseoHome, { recursive: true, force: true });
@@ -1535,7 +1448,7 @@ describe("agent MCP end-to-end (offline)", () => {
     }
   }, 30_000);
 
-  test("create_agent with worktree is async and boots terminals only after setup success", async () => {
+  test("workspace creation owns async setup and terminal bootstrap before agent attachment", async () => {
     const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-home-"));
     const staticDir = await mkdtemp(path.join(os.tmpdir(), "paseo-static-"));
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "paseo-worktree-repo-"));
@@ -1594,22 +1507,30 @@ describe("agent MCP end-to-end (offline)", () => {
         stdio: "pipe",
       });
 
-      const result = await withTimeout({
+      const workspaceResult = await withTimeout({
         promise: client.callTool({
-          name: "create_agent",
+          name: "create_workspace",
           args: {
-            cwd: repoRoot,
-            title: "MCP worktree setup terminals",
-            provider: "claude/claude-test-model",
-            mode: "bypassPermissions",
-            initialPrompt: "say done and stop",
-            worktreeName: "mcp-worktree-setup-test",
+            isolation: "worktree",
+            path: repoRoot,
+            worktreeSlug: "mcp-worktree-setup-test",
             baseBranch: "main",
-            background: true,
           },
         }),
         timeoutMs: 2500,
-        label: "create_agent should not block on setup",
+        label: "create_workspace should not block on setup",
+      });
+      const workspace = getStructuredContent(workspaceResult);
+      if (typeof workspace?.workspaceId !== "string") throw new Error("Expected created workspace");
+      const result = await client.callTool({
+        name: "create_agent",
+        args: {
+          workspaceId: workspace.workspaceId,
+          title: "MCP worktree setup terminals",
+          provider: "claude/claude-test-model",
+          settings: { modeId: "bypassPermissions" },
+          initialPrompt: "say done and stop",
+        },
       });
 
       const payload = getStructuredContent(result);
@@ -1726,6 +1647,10 @@ test("computer-use job label works through the scratch MCP endpoint with one lea
     expect(result.isError, JSON.stringify(result)).not.toBe(true);
     const workerId = (result.structuredContent as { agentId: string }).agentId;
     if (!codexSession) throw new Error("Real Codex adapter session required");
+    // Real Codex announces the turn before it asks for consent. The thread counts as saved from
+    // then on, so the consent decisions reach the stored persistence.
+    const turnStart = await appServer.waitForTurnStart();
+    appServer.startsTurn({ threadId: String(turnStart.threadId), turnId: "turn-1" });
     const request = (app: string) => appServer.requestMcpElicitation(computerUseConsent(app));
     for (let i = 0; i < 3; i++) {
       request("VRoid Studio");

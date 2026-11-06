@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { View } from "react-native";
 import { Settings } from "lucide-react-native";
 import { withUnistyles } from "react-native-unistyles";
@@ -7,16 +8,13 @@ import { ToolbarButton, paneContentToolbarIconSize } from "@/components/ui/pane-
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { SettingsRow, SettingsSwitch } from "@/components/settings";
 import { SegmentedControl, type SegmentedControlOption } from "@/components/ui/segmented-control";
+import { Alert } from "@/components/ui/alert";
+import { useHosts } from "@/runtime/host-runtime";
 import { settingsStyles } from "@/styles/settings";
-import { usageCopy } from "./copy";
-import { useUsagePreferences } from "./display";
+import { useUsageSetting } from "./setting";
+import { useUsageDisplay } from "./display";
 import { useUsageInSidebar } from "./in-sidebar";
 import type { UsageDisplayAs } from "./preferences";
-
-const DISPLAY_AS_OPTIONS: SegmentedControlOption<UsageDisplayAs>[] = [
-  { value: "used", label: usageCopy.displayUsed, testID: "usage-display-used" },
-  { value: "remaining", label: usageCopy.displayRemaining, testID: "usage-display-remaining" },
-];
 
 const ACTION_TARGET = {
   minWidth: 48,
@@ -28,16 +26,27 @@ const ACTION_TARGET = {
 const ThemedSettings = withUnistyles(Settings);
 
 /** The shared usage preferences, opened from a cog as a popover or compact sheet. */
-export function UsageOptions() {
+export function UsageOptions({ serverId }: { serverId: string | null }) {
+  const setting = useUsageSetting(serverId);
+  const hostLabel = useHosts().find((host) => host.serverId === serverId)?.label ?? serverId;
+  const { t } = useTranslation();
+  const displayAsOptions: SegmentedControlOption<UsageDisplayAs>[] = [
+    { value: "used", label: t("providerUsage.displayUsed"), testID: "usage-display-used" },
+    {
+      value: "remaining",
+      label: t("providerUsage.displayRemaining"),
+      testID: "usage-display-remaining",
+    },
+  ];
   const compact = useIsCompactFormFactor();
-  const { display } = useUsagePreferences();
+  const { display } = useUsageDisplay([]);
   const { inSidebar, setInSidebar } = useUsageInSidebar();
   return (
     <DropdownMenu compactMode="sheet">
       <ToolbarButton
         kind="menu"
         style={ACTION_TARGET}
-        label={usageCopy.options}
+        label={t("providerUsage.options")}
         compact={compact}
         testID="usage-options-menu"
       >
@@ -49,21 +58,33 @@ export function UsageOptions() {
       <DropdownMenuContent
         align="end"
         width={340}
-        sheetTitle={usageCopy.options}
+        sheetTitle={t("providerUsage.options")}
         testID="usage-options-surface"
       >
         <View testID="usage-options-fields">
-          <SettingsSwitch
-            label={usageCopy.showInSidebar}
-            hint={usageCopy.showInSidebarHint}
-            value={inSidebar}
-            onValueChange={setInSidebar}
-            testID="usage-show-in-sidebar"
-          />
+          {setting.error ? <Alert variant="error" description={setting.error.message} /> : null}
+          {setting.supported ? (
+            <SettingsSwitch
+              label={t("providerUsage.checkUsage")}
+              hint={t("providerUsage.checkUsageHint", { host: hostLabel })}
+              disabled={!setting.ready}
+              value={setting.enabled}
+              onValueChange={setting.setEnabled}
+            />
+          ) : null}
+          <View style={setting.supported ? settingsStyles.rowBorder : undefined}>
+            <SettingsSwitch
+              label={t("providerUsage.showInSidebar")}
+              hint={t("providerUsage.showInSidebarHint")}
+              value={inSidebar}
+              onValueChange={setInSidebar}
+              testID="usage-show-in-sidebar"
+            />
+          </View>
           <View style={settingsStyles.rowBorder}>
-            <SettingsRow label={usageCopy.displayAs}>
+            <SettingsRow label={t("providerUsage.displayAs")}>
               <SegmentedControl
-                options={DISPLAY_AS_OPTIONS}
+                options={displayAsOptions}
                 value={display.displayAs}
                 onValueChange={display.setDisplayAs}
                 size="sm"

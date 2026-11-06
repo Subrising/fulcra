@@ -1,10 +1,14 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { afterEach, beforeEach, expect, test } from "vitest";
+import { expectKeptByCleanupGuard, watchCleanupKeeps } from "./test-utils/cleanup-guard-keep.js";
 
 import { getFullAccessConfig } from "./daemon-e2e/agent-configs.js";
+import { createWorktree } from "../utils/worktree.js";
 import {
   createDaemonTestContext,
   DaemonClient,
@@ -52,6 +56,32 @@ function createGitRepo(): string {
     stdio: "pipe",
   });
   return repoDir;
+}
+
+async function runCli(args: string[], cwd: string): Promise<string> {
+  const result = await promisify(execFile)(
+    process.execPath,
+    [
+      "--conditions=source",
+      "--import",
+      import.meta.resolve("tsx"),
+      fileURLToPath(new URL("../../../cli/src/index.ts", import.meta.url)),
+      "--host",
+      `127.0.0.1:${ctx.daemon.port}`,
+      ...args,
+    ],
+    {
+      cwd,
+      env: {
+        ...Object.fromEntries(
+          Object.entries(process.env).filter(([key]) => !key.startsWith("PASEO_")),
+        ),
+        PASEO_HOME: ctx.daemon.paseoHome,
+      },
+      timeout: 20000,
+    },
+  );
+  return result.stdout;
 }
 
 async function createLocalWorkspace(cwd: string, title: string): Promise<string> {
@@ -247,6 +277,84 @@ test("renaming a workspace updates every subscribed client", async () => {
     await observer.close();
   }
 });
+
+test.each(["worktree", "workspace"] as const)(
+  "%s archive keeps the guarded worktree in a warm CLI listing (FU-657)",
+  async (command) => {
+    const repoDir = createGitRepo();
+    const created = await ctx.client.createWorkspace({
+      source: {
+        kind: "worktree",
+        cwd: repoDir,
+        worktreeSlug: "cached-worktree",
+        baseBranch: "main",
+      },
+    });
+    const workspace = created.workspace;
+    if (!workspace?.workspaceDirectory) {
+      throw new Error(created.error ?? "Failed to create worktree workspace");
+    }
+    const worktreePath = workspace.workspaceDirectory;
+    const name = path.basename(worktreePath);
+    const before = JSON.parse(await runCli(["worktree", "ls", "--json"], repoDir));
+    expect(before).toEqual([expect.objectContaining({ name, cwd: worktreePath })]);
+
+    const keeps = watchCleanupKeeps();
+    await runCli(
+      [command, "archive", command === "worktree" ? name : workspace.id, "--json"],
+      repoDir,
+    );
+    expectKeptByCleanupGuard(keeps, worktreePath);
+    // The guard keeps the git registration with the directory (its removal is git worktree remove).
+    expect(
+      execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: repoDir }).toString(),
+    ).toContain(worktreePath);
+    const after = JSON.parse(await runCli(["worktree", "ls", "--json"], repoDir));
+    console.log(
+      `${command} archive: warm listing=${JSON.stringify(before)}\nimmediate listing=${JSON.stringify(after)}`,
+    );
+    // The listing reads the git registration, so the kept worktree stays listed.
+    expect(after).toEqual(before);
+  },
+  60000,
+);
+
+test("archiving an unregistered worktree in a bare repo keeps it listed in the main checkout (FU-657)", async () => {
+  const sourceRepo = createGitRepo();
+  const repoRoot = makeTempDir("workspace-archive-bare-");
+  const bareRepo = path.join(repoRoot, "repo.git");
+  const mainCheckout = path.join(repoRoot, "main");
+  execFileSync("git", ["clone", "--bare", sourceRepo, bareRepo], { stdio: "pipe" });
+  execFileSync("git", ["worktree", "add", mainCheckout, "main"], {
+    cwd: bareRepo,
+    stdio: "pipe",
+  });
+  const { worktreePath } = await createWorktree({
+    cwd: mainCheckout,
+    source: { kind: "branch-off", baseBranch: "main", branchName: "cached-bare-worktree" },
+    worktreeSlug: "cached-bare-worktree",
+
+    paseoHome: ctx.daemon.paseoHome,
+  });
+  expect(await activeWorkspaceIds()).toEqual(new Set());
+  const name = path.basename(worktreePath);
+  const before = JSON.parse(await runCli(["worktree", "ls", "--json"], mainCheckout));
+  expect(before).toEqual([expect.objectContaining({ name, cwd: worktreePath })]);
+
+  const keeps = watchCleanupKeeps();
+  await runCli(["worktree", "archive", name, "--json"], mainCheckout);
+  expectKeptByCleanupGuard(keeps, worktreePath);
+  // The guard keeps the git registration with the directory (its removal is git worktree remove).
+  expect(
+    execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: mainCheckout }).toString(),
+  ).toContain(worktreePath);
+  const after = JSON.parse(await runCli(["worktree", "ls", "--json"], mainCheckout));
+  console.log(
+    `bare repo archive: warm listing=${JSON.stringify(before)}\nimmediate listing=${JSON.stringify(after)}`,
+  );
+  // The listing reads the git registration, so the kept worktree stays listed.
+  expect(after).toEqual(before);
+}, 60000);
 
 test("archiving the last reference to a worktree removes it from disk regardless of the disk flag", async () => {
   const repoDir = createGitRepo();

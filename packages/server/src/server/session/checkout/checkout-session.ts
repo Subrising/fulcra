@@ -234,12 +234,39 @@ export class CheckoutSession {
     }
   }
 
-  async handleStatusRequest(msg: CheckoutStatusRequest): Promise<void> {
+  async handleStatusRequest(
+    msg: CheckoutStatusRequest,
+    options?: { refresh?: boolean },
+  ): Promise<void> {
     const { cwd, requestId } = msg;
     const resolvedCwd = expandTilde(cwd);
 
     try {
-      const snapshot = await this.workspaceGitService.getSnapshot(resolvedCwd);
+      let snapshot: WorkspaceGitRuntimeSnapshot;
+      if (options?.refresh) {
+        // FULCRA(FU-657): the first-open fresh read can take seconds. Waiting for it made the workspace
+        // header and launcher appear late and move the screen. Start it, answer with the service's
+        // cached snapshot (or join the read when there is none), then push the fresh result as a status
+        // update. Only a real change since the cached read changes the screen.
+        const fresh = this.workspaceGitService.getSnapshot(resolvedCwd, {
+          force: true,
+          includeForge: false,
+          reason: "checkout-status-first-open",
+        });
+        let answered: WorkspaceGitRuntimeSnapshot | null = null;
+        void fresh
+          .then((latest) => {
+            if (answered && latest !== answered) this.emitStatusUpdate(cwd, latest);
+            return undefined;
+          })
+          .catch((error) => {
+            this.logger.warn({ err: error, cwd }, "First-open checkout status refresh failed");
+          });
+        snapshot = await this.workspaceGitService.getSnapshot(resolvedCwd);
+        answered = snapshot;
+      } else {
+        snapshot = await this.workspaceGitService.getSnapshot(resolvedCwd);
+      }
       this.host.emit({
         type: "checkout_status_response",
         payload: buildCheckoutStatusPayloadFromSnapshot({
@@ -291,7 +318,10 @@ export class CheckoutSession {
     }
   }
 
-  async handleCommitFileDiffRequest(msg: CheckoutCommitFileDiffRequest): Promise<void> {
+  async handleCommitFileDiffRequest(
+    msg: CheckoutCommitFileDiffRequest,
+    signal: AbortSignal,
+  ): Promise<void> {
     const { cwd, sha, path, requestId } = msg;
 
     try {
@@ -299,7 +329,7 @@ export class CheckoutSession {
       if (path.length === 0 || isAbsolute(path) || path.split(/[\\/]/).includes("..")) {
         throw new Error(`Invalid path: ${path}`);
       }
-      const file = await getCommitFileDiff({ cwd: expandTilde(cwd), sha, path });
+      const file = await getCommitFileDiff({ cwd: expandTilde(cwd), sha, path, signal });
       this.host.emit({
         type: "checkout.commits.file_diff.response",
         payload: { cwd, sha, path, file, error: null, requestId },
@@ -490,6 +520,8 @@ export class CheckoutSession {
         force: true,
         includeForge: true,
         reason: "manual-refresh",
+        // FULCRA(FU-657): the caller may have just changed the checkout; do not join an older read.
+        afterInFlight: true,
       });
       this.checkoutDiffManager.scheduleRefreshForCwd(resolvedCwd);
       this.host.emit({

@@ -5,10 +5,8 @@ import {
 } from "@getpaseo/server/agent-response";
 import type { AgentSnapshotPayload } from "@getpaseo/protocol/messages";
 import { REPORTS_TO_LABEL } from "@getpaseo/protocol/agent-labels";
-import {
-  DaemonConnectionError,
-  type FetchWorkspacesOptions,
-} from "@getpaseo/client/internal/daemon-client";
+import type { FetchWorkspacesOptions } from "@getpaseo/client/internal/daemon-client";
+import { resolveCallerAgentId } from "../../utils/caller-agent.js";
 import { connectToDaemon } from "../../utils/client.js";
 import type {
   CommandOptions,
@@ -38,10 +36,13 @@ export function addRunOptions(cmd: Command): Command {
         "--prompt-file <path>",
         "Read the prompt from a UTF-8 file, or from standard input when the path is - (multi-line prompts on Windows)",
       )
-      .option("-d, --background", "Run in background")
+      .option("--no-wait", "Return immediately without waiting for completion")
+      // COMPAT(backgroundRunFlag): --background was the documented spelling of
+      // --no-wait. Added in v0.2.0; remove after 2027-04-01.
+      .addOption(new Option("-d, --background", "Legacy alias for --no-wait").hideHelp())
       // COMPAT(detachRunFlag): --detach used to mean background execution, not
       // ownership transfer. Added in v0.2.0; remove after 2027-01-17.
-      .addOption(new Option("--detach", "Legacy alias for --background").hideHelp())
+      .addOption(new Option("--detach", "Legacy alias for --no-wait").hideHelp())
       .option("--title <title>", "Assign a title to the agent")
       .addOption(new Option("--name <name>", "Hidden alias for --title").hideHelp())
       .option(
@@ -137,6 +138,7 @@ export const agentRunSchema: OutputSchema<AgentRunResult> = {
 
 export interface AgentRunOptions extends CommandOptions {
   promptFile?: string;
+  wait?: boolean;
   background?: boolean;
   detach?: boolean;
   title?: string;
@@ -422,19 +424,25 @@ function validateRunOptions(prompt: string, options: AgentRunOptions, outputSche
     } satisfies CommandError;
   }
 
+  if (options.background) {
+    console.error("Warning: --background (-d) is deprecated. Use --no-wait instead.");
+  }
+
   validateRunWorkspaceOptions(options);
 
-  if (outputSchema && runsInBackground(options)) {
+  if (outputSchema && !waitsForFinish(options)) {
     throw {
       code: "INVALID_OPTIONS",
-      message: "--output-schema cannot be used with --background",
+      message: "--output-schema cannot be used with --no-wait",
       details: "Structured output requires waiting for the agent to finish",
     } satisfies CommandError;
   }
 }
 
-function runsInBackground(options: Pick<AgentRunOptions, "background" | "detach">): boolean {
-  return Boolean(options.background || options.detach);
+export function waitsForFinish(
+  options: Pick<AgentRunOptions, "wait" | "background" | "detach">,
+): boolean {
+  return options.wait !== false && !options.background && !options.detach;
 }
 
 function parseWaitTimeoutOption(waitTimeout: string | undefined): number {
@@ -631,7 +639,10 @@ async function resolveRunWorkspace(
   // TODO: thread the run `prompt` as firstAgentContext so workspace-level
   // title/branch generation picks up the task description (U8/U6 deferred).
   const source = buildRunWorkspaceSource(options, cwd);
-  const result = await client.createWorkspace({ source });
+  const result = await client.createWorkspace({
+    source,
+    ...(callerAgentId ? { callerAgentId } : {}),
+  });
 
   if (result.error || !result.workspace) {
     throw {
@@ -716,7 +727,7 @@ export async function runRunCommand(
       preapprove: options.preapprove,
     });
 
-    const callerAgentId = await resolveRunCallerAgentId(client);
+    const callerAgentId = await resolveCallerAgentId(client);
     addReportingLine(labels, callerAgentId);
     const workspace = await resolveRunWorkspace(client, options, cwd, callerAgentId);
     const workspaceId = workspace.id;
@@ -819,8 +830,8 @@ export async function runRunCommand(
       labels: Object.keys(labels).length > 0 ? labels : undefined,
     });
 
-    // Default run behavior is foreground: wait for completion unless background execution is set.
-    if (!runsInBackground(options)) {
+    // Default run behavior is foreground: wait for completion unless --no-wait is set.
+    if (waitsForFinish(options)) {
       const state = await client.waitForFinish(agent.id, waitTimeoutMs);
       await client.close();
 
@@ -866,30 +877,4 @@ function addReportingLine(labels: Record<string, string>, callerAgentId: string 
 export function withReportingLine(prompt: string, callerAgentId: string | undefined): string {
   if (!callerAgentId) return prompt;
   return `You report to chat ${callerAgentId}. Send your reports and questions to it.\n\n${prompt}`;
-}
-
-export interface RunCallerLookupClient {
-  fetchAgent(options: { agentId: string }): Promise<{ agent: { id: string } } | null>;
-}
-
-// PASEO_AGENT_ID names an agent on the daemon that launched this shell. A run
-// sent to another daemon (--host or --home) has no caller there, so it runs as
-// a top-level agent instead of failing on an unknown caller.
-export async function resolveRunCallerAgentId(
-  client: RunCallerLookupClient,
-  env: { PASEO_AGENT_ID?: string } = process.env,
-): Promise<string | undefined> {
-  const agentId = env.PASEO_AGENT_ID?.trim();
-  if (!agentId) {
-    return undefined;
-  }
-  const caller = await client.fetchAgent({ agentId }).catch((error: unknown) => {
-    // A daemon without this agent answers with an error. A lost or timed-out
-    // connection is not an answer, so it must not drop the caller.
-    if (error instanceof DaemonConnectionError) {
-      throw error;
-    }
-    return null;
-  });
-  return caller?.agent.id === agentId ? agentId : undefined;
 }

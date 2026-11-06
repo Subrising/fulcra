@@ -1,4 +1,11 @@
-import { spawn, execFileSync, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { promisify } from "node:util";
+import {
+  spawn,
+  execFile,
+  execFileSync,
+  type ChildProcess,
+  type SpawnOptions,
+} from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
@@ -9,6 +16,7 @@ import { killProcessTree, spawnTsx } from "./spawn-node";
 
 // A killed daemon's child can still write into its home while it is removed (ENOTEMPTY).
 const REMOVE_TREE = { recursive: true, force: true, maxRetries: 5, retryDelay: 200 } as const;
+const execFileAsync = promisify(execFile);
 
 export interface IsolatedHostDaemon {
   serverId: string;
@@ -159,15 +167,38 @@ export async function startIsolatedHostDaemon(
     ? path.join(publishedPackageRoot, "node_modules", "@getpaseo", "server")
     : path.resolve(__dirname, "../../../../server");
   assertTestHome(paseoHome, "an e2e daemon");
+  let child: ChildProcess | null = null;
+  const stopDaemon = async (): Promise<void> => {
+    // The CLI owns graceful shutdown, forced cleanup and detached terminal
+    // reaping. Keep its ESM graph out of Playwright's transforming loader.
+    await execFileAsync(
+      process.execPath,
+      [
+        path.resolve(__dirname, "../../../../cli/dist/index.js"),
+        "daemon",
+        "stop",
+        "--home",
+        paseoHome,
+        "--force",
+        // FULCRA(FU-657): Fulcra's default graceful deadline is 40 s (FU-74), above this 30 s
+        // limit, so a stuck daemon never reached forced cleanup. Keep upstream's 15 s here.
+        "--timeout",
+        "15",
+      ],
+      { timeout: 30_000 },
+    );
+    await killProcessTree(child);
+  };
   const spawnDaemon = async (): Promise<ChildProcess> => {
     const spawnOptions: SpawnOptions = {
       cwd: serverDir,
       env: withDisabledE2ESpeechEnv({
         ...process.env,
+        ...options.environment,
         // Agent subprocesses inherit packaged launcher flags. Test homes use the source daemon.
+        // FULCRA(FU-657): after the caller's environment, which can be a copy of process.env.
         FULCRA_COMMAND_CENTRE: "0",
         FULCRA_COMMAND_CENTRE_AUTH_HASH: undefined,
-        ...options.environment,
         PASEO_HOME: paseoHome,
         PASEO_SKILLS_HOME: skillsHome,
         PASEO_SERVER_ID: serverId,
@@ -180,22 +211,22 @@ export async function startIsolatedHostDaemon(
       stdio: ["ignore", "ignore", "pipe"],
       detached: false,
     };
-    const child =
+    const spawned =
       publishedPackageRoot || process.env.E2E_USE_BUILT_DAEMON === "1"
         ? spawn(process.execPath, ["dist/scripts/supervisor-entrypoint.js"], spawnOptions)
         : spawnTsx("scripts/supervisor-entrypoint.ts", ["--dev"], spawnOptions);
 
+    child = spawned;
     let stderr = "";
-    child.stderr?.on("data", (chunk: Buffer) => {
+    spawned.stderr?.on("data", (chunk: Buffer) => {
       stderr += chunk.toString("utf8");
       stderr = stderr.split("\n").slice(-40).join("\n");
     });
 
     try {
-      await waitForServer(port, child);
-      return child;
+      await waitForServer(port, spawned);
+      return spawned;
     } catch (error) {
-      await killProcessTree(child);
       throw new Error(
         `${error instanceof Error ? error.message : String(error)}\nDaemon stderr:\n${stderr}`,
         { cause: error },
@@ -217,10 +248,10 @@ export async function startIsolatedHostDaemon(
     }
   };
 
-  let child: ChildProcess;
   try {
-    child = await spawnFirstDaemon();
+    await spawnFirstDaemon();
   } catch (error) {
+    await stopDaemon();
     if (!options.preserveHome) {
       await rm(paseoHome, REMOVE_TREE);
     }
@@ -236,22 +267,22 @@ export async function startIsolatedHostDaemon(
     port,
     paseoHome,
     skillsHome,
-    getPid: () => child.pid,
+    getPid: () => child?.pid,
     restart: async () => {
       if (closed) throw new Error(`Cannot restart closed isolated daemon ${serverId}`);
-      await killProcessTree(child);
-      child = await spawnDaemon();
+      await stopDaemon();
+      await spawnDaemon();
     },
     close: async () => {
       if (closed) return;
-      closed = true;
-      await killProcessTree(child);
+      await stopDaemon();
       if (!options.preserveHome) {
         await rm(paseoHome, REMOVE_TREE);
       }
       if (publishedPackageRoot) {
         await rm(publishedPackageRoot, REMOVE_TREE);
       }
+      closed = true;
     },
   };
 }

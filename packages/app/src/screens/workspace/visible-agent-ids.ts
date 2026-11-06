@@ -17,19 +17,28 @@ export function selectVisibleAgentIds(input: {
   tabs: WorkspaceTab[];
   routeFocused: boolean;
   focusedPaneOnly: boolean;
+  explorerPaneId?: string | null;
+  explorerVisible?: boolean;
 }): string[] {
   if (!input.routeFocused || !input.layout) {
     return [];
   }
   const panes = input.focusedPaneOnly
-    ? collectAllPanes(input.layout.root).filter((pane) => pane.id === input.layout?.focusedPaneId)
+    ? collectAllPanes(input.layout.root).filter(
+        (pane) =>
+          pane.id === input.layout?.focusedPaneId ||
+          (input.explorerVisible !== false && pane.id === input.explorerPaneId),
+      )
     : collectAllPanes(input.layout.root);
 
+  const targets = panes.flatMap((pane) => {
+    const target = deriveWorkspacePaneState({ pane, tabs: input.tabs }).activeTab?.descriptor
+      .target;
+    return target ? [target] : [];
+  });
   return [
     ...new Set(
-      panes.flatMap((pane) => {
-        const target = deriveWorkspacePaneState({ pane, tabs: input.tabs }).activeTab?.descriptor
-          .target;
+      targets.flatMap((target) => {
         const agentId = agentIdForViewedTab(target);
         return agentId ? [agentId] : [];
       }),
@@ -42,6 +51,8 @@ export function useVisibleAgentIds(input: {
   tabs: WorkspaceTab[];
   routeFocused: boolean;
   focusedPaneOnly: boolean;
+  explorerPaneId?: string | null;
+  explorerVisible?: boolean;
 }): string[] {
   const nextAgentIds = selectVisibleAgentIds(input);
   const stableAgentIds = useRef<string[]>([]);

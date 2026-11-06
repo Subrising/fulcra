@@ -235,6 +235,7 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
         messageId: notice
           ? `${FINISH_NOTIFICATION_MESSAGE_PREFIX}host-link:${delivery.messageId}`
           : delivery.messageId,
+        ...(notice ? { systemNotice: true as const } : {}),
         runOptions: { [FINAL_INPUT_CHECK]: final },
         activeTurnBehavior: "steer",
         steerOnly: true,
@@ -328,6 +329,7 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
             agentId: request.agentId,
             prompt: formatSystemNotificationPrompt(request.text),
             messageId: `${FINISH_NOTIFICATION_MESSAGE_PREFIX}host-link-return:${request.messageId}`,
+            systemNotice: true,
             runOptions: { [FINAL_INPUT_CHECK]: final },
             activeTurnBehavior: "steer",
             steerOnly: true,

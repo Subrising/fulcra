@@ -428,6 +428,10 @@ test.describe("Workspace model restart regressions", () => {
           status: "idle",
         });
 
+      await expect
+        .poll(() => fetchWorkspaceStatuses(client, [seeded.workspaceA, seeded.workspaceB]))
+        .toEqual({ [seeded.workspaceA]: "done", [seeded.workspaceB]: "done" });
+
       await page.goto(buildHostWorkspaceRoute(serverId, seeded.workspaceA));
       await waitForSidebarHydration(page);
       await expectWorkspaceRowDoesNotShowIndicator(page, {
@@ -474,6 +478,7 @@ test.describe("Workspace model restart regressions", () => {
           ]),
         )
         .toMatchObject({
+          [seeded.workspaceA]: "done",
           [seeded.workspaceB]: "done",
           [createdWorkspaceId]: "done",
         });

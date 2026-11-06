@@ -1,19 +1,21 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { build } from "esbuild";
+import {
+  createTestRegistries,
+  createTestLogger,
+  deferred,
+} from "./test-fixtures/reconciliation-registries.js";
 import type { ProjectCheckoutLitePayload } from "@getpaseo/protocol/messages";
 import type pino from "pino";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, afterEach, describe, expect, test } from "vitest";
 import {
   createPersistedProjectRecord,
   createPersistedWorkspaceRecord,
-} from "./workspace-registry.js";
-import type {
-  PersistedProjectRecord,
-  PersistedWorkspaceRecord,
-  ProjectRegistry,
-  WorkspaceRegistry,
 } from "./workspace-registry.js";
 import {
   type ReconciliationChange,
@@ -22,6 +24,23 @@ import {
 import { deriveProjectKey } from "./project-key.js";
 import type { DirectoryState } from "./directory-access.js";
 import { isPlatform } from "../test-utils/platform.js";
+
+let probeDirectory: string;
+let probePath: string;
+beforeAll(async () => {
+  probeDirectory = mkdtempSync(path.join(tmpdir(), "reconciliation-probe-"));
+  probePath = path.join(probeDirectory, "reconciliation.mjs");
+  await build({
+    entryPoints: [
+      fileURLToPath(new URL("./test-fixtures/reconciliation-responsiveness.ts", import.meta.url)),
+    ],
+    outfile: probePath,
+    bundle: true,
+    platform: "node",
+    format: "esm",
+  });
+});
+afterAll(() => rmSync(probeDirectory, { recursive: true, force: true }));
 
 function canonicalLocalProjectKey(rootPath: string): string {
   return deriveProjectKey({
@@ -32,86 +51,6 @@ function canonicalLocalProjectKey(rootPath: string): string {
   });
 }
 
-function createTestRegistries() {
-  const projects = new Map<string, PersistedProjectRecord>();
-  const workspaces = new Map<string, PersistedWorkspaceRecord>();
-
-  const projectRegistry: ProjectRegistry = {
-    initialize: async () => {},
-    existsOnDisk: async () => true,
-    list: async () => Array.from(projects.values()),
-    get: async (id: string) => projects.get(id) ?? null,
-    getOrCreateActiveByRoot: async (input) => {
-      const existing = Array.from(projects.values()).find(
-        (project) => !project.archivedAt && project.rootPath === input.rootPath,
-      );
-      if (existing) return existing;
-      const record = createPersistedProjectRecord({
-        projectId: `prj_${projects.size}`,
-        rootPath: input.rootPath,
-        kind: input.kind,
-        displayName: input.displayName,
-        createdAt: input.timestamp,
-        updatedAt: input.timestamp,
-      });
-      projects.set(record.projectId, record);
-      return record;
-    },
-    upsert: async (record: PersistedProjectRecord) => {
-      projects.set(record.projectId, record);
-    },
-    archive: async (id: string, archivedAt: string) => {
-      const existing = projects.get(id);
-      if (existing) {
-        projects.set(id, { ...existing, archivedAt, updatedAt: archivedAt });
-      }
-    },
-    remove: async (id: string) => {
-      projects.delete(id);
-    },
-  };
-
-  const workspaceRegistry: WorkspaceRegistry = {
-    initialize: async () => {},
-    existsOnDisk: async () => true,
-    list: async () => Array.from(workspaces.values()),
-    get: async (id: string) => workspaces.get(id) ?? null,
-    update: async (id, updater) => {
-      const existing = workspaces.get(id);
-      if (!existing) return null;
-      const updated = updater(existing);
-      workspaces.set(id, updated);
-      return updated;
-    },
-    upsert: async (record: PersistedWorkspaceRecord) => {
-      workspaces.set(record.workspaceId, record);
-    },
-    archive: async (id: string, archivedAt: string) => {
-      const existing = workspaces.get(id);
-      if (existing) {
-        workspaces.set(id, { ...existing, archivedAt, updatedAt: archivedAt });
-      }
-    },
-    remove: async (id: string) => {
-      workspaces.delete(id);
-    },
-  };
-
-  return { projects, workspaces, projectRegistry, workspaceRegistry };
-}
-
-function createTestLogger() {
-  const logger = {
-    child: () => logger,
-    trace: () => undefined,
-    debug: () => undefined,
-    info: () => undefined,
-    warn: () => undefined,
-    error: () => undefined,
-  };
-  return logger as unknown as pino.Logger;
-}
-
 interface CapturedLogRecord {
   message: string;
   payload: unknown;
@@ -119,6 +58,7 @@ interface CapturedLogRecord {
 
 function createCapturingLogger() {
   const infoRecords: CapturedLogRecord[] = [];
+  const warnRecords: CapturedLogRecord[] = [];
   const logger = {
     child: () => logger,
     trace: () => undefined,
@@ -126,10 +66,12 @@ function createCapturingLogger() {
     info: (payload: unknown, message?: string) => {
       infoRecords.push({ payload, message: message ?? "" });
     },
-    warn: () => undefined,
+    warn: (payload: unknown, message?: string) => {
+      warnRecords.push({ payload, message: message ?? "" });
+    },
     error: () => undefined,
   };
-  return { logger: logger as unknown as pino.Logger, infoRecords };
+  return { logger: logger as unknown as pino.Logger, infoRecords, warnRecords };
 }
 
 function createWorkspaceGitServiceStub(
@@ -187,14 +129,6 @@ function createCheckout(
   };
 }
 
-function deferred(): { promise: Promise<void>; resolve(): void } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((accept) => {
-    resolve = accept;
-  });
-  return { promise, resolve };
-}
-
 class TestCheckouts {
   readonly reads: string[] = [];
   private readonly checkouts = new Map<string, ProjectCheckoutLitePayload>();
@@ -211,7 +145,7 @@ class TestCheckouts {
 
 function initGitRepoInDir(dir: string): void {
   execFileSync("git", ["init", "-b", "main"], { cwd: dir, stdio: "ignore" });
-  execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: dir, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "noreply@fulcra.ai"], { cwd: dir, stdio: "ignore" });
   execFileSync("git", ["config", "user.name", "Test"], { cwd: dir, stdio: "ignore" });
   execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: dir, stdio: "ignore" });
   execFileSync("git", ["add", "."], { cwd: dir, stdio: "ignore" });
@@ -222,7 +156,7 @@ function createTempGitRepo(prefix: string): string {
   const raw = mkdtempSync(path.join(tmpdir(), prefix));
   const dir = realpathSync(raw);
   execFileSync("git", ["init", "-b", "main"], { cwd: dir, stdio: "ignore" });
-  execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: dir, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "noreply@fulcra.ai"], { cwd: dir, stdio: "ignore" });
   execFileSync("git", ["config", "user.name", "Test"], { cwd: dir, stdio: "ignore" });
   execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: dir, stdio: "ignore" });
   writeFileSync(path.join(dir, "README.md"), "# Test\n");
@@ -242,6 +176,196 @@ describe("WorkspaceReconciliationService", () => {
     }
     tempDirs.length = 0;
   });
+
+  test("does not emit a duplicate archive when user archival commits before reconciliation's archive", async () => {
+    const rootPath = realpathSync(mkdtempSync(path.join(tmpdir(), "reconcile-archive-commit-")));
+    tempDirs.push(rootPath);
+    const { projects, workspaces, projectRegistry, workspaceRegistry, holdNextArchive } =
+      createTestRegistries();
+    projects.set(
+      "p1",
+      createPersistedProjectRecord({
+        projectId: "p1",
+        rootPath,
+        projectKey: canonicalLocalProjectKey(rootPath),
+        kind: "non_git",
+        displayName: "project",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }),
+    );
+    workspaces.set(
+      "w1",
+      createPersistedWorkspaceRecord({
+        workspaceId: "w1",
+        projectId: "p1",
+        cwd: path.join(rootPath, "missing"),
+        kind: "directory",
+        displayName: "workspace",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }),
+    );
+    const callbacks: string[] = [];
+    const service = new WorkspaceReconciliationService({
+      projectRegistry,
+      workspaceRegistry,
+      logger: createTestLogger(),
+      onWorkspaceArchived: (id) => {
+        callbacks.push(id);
+      },
+    });
+    const gate = holdNextArchive();
+    try {
+      const scan = service.runOnce();
+      await gate.started.promise;
+      expect(await workspaceRegistry.archive("w1", timestamp)).toBe(true);
+      gate.release.resolve();
+      expect((await scan).changesApplied).toEqual([]);
+      expect(callbacks).toEqual([]);
+      expect(workspaces.get("w1")?.archivedAt).toBe(timestamp);
+    } finally {
+      gate.release.resolve();
+      service.dispose();
+    }
+  });
+
+  test.each(["missing", "directory"] as const)(
+    "does not process or archive a workspace archived during %s inspection",
+    async (state) => {
+      const rootPath = realpathSync(
+        mkdtempSync(path.join(tmpdir(), "reconcile-inspection-archive-")),
+      );
+      tempDirs.push(rootPath);
+      const { projects, workspaces, projectRegistry, workspaceRegistry } = createTestRegistries();
+      projects.set(
+        "p1",
+        createPersistedProjectRecord({
+          projectId: "p1",
+          rootPath,
+          projectKey: canonicalLocalProjectKey(rootPath),
+          kind: "non_git",
+          displayName: "project",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        }),
+      );
+      const cwd = path.join(rootPath, "missing");
+      workspaces.set(
+        "w1",
+        createPersistedWorkspaceRecord({
+          workspaceId: "w1",
+          projectId: "p1",
+          cwd,
+          kind: "directory",
+          displayName: "workspace",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        }),
+      );
+      const started = deferred();
+      const release = deferred();
+      const archivedCallbacks: string[] = [];
+      const checkouts = new TestCheckouts();
+      const service = new WorkspaceReconciliationService({
+        projectRegistry,
+        workspaceRegistry,
+        logger: createTestLogger(),
+        workspaceGitService: checkouts,
+        onWorkspaceArchived: (id) => {
+          archivedCallbacks.push(id);
+        },
+        inspectDirectories: async (paths) => {
+          if (paths.includes(cwd)) {
+            started.resolve();
+            await release.promise;
+          }
+          return new Map(
+            paths.map((target): [string, DirectoryState] => [
+              target,
+              target === cwd ? state : "directory",
+            ]),
+          );
+        },
+      });
+      try {
+        const scan = service.runOnce();
+        await Promise.race([
+          started.promise,
+          scan.then(() => {
+            throw new Error("Reconciliation did not use its directory inspection capability");
+          }),
+        ]);
+        await workspaceRegistry.archive("w1", "2026-01-01T00:00:00.000Z");
+        const archived = workspaces.get("w1");
+        release.resolve();
+        const result = await scan;
+        expect(workspaces.get("w1")).toEqual(archived);
+        expect(archivedCallbacks).toEqual([]);
+        expect(checkouts.reads).toEqual([rootPath]);
+        expect(result.changesApplied).toEqual([]);
+      } finally {
+        release.resolve();
+        service.dispose();
+      }
+    },
+  );
+
+  test("keeps the event loop responsive while inspecting 20000 real workspace paths", async () => {
+    const rootPath = realpathSync(mkdtempSync(path.join(tmpdir(), "reconcile-many-")));
+    tempDirs.push(rootPath);
+    // This CPU belongs to the runner, not to reconciliation. Keep it present
+    // throughout the read so a later loop turn cannot contaminate the budget.
+    let running = true;
+    const unrelatedWork = () => {
+      const threadCpuUsage: (previous?: NodeJS.CpuUsage) => NodeJS.CpuUsage = Reflect.get(
+        process,
+        "threadCpuUsage",
+      );
+      const start = threadCpuUsage();
+      let elapsed: NodeJS.CpuUsage;
+      do {
+        elapsed = threadCpuUsage(start);
+      } while (elapsed.user + elapsed.system < 60_000);
+      if (running) unrelated = setImmediate(unrelatedWork);
+    };
+    let unrelated = setImmediate(unrelatedWork);
+    try {
+      const { stdout, stderr } = await promisify(execFile)(
+        process.execPath,
+        ["--expose-gc", probePath, rootPath],
+        { timeout: 25_000 },
+      );
+      process.stderr.write(stderr);
+      const {
+        changesApplied,
+        blockingMs,
+        filesystemRequests,
+        yields,
+        allArchived,
+        workerMessages,
+      } = JSON.parse(stdout) as {
+        changesApplied: number;
+        blockingMs: number;
+        filesystemRequests: number;
+        yields: number;
+        allArchived: boolean;
+        workerMessages: number;
+      };
+      expect(blockingMs).toBeLessThan(20);
+      // Fulcra: on macOS the directory checks run in one child process (see directory-access.ts),
+      // so the daemon thread makes no filesystem request for the workspace paths.
+      expect(filesystemRequests).toBe(process.platform === "darwin" ? 0 : 20001);
+      expect(changesApplied).toBe(20000);
+      expect(allArchived).toBe(true);
+      // No per-path loop turns on macOS: one child process answers for every path.
+      if (process.platform !== "darwin") expect(yields).toBeGreaterThan(0);
+      expect(workerMessages).toBe(0);
+    } finally {
+      running = false;
+      clearImmediate(unrelated);
+    }
+  }, 30000);
 
   test("preserves workspace archival that lands during boot reconciliation", async () => {
     const workspaceRoot = realpathSync(mkdtempSync(path.join(tmpdir(), "reconcile-archive-race-")));
@@ -750,6 +874,7 @@ describe("WorkspaceReconciliationService", () => {
       cwd: missingWorkspace,
       kind: "directory",
       displayName: "orphan",
+      background: false,
       title: null,
       pinnedAt: null,
       branch: null,

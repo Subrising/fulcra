@@ -4,8 +4,12 @@ import path from "node:path";
 import pino from "pino";
 import { test, expect, vi } from "vitest";
 const f = vi.hoisted(() => ({ bundle: "" }));
+// FULCRA(FU-657): upstream v0.15 runtime compiles through compileDirectoryPlugin (manifest + bundles).
 vi.mock("./compiler.js", () => ({
-  compilePlugin: async () => ({ clientBundle: f.bundle }),
+  compileDirectoryPlugin: async (directory: string) => {
+    const { readPluginManifest } = await import("./manifest.js");
+    return { clientBundle: f.bundle, manifest: await readPluginManifest(directory) };
+  },
 }));
 import { PluginRuntime } from "./runtime.js";
 test("oversize plugin catalog entry is excluded with a visible error; healthy plugins stay available", async () => {

@@ -1,9 +1,12 @@
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import MarkdownIt from "markdown-it";
+import { projectTimelineRows } from "../timeline-projection.js";
 import { describe, expect, test } from "vitest";
 
 import {
   isEvictedProviderImage,
+  MAX_PROVIDER_IMAGE_BYTES,
   isProviderImageMarkdown,
   MAX_PRIVATE_FILES,
   materializeProviderImage,
@@ -12,8 +15,8 @@ import {
 
 const HASH = "a".repeat(64);
 
-function renderImageMarkdown(imagePath: string): string {
-  const item = renderProviderImageOutputAsAssistantMarkdown({ path: imagePath });
+async function renderImageMarkdown(imagePath: string): Promise<string> {
+  const item = await renderProviderImageOutputAsAssistantMarkdown({ path: imagePath });
   if (!item || item.type !== "assistant_message") {
     throw new Error("Expected provider image output to render as assistant markdown.");
   }
@@ -40,35 +43,37 @@ describe("isProviderImageMarkdown", () => {
     ).toBe(true);
   });
 
-  test("emits Windows file paths as file URIs", () => {
-    const markdown = renderImageMarkdown(
+  test("emits Windows file paths as file URIs", async () => {
+    const markdown = await renderImageMarkdown(
       `C:\\Users\\me\\AppData\\Local\\Temp\\paseo-attachments\\${HASH}.png`,
     );
 
     expect(markdown).toBe(
-      `![Image](file:///C:/Users/me/AppData/Local/Temp/paseo-attachments/${HASH}.png)`,
+      `\n\n![Image](file:///C:/Users/me/AppData/Local/Temp/paseo-attachments/${HASH}.png)\n\n`,
     );
     expect(isProviderImageMarkdown(markdown)).toBe(true);
   });
 
-  test("emits POSIX file paths with spaces as valid file URI markdown", () => {
-    const markdown = renderImageMarkdown("/home/user/Projects/Project With Spaces/screenshot.png");
+  test("emits POSIX file paths with spaces as valid file URI markdown", async () => {
+    const markdown = await renderImageMarkdown(
+      "/home/user/Projects/Project With Spaces/screenshot.png",
+    );
 
     expect(markdown).toBe(
-      "![Image](file:///home/user/Projects/Project%20With%20Spaces/screenshot.png)",
+      "\n\n![Image](file:///home/user/Projects/Project%20With%20Spaces/screenshot.png)\n\n",
     );
   });
 
-  test("encodes URI-significant characters in POSIX file paths", () => {
-    const markdown = renderImageMarkdown("/tmp/screenshot#1?draft.png");
+  test("encodes URI-significant characters in POSIX file paths", async () => {
+    const markdown = await renderImageMarkdown("/tmp/screenshot#1?draft.png");
 
-    expect(markdown).toBe("![Image](file:///tmp/screenshot%231%3Fdraft.png)");
+    expect(markdown).toBe("\n\n![Image](file:///tmp/screenshot%231%3Fdraft.png)\n\n");
   });
 
-  test("preserves double-leading slashes in POSIX file paths", () => {
-    const markdown = renderImageMarkdown("//tmp/screenshot#1.png");
+  test("preserves double-leading slashes in POSIX file paths", async () => {
+    const markdown = await renderImageMarkdown("//tmp/screenshot#1.png");
 
-    expect(markdown).toBe("![Image](file:////tmp/screenshot%231.png)");
+    expect(markdown).toBe("\n\n![Image](file:////tmp/screenshot%231.png)\n\n");
   });
 
   test.each([
@@ -78,8 +83,8 @@ describe("isProviderImageMarkdown", () => {
       "\\\\?\\UNC\\server\\share\\shot?draft.png",
       "file://server/share/shot%3Fdraft.png",
     ],
-  ])("encodes %s image paths as file URIs", (_label, imagePath, expectedSource) => {
-    expect(renderImageMarkdown(imagePath)).toBe(`![Image](${expectedSource})`);
+  ])("encodes %s image paths as file URIs", async (_label, imagePath, expectedSource) => {
+    expect(await renderImageMarkdown(imagePath)).toBe(`\n\n![Image](${expectedSource})\n\n`);
   });
 
   test("rejects user-authored markdown that is not a materialized attachment", () => {
@@ -93,8 +98,8 @@ describe("isProviderImageMarkdown", () => {
 
 // Descriptor confinement is unsupported on Windows; assert that refusal below.
 describe.runIf(process.platform !== "win32")("materializeProviderImage", () => {
-  test("recreates the private temp directory if the cached directory is removed", () => {
-    const first = materializeProviderImage({
+  test("recreates the private temp directory if the cached directory is removed", async () => {
+    const first = await materializeProviderImage({
       data: "YWJjMTIz",
       mimeType: "image/png",
     });
@@ -103,7 +108,7 @@ describe.runIf(process.platform !== "win32")("materializeProviderImage", () => {
 
     rmSync(firstDir, { recursive: true, force: true });
 
-    const second = materializeProviderImage({
+    const second = await materializeProviderImage({
       data: "ZGVmNDU2",
       mimeType: "image/png",
     });
@@ -128,7 +133,7 @@ test.runIf(process.platform === "win32")(
 
 // FULCRA(image-retention): at the cap the oldest images make room; new screenshots keep rendering.
 describe("provider image retention", () => {
-  test("past the file cap the newest image still renders and only the oldest is evicted", () => {
+  test("past the file cap the newest image still renders and only the oldest is evicted", async () => {
     const image = (i: number) => ({
       data: Buffer.from(`retention-test-image-${i}`).toString("base64"),
       mimeType: "image/png",
@@ -136,7 +141,7 @@ describe("provider image retention", () => {
     const first = materializeProviderImage(image(0)).path;
     let newest = "";
     for (let i = 1; i <= MAX_PRIVATE_FILES; i++) {
-      const item = renderProviderImageOutputAsAssistantMarkdown(image(i), {
+      const item = await renderProviderImageOutputAsAssistantMarkdown(image(i), {
         materialize: materializeProviderImage,
       });
       if (item?.type !== "assistant_message") throw new Error("Expected an image message");
@@ -178,5 +183,105 @@ describe("provider image retention", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+describe("provider image paragraph boundaries", () => {
+  test.each(["", "\n"])("keeps image outputs separate from prose ending in %j", async (ending) => {
+    const image = await renderProviderImageOutputAsAssistantMarkdown({
+      url: "https://example.com/chart.png",
+    });
+    if (!image) throw new Error("Expected image output");
+    const projected = projectTimelineRows({
+      mode: "projected",
+      rows: [
+        {
+          seq: 1,
+          timestamp: "2026-10-16T15:08:23Z",
+          item: { type: "assistant_message", text: `Before${ending}`, messageId: "commentary" },
+        },
+        { seq: 2, timestamp: "2026-10-16T15:08:24Z", item: image },
+        {
+          seq: 3,
+          timestamp: "2026-10-16T15:08:25Z",
+          item: { type: "assistant_message", text: "After" },
+        },
+      ],
+    });
+    expect(projected).toHaveLength(1);
+    const item = projected[0]!.item;
+    if (item.type !== "assistant_message") throw new Error("Expected assistant message");
+    const paragraphs = new MarkdownIt()
+      .parse(item.text, {})
+      .filter((token) => token.type === "inline");
+    expect(paragraphs.map((token) => token.content)).toEqual([
+      "Before",
+      "![Image](https://example.com/chart.png)",
+      "After",
+    ]);
+  });
+});
+
+test("materialized image output retains paragraph boundaries and attachment recognition", async () => {
+  const item = await renderProviderImageOutputAsAssistantMarkdown(
+    { data: "YWJjMTIz", mimeType: "image/png" },
+    { materialize: async () => ({ path: `/tmp/paseo-attachments/${HASH}.png` }) },
+  );
+  expect(item).toEqual({
+    type: "assistant_message",
+    text: `\n\n![Image](file:///tmp/paseo-attachments/${HASH}.png)\n\n`,
+  });
+  if (!item || item.type !== "assistant_message") throw new Error("Expected image output");
+  expect(isProviderImageMarkdown(item.text)).toBe(true);
+});
+
+describe.runIf(process.platform !== "win32")("confined materialization", () => {
+  test("repeated content is reused without rewriting the attachment", async () => {
+    const image = {
+      data: Buffer.from("dedupe regression").toString("base64"),
+      mimeType: "image/png",
+    };
+    const first = await materializeProviderImage(image);
+    const before = statSync(first.path, { bigint: true });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const second = await materializeProviderImage(image);
+    expect(second.path).toBe(first.path);
+    expect(statSync(second.path, { bigint: true }).mtimeNs).toBe(before.mtimeNs);
+  });
+
+  test("preserves base64 decoding across whitespace and chunk boundaries", async () => {
+    const bytes = Buffer.alloc(512 * 1024, 123);
+    const base64 = bytes.toString("base64");
+    const data = base64.match(/.{1,77}/g)!.join("\n");
+    const result = await materializeProviderImage({ data, mimeType: "image/png" });
+    expect(readFileSync(result.path).equals(bytes)).toBe(true);
+  });
+
+  // Fulcra: materialization is synchronous and bounded at 16 MiB, so an oversized image throws at once.
+  test("rejects oversized materialization before work and leaves later images usable", async () => {
+    const data = "A".repeat(Math.ceil(MAX_PROVIDER_IMAGE_BYTES / 3) * 4 + 260);
+    expect(() => materializeProviderImage({ data, mimeType: "image/png" })).toThrow("exceeds");
+    const omitted = await renderProviderImageOutputAsAssistantMarkdown(
+      { data, mimeType: "image/png" },
+      { materialize: materializeProviderImage },
+    );
+    expect(omitted).toEqual({
+      type: "assistant_message",
+      text: "Image output was omitted because it was not available as a file path or URL.",
+    });
+    const image = await materializeProviderImage({ data: "YWJjMTIz", mimeType: "image/png" });
+    expect(readFileSync(image.path).toString()).toBe("abc123");
+  });
+
+  test("simultaneous requests for the same content share the published file", async () => {
+    const image = {
+      data: Buffer.from("concurrent dedupe fixture").toString("base64"),
+      mimeType: "image/png",
+    };
+    const results = await Promise.all([
+      materializeProviderImage(image),
+      materializeProviderImage(image),
+    ]);
+    expect(results[0]).toEqual(results[1]);
+    expect(readFileSync(results[0].path).toString()).toBe("concurrent dedupe fixture");
   });
 });

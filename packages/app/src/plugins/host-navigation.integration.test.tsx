@@ -120,10 +120,10 @@ it("Book Changes uses the Book workspace and existing native Changes surface", (
     target: { kind: "agent", agentId: "shared-agent" },
     pin: undefined,
   });
+  // FULCRA(FU-657): since v0.15 the explorer sidebar finds the checkout from the workspace key.
   expect(openExplorerSidebarView).toHaveBeenCalledExactlyOnceWith({
     isCompact: false,
     workspaceKey: "book:book-workspace",
-    checkout: { serverId: "book", cwd: "/book/work", isGit: true },
     view: "changes",
   });
 });

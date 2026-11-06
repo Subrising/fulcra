@@ -188,9 +188,10 @@ function reloadableStore(dir: string) {
   );
   return {
     store,
-    reload: (setting: boolean | undefined) => {
+    // FULCRA(FU-657): upstream v0.15 made DaemonConfigStore.reload() async.
+    reload: async (setting: boolean | undefined) => {
       writeFileSync(configPath, JSON.stringify({ daemon: { reportUpOnTurnEnd: setting } }));
-      expect(store.reload().appliedPaths).toEqual(["daemon.reportUpOnTurnEnd"]);
+      expect((await store.reload()).appliedPaths).toEqual(["daemon.reportUpOnTurnEnd"]);
     },
   };
 }
@@ -254,9 +255,9 @@ describe("report-up reload while delivery waits", () => {
         if (atHandoff)
           beforeSend = () => {
             beforeSend = undefined;
-            reload(setting);
+            return reload(setting);
           };
-        else reload(setting);
+        else await reload(setting);
         f.leadTurnEnds();
         await settle();
         if (setting === false) expect(sent).toEqual([]);
@@ -304,9 +305,9 @@ describe("report-up reload while delivery waits", () => {
         if (atHandoff)
           beforeSend = () => {
             beforeSend = undefined;
-            reload(undefined);
+            return reload(undefined);
           };
-        else reload(undefined);
+        else await reload(undefined);
         f.leadTurnEnds();
         await settle();
         expect(sent).toHaveLength(1);
@@ -632,8 +633,9 @@ test("the nudge switch cancels at dispatch without disabling other notices", asy
   const f = setup(store, { readLedger: nudgeLedger });
   f.chats.get(A)!.lifecycle = "idle";
   f.leadTurnEnds();
-  beforeSend = () => {
-    store.patch({ idleLeadNudge: false });
+  // FULCRA(FU-657): upstream v0.15 made DaemonConfigStore.patch() and reload() async.
+  beforeSend = async () => {
+    await store.patch({ idleLeadNudge: false });
   };
   try {
     f.finish(LEAD);
@@ -664,8 +666,9 @@ test("owner exclusions cancel a nudge that already waits for delivery", async ()
   });
   f.chats.get(A)!.lifecycle = "idle";
   f.leadTurnEnds();
-  beforeSend = () => {
-    store.patch({ idleLeadNudgeSkipOwners: ["LEAD"] });
+  // FULCRA(FU-657): upstream v0.15 made DaemonConfigStore.patch() and reload() async.
+  beforeSend = async () => {
+    await store.patch({ idleLeadNudgeSkipOwners: ["LEAD"] });
   };
   try {
     f.finish(LEAD);

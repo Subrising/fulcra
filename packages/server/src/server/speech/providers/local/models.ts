@@ -1,12 +1,9 @@
-import {
-  ensureSherpaOnnxModels,
-  getSherpaOnnxModelDir,
-  isSherpaOnnxModelInstalled,
-} from "./sherpa/model-downloader.js";
+import { ensureSherpaOnnxModels, getSherpaOnnxModelDir } from "./sherpa/model-downloader.js";
 import { ensureSileroVadModel } from "./sherpa/silero-vad-provider.js";
 import {
   DEFAULT_LOCAL_STT_MODEL,
   DEFAULT_LOCAL_TTS_MODEL,
+  LocalSpeechModelIdSchema,
   LocalSttModelIdSchema,
   LocalTtsModelIdSchema,
   listSherpaOnnxModels,
@@ -18,6 +15,7 @@ import {
 export {
   DEFAULT_LOCAL_STT_MODEL,
   DEFAULT_LOCAL_TTS_MODEL,
+  LocalSpeechModelIdSchema,
   LocalSttModelIdSchema,
   LocalTtsModelIdSchema,
   type LocalSpeechModelId,
@@ -33,16 +31,6 @@ export function listLocalSpeechModels(): LocalSpeechModelSpec[] {
 
 export function getLocalSpeechModelDir(modelsDir: string, modelId: LocalSpeechModelId): string {
   return getSherpaOnnxModelDir(modelsDir, modelId);
-}
-
-export async function listMissingLocalSpeechModels(options: {
-  modelsDir: string;
-  modelIds: LocalSpeechModelId[];
-}): Promise<LocalSpeechModelId[]> {
-  const installed = await Promise.all(
-    options.modelIds.map((modelId) => isSherpaOnnxModelInstalled(options.modelsDir, modelId)),
-  );
-  return options.modelIds.filter((_modelId, index) => !installed[index]);
 }
 
 export async function ensureLocalSpeechModels(options: {

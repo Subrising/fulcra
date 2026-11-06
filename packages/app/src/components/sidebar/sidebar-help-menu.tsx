@@ -13,15 +13,16 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useIsCompactFormFactor } from "@/constants/layout";
-import { useSidebarTouchRows } from "@/components/sidebar/sidebar-touch";
-import { sidebarFooterButtonSize } from "@/components/sidebar/sidebar-footer-size";
+import { DensityIcon } from "@/components/ui/density-icon";
+import { SidebarFooterIconHighlight } from "./sidebar-footer-icon-highlight";
+import { SIDEBAR_TOUCH_ROW_HEIGHT, useSidebarTouchRows } from "@/components/sidebar/sidebar-touch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAppDiagnosticStore } from "@/diagnostics/store";
 import { useKeyboardShortcutsAvailable } from "@/keyboard/availability";
 import { useHostRuntimeIsConnected, useHosts } from "@/runtime/host-runtime";
 import { useKeyboardShortcutsStore } from "@/stores/keyboard-shortcuts-store";
 import { useSessionStore } from "@/stores/session-store";
+import { density } from "@/styles/density";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 import type { HostProfile } from "@/types/host-connection";
 import { formatVersionWithPrefix } from "@/desktop/updates/desktop-updates";
@@ -30,10 +31,8 @@ import { buildSettingsSectionRoute } from "@/utils/host-routes";
 import { hostDisplayName } from "@/hosts/host-display-name";
 
 const ThemedActivity = withUnistyles(Activity);
-const ThemedCircleHelp = withUnistyles(CircleHelp);
 const ThemedKeyboard = withUnistyles(Keyboard);
 const ThemedScale = withUnistyles(Scale);
-const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 const foregroundMutedColorMapping = (theme: Theme) => ({
   color: theme.colors.foregroundMuted,
 });
@@ -69,7 +68,6 @@ function HostVersionHint({ host }: { host: HostProfile }) {
 }
 
 export function SidebarHelpMenu() {
-  const isCompact = useIsCompactFormFactor();
   const touchRows = useSidebarTouchRows();
   const { t } = useTranslation();
   const shortcutsAvailable = useKeyboardShortcutsAvailable();
@@ -94,16 +92,20 @@ export function SidebarHelpMenu() {
         <TooltipTrigger asChild>
           <View>
             <DropdownMenuTrigger
-              style={styles.trigger(isCompact, touchRows)}
+              style={touchRows ? [styles.trigger, styles.triggerTouch] : styles.trigger}
               testID="sidebar-help"
               accessibilityRole="button"
               accessibilityLabel={t("sidebar.help.trigger")}
             >
-              {({ hovered }) => (
-                <ThemedCircleHelp
-                  size={isCompact || touchRows ? ICON_SIZE.lg : ICON_SIZE.md}
-                  uniProps={hovered ? foregroundColorMapping : foregroundMutedColorMapping}
-                />
+              {({ hovered, pressed, open: menuOpen }) => (
+                <>
+                  <SidebarFooterIconHighlight visible={pressed || menuOpen} />
+                  <DensityIcon
+                    icon={CircleHelp}
+                    size="md"
+                    color={hovered ? "foreground" : "foregroundMuted"}
+                  />
+                </>
               )}
             </DropdownMenuTrigger>
           </View>
@@ -157,14 +159,18 @@ export function SidebarHelpMenu() {
 
 const styles = StyleSheet.create((theme) => ({
   // FU-62: the same touch target as the other footer buttons on a touch screen.
-  trigger: (isCompact: boolean, touch: boolean) => ({
-    width: sidebarFooterButtonSize(isCompact, touch),
-    height: sidebarFooterButtonSize(isCompact, touch),
+  triggerTouch: {
+    width: SIDEBAR_TOUCH_ROW_HEIGHT,
+    height: SIDEBAR_TOUCH_ROW_HEIGHT,
+  },
+  trigger: {
+    width: density.iconButton,
+    height: density.iconButton,
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: theme.spacing[1],
     paddingHorizontal: theme.spacing[1],
-  }),
+  },
   tooltipText: {
     fontSize: theme.fontSize.base,
     color: theme.colors.popoverForeground,

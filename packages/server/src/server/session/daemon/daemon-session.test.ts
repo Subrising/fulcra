@@ -43,7 +43,7 @@ function makeSubsystem(overrides: {
   listProviderAvailability?: () => Promise<ProviderAvailability[]>;
   getWebSocketRuntimeMetrics?: () => DaemonWebSocketRuntimeDiagnosticSnapshot | null;
   hubRelationships?: HubRelationshipManagement;
-  reloadConfig?: () => DaemonConfigReloadResult;
+  reloadConfig?: () => Promise<DaemonConfigReloadResult>;
 }) {
   const emitted: SessionOutboundMessage[] = [];
   const restartIntents: Parameters<DaemonSessionHost["emitLifecycleIntent"]>[0][] = [];
@@ -67,7 +67,7 @@ function makeSubsystem(overrides: {
     hubRelationships: overrides.hubRelationships,
     reloadConfig:
       overrides.reloadConfig ??
-      (() => ({
+      (async () => ({
         appliedPaths: [],
         restartRequiredPaths: [],
         overrideControlledPaths: [],
@@ -78,16 +78,16 @@ function makeSubsystem(overrides: {
 }
 
 describe("DaemonSession", () => {
-  test("config reload returns the daemon-owned classification", () => {
+  test("config reload returns the daemon-owned classification", async () => {
     const { subsystem, emitted } = makeSubsystem({
-      reloadConfig: () => ({
+      reloadConfig: async () => ({
         appliedPaths: ["daemon.browserTools.enabled"],
         restartRequiredPaths: ["daemon.listen"],
         overrideControlledPaths: ["app.baseUrl"],
       }),
     });
 
-    subsystem.handleConfigReloadRequest({
+    await subsystem.handleConfigReloadRequest({
       type: "daemon.config.reload.request",
       requestId: "reload-1",
     });
@@ -105,14 +105,14 @@ describe("DaemonSession", () => {
     ]);
   });
 
-  test("config reload failures return a correlated RPC error", () => {
+  test("config reload failures return a correlated RPC error", async () => {
     const { subsystem, emitted } = makeSubsystem({
-      reloadConfig: () => {
+      reloadConfig: async () => {
         throw new Error("Invalid config");
       },
     });
 
-    subsystem.handleConfigReloadRequest({
+    await subsystem.handleConfigReloadRequest({
       type: "daemon.config.reload.request",
       requestId: "reload-2",
     });
@@ -212,6 +212,7 @@ describe("DaemonSession", () => {
             { provider: "claude", available: true, error: null },
             { provider: "codex", available: false, error: "boom" },
           ],
+          terminalCleanupUnconfirmed: [],
         },
       },
     ]);
@@ -242,6 +243,7 @@ describe("DaemonSession", () => {
           listen: null,
           relay: null,
           providers: [],
+          terminalCleanupUnconfirmed: [],
         },
       },
     ]);
@@ -298,6 +300,8 @@ describe("DaemonSession", () => {
             // Empty, never assumed available: the probe established nothing. Every other
             // field is real and is still delivered, unlike the listing-rejects path above.
             providers: [],
+            // FULCRA(FU-657): the v0.15 status payload always carries the unconfirmed-cleanup list.
+            terminalCleanupUnconfirmed: [],
           },
         },
       ]);

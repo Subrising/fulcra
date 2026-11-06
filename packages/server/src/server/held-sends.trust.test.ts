@@ -1254,6 +1254,8 @@ test("a message wait ignores the running turn while its second task is held", as
     agentStorage: f.storage,
     sessionLogger: f.logger,
     delivery: { requestSignal: new AbortController().signal },
+    // FULCRA(FU-657): v0.15 waits first in its connected-host agent-message queue. No message waits there here.
+    agentMessages: { waitForDispatch: async () => undefined },
     emit: (message: SessionOutboundMessage) => f.messages.push(message),
     getAgentPayloadById: async (id: string) => ({ id }),
   });

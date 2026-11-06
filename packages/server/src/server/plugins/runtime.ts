@@ -5,19 +5,23 @@ import { managementFailure, managementMethod, managementReason } from "./managem
 import { readPackagedBundles } from "./packaged-bundles.js";
 import type { TrustedPlugins } from "./trusted.js";
 import type { ManagementInvocation, ManagementTarget } from "./management.js";
+import { validateWorktreePath } from "../../utils/worktree-path.js";
+import type { PluginHookPayload } from "@getpaseo/plugin/server";
+import type { PluginWireBeforeRequests, PluginBeforeResults } from "./lifecycle/index.js";
+import type { SessionOpenWireRequest, AttachedAgentTool } from "./agent-tools.js";
 import type { UsageScope } from "@getpaseo/plugin/server/usage";
 import {
   ProviderStatusSchema,
   type ProviderStatus,
   type ProviderStatusRequest,
 } from "@getpaseo/plugin/server/provider";
-import type { PluginBeforeRequests, PluginLifecycleEvents } from "@getpaseo/plugin/server";
+import type { PluginHookEvents, PluginHookAgent, AgentToolResult } from "@getpaseo/plugin/server";
 import { validateBeforeRequest, validateBeforeResult } from "./lifecycle/index.js";
 import { fork } from "node:child_process";
 import { stat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type pino from "pino";
 import {
   PROVIDER_CAPABILITIES,
@@ -29,10 +33,10 @@ import {
   type ProviderInput,
 } from "@getpaseo/plugin/server/provider";
 import type { PluginLogEntry } from "@getpaseo/protocol/messages";
-import { compilePlugin } from "./compiler.js";
+import { compileDirectoryPlugin } from "./compiler.js";
 import { readPluginManifest } from "./manifest.js";
-import type { PluginRequirements } from "@getpaseo/protocol/messages";
 import { assertPluginCompatibility } from "@getpaseo/protocol/plugin-requirements";
+import type { PluginRequirements } from "@getpaseo/protocol/messages";
 import type {
   PluginProcessMessage,
   PluginProcessRequest,
@@ -45,9 +49,8 @@ import type { PluginHostCall } from "./plugin-host-calls.js";
 import { InternalPluginChild } from "./internal-child.js";
 import { evaluateBundle } from "./bundle-evaluator.js";
 
-const CLIENT_ENTRY_FILENAMES = ["index.client.ts", "index.client.tsx"] as const;
-const SERVER_ENTRY_FILENAMES = ["index.server.ts", "index.server.tsx"] as const;
 const REQUEST_TIMEOUT_MS = 30_000;
+const TOOL_CALL_TIMEOUT_MS = 10 * 60_000;
 const MAX_LOG_ENTRIES = 500;
 const MAX_LOG_BYTES = 256 * 1024;
 const MAX_LOG_LINE_BYTES = 16 * 1024;
@@ -80,12 +83,15 @@ interface LoadedPlugin {
   managementTarget?: ManagementTarget;
   bundledDirectory?: string;
   id: string;
+  instanceId: string;
   requirements: PluginRequirements | undefined;
   clientBundle: string;
+  /** Lets a client that already holds this bundle skip downloading it again. */
+  clientBundleHash: string;
   methods: ReadonlySet<string>;
   /** D13: the methods the plugin registered as reads. */
   readMethods: ReadonlySet<string>;
-  hooks: { events: string[]; before: string[] };
+  hooks: string[];
   providers: readonly PluginProviderMetadata[];
   usageSources: readonly PluginUsageSourceMetadata[];
   child: PluginChild | null;
@@ -258,6 +264,10 @@ function terminatePluginChild(child: PluginChild): void {
   if (!child.killed) child.kill();
 }
 
+function hashClientBundle(clientBundle: string): string {
+  return createHash("sha256").update(clientBundle).digest("hex");
+}
+
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -280,33 +290,26 @@ function send(child: PluginChild, message: PluginProcessRequest): Promise<void> 
   });
 }
 
-async function findEntry(directory: string, filenames: readonly string[]): Promise<string | null> {
-  for (const filename of filenames) {
+// FULCRA(trusted-bundles): a trusted distribution bundle must keep every entry file inside its verified directory.
+const TRUSTED_ENTRY_FILENAMES = [
+  "index.client.ts",
+  "index.client.tsx",
+  "index.server.ts",
+  "index.server.tsx",
+] as const;
+
+async function assertTrustedEntriesInside(
+  directory: string,
+  bundledDirectory: string,
+): Promise<void> {
+  for (const filename of TRUSTED_ENTRY_FILENAMES) {
     const filePath = path.join(directory, filename);
     const info = await stat(filePath).catch(() => null);
-    if (info?.isFile()) return filePath;
+    if (!info?.isFile()) continue;
+    const resolved = await realpath(filePath);
+    if (!resolved.startsWith(bundledDirectory + path.sep))
+      throw new Error("Trusted entry escaped bundle");
   }
-  return null;
-}
-
-async function resolveEntryPaths(directory: string): Promise<{
-  client: string | null;
-  server: string | null;
-}> {
-  const [client, server] = await Promise.all([
-    findEntry(directory, CLIENT_ENTRY_FILENAMES),
-    findEntry(directory, SERVER_ENTRY_FILENAMES),
-  ]);
-  if (client || server) return { client, server };
-  const legacyEntry = await findEntry(directory, ["index.ts", "index.tsx"]);
-  if (legacyEntry) {
-    throw new Error(
-      "This plugin was made for the plugin API before 0.8 and cannot run on this version of Fulcra. Ask its author to update it.",
-    );
-  }
-  throw new Error(
-    `Plugin entry points are missing: expected ${CLIENT_ENTRY_FILENAMES.join(" or ")} and/or ${SERVER_ENTRY_FILENAMES.join(" or ")} in ${directory}`,
-  );
 }
 
 export class PluginRuntime {
@@ -332,6 +335,7 @@ export class PluginRuntime {
   private readonly spawnChild: () => PluginChild;
   private sessionHost: PluginPaseoSessionHost | null;
   private readonly listeners = new Set<(pluginId: string, error?: string) => void>();
+  private readonly sessionOpenListeners = new Set<() => void>();
 
   constructor(
     logger: pino.Logger,
@@ -354,6 +358,16 @@ export class PluginRuntime {
     return () => this.listeners.delete(listener);
   }
 
+  subscribeSessionOpenChanges(listener: () => void): () => void {
+    this.sessionOpenListeners.add(listener);
+    return () => this.sessionOpenListeners.delete(listener);
+  }
+
+  private notifySessionOpenChange(loaded: LoadedPlugin): void {
+    if (!loaded.hooks.includes("agent.open.before")) return;
+    for (const listener of this.sessionOpenListeners) listener();
+  }
+
   async startPlugin(
     pluginId: string,
     configuredPath: string,
@@ -361,10 +375,16 @@ export class PluginRuntime {
   ): Promise<void> {
     if (this.plugins.has(pluginId)) throw new Error(`Plugin is already running: ${pluginId}`);
     this.appendLog(pluginId, "stdout", "[paseo] Loading plugin");
-    const loaded = await this.loadDirectoryPlugin(pluginId, configuredPath).catch((error) => {
-      this.appendLog(pluginId, "stderr", `[paseo] Plugin failed to load: ${describeError(error)}`);
-      throw error;
-    });
+    const loaded = await this.loadDirectoryPlugin(pluginId, configuredPath, canPublish).catch(
+      (error) => {
+        this.appendLog(
+          pluginId,
+          "stderr",
+          `[paseo] Plugin failed to load: ${describeError(error)}`,
+        );
+        throw error;
+      },
+    );
     if (!canPublish()) {
       await this.stopPlugin(loaded);
       throw new Error(`Plugin start cancelled: ${pluginId}`);
@@ -378,6 +398,7 @@ export class PluginRuntime {
     this.plugins.set(pluginId, loaded);
     changePluginCacheBytes(Buffer.byteLength(loaded.clientBundle));
     this.catalogChanged();
+    this.notifySessionOpenChange(loaded);
     this.appendLog(pluginId, "stdout", "[paseo] Plugin ready");
   }
 
@@ -385,12 +406,8 @@ export class PluginRuntime {
     if (this.plugins.has(input.id)) throw new Error(`Plugin is already running: ${input.id}`);
     this.appendLog(input.id, "stdout", "[paseo] Loading plugin");
     const directory = path.resolve(input.directory);
-    const manifest = await readPluginManifest(directory);
-    if (manifest.id !== input.id) {
-      throw new Error(`Built-in plugin ${input.id} has manifest ID ${manifest.id}`);
-    }
-    assertPluginCompatibility({ ...manifest, version: this.daemonVersion, runtime: "daemon" });
-    const bundles = await compilePlugin(await resolveEntryPaths(directory));
+    const bundles = await compileDirectoryPlugin(directory, this.daemonVersion, input.id);
+    const { manifest } = bundles;
     if (!bundles.serverBundle) throw new Error(`Built-in plugin ${input.id} needs a server entry`);
     const loaded = await this.launchPlugin({
       pluginId: input.id,
@@ -402,15 +419,12 @@ export class PluginRuntime {
     });
     this.plugins.set(input.id, loaded);
     changePluginCacheBytes(Buffer.byteLength(loaded.clientBundle));
+    this.notifySessionOpenChange(loaded);
     this.appendLog(input.id, "stdout", "[paseo] Plugin ready");
   }
 
   async validatePlugin(configuredPath: string): Promise<void> {
-    const directory = path.resolve(configuredPath);
-    const manifest = await readPluginManifest(directory);
-    assertPluginCompatibility({ ...manifest, version: this.daemonVersion, runtime: "daemon" });
-    const entryPaths = await resolveEntryPaths(directory);
-    await compilePlugin(entryPaths);
+    await compileDirectoryPlugin(path.resolve(configuredPath), this.daemonVersion);
   }
 
   async stopPluginById(pluginId: string): Promise<boolean> {
@@ -419,6 +433,7 @@ export class PluginRuntime {
     this.plugins.delete(pluginId);
     changePluginCacheBytes(-Buffer.byteLength(loaded.clientBundle));
     this.catalogChanged();
+    this.notifySessionOpenChange(loaded);
     this.rejectPending(loaded, `Plugin stopped: ${pluginId}`);
     await this.stopPlugin(loaded);
     return true;
@@ -427,10 +442,16 @@ export class PluginRuntime {
   catalog(): Array<{
     id: string;
     clientBundle: string;
+    clientBundleHash: string;
     requirements?: PluginRequirements;
   }> {
     return [...this.plugins.values()]
-      .map(({ id, clientBundle, requirements }) => ({ id, clientBundle, requirements }))
+      .map(({ id, clientBundle, clientBundleHash, requirements }) => ({
+        id,
+        clientBundle,
+        clientBundleHash,
+        requirements,
+      }))
       .sort((left, right) => left.id.localeCompare(right.id));
   }
 
@@ -603,18 +624,14 @@ export class PluginRuntime {
     }
   }
 
-  emit<Name extends keyof PluginLifecycleEvents>(
-    name: Name,
-    event: PluginLifecycleEvents[Name],
-  ): void {
+  emit<Name extends keyof PluginHookEvents>(name: Name, event: PluginHookEvents[Name]): void {
     for (const loaded of this.plugins.values()) {
-      if (!loaded.hooks.events.includes(name)) {
+      if (!loaded.hooks.includes(name)) {
         continue;
       }
       const request = this.request(loaded, {
         type: "hook",
         requestId: randomUUID(),
-        kind: "event",
         name,
         input: event,
       })
@@ -635,32 +652,75 @@ export class PluginRuntime {
     await Promise.all(this.pendingEvents);
   }
 
-  async before<Name extends keyof PluginBeforeRequests>(
+  async wait(
+    name: "worktree.create.after",
+    payload: PluginHookPayload<"worktree.create.after">,
+  ): Promise<void> {
+    const plugins = [...this.plugins.values()].sort((left, right) =>
+      left.id.localeCompare(right.id),
+    );
+    for (const loaded of plugins) {
+      if (!loaded.hooks.includes(name)) continue;
+      try {
+        await this.request(loaded, { type: "hook", requestId: randomUUID(), name, input: payload });
+      } catch (error) {
+        throw new Error(`Plugin ${loaded.id} ${name} failed: ${describeError(error)}`, {
+          cause: error,
+        });
+      }
+    }
+  }
+
+  async before<Name extends keyof PluginWireBeforeRequests>(
     name: Name,
-    input: PluginBeforeRequests[Name],
-  ): Promise<PluginBeforeRequests[Name]> {
+    input: PluginWireBeforeRequests[Name],
+  ): Promise<PluginBeforeResults[Name]> {
     let request = validateBeforeRequest(name, input);
     const plugins = [...this.plugins.values()].sort((left, right) => {
       return left.id.localeCompare(right.id);
     });
+    const attached: AttachedAgentTool[] = [];
+    const mcpServers: SessionOpenWireRequest["mcpServers"] = {};
+    const mcpServerOwners: Record<string, string> = {};
     for (const loaded of plugins) {
-      if (!loaded.hooks.before.includes(name)) {
+      if (!loaded.hooks.includes(name)) {
         continue;
       }
       try {
         const output = await this.request(loaded, {
           type: "hook",
           requestId: randomUUID(),
-          kind: "before",
           name,
-          input: request,
+          input: name === "agent.open.before" ? { ...request, tools: [], mcpServers: {} } : request,
         });
-        request = validateBeforeResult(name, request, output);
+        request = await validateBeforeResult(name, request, output);
+        if (name === "worktree.create.before") {
+          const worktree = request as PluginWireBeforeRequests["worktree.create.before"];
+          worktree.path = await validateWorktreePath({
+            candidate: worktree.path,
+            repoPath: worktree.repoRoot,
+          });
+        }
+        if (name === "agent.open.before") {
+          const opened = request as SessionOpenWireRequest;
+          this.collectMcpServers(mcpServers, mcpServerOwners, loaded, opened.mcpServers);
+          this.collectAgentTools(attached, loaded, opened.tools);
+        }
       } catch (error) {
-        throw new Error(`Plugin ${loaded.id} before ${name} failed: ${describeError(error)}`, {
+        if (name === "agent.open.before")
+          this.detachTools((request as SessionOpenWireRequest).agentId);
+        throw new Error(`Plugin ${loaded.id} ${name} failed: ${describeError(error)}`, {
           cause: error,
         });
       }
+    }
+    if (name === "agent.open.before") {
+      return {
+        ...request,
+        tools: attached,
+        mcpServers,
+        mcpServerOwners,
+      } as PluginBeforeResults[Name];
     }
     return request;
   }
@@ -683,41 +743,134 @@ export class PluginRuntime {
     return output;
   }
 
+  private collectMcpServers(
+    servers: SessionOpenWireRequest["mcpServers"],
+    owners: Record<string, string>,
+    loaded: LoadedPlugin,
+    contributions: SessionOpenWireRequest["mcpServers"],
+  ): void {
+    for (const [name, server] of Object.entries(contributions)) {
+      if (Object.hasOwn(servers, name)) {
+        throw new Error(
+          `MCP server ${name} from plugin ${loaded.id} collides with plugin ${owners[name]}`,
+        );
+      }
+      servers[name] = server;
+      owners[name] = loaded.id;
+    }
+  }
+
+  private collectAgentTools(
+    attached: AttachedAgentTool[],
+    loaded: LoadedPlugin,
+    tools: SessionOpenWireRequest["tools"],
+  ): void {
+    for (const tool of tools) {
+      const collision = attached.find((entry) => entry.name === tool.name);
+      if (collision)
+        throw new Error(
+          `Agent tool ${tool.name} from plugin ${loaded.id} collides with plugin ${collision.pluginId}`,
+        );
+      attached.push({ ...tool, pluginId: loaded.id, pluginInstanceId: loaded.instanceId });
+    }
+  }
+
+  isToolPluginAvailable(pluginId: string, pluginInstanceId: string): boolean {
+    return this.plugins.get(pluginId)?.instanceId === pluginInstanceId;
+  }
+
+  detachTools(agentId: string): void {
+    for (const loaded of this.plugins.values()) {
+      if (loaded.child) void send(loaded.child, { type: "tools.detach", agentId }).catch(() => {});
+    }
+  }
+
+  async callTool(
+    pluginId: string,
+    pluginInstanceId: string,
+    agent: PluginHookAgent,
+    name: string,
+    input: unknown,
+    signal?: AbortSignal,
+  ): Promise<AgentToolResult> {
+    const loaded = this.plugins.get(pluginId);
+    if (!loaded || loaded.instanceId !== pluginInstanceId)
+      return { isError: true, text: `Plugin is not available: ${pluginId}` };
+    const requestId = randomUUID();
+    try {
+      return (await this.request(
+        loaded,
+        { type: "tool.call", requestId, agent, name, input },
+        undefined,
+        signal,
+      )) as AgentToolResult;
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      return { isError: true, text: describeError(error) };
+    }
+  }
+
   private request(
     loaded: LoadedPlugin,
     message: Extract<PluginProcessRequest, { requestId: string }>,
     management?: ManagementInvocation,
+    signal?: AbortSignal,
   ): Promise<unknown> {
     const child = loaded.child;
     const pluginId = loaded.id;
     if (!child) throw new Error(`Plugin ${pluginId} has no server entry`);
     const requestId = message.requestId;
+    signal?.throwIfAborted();
+    const baseTimeoutMs = message.type === "tool.call" ? TOOL_CALL_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
+    const timeoutMs = management ? 50_000 : baseTimeoutMs;
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(
-        () => {
-          management?.close();
-          loaded.pending.delete(requestId);
-          if (message.type === "hook") {
-            void send(child, { type: "hook.cancel", requestId }).catch(() => {});
-          }
-          reject(
-            Object.assign(
-              new Error(
-                management
-                  ? "Management outcome uncertain; do not replay"
-                  : `Plugin RPC timed out: ${pluginId}.${message.type}`,
-              ),
-              {
-                code: management ? "uncertain" : undefined,
-              },
+      const cancel = () => {
+        clearTimeout(timeout);
+        management?.close();
+        loaded.pending.delete(requestId);
+        if (message.type === "tool.call")
+          void send(child, { type: "tool.cancel", requestId }).catch(() => {});
+        signal?.removeEventListener("abort", cancel);
+        reject(signal?.reason ?? new Error("Tool call canceled"));
+      };
+      const timeout = setTimeout(() => {
+        management?.close();
+        loaded.pending.delete(requestId);
+        signal?.removeEventListener("abort", cancel);
+        if (message.type === "tool.call")
+          void send(child, { type: "tool.cancel", requestId }).catch(() => {});
+        if (message.type === "hook") {
+          void send(child, { type: "hook.cancel", requestId }).catch(() => {});
+        }
+        reject(
+          Object.assign(
+            new Error(
+              management
+                ? "Management outcome uncertain; do not replay"
+                : `Plugin RPC timed out: ${pluginId}.${message.type}`,
             ),
-          );
+            {
+              code: management ? "uncertain" : undefined,
+            },
+          ),
+        );
+      }, timeoutMs);
+      signal?.addEventListener("abort", cancel, { once: true });
+      loaded.pending.set(requestId, {
+        resolve: (value) => {
+          signal?.removeEventListener("abort", cancel);
+          resolve(value);
         },
-        management ? 50_000 : REQUEST_TIMEOUT_MS,
-      );
-      loaded.pending.set(requestId, { resolve, reject, timeout, management });
+        reject: (error) => {
+          signal?.removeEventListener("abort", cancel);
+          reject(error);
+        },
+        timeout,
+        management,
+      });
       void send(child, message).catch((error) => {
         clearTimeout(timeout);
+        signal?.removeEventListener("abort", cancel);
         loaded.pending.delete(requestId);
         reject(error);
       });
@@ -730,6 +883,7 @@ export class PluginRuntime {
     for (const plugin of loaded) changePluginCacheBytes(-Buffer.byteLength(plugin.clientBundle));
     this.catalogChanged();
     for (const plugin of loaded) {
+      this.notifySessionOpenChange(plugin);
       this.rejectPending(plugin, `Plugin stopped: ${plugin.id}`);
     }
     await Promise.all(loaded.map((plugin) => this.stopPlugin(plugin)));
@@ -738,28 +892,32 @@ export class PluginRuntime {
   private async loadDirectoryPlugin(
     pluginId: string,
     configuredPath: string,
+    canPublish: () => boolean,
   ): Promise<LoadedPlugin> {
     const directory = path.resolve(configuredPath);
     const bundledDirectory = await this.dependencies.trustedBundles?.verifyBundledDirectory(
       pluginId,
       directory,
     );
-    const manifest = await readPluginManifest(directory);
-    assertPluginCompatibility({ ...manifest, version: this.daemonVersion, runtime: "daemon" });
-    const entryPaths = await resolveEntryPaths(directory);
+    let bundles: Awaited<ReturnType<typeof compileDirectoryPlugin>>;
     if (bundledDirectory) {
-      if (manifest.id !== pluginId) throw new Error("Trusted bundle ID override refused");
-      for (const entry of Object.values(entryPaths)) {
-        if (!entry) continue;
-        const resolved = await realpath(entry);
-        if (!resolved.startsWith(bundledDirectory + path.sep))
-          throw new Error("Trusted entry escaped bundle");
-      }
-    }
-    const bundles =
-      bundledDirectory && this.dependencies.trustedBundles?.requiresPackagedRuntime(pluginId)
+      const trustedManifest = await readPluginManifest(directory);
+      assertPluginCompatibility({
+        ...trustedManifest,
+        version: this.daemonVersion,
+        runtime: "daemon",
+      });
+      if (trustedManifest.id !== pluginId) throw new Error("Trusted bundle ID override refused");
+      await assertTrustedEntriesInside(directory, bundledDirectory);
+      const compiled = this.dependencies.trustedBundles?.requiresPackagedRuntime(pluginId)
         ? await readPackagedBundles(bundledDirectory, this.daemonVersion)
-        : await compilePlugin(entryPaths);
+        : await compileDirectoryPlugin(directory, this.daemonVersion);
+      bundles = { ...compiled, manifest: trustedManifest };
+    } else {
+      bundles = await compileDirectoryPlugin(directory, this.daemonVersion);
+    }
+    const { manifest } = bundles;
+    if (!canPublish()) throw new Error(`Plugin start cancelled: ${pluginId}`);
     // Bound the full encoded catalog entry, not JS character count. A failed load is
     // surfaced in plugin settings/logs and does not disturb already running plugins.
     const catalogBytes = Buffer.byteLength(
@@ -773,14 +931,17 @@ export class PluginRuntime {
       throw new Error("Plugin catalog entry exceeds 1 MiB; reduce the client bundle");
     const serverBundle = bundles.serverBundle;
     if (!serverBundle) {
+      const clientBundle = bundles.clientBundle ?? "";
       return {
         id: pluginId,
         bundledDirectory,
-        clientBundle: bundles.clientBundle ?? "",
+        instanceId: randomUUID(),
+        clientBundle,
+        clientBundleHash: hashClientBundle(clientBundle),
         requirements: manifest.requirements,
         methods: new Set(),
         readMethods: new Set(),
-        hooks: { events: [], before: [] },
+        hooks: [],
         providers: [],
         usageSources: [],
         child: null,
@@ -911,11 +1072,13 @@ export class PluginRuntime {
     loaded = {
       id: pluginId,
       bundledDirectory,
+      instanceId: randomUUID(),
       clientBundle,
+      clientBundleHash: hashClientBundle(clientBundle),
       requirements,
       methods: new Set(ready.methods),
       readMethods: new Set((ready.readMethods ?? []).filter((m) => ready.methods.includes(m))),
-      hooks: ready.hooks ?? { events: [], before: [] },
+      hooks: ready.hooks ?? [],
       providers: ready.providers ?? [],
       usageSources: ready.usageSources ?? [],
       child,
@@ -995,7 +1158,14 @@ export class PluginRuntime {
 
   private handleChildMessage(loaded: LoadedPlugin, message: PluginProcessMessage): void {
     if (message.type === "hooks.changed") {
+      const hadSessionOpen = loaded.hooks.includes("agent.open.before");
       loaded.hooks = message.hooks;
+      if (
+        this.plugins.get(loaded.id) === loaded &&
+        hadSessionOpen !== loaded.hooks.includes("agent.open.before")
+      ) {
+        for (const listener of this.sessionOpenListeners) listener();
+      }
       return;
     }
     if (message.type === "settings.changed") {
@@ -1404,6 +1574,7 @@ export class PluginRuntime {
       this.plugins.delete(loaded.id);
       changePluginCacheBytes(-Buffer.byteLength(loaded.clientBundle));
       this.catalogChanged();
+      this.notifySessionOpenChange(loaded);
     }
     this.rejectPending(loaded, `Plugin process exited: ${loaded.id}`);
     for (const state of loaded.providerConnections.values()) {

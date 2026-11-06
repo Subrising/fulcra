@@ -6,6 +6,7 @@ import { ComposerDock } from "@/composer/dock";
 import { useContainerWidthBelow } from "@/hooks/use-container-width";
 import invariant from "tiny-invariant";
 import { Composer } from "@/composer";
+import { useComposerEditingSession, useComposerFullscreen } from "@/composer/editing-session";
 import { FileDropZone } from "@/components/file-drop/file-drop-zone";
 import { ComposerImportPill } from "@/composer/draft/import-pill";
 import { COMPOSER_PILL_CLEARANCE } from "@/composer/pill-styles";
@@ -15,7 +16,7 @@ import { useAgentInputDraft } from "@/composer/draft/input-draft";
 import type { CreateAgentInitialValues } from "@/hooks/use-agent-form-state";
 import { useDraftAgentCreateFlow, type DraftCreateAttempt } from "@/composer/draft/create-flow";
 import { resolveTurnPresentation, TURN_LIVENESS_IDLE } from "@/timeline/turn-liveness";
-import { useHostRuntimeClient } from "@/runtime/host-runtime";
+import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { buildWorkspaceDraftAgentConfig } from "@/screens/workspace/workspace-draft-agent-config";
 import { buildDraftStoreKey } from "@/stores/draft-keys";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
@@ -35,7 +36,7 @@ import {
   validateDraftSubmission,
 } from "@/composer/draft/workspace-tab-core";
 import type { AgentCapabilityFlags } from "@getpaseo/protocol/agent-types";
-import type { AgentSnapshotPayload } from "@getpaseo/protocol/messages";
+import type { AgentSnapshotPayload, CreationSnapshot } from "@getpaseo/protocol/messages";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { WorkspaceComposerAttachment } from "@/attachments/types";
 import {
@@ -44,7 +45,7 @@ import {
   useWorkspaceAttachmentsStore,
 } from "@/attachments/workspace-attachments-store";
 import type { UserMessageImageAttachment } from "@/types/stream";
-import { COMPACT_FORM_FACTOR_WIDTH, useIsCompactFormFactor } from "@/constants/layout";
+import { COMPACT_CONTENT_WIDTH, useIsCompactFormFactor } from "@/constants/layout";
 import { isWeb } from "@/constants/platform";
 import {
   buildWorkspaceTabPersistenceKey,
@@ -91,31 +92,18 @@ function resolveAutoSubmitConfig(
   };
 }
 
-// Reconcile the form's selected mode against the currently discovered modes.
-// The mode picker displays modeOptions[0] when the stored mode isn't in the
-// list (e.g. a globally-remembered "plan" that this workspace's OpenCode config
-// no longer defines), so the submitted mode must match that display — otherwise
-// we'd send a stale mode the provider rejects while the UI showed a valid one.
-function reconcileSelectedMode(modeOptionIds: readonly string[], selectedMode: string): string {
-  if (modeOptionIds.length === 0) {
-    return "";
-  }
-  return modeOptionIds.includes(selectedMode) ? selectedMode : (modeOptionIds[0] ?? "");
-}
-
 function resolveDraftModeIdOverride(input: {
   autoSubmitConfig: AutoSubmitConfig | null;
   modeOptionIds: readonly string[];
-  selectedMode: string;
+  effectiveModeId: string;
   provider: string;
 }): { modeId: string } | Record<string, never> {
-  const { autoSubmitConfig, modeOptionIds, selectedMode } = input;
+  const { autoSubmitConfig, effectiveModeId, modeOptionIds } = input;
   if (autoSubmitConfig?.modeId) {
     return { modeId: autoSubmitConfig.modeId };
   }
-  const reconciled = reconcileSelectedMode(modeOptionIds, selectedMode);
-  if (reconciled !== "") {
-    return { modeId: reconciled };
+  if (effectiveModeId !== "") {
+    return { modeId: effectiveModeId };
   }
   // Nobody chose a mode, so the session would be born in whatever the provider defaults
   // to at runtime. Send the adapter's declared automatic-approval mode instead — resolved
@@ -129,16 +117,15 @@ function resolveDraftModeIdOverride(input: {
 function resolveDraftModeId(input: {
   autoSubmitConfig: AutoSubmitConfig | null;
   modeOptionIds: readonly string[];
-  selectedMode: string;
+  effectiveModeId: string;
   provider: string;
 }): string | null {
-  const { autoSubmitConfig, modeOptionIds, selectedMode } = input;
+  const { autoSubmitConfig, effectiveModeId, modeOptionIds } = input;
   if (autoSubmitConfig?.modeId !== undefined) {
     return autoSubmitConfig.modeId;
   }
-  const reconciled = reconcileSelectedMode(modeOptionIds, selectedMode);
-  if (reconciled !== "") {
-    return reconciled;
+  if (effectiveModeId !== "") {
+    return effectiveModeId;
   }
   // The draft tab shows this as the session's mode, so it has to be the same answer the
   // creation request sends. Two resolvers disagreeing is how a session ends up running in
@@ -163,8 +150,8 @@ async function submitDraftCreateRequest(input: {
   autoSubmitConfig: AutoSubmitConfig | null;
   composerState: {
     selectedProvider: string | null;
-    selectedMode: string;
     modeOptions: readonly { id: string }[];
+    effectiveModeId: string;
     effectiveModelId: string | null;
     effectiveThinkingOptionId: string | null;
     featureValues: Record<string, unknown> | undefined;
@@ -200,7 +187,7 @@ async function submitDraftCreateRequest(input: {
   const modeIdOverride = resolveDraftModeIdOverride({
     autoSubmitConfig,
     modeOptionIds: composerState.modeOptions.map((mode) => mode.id),
-    selectedMode: composerState.selectedMode,
+    effectiveModeId: composerState.effectiveModeId,
     provider,
   });
   const config = buildWorkspaceDraftAgentConfig({
@@ -226,7 +213,22 @@ async function submitDraftCreateRequest(input: {
     ...(attachmentsArray && attachmentsArray.length > 0 ? { attachments: attachmentsArray } : {}),
   };
   const creation = useWorkspaceDraftSubmissionStore.getState().creationByDraftId[input.draftId];
-  const result = creation ? await creation.retry(options) : await client.createAgent(options);
+  // FULCRA(FU-657): the host rejects a create whose first turn failed to start, but the agent is
+  // registered by then. The tab becomes that agent, which shows the failure in its timeline.
+  let registered: AgentSnapshotPayload | undefined;
+  const observed = {
+    ...options,
+    onEvent: (snapshot: CreationSnapshot) => {
+      if (snapshot.agent) registered = snapshot.agent;
+    },
+  };
+  let result: AgentSnapshotPayload;
+  try {
+    result = creation ? await creation.retry(observed) : await client.createAgent(observed);
+  } catch (error) {
+    if (!registered) throw error;
+    result = registered;
+  }
 
   return {
     agentId: result.id,
@@ -244,7 +246,7 @@ function buildDraftAgentSnapshot(input: {
     effectiveModelId: string | null;
     effectiveThinkingOptionId: string | null;
     modeOptions: readonly { id: string }[];
-    selectedMode: string;
+    effectiveModeId: string;
     selectedProvider: string | null;
     agentControls: { features?: Agent["features"] };
   };
@@ -263,7 +265,7 @@ function buildDraftAgentSnapshot(input: {
   const modeId = resolveDraftModeId({
     autoSubmitConfig,
     modeOptionIds: composerState.modeOptions.map((mode) => mode.id),
-    selectedMode: composerState.selectedMode,
+    effectiveModeId: composerState.effectiveModeId,
     provider,
   });
   return {
@@ -349,6 +351,7 @@ export function WorkspaceDraftAgentTab({
 }: WorkspaceDraftAgentTabProps) {
   const { t } = useTranslation();
   const client = useHostRuntimeClient(serverId);
+  const isConnected = useHostRuntimeIsConnected(serverId);
   const workspaceFields = useWorkspaceFields(serverId, workspaceId, (w) => ({
     workspaceDirectory: w.workspaceDirectory,
     id: w.id,
@@ -434,8 +437,10 @@ export function WorkspaceDraftAgentTab({
   }, [pendingCreateAttempt]);
   const allowsEmptyAutoSubmit = pendingAutoSubmit?.allowEmptyText === true;
   const isCompactFormFactor = useIsCompactFormFactor();
+  const editingSession = useComposerEditingSession("chat");
+  const isComposerFullscreen = useComposerFullscreen(editingSession);
   const { onLayout: onInputAreaLayout, isBelow: isCompactComposerLayout } = useContainerWidthBelow(
-    COMPACT_FORM_FACTOR_WIDTH,
+    COMPACT_CONTENT_WIDTH,
     { initialIsBelow: isCompactFormFactor },
   );
   const workspaceAttachmentScopeKey = useWorkspaceAttachmentScopeKey({
@@ -460,11 +465,10 @@ export function WorkspaceDraftAgentTab({
       openWorkspaceChanges({
         isCompact: isCompactFormFactor,
         workspaceKey: buildWorkspaceTabPersistenceKey({ serverId, workspaceId: workspaceId ?? "" }),
-        checkout: { serverId, cwd: composerState.workingDir, isGit: true },
         preferences: openInSidePane,
       });
     },
-    [composerState.workingDir, isCompactFormFactor, openInSidePane, serverId, workspaceId],
+    [isCompactFormFactor, openInSidePane, serverId, workspaceId],
   );
 
   const {
@@ -491,7 +495,7 @@ export function WorkspaceDraftAgentTab({
         composerState,
         autoSubmitConfig,
         workspaceDirectory: draftWorkingDirectory,
-        hasClient: Boolean(client),
+        isConnected,
       });
     },
     onBeforeSubmit: async () => {
@@ -684,10 +688,10 @@ export function WorkspaceDraftAgentTab({
 
   return (
     <FileDropZone style={styles.container}>
-      <ComposerDock>
+      <ComposerDock fullscreen={isComposerFullscreen}>
         {dockContent}
         <View style={animatedStaticStyles.inputAreaWrapper} onLayout={onInputAreaLayout}>
-          {importPillPress ? (
+          {importPillPress && !isComposerFullscreen ? (
             <View style={styles.importPillRow}>
               <View style={styles.importPillContent}>
                 <ComposerImportPill onPress={importPillPress} />
@@ -711,6 +715,7 @@ export function WorkspaceDraftAgentTab({
             onChangeAttachments={draftInput.setAttachments}
             cwd={composerState.workingDir}
             clearDraft={draftInput.clear}
+            editingSession={editingSession}
             autoFocus={shouldAutoFocusWorkspaceDraftComposer({ isPaneFocused, isSubmitting })}
             autoFocusKey={String(draftInput.attachmentFocusRequestId)}
             onFocusInput={handleFocusInputCallback}
@@ -728,6 +733,8 @@ const animatedStaticStyles = RNStyleSheet.create({
   inputAreaWrapper: {
     width: "100%",
     flexShrink: 1,
+    // Content-sized inline; fills the dock's fullscreen slot.
+    flexGrow: 1,
   },
 });
 

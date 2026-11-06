@@ -1,3 +1,4 @@
+import { createWorkspaceRuntimeStore } from "./workspace-runtime-store/index.js";
 import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -110,6 +111,8 @@ async function fixture() {
     null,
     { allowedOrigins: new Set() },
     createStub({}),
+    // FULCRA(FU-657): v0.15 adds the workspace runtime store as argument 12.
+    createWorkspaceRuntimeStore(),
     undefined,
     undefined,
     undefined,
@@ -862,10 +865,13 @@ test("normal paired source switches its focused chat while other open timelines 
     expect(f.bridge).not.toHaveBeenCalled();
     await call("organization.accounts.switch");
     expect(f.bridge).toHaveBeenCalledTimes(1);
-    expect(
-      socket.sent.findLast((frame) => frame.message?.type === "plugin.rpc.invoke.response")?.message
-        ?.payload.output,
-    ).toBe("ok");
+    // FULCRA(FU-657): since v0.15 the request settles after handleMessage returns.
+    await vi.waitFor(() =>
+      expect(
+        socket.sent.findLast((frame) => frame.message?.type === "plugin.rpc.invoke.response")
+          ?.message?.payload.output,
+      ).toBe("ok"),
+    );
     expect(f.bridge).toHaveBeenLastCalledWith(
       expect.objectContaining({ method: "session-takeover" }),
       expect.objectContaining({ deviceId, accountSessionId: id }),

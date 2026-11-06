@@ -837,6 +837,7 @@ test("PR routing declares stable behavior ownership", () => {
       "packages/app/src/desktop/**",
       "packages/app/src/device/plugin-device.electron.ts",
       "packages/app/src/plugins/bundle-trust-policy.electron.ts",
+      "packages/app/src/notification-open/source.electron.ts",
       "packages/server/src/server/browser-tools/**",
       "packages/app/e2e/support/**",
       "packages/app/*config.{cjs,js,ts}",
@@ -894,6 +895,7 @@ test("browser and desktop tests have exclusive, directory-owned suites", () => {
   const nativePolicyModules = new Set([
     "packages/app/src/device/plugin-device.electron.ts",
     "packages/app/src/plugins/bundle-trust-policy.electron.ts",
+    "packages/app/src/notification-open/source.electron.ts",
   ]);
   assert.ok(
     electronModules.every(
@@ -925,6 +927,7 @@ test("browser and desktop tests have exclusive, directory-owned suites", () => {
     "packages/app/src/desktop/**",
     "packages/app/src/device/plugin-device.electron.ts",
     "packages/app/src/plugins/bundle-trust-policy.electron.ts",
+    "packages/app/src/notification-open/source.electron.ts",
     "packages/server/src/server/browser-tools/**",
     "packages/app/e2e/support/**",
     "packages/app/*config.{cjs,js,ts}",

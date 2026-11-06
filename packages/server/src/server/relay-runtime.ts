@@ -3,7 +3,7 @@ import { OfferStore } from "./pairing/offer-store.js";
 import { DeviceRegistry } from "./pairing/device-registry.js";
 import { RelayDeviceGate } from "./pairing/relay-device-gate.js";
 import type pino from "pino";
-import type { KeyPair } from "@getpaseo/relay/e2ee";
+import type { KeyPair } from "@getpaseo/client/relay-v3";
 import type { ExternalSocketMetadata } from "./websocket-server.js";
 import {
   startRelayTransport,

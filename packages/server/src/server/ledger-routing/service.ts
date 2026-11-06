@@ -657,7 +657,6 @@ export class LedgerRoutingService {
           thinking: role.thinking,
           env: { FULCRA_ACCOUNT_REQUEST: role.account },
           callerAgentId: config.leadId,
-          background: true,
           notifyOnFinish: false,
           creationAdmission: check,
           labels: {

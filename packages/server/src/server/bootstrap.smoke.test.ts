@@ -3,6 +3,10 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { AgentClient, AgentSessionConfig } from "./agent/agent-sdk-types.js";
 import { resolveDaemonVersion } from "./daemon-version.js";
 import os from "node:os";
+import { once } from "node:events";
+import type { ChildProcess } from "node:child_process";
+import type { Query } from "@anthropic-ai/claude-agent-sdk";
+import { ClaudeAgentClient } from "./agent/providers/claude/agent.js";
 import http from "node:http";
 import path from "node:path";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -1223,6 +1227,131 @@ test.each([0, 1250])(
       await mcp.close();
       await client.close();
       await daemon.close();
+    }
+  },
+  30_000,
+);
+
+test.each(["reject", "stall"] as const)(
+  "shutdown closes Claude and its process despite a %s peer and stalled SDK handshake",
+  async (failure) => {
+    let child: ChildProcess | undefined;
+    let ready!: () => void;
+    const processReady = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
+    let finishStream!: () => void;
+    const streamFinished = new Promise<void>((resolve) => {
+      finishStream = resolve;
+    });
+    const never = new Promise<never>(() => {});
+    const claude = new ClaudeAgentClient({
+      logger: pino({ level: "silent" }),
+      resolveBinary: async () => process.execPath,
+      queryFactory: ({ options }) => {
+        child = options.spawnClaudeCodeProcess!({
+          command: process.execPath,
+          args: [
+            "-e",
+            "process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000)",
+          ],
+          cwd: process.cwd(),
+          env: process.env,
+          signal: new AbortController().signal,
+        }) as ChildProcess;
+        child.stdout!.once("data", ready);
+        let initialized = false;
+        // An injected SDK adapter leaves an active turn and both close requests unanswered.
+        return {
+          async next() {
+            if (!initialized) {
+              initialized = true;
+              return {
+                done: false,
+                value: {
+                  type: "system",
+                  subtype: "init",
+                  session_id: "shutdown-session",
+                  permissionMode: "default",
+                },
+              };
+            }
+            await streamFinished;
+            return { done: true, value: undefined };
+          },
+          interrupt: () => never,
+          return: () => never,
+          close() {},
+          async supportedModels() {
+            return [];
+          },
+          async supportedCommands() {
+            return [];
+          },
+          async setPermissionMode() {},
+          async setModel() {},
+          async applyFlagSettings() {},
+          [Symbol.asyncIterator]() {
+            return this;
+          },
+        } as Query;
+      },
+    });
+    let armed = false;
+    let peerRunning!: () => void;
+    const peerReady = new Promise<void>((resolve) => {
+      peerRunning = resolve;
+    });
+    const peers = createTestAgentClients({
+      beforeTurnComplete: async () => {
+        peerRunning();
+        await streamFinished;
+      },
+      closeSession: async () => {
+        if (!armed) return;
+        if (failure === "reject") throw new Error("peer close rejected");
+        await never;
+      },
+    });
+    const handle = await createTestPaseoDaemon({ agentClients: { claude, codex: peers.codex } });
+    let stopped = false;
+    let run: Promise<unknown> | undefined;
+    let peerRun: Promise<unknown> | undefined;
+    try {
+      const agent = await handle.daemon.agentManager.createAgent(
+        { provider: "claude", cwd: handle.paseoHome },
+        undefined,
+        { workspaceId: undefined },
+      );
+      run = handle.daemon.agentManager.runAgent(agent.id, "keep working").catch(() => undefined);
+      await processReady;
+      expect(handle.daemon.agentManager.getAgent(agent.id)?.lifecycle).toBe("running");
+      const peer = await handle.daemon.agentManager.createAgent(
+        { provider: "codex", cwd: handle.paseoHome, modeId: "full-access" },
+        undefined,
+        { workspaceId: undefined },
+      );
+      peerRun = handle.daemon.agentManager.runAgent(peer.id, "keep working").catch(() => undefined);
+      await peerReady;
+      armed = true;
+      await handle.daemon.stop();
+      stopped = true;
+      // Windows taskkill is forceful on the first signal; POSIX escalates after SIGTERM.
+      expect(child!.exitCode !== null || child!.signalCode !== null).toBe(true);
+      expect((await handle.daemon.agentStorage.get(agent.id))?.lastStatus).toBe("closed");
+      expect(handle.daemon.agentManager.getAgent(agent.id)).toBeNull();
+      expect((await handle.daemon.agentStorage.get(peer.id))?.lastStatus).toBe("running");
+    } finally {
+      finishStream();
+      if (child && child.exitCode === null && child.signalCode === null) {
+        const exited = once(child, "exit");
+        child.kill("SIGKILL");
+        await exited;
+      }
+      if (!stopped) await handle.daemon.stop();
+      await Promise.all([run, peerRun]);
+      await rm(path.dirname(handle.paseoHome), { recursive: true, force: true });
+      await rm(handle.staticDir, { recursive: true, force: true });
     }
   },
   30_000,

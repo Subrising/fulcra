@@ -120,13 +120,6 @@ if (target === "android" || target === "android-prebuild") {
   env.PASEO_FDROID_BUILD = "1";
   env.PASEO_PROFILE_BUILD = "0";
   run(npm, ["run", "build:app-deps"]);
-  run(npm, ["run", "build:terminal-webview", "--workspace=@getpaseo/app"]);
-  run(npm, [
-    "run",
-    "format:files",
-    "--",
-    "packages/app/src/terminal/webview/terminal-emulator-webview-html.ts",
-  ]);
   run(
     npm,
     ["exec", "--", "expo", "prebuild", "--platform", "android", "--clean", "--no-install"],

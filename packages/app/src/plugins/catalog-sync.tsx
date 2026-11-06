@@ -1,12 +1,12 @@
 import { preparePluginCatalog } from "./bundle-trust";
 import { useVoiceAudioEngineOptional } from "@/contexts/voice-context";
-import { pluginSettingsKey } from "./settings/use-settings";
 import { useEffect } from "react";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { useHostFeatureAvailability } from "@/runtime/host-features";
 import { useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { pluginRegistry } from "./registry";
 import { sha256Hex } from "./catalog-hash";
+import { pluginSettingsKey, pluginSettingsPrefix } from "./settings/query";
 
 // FULCRA(plugin-host): one failed catalog read (a slow or dropped network on the phone, a host that is still starting)
 // used to leave the host with no plugins until the app restarted: no /account, no home computer. The read is
@@ -125,7 +125,19 @@ export function PluginCatalogSync({
     ]);
     observation.subscribe({
       snapshot: () => {
-        if (generation === 0) void refresh();
+        if (generation !== 0) return;
+        void refresh().then(() => {
+          if (cancelled) return undefined;
+          // Retained replicas miss offline writes and do not refetch when a screen mounts.
+          for (const plugin of pluginRegistry.getSnapshot()) {
+            if (plugin.serverId !== serverId) continue;
+            void plugin.queryClient.invalidateQueries({
+              queryKey: pluginSettingsPrefix,
+              refetchType: "all",
+            });
+          }
+          return undefined;
+        });
       },
       update: (message) => {
         if (message.type !== "status") return;

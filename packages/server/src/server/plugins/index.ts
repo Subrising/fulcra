@@ -1,6 +1,7 @@
-import type { PluginLifecycleEvents } from "@getpaseo/plugin/server";
+import type { PluginHookEvents, PluginLifecycleEvents } from "@getpaseo/plugin/server";
 import type { TrustedPlugins } from "./trusted.js";
 import type { ManagementInvocation } from "./management.js";
+import type { PluginAgentToolsRuntime } from "./agent-tools.js";
 import type { PluginLifecycle } from "./lifecycle/index.js";
 import type { PluginHostCall } from "./plugin-host-calls.js";
 import path from "node:path";
@@ -42,9 +43,14 @@ const BUILTIN_PROVIDER_ID_SET: ReadonlySet<string> = new Set(BUILTIN_PROVIDER_ID
 
 interface PluginRuntimePort {
   managementTarget?: PluginRuntime["managementTarget"];
+  subscribeSessionOpenChanges?: PluginRuntime["subscribeSessionOpenChanges"];
+  isToolPluginAvailable?: PluginRuntime["isToolPluginAvailable"];
+  callTool?: PluginRuntime["callTool"];
+  detachTools?: PluginRuntime["detachTools"];
   emit?: PluginLifecycle["emit"];
   drainEvents?: PluginRuntime["drainEvents"];
   before?: PluginLifecycle["before"];
+  wait?: PluginLifecycle["wait"];
   catalog: PluginRuntime["catalog"];
   readonly catalogPaging?: PluginRuntime["catalogPaging"];
   invoke(
@@ -92,6 +98,20 @@ function resolvePluginStatus(input: {
   return input.running ? "running" : "failed";
 }
 
+// FULCRA: host policy event names (legacy) to the hook names the daemon emits. Mirrors the
+// COMPAT(pluginHookNames) table in @getpaseo/plugin/server.
+const HOST_LIFECYCLE_EVENT_NAMES: Record<keyof PluginLifecycleEvents, keyof PluginHookEvents> = {
+  "workspace.created": "workspace.create.after",
+  "workspace.archived": "workspace.archive.after",
+  "agent.created": "agent.create.after",
+  "agent.closed": "agent.close.after",
+  "agent.archived": "agent.archive.after",
+  "agent.turn_started": "agent.turn.before",
+  "agent.turn_ended": "agent.turn.after",
+  "agent.permission_requested": "agent.permission.before",
+  "agent.permission_resolved": "agent.permission.after",
+};
+
 export class PluginService {
   private readonly runtime: PluginRuntimePort;
   private readonly managedSources: ManagedPluginSources | null;
@@ -108,6 +128,10 @@ export class PluginService {
   private lifecycle = Promise.resolve();
   private globalStartsBlocked = true;
   private readonly distributionStarts = new Set<string>();
+  private readonly pendingOperations = new Map<
+    string,
+    { kind: "disable" | "remove"; completion: Promise<void> }
+  >();
   private started = false;
   private readonly settingsListeners = new Set<(pluginId: string, settingsId: string) => void>();
 
@@ -147,15 +171,20 @@ export class PluginService {
   }
 
   private readonly hostLifecycleListeners = new Map<
-    keyof PluginLifecycleEvents,
+    keyof PluginHookEvents,
     Set<(event: never) => void | Promise<void>>
   >();
 
-  /** Distribution-owned policies use the same native event names and payloads as subprocess plugins. */
+  /**
+   * Distribution-owned policies use the same native event names and payloads as subprocess plugins.
+   * FULCRA: they still use the legacy names (`agent.turn_ended`); the daemon emits the v0.14 hook names.
+   */
   readonly on = <Name extends keyof PluginLifecycleEvents>(
-    name: Name,
+    legacyName: Name,
     handler: (event: PluginLifecycleEvents[Name]) => void | Promise<void>,
   ): (() => void) => {
+    const name = HOST_LIFECYCLE_EVENT_NAMES[legacyName];
+    if (!name) throw new Error(`Unknown lifecycle event: ${legacyName}`);
     const handlers = this.hostLifecycleListeners.get(name) ?? new Set();
     const callback = handler as (event: never) => void | Promise<void>;
     handlers.add(callback);
@@ -177,6 +206,38 @@ export class PluginService {
       }
     }
     this.runtime.emit?.(name, event);
+  };
+
+  subscribeSessionOpenChanges(listener: () => void): () => void {
+    return this.runtime.subscribeSessionOpenChanges?.(listener) ?? (() => {});
+  }
+
+  readonly isToolPluginAvailable: PluginAgentToolsRuntime["isToolPluginAvailable"] = (
+    pluginId,
+    pluginInstanceId,
+  ) => {
+    return this.runtime.isToolPluginAvailable?.(pluginId, pluginInstanceId) ?? false;
+  };
+
+  readonly detachTools: PluginAgentToolsRuntime["detachTools"] = (agentId) => {
+    this.runtime.detachTools?.(agentId);
+  };
+
+  readonly callTool: PluginAgentToolsRuntime["callTool"] = async (
+    pluginId,
+    pluginInstanceId,
+    agent,
+    name,
+    input,
+    signal,
+  ) => {
+    if (!this.isToolPluginAvailable(pluginId, pluginInstanceId) || !this.runtime.callTool)
+      return { isError: true, text: `Plugin is not available: ${pluginId}` };
+    return this.runtime.callTool(pluginId, pluginInstanceId, agent, name, input, signal);
+  };
+
+  readonly wait: PluginLifecycle["wait"] = async (name, payload) => {
+    await this.runtime.wait?.(name, payload);
   };
 
   async drainEvents(): Promise<void> {
@@ -319,11 +380,7 @@ export class PluginService {
           `Plugin ID "${pluginId}" is already configured; choose another ID with --id`,
         );
       }
-      const sources = {
-        ...this.configStore.get().plugins,
-        [pluginId]: { source: "directory" as const, path: directory, enabled: true },
-      };
-      this.configStore.patch({ plugins: sources });
+      await this.patchSource(pluginId, { source: "directory", path: directory, enabled: true });
       if (this.canPublish(pluginId)) await this.startConfigured(pluginId);
       this.notify(pluginId);
       const installed = await this.requireItem(pluginId);
@@ -384,15 +441,17 @@ export class PluginService {
         await managedSources.discard(candidate);
         throw error;
       }
-      this.patchSource(pluginId, { source: "directory", path: candidate.directory, enabled: true });
+      await this.patchSource(pluginId, {
+        source: "directory",
+        path: candidate.directory,
+        enabled: true,
+      });
       try {
         if (this.canPublish(pluginId)) await this.startExplicit(pluginId, candidate.directory);
         managedSources.commit(pluginId, candidate.record);
       } catch (error) {
         await this.stopPlugin(pluginId);
-        const sources = { ...this.configStore.get().plugins };
-        delete sources[pluginId];
-        this.configStore.patch({ plugins: sources });
+        await this.removeSource(pluginId);
         await managedSources.discard(candidate);
         this.errors.delete(pluginId);
         this.notify(pluginId);
@@ -501,10 +560,11 @@ export class PluginService {
 
   async enablePlugin(pluginId: string): Promise<PluginListItem> {
     this.refuseTrustedInstall(pluginId);
-    const source = this.requireSource(pluginId);
-    this.patchSource(pluginId, { ...source, enabled: true });
+    await this.patchSource(pluginId, (source) => ({ ...source, enabled: true }));
     this.errors.delete(pluginId);
     return this.enqueue(async () => {
+      // Cancellation persistence uses the store queue, so it never waits behind a blocked start.
+      await this.pendingOperations.get(pluginId)?.completion.catch(() => {});
       const current = this.requireSource(pluginId);
       if (current.enabled !== false && this.configStore.get().pluginsEnabled === true) {
         await this.startExplicit(pluginId, current.path);
@@ -515,8 +575,17 @@ export class PluginService {
   }
 
   async disablePlugin(pluginId: string): Promise<PluginListItem> {
-    const source = this.requireSource(pluginId);
-    this.patchSource(pluginId, { ...source, enabled: false });
+    const operation = {
+      kind: "disable",
+      completion: this.patchSource(pluginId, (source) => ({ ...source, enabled: false })),
+    } as const;
+    this.pendingOperations.set(pluginId, operation);
+    try {
+      await operation.completion;
+    } finally {
+      if (this.pendingOperations.get(pluginId) === operation)
+        this.pendingOperations.delete(pluginId);
+    }
     const stopping = this.stopPlugin(pluginId);
     return this.enqueue(async () => {
       await stopping;
@@ -528,10 +597,15 @@ export class PluginService {
 
   async removePlugin(pluginId: string): Promise<void> {
     this.requireSource(pluginId);
+    const operation = { kind: "remove", completion: this.removeSource(pluginId) } as const;
+    this.pendingOperations.set(pluginId, operation);
+    try {
+      await operation.completion;
+    } finally {
+      if (this.pendingOperations.get(pluginId) === operation)
+        this.pendingOperations.delete(pluginId);
+    }
     const stopping = this.stopPlugin(pluginId);
-    const sources = { ...this.configStore.get().plugins };
-    delete sources[pluginId];
-    this.configStore.patch({ plugins: sources });
     await this.enqueue(async () => {
       await stopping;
       this.runtime.clearLogs(pluginId);
@@ -619,11 +693,12 @@ export class PluginService {
   private canPublish(pluginId: string): boolean {
     const config = this.configStore.get();
     return (
-      this.distributionStarts.has(pluginId) ||
-      (!this.globalStartsBlocked &&
-        config.pluginsEnabled === true &&
-        config.plugins?.[pluginId]?.enabled !== false &&
-        config.plugins?.[pluginId] !== undefined)
+      !this.pendingOperations.has(pluginId) &&
+      (this.distributionStarts.has(pluginId) ||
+        (!this.globalStartsBlocked &&
+          config.pluginsEnabled === true &&
+          config.plugins?.[pluginId]?.enabled !== false &&
+          config.plugins?.[pluginId] !== undefined))
     );
   }
 
@@ -833,7 +908,10 @@ export class PluginService {
       await managedSources.discard(candidate);
       throw new Error(`Plugin is no longer configured: ${pluginId}`);
     }
-    this.patchSource(pluginId, { ...activatedSource, path: candidate.directory });
+    await this.patchSource(pluginId, (currentSource) => ({
+      ...currentSource,
+      path: candidate.directory,
+    }));
     this.errors.delete(pluginId);
     this.notify(pluginId);
     let warning: string | undefined;
@@ -875,9 +953,28 @@ export class PluginService {
     return source;
   }
 
-  private patchSource(pluginId: string, source: PluginSource): void {
-    this.configStore.patch({
-      plugins: { ...this.configStore.get().plugins, [pluginId]: source },
+  private async patchSource(
+    pluginId: string,
+    update: PluginSource | ((source: PluginSource) => PluginSource),
+  ): Promise<void> {
+    await this.configStore.patch((current) => {
+      const source = current.plugins?.[pluginId];
+      if (typeof update === "function" && !source)
+        throw new Error(`Plugin is not configured: ${pluginId}`);
+      return {
+        plugins: {
+          ...current.plugins,
+          [pluginId]: typeof update === "function" ? update(source!) : update,
+        },
+      };
+    });
+  }
+
+  private async removeSource(pluginId: string): Promise<void> {
+    await this.configStore.patch((current) => {
+      const sources = { ...current.plugins };
+      delete sources[pluginId];
+      return { plugins: sources };
     });
   }
 

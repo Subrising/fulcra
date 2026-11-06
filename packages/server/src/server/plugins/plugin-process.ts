@@ -1,5 +1,6 @@
 import { createManagementContext } from "./plugin-management-context.js";
 import { untrustedHostHooks } from "./trusted.js";
+import { PluginAgentTools } from "./agent-tools.js";
 import { PluginHookHandlers } from "./lifecycle/index.js";
 import { evaluateBundle } from "./bundle-evaluator.js";
 import {
@@ -39,6 +40,7 @@ import {
   redactPluginError,
   type PluginSecretStore,
 } from "./plugin-secrets.js";
+import { initializeEnvironmentProxy } from "../network/index.js";
 function describeError(error: unknown, secretStore: PluginSecretStore | null = null): string {
   return redactPluginError(secretStore, error instanceof Error ? error.message : String(error));
 }
@@ -80,9 +82,10 @@ export function createPluginWorker(options: {
     readOnly: boolean;
   }
 
+  const agentTools = new PluginAgentTools();
   const hooks = new PluginHookHandlers(() => {
     send({ type: "hooks.changed", hooks: hooks.catalog() });
-  });
+  }, agentTools);
   const handlers = new Map<string, RegisteredRpc>();
   const providers = new Map<string, ProviderRegistration>();
   const usageSources = new Map<string, UsageSourceRegistration>();
@@ -376,6 +379,7 @@ export function createPluginWorker(options: {
       registerProvider,
       registerUsageSource,
       registerSettings,
+      addHook: hooks.addHook,
       on: hooks.on,
       before: hooks.before,
     });
@@ -416,6 +420,7 @@ export function createPluginWorker(options: {
       ?.dispose()
       .catch((error) => console.error("Plugin API cleanup failed", error));
     hooks.close();
+    agentTools.close();
     for (const pending of pendingProviderConnections.values()) pending.tombstoned = true;
     for (const pending of pendingHostCalls.values())
       pending.reject(new Error("Plugin is stopping"));
@@ -478,6 +483,42 @@ export function createPluginWorker(options: {
     }
   }
 
+  function handleToolMessage(
+    message: PluginProcessRequest,
+  ): message is Extract<
+    PluginProcessRequest,
+    { type: "tool.call" | "tool.cancel" | "tools.detach" }
+  > {
+    if (message.type === "tools.detach") {
+      agentTools.detach(message.agentId);
+      return true;
+    }
+    if (message.type === "tool.cancel") {
+      agentTools.cancel(message.requestId);
+      return true;
+    }
+    if (message.type === "tool.call") {
+      if (!paseo) {
+        send({ type: "error", requestId: message.requestId, error: "Plugin API unavailable" });
+        return true;
+      }
+      void agentTools
+        .call(message.requestId, message.agent, message.name, message.input, paseo)
+        .then((output) =>
+          send({
+            type: "result",
+            requestId: message.requestId,
+            output: jsonTransportValue(output),
+          }),
+        )
+        .catch((error) =>
+          send({ type: "error", requestId: message.requestId, error: describeError(error) }),
+        );
+      return true;
+    }
+    return false;
+  }
+
   // oxlint-disable-next-line complexity -- FULCRA: upstream body plus the named core patch seams; split on the next upstream merge.
   function handleMessage(rawMessage: unknown): void {
     const parsed = PluginProcessRequestSchema.safeParse(rawMessage);
@@ -524,6 +565,7 @@ export function createPluginWorker(options: {
       rejectWhileStopping(message);
       return;
     }
+    if (handleToolMessage(message)) return;
     if (message.type === "provider.status") {
       void (async () => {
         const provider = providers.get(message.providerId);
@@ -661,7 +703,7 @@ export function createPluginWorker(options: {
         });
         return;
       }
-      void hooks.invoke(message.requestId, message.kind, message.name, message.input, paseo).then(
+      void hooks.invoke(message.requestId, message.name, message.input, paseo).then(
         (output) => {
           try {
             return send({
@@ -711,6 +753,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const parsed = PluginProcessRequestSchema.safeParse(raw);
     if (!worker && parsed.success && parsed.data.type === "initialize") {
       try {
+        initializeEnvironmentProxy();
         worker = createPluginWorker({ channel, contribute: evaluateBundle(parsed.data.bundle) });
       } catch (error) {
         channel.send({ type: "fatal", error: describeError(error) });

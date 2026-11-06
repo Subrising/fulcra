@@ -44,6 +44,14 @@ vi.mock("./private-files.js", async (importOriginal) => {
       }
       return original.writePrivateFileAtomicSync(...args);
     },
+    // FULCRA(FU-657): upstream v0.15 writes config.json through the async writer.
+    writePrivateFileAtomic: async (...args: Parameters<typeof original.writePrivateFileAtomic>) => {
+      if (fault.mainWrite && args[0].endsWith("/config.json")) {
+        fault.mainWrite = false;
+        throw Error("fixture main write refused");
+      }
+      return original.writePrivateFileAtomic(...args);
+    },
   };
 });
 const homes: string[] = [];
@@ -61,7 +69,7 @@ const combinations = (["all", "off", "primes"] as const).flatMap((mode) =>
 );
 test.each(combinations)(
   "combined preference $mode/$resume keeps old main bytes and new readback",
-  ({ mode, resume }) => {
+  async ({ mode, resume }) => {
     const root = home();
     savePersistedConfig(root, {
       version: 1,
@@ -71,7 +79,8 @@ test.each(combinations)(
     writeFileSync(path.join(root, "identity.fixture"), "preserved identity");
     const before = readFileSync(path.join(root, "config.json"), "utf8");
     const store = new DaemonConfigStore(root, initial());
-    store.patch({ notificationMode: mode, autoResumeOnLimit: resume });
+    // FULCRA(FU-657): upstream v0.15 made DaemonConfigStore.patch() async.
+    await store.patch({ notificationMode: mode, autoResumeOnLimit: resume });
     expect(readFileSync(path.join(root, "config.json"), "utf8")).toBe(before);
     expect(readFileSync(path.join(root, "identity.fixture"), "utf8")).toBe("preserved identity");
     expect(new DaemonConfigStore(root, initial()).get()).toMatchObject({
@@ -127,23 +136,25 @@ test.each(["all", "off", "primes"] as const)(
     expect(loadPersistedConfig(root).daemon?.notificationMode).toBe("off");
   },
 );
-test("stale generic saves and unrelated patches preserve newer sidecar", () => {
+test("stale generic saves and unrelated patches preserve newer sidecar", async () => {
+  // FULCRA(FU-657): upstream v0.15 made DaemonConfigStore.patch() async.
   const root = home();
   const store = new DaemonConfigStore(root, initial());
-  store.patch({ notificationMode: "all" });
+  await store.patch({ notificationMode: "all" });
   const stale = loadPersistedConfig(root);
   writeNotificationSetting(root, "off");
   savePersistedConfig(root, { ...stale, app: { baseUrl: "https://fixture.invalid" } });
-  store.patch({ appendSystemPrompt: "unrelated" });
+  await store.patch({ appendSystemPrompt: "unrelated" });
   expect(readNotificationSetting(root)).toBe("off");
   expect(
     JSON.parse(readFileSync(path.join(root, "config.json"), "utf8")).daemon.notificationMode,
   ).toBeUndefined();
 });
-test("explicit same-default choice and CLI set/unset persist separately", () => {
+test("explicit same-default choice and CLI set/unset persist separately", async () => {
+  // FULCRA(FU-657): upstream v0.15 made DaemonConfigStore.patch() async.
   const root = home();
   const store = new DaemonConfigStore(root, initial());
-  store.patch({ notificationMode: "primes" });
+  await store.patch({ notificationMode: "primes" });
   expect(readNotificationSetting(root)).toBe("primes");
   editPersistedConfig(root, "daemon.notificationMode", { value: "off" });
   expect(readNotificationSetting(root)).toBe("off");
@@ -152,15 +163,16 @@ test("explicit same-default choice and CLI set/unset persist separately", () => 
   editPersistedConfig(root, "daemon.notificationMode", { unset: true });
   expect(readNotificationSetting(root)).toBe("primes");
 });
-test("failed owner application restores both durable preferences and main bytes", () => {
+test("failed owner application restores both durable preferences and main bytes", async () => {
+  // FULCRA(FU-657): upstream v0.15 made DaemonConfigStore.patch() async.
   const root = home();
   const store = new DaemonConfigStore(root, initial());
-  store.patch({ notificationMode: "all", autoResumeOnLimit: false });
+  await store.patch({ notificationMode: "all", autoResumeOnLimit: false });
   const before = readFileSync(path.join(root, "config.json"), "utf8");
   store.onApply(() => {
     throw Error("owner refused");
   });
-  expect(() => store.patch({ notificationMode: "off", autoResumeOnLimit: true })).toThrow(
+  await expect(store.patch({ notificationMode: "off", autoResumeOnLimit: true })).rejects.toThrow(
     "owner refused",
   );
   expect(new DaemonConfigStore(root, initial()).get()).toMatchObject({
@@ -169,12 +181,13 @@ test("failed owner application restores both durable preferences and main bytes"
   });
   expect(readFileSync(path.join(root, "config.json"), "utf8")).toBe(before);
 });
-test("failed second sidecar write restores first rather than persisting half a patch", () => {
+test("failed second sidecar write restores first rather than persisting half a patch", async () => {
+  // FULCRA(FU-657): upstream v0.15 made DaemonConfigStore.patch() async.
   const root = home();
   const store = new DaemonConfigStore(root, initial());
-  store.patch({ notificationMode: "all", autoResumeOnLimit: false });
+  await store.patch({ notificationMode: "all", autoResumeOnLimit: false });
   fault.secondWrite = true;
-  expect(() => store.patch({ notificationMode: "off", autoResumeOnLimit: true })).toThrow(
+  await expect(store.patch({ notificationMode: "off", autoResumeOnLimit: true })).rejects.toThrow(
     "fixture second sidecar write refused",
   );
   expect(readNotificationSetting(root)).toBe("all");
@@ -218,19 +231,20 @@ test("malformed/future legacy main refuses without cleanup or sidecar", () => {
   }
 });
 
-test("failed combined main write restores both sidecars and unrelated main bytes", () => {
+test("failed combined main write restores both sidecars and unrelated main bytes", async () => {
+  // FULCRA(FU-657): upstream v0.15 made DaemonConfigStore.patch() async.
   const root = home();
   const store = new DaemonConfigStore(root, initial());
-  store.patch({ notificationMode: "all", autoResumeOnLimit: false });
+  await store.patch({ notificationMode: "all", autoResumeOnLimit: false });
   const before = readFileSync(path.join(root, "config.json"), "utf8");
   fault.mainWrite = true;
-  expect(() =>
+  await expect(
     store.patch({
       notificationMode: "off",
       autoResumeOnLimit: true,
       appendSystemPrompt: "new text",
     }),
-  ).toThrow("fixture main write refused");
+  ).rejects.toThrow("fixture main write refused");
   expect(readFileSync(path.join(root, "config.json"), "utf8")).toBe(before);
   expect(new DaemonConfigStore(root, initial()).get()).toMatchObject({
     notificationMode: "all",

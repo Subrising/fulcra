@@ -1,3 +1,5 @@
+import { createWorkspaceRuntimeStore } from "./workspace-runtime-store/index.js";
+import { createAgentMessageDeliveryStub } from "./test-utils/session-stubs.js";
 import {
   createMessageReceiptsStub,
   createTestCreationService,
@@ -145,7 +147,7 @@ function createSessionForWorkspaceGitWatchTests(options?: {
   workspaces: Map<string, ReturnType<typeof createPersistedWorkspaceRecord>>;
   workspaceGitService: WorkspaceGitService & {
     registerWorkspace: ReturnType<typeof vi.fn>;
-    peekSnapshot: ReturnType<typeof vi.fn>;
+
     getSnapshot: ReturnType<typeof vi.fn>;
     refresh: ReturnType<typeof vi.fn>;
     requestWorkingTreeWatch: ReturnType<typeof vi.fn>;
@@ -188,7 +190,7 @@ function createSessionForWorkspaceGitWatchTests(options?: {
         unsubscribe,
       };
     }),
-    peekSnapshot: vi.fn((cwd: string) => createWorkspaceRuntimeSnapshot(cwd)),
+
     getSnapshot: vi.fn(async (cwd: string) => createWorkspaceRuntimeSnapshot(cwd)),
     refresh: vi.fn(async () => {}),
     requestWorkingTreeWatch: vi.fn(async (cwd: string) => ({
@@ -200,7 +202,9 @@ function createSessionForWorkspaceGitWatchTests(options?: {
   };
 
   const session = new Session({
+    workspaceRuntimeStore: createWorkspaceRuntimeStore(),
     messageReceipts: createMessageReceiptsStub(),
+    agentMessages: createAgentMessageDeliveryStub(),
     creationService: createTestCreationService(),
     clientId: "test-client",
     permissions: OWNER_PERMISSIONS,
@@ -631,8 +635,28 @@ describe("workspace git watch targets", () => {
       requestId: "open",
       cwd: IDLE_CWD,
     });
-    expect(workspaceGitService.getSnapshot).toHaveBeenCalledWith(IDLE_CWD);
+    // FU-657: no watcher saw changes before this first open, so it starts a fresh git read. It answers from the
+    // cached snapshot (a later plain call) and pushes the fresh result as an update.
+    expect(workspaceGitService.getSnapshot).toHaveBeenCalledWith(IDLE_CWD, {
+      force: true,
+      includeForge: false,
+      reason: "checkout-status-first-open",
+    });
     await vi.waitFor(() => expect(watched()).toEqual([REPO_CWD, IDLE_CWD]));
+
+    // A second request for the same open checkout uses the observed snapshot.
+    await session.handleMessage({
+      type: "checkout_status_request",
+      requestId: "again",
+      cwd: IDLE_CWD,
+    });
+    // FULCRA(FU-657): the plain read passes no options; only the first open made a forced read.
+    expect(workspaceGitService.getSnapshot.mock.lastCall).toEqual([IDLE_CWD]);
+    expect(
+      workspaceGitService.getSnapshot.mock.calls.filter(
+        (call) => call[0] === IDLE_CWD && (call[1] as { force?: boolean } | undefined)?.force,
+      ),
+    ).toHaveLength(1);
 
     await session.cleanup();
   });

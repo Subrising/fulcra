@@ -5,11 +5,10 @@ import { type ChildProcess, type ChildProcessWithoutNullStreams } from "node:chi
 import { query, type Options, type Query, type SpawnOptions } from "@anthropic-ai/claude-agent-sdk";
 
 import {
-  createProviderEnv,
   createProviderEnvSpec,
   type ProviderRuntimeSettings,
 } from "../../provider-launch-config.js";
-import { buildSelfNodeCommand } from "../../../paseo-env.js";
+import { buildSelfNodeCommand, createExternalProcessEnv } from "../../../paseo-env.js";
 import { spawnProcess, type SpawnProcessOptions } from "../../../../utils/spawn.js";
 import { moveMcpConfigOffArgv } from "./mcp-config-file.js";
 
@@ -86,6 +85,25 @@ function prepareApiKeyGuard(
   return guardClaudeApiRuntime(launchEnv.FULCRA_API_KEY_ACCOUNT);
 }
 
+function buildClaudeSpawnEnv(
+  baseEnv: SpawnOptions["env"],
+  runtimeSettings: ProviderRuntimeSettings | undefined,
+  launchEnv: Record<string, string> | undefined,
+) {
+  const providerEnvSpec = createProviderEnvSpec({
+    baseEnv,
+    runtimeSettings,
+    overlays: [launchEnv],
+  });
+  // Session-open hooks may explicitly supply a client identity. Keep inherited
+  // SDK/parent identities cleared while honoring this launch-only contribution.
+  providerEnvSpec.envOverlay.CLAUDE_CODE_ENTRYPOINT = launchEnv?.CLAUDE_CODE_ENTRYPOINT;
+  const providerEnv = createExternalProcessEnv(baseEnv, providerEnvSpec.envOverlay);
+  // A pooled API launch owns authentication; inherited keys and tokens never reach it.
+  if (launchEnv?.FULCRA_API_KEY_HELPER) sanitizeClaudeApiEnv(providerEnv);
+  return { providerEnvSpec, providerEnv };
+}
+
 function applyRuntimeSettingsToClaudeOptions(
   options: ClaudeOptions,
   context: ClaudeQueryContext,
@@ -102,17 +120,11 @@ function applyRuntimeSettingsToClaudeOptions(
       // or the user overrides the command via runtime settings, use that directly.
       const isDefaultRuntime = ["node", "bun"].includes(resolved.command);
       const api = Boolean(launchEnv?.FULCRA_API_KEY_HELPER);
-      const providerEnvSpec = createProviderEnvSpec({
-        baseEnv: spawnOptions.env,
+      const { providerEnvSpec, providerEnv } = buildClaudeSpawnEnv(
+        spawnOptions.env,
         runtimeSettings,
-        overlays: [launchEnv],
-      });
-      const providerEnv = createProviderEnv({
-        baseEnv: spawnOptions.env,
-        runtimeSettings,
-        overlays: [launchEnv],
-      });
-      if (api) sanitizeClaudeApiEnv(providerEnv);
+        launchEnv,
+      );
       const selfNodeCommand = isDefaultRuntime
         ? buildSelfNodeCommand(resolved.args, providerEnv)
         : null;

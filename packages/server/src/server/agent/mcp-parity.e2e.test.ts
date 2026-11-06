@@ -232,7 +232,6 @@ async function createTopLevelAgent(args?: Partial<StructuredContent>): Promise<s
     provider: "claude/claude-test-model",
     initialPrompt: "say done and stop",
     settings: { modeId: "bypassPermissions" },
-    background: true,
     ...rest,
   });
   return str(payload.agentId);
@@ -307,7 +306,6 @@ beforeAll(async () => {
     provider: "claude/claude-test-model",
     initialPrompt: "say done and stop",
     settings: { modeId: "bypassPermissions" },
-    background: true,
   });
   parentAgentId = str(parentPayload.agentId);
 
@@ -335,6 +333,10 @@ afterAll(async () => {
 });
 
 describe("Suite A: Core Fixes", () => {
+  // FU-657 row 9: seven upstream finish notice tests were removed (create_agent finish counts,
+  // Stop/Reload cancel notices, follow-up finished/errored notices). They expect the upstream
+  // tool_call agentMessage notice. Fulcra keeps its own finish notice path.
+
   test("AGENT_WAIT_TIMEOUT_MS is 30000", () => {
     expect(AGENT_WAIT_TIMEOUT_MS).toBe(30_000);
   });
@@ -946,6 +948,109 @@ describe("Suite E: Workspace Tools", () => {
       await worktreeScopedClient?.close();
       await archiveAgentIfPresent(worktreeAgentId);
       await archiveWorkspaceIfPresent(workspaceId);
+    }
+  });
+
+  test("background worktree creation, discovery and archive use ordinary workspace ownership", async () => {
+    const created = await callToolStructured(topLevelClient, "create_workspace", {
+      isolation: "worktree",
+      path: worktreeRepoCwd,
+      baseBranch: "main",
+      branchName: `parity-background-${Date.now()}`,
+      background: true,
+    });
+    const workspaceId = str(created.workspaceId);
+    try {
+      expect(created.background).toBe(true);
+      const ordinary = await callToolStructured(topLevelClient, "list_workspaces", {});
+      expect(
+        recordArr(ordinary.workspaces).map((workspace) => workspace.workspaceId),
+      ).not.toContain(workspaceId);
+      const inclusive = await callToolStructured(topLevelClient, "list_workspaces", {
+        includeBackground: true,
+      });
+      expect(recordArr(inclusive.workspaces)).toContainEqual(
+        expect.objectContaining({ workspaceId, background: true }),
+      );
+      const child = await callToolStructured(topLevelClient, "create_agent", {
+        workspaceId,
+        title: "Background worker",
+        provider: "claude/claude-test-model",
+        initialPrompt: "Say done.",
+      });
+      const agentId = str(child.agentId);
+      const workerClient = await createMcpClient(
+        `http://127.0.0.1:${daemonHandle.port}/mcp/agents?callerAgentId=${agentId}`,
+      );
+      let terminalId: string;
+      try {
+        const terminal = await callToolStructured(workerClient, "create_terminal", {
+          name: "Background terminal",
+        });
+        terminalId = str(terminal.id);
+        expect(terminal.cwd).toBe(created.cwd);
+      } finally {
+        await workerClient.close();
+      }
+      const status = await callToolStructured(topLevelClient, "get_agent_status", { agentId });
+      expect((status.snapshot as StructuredContent).workspaceId).toBe(workspaceId);
+      const archived = await callToolStructured(topLevelClient, "archive_workspace", {
+        workspaceId,
+      });
+      expect(archived.archivedAgentIds).toContain(agentId);
+      const terminals = await callToolStructured(topLevelClient, "list_terminals", { all: true });
+      expect(recordArr(terminals.terminals).map((terminal) => terminal.id)).not.toContain(
+        terminalId,
+      );
+      const remaining = await callToolStructured(topLevelClient, "list_workspaces", {
+        includeBackground: true,
+      });
+      expect(
+        recordArr(remaining.workspaces).map((workspace) => workspace.workspaceId),
+      ).not.toContain(workspaceId);
+    } finally {
+      await topLevelClient
+        .callTool({ name: "archive_workspace", args: { workspaceId } })
+        .catch(() => undefined);
+    }
+  });
+
+  test("agent-scoped workspace creation inherits visibility and permits an explicit false override", async () => {
+    const parentWorkspace = await callToolStructured(topLevelClient, "create_workspace", {
+      isolation: "local",
+      path: worktreeRepoCwd,
+      background: true,
+    });
+    const parentWorkspaceId = str(parentWorkspace.workspaceId);
+    let scoped: McpClient | null = null;
+    const ownedWorkspaces: string[] = [parentWorkspaceId];
+    try {
+      const parent = await callToolStructured(topLevelClient, "create_agent", {
+        workspaceId: parentWorkspaceId,
+        title: "Background parent",
+        provider: "claude/claude-test-model",
+        initialPrompt: "Say done.",
+      });
+      scoped = await createMcpClient(
+        `http://127.0.0.1:${daemonHandle.port}/mcp/agents?callerAgentId=${str(parent.agentId)}`,
+      );
+      const inherited = await callToolStructured(scoped, "create_workspace", {
+        isolation: "local",
+      });
+      ownedWorkspaces.push(str(inherited.workspaceId));
+      expect(inherited.background).toBe(true);
+      const visible = await callToolStructured(scoped, "create_workspace", {
+        isolation: "local",
+        background: false,
+      });
+      ownedWorkspaces.push(str(visible.workspaceId));
+      expect(visible.background).toBe(false);
+    } finally {
+      await scoped?.close();
+      for (const workspaceId of ownedWorkspaces.toReversed())
+        await topLevelClient
+          .callTool({ name: "archive_workspace", args: { workspaceId } })
+          .catch(() => undefined);
     }
   });
 });

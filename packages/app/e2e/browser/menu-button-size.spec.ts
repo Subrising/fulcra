@@ -9,6 +9,10 @@ const PHONE_VIEWPORTS = [
   { name: "phone landscape", width: 667, height: 375 },
 ];
 
+// FU-657: a phone is a touch screen. Without touch, a 667x375 window is a narrow desktop window with a
+// mouse, which upstream (md = 600) lays out as desktop.
+test.use({ hasTouch: true, isMobile: true });
+
 for (const viewport of PHONE_VIEWPORTS) {
   test(`the menu button is at least 48x48 on a ${viewport.name}`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });

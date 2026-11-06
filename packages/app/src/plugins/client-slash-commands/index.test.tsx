@@ -51,6 +51,9 @@ void useSessionStore;
 const account = {
   id: "fulcra-controller",
   serverId: "mini",
+  // FULCRA(FU-657): since v0.15 an installed plugin resolves its texts through its own i18n.
+  locale: "en",
+  i18n: { resolve: (text: unknown) => text },
   clientSlashCommands: [
     {
       name: "account",

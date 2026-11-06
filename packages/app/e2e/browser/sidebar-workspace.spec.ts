@@ -504,6 +504,27 @@ test.describe("Mobile sidebar panelState transition", () => {
     await expectMobileAgentSidebarHidden(page);
   });
 
+  test("places the close button beside the first nav row instead of over it", async ({ page }) => {
+    await gotoAppShell(page);
+    await openMobileAgentSidebar(page);
+    await expectMobileAgentSidebarVisible(page);
+
+    // FULCRA(FU-657): Fulcra's first sidebar row is the pinned main assistant (it can be empty), then
+    // New chat. The close button shares that first row, so it sits beside or above the nav rows, never over one.
+    const closeButton = await page.getByTestId("sidebar-close").boundingBox();
+    if (!closeButton) throw new Error("close button must render");
+    for (const testId of ["sidebar-new-chat", "sidebar-global-new-workspace"]) {
+      const row = await page.getByTestId(testId).boundingBox();
+      if (!row) throw new Error(`${testId} must render`);
+      const overlaps =
+        closeButton.x < row.x + row.width &&
+        row.x < closeButton.x + closeButton.width &&
+        closeButton.y < row.y + row.height &&
+        row.y < closeButton.y + closeButton.height;
+      expect(overlaps, `close button overlaps ${testId}`).toBe(false);
+    }
+  });
+
   test("keeps a pinned workspace rendered while the retained sidebar is closed", async ({
     page,
   }) => {
@@ -613,7 +634,9 @@ test.describe("Half-screen desktop layout", () => {
     await expect(page.getByTestId("sidebar-settings")).not.toBeVisible();
   });
 
-  test("keeps app navigation beside the Explorer pane", async ({ page }) => {
+  test("yields app navigation to Explorer and restores it when Explorer closes", async ({
+    page,
+  }) => {
     const workspace = await seedWorkspace({ repoPrefix: "sidebar-half-screen-explorer-" });
 
     try {
@@ -625,7 +648,7 @@ test.describe("Half-screen desktop layout", () => {
       const explorerToggle = page.getByTestId("workspace-explorer-toggle").first();
       await expect(page.getByTestId("workspace-tab-files").filter({ visible: true })).toBeVisible();
       await expect(explorerToggle).toHaveAccessibleName("Close Explorer sidebar");
-      await expect(page.getByTestId("sidebar-global-new-workspace")).toBeVisible();
+      await expect(page.getByTestId("sidebar-global-new-workspace")).not.toBeVisible();
       await expect(page.getByTestId("workspace-explorer-sidebar")).toBeVisible();
       await expect(
         page

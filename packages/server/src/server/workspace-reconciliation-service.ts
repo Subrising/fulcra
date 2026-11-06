@@ -215,6 +215,7 @@ export class WorkspaceReconciliationService {
     const workspacesByProject = new Map<string, PersistedWorkspaceRecord[]>();
     for (const workspace of activeWorkspaces) {
       if (states.get(workspace.cwd) !== "directory") continue;
+      if ((await this.workspaceRegistry.get(workspace.workspaceId))?.archivedAt !== null) continue;
       const siblings = workspacesByProject.get(workspace.projectId) ?? [];
       siblings.push(workspace);
       workspacesByProject.set(workspace.projectId, siblings);
@@ -236,6 +237,9 @@ export class WorkspaceReconciliationService {
     const allWorkspaces = await this.workspaceRegistry.list();
 
     const activeProjects = allProjects.filter((p) => !p.archivedAt);
+    const activeProjectsById = new Map(
+      activeProjects.map((project) => [project.projectId, project]),
+    );
     const activeWorkspaces = allWorkspaces.filter((w) => !w.archivedAt);
     const states = await this.inspectPaths([
       ...activeWorkspaces.map((workspace) => workspace.cwd),
@@ -245,9 +249,6 @@ export class WorkspaceReconciliationService {
       workspace,
       state: states.get(workspace.cwd) ?? "unreadable",
     }));
-    // Project roots are read after the workspace directories, so a volume that
-    // goes away mid-pass leaves its project unreachable rather than its workspaces
-    // alone. The skew can only withhold an archive, never produce one.
     const reachableProjectIds = new Set(
       activeProjects
         .filter((project) => states.get(project.rootPath) === "directory")
@@ -257,6 +258,7 @@ export class WorkspaceReconciliationService {
     const workspacesByProject = new Map<string, PersistedWorkspaceRecord[]>();
     for (const { workspace, state } of workspaceDirectoryStates) {
       if (state !== "directory") continue;
+      if ((await this.workspaceRegistry.get(workspace.workspaceId))?.archivedAt !== null) continue;
       const list = workspacesByProject.get(workspace.projectId) ?? [];
       list.push(workspace);
       workspacesByProject.set(workspace.projectId, list);
@@ -273,26 +275,30 @@ export class WorkspaceReconciliationService {
           state === "missing" && reachableProjectIds.has(workspace.projectId),
       )
       .map(({ workspace }) => workspace);
-    await Promise.all(
-      missingWorkspaces.map(async (workspace) => {
-        const timestamp = new Date().toISOString();
-        await this.workspaceRegistry.archive(workspace.workspaceId, timestamp);
-        await this.onWorkspaceArchived?.(workspace.workspaceId);
-        changes.push({
-          kind: "workspace_archived",
-          workspaceId: workspace.workspaceId,
-          directory: workspace.cwd,
-          reason: "directory_missing",
-        });
-
-        // Update the in-memory list for the project orphan check below
-        const siblings = workspacesByProject.get(workspace.projectId);
-        if (siblings) {
-          const updated = siblings.filter((w) => w.workspaceId !== workspace.workspaceId);
-          workspacesByProject.set(workspace.projectId, updated);
-        }
-      }),
-    );
+    // Each archive re-reads the records first: a pass must not archive a workspace that moved or was archived.
+    for (const workspace of missingWorkspaces) {
+      const current = await this.workspaceRegistry.get(workspace.workspaceId);
+      const project = await this.projectRegistry.get(workspace.projectId);
+      if (
+        !current ||
+        current.archivedAt ||
+        current.cwd !== workspace.cwd ||
+        current.projectId !== workspace.projectId ||
+        !project ||
+        project.archivedAt ||
+        project.rootPath !== activeProjectsById.get(project.projectId)?.rootPath
+      )
+        continue;
+      const timestamp = new Date().toISOString();
+      if (!(await this.workspaceRegistry.archive(workspace.workspaceId, timestamp))) continue;
+      await this.onWorkspaceArchived?.(workspace.workspaceId);
+      changes.push({
+        kind: "workspace_archived",
+        workspaceId: workspace.workspaceId,
+        directory: workspace.cwd,
+        reason: "directory_missing",
+      });
+    }
 
     // 2. Reconcile mutable git metadata without changing identity or membership.
     //    Projects persist until explicitly removed, even when they currently have
@@ -369,13 +375,17 @@ export class WorkspaceReconciliationService {
   }
 
   private async reconcileProject(input: ProjectReconciliationInput): Promise<void> {
-    const { project, siblings, currentGit, readCheckout, changes } = input;
+    const { siblings, currentGit, readCheckout, changes } = input;
     const workspaceCheckouts = await Promise.all(
-      siblings.map(async (workspace) => ({
-        workspace,
-        checkout: await readCheckout(workspace.cwd),
-      })),
+      siblings.map(async (workspace) => {
+        const current = await this.workspaceRegistry.get(workspace.workspaceId);
+        if (!current || current.cwd !== workspace.cwd || current.projectId !== workspace.projectId)
+          return null;
+        return { workspace: current, checkout: await readCheckout(current.cwd) };
+      }),
     );
+    const project = await this.projectRegistry.get(input.project.projectId);
+    if (!project || project.archivedAt || project.rootPath !== input.project.rootPath) return;
     const projectUpdates: Partial<Pick<PersistedProjectRecord, "kind" | "projectKey">> = {};
     const mappedKind = deriveProjectKind(currentGit);
     const projectKey = deriveProjectKey({
@@ -395,40 +405,47 @@ export class WorkspaceReconciliationService {
 
     if (Object.keys(projectUpdates).length > 0) {
       const timestamp = new Date().toISOString();
-      await this.projectRegistry.upsert({
-        ...project,
-        ...projectUpdates,
-        updatedAt: timestamp,
+      let applied = false;
+      await this.projectRegistry.update(project.projectId, (current) => {
+        if (current.archivedAt || current.rootPath !== project.rootPath) return current;
+        applied = true;
+        return { ...current, ...projectUpdates, updatedAt: timestamp };
       });
-      changes.push({
-        kind: "project_updated",
-        projectId: project.projectId,
-        directory: project.rootPath,
-        fields: projectUpdates,
-      });
+      if (applied)
+        changes.push({
+          kind: "project_updated",
+          projectId: project.projectId,
+          directory: project.rootPath,
+          fields: projectUpdates,
+        });
     }
 
     await Promise.all(
-      workspaceCheckouts.map(async ({ workspace, checkout: wsGit }) => {
+      workspaceCheckouts.map(async (entry) => {
+        if (!entry) return;
+        const { workspace, checkout: wsGit } = entry;
         const timestamp = new Date().toISOString();
-        const update = reconcileWorkspacePlacement({
-          workspace,
-          checkout: wsGit,
-          updatedAt: timestamp,
+        if (!reconcileWorkspacePlacement({ workspace, checkout: wsGit, updatedAt: timestamp }))
+          return;
+        let fields: Partial<MutableWorkspacePlacement> | null = null;
+        await this.workspaceRegistry.update(workspace.workspaceId, (current) => {
+          if (current.cwd !== workspace.cwd || current.projectId !== workspace.projectId)
+            return current;
+          const update = reconcileWorkspacePlacement({
+            workspace: current,
+            checkout: wsGit,
+            updatedAt: timestamp,
+          });
+          if (!update) return current;
+          fields = update.fields;
+          return { ...current, ...fields, updatedAt: timestamp };
         });
-        if (!update) return;
-
-        const updated = await this.workspaceRegistry.update(workspace.workspaceId, (current) => ({
-          ...current,
-          ...update.fields,
-          updatedAt: timestamp,
-        }));
-        if (!updated) return;
+        if (!fields) return;
         changes.push({
           kind: "workspace_updated",
           workspaceId: workspace.workspaceId,
           directory: workspace.cwd,
-          fields: update.fields,
+          fields,
         });
       }),
     );

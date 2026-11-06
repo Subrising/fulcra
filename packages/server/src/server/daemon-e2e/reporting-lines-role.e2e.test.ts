@@ -235,8 +235,20 @@ test("two isolated daemons create one remote worker and deliver a role notice th
       (event) => {
         if (event.type !== "agent_stream") return;
         if (event.event.type === "turn_started") turns.push(event.agentId);
-        if (event.event.type === "timeline" && event.event.item.type === "user_message")
-          inputs.push({ id: event.agentId, text: event.event.item.text });
+        if (event.event.type !== "timeline") return;
+        const item = event.event.item;
+        if (item.type === "user_message") inputs.push({ id: event.agentId, text: item.text });
+        // FU-657: upstream records a <paseo-system> notice as a system card. Wrap the card text
+        // again so the checks below compare the prompt the chat received.
+        else if (
+          item.type === "tool_call" &&
+          item.callId.startsWith("paseo-system:") &&
+          item.detail?.type === "plain_text"
+        )
+          inputs.push({
+            id: event.agentId,
+            text: formatSystemNotificationPrompt(item.detail.text),
+          });
       },
       { replayState: false },
     );
@@ -363,12 +375,18 @@ test("two isolated daemons create one remote worker and deliver a role notice th
     const offParent = source.daemon.agentManager.subscribe(
       (event) => {
         if (
-          event.type === "agent_stream" &&
-          event.agentId === lead.id &&
-          event.event.type === "timeline" &&
-          event.event.item.type === "user_message"
+          event.type !== "agent_stream" ||
+          event.agentId !== lead.id ||
+          event.event.type !== "timeline"
         )
-          parentInputs.push(event.event.item.text);
+          return;
+        // FU-657: upstream records daemon notices as cards (tool_call), not as user_message.
+        const item = event.event.item;
+        if (item.type === "user_message") parentInputs.push(item.text);
+        else if (item.type === "tool_call" && item.agentMessage)
+          parentInputs.push(item.agentMessage.text);
+        else if (item.type === "tool_call" && item.detail?.type === "plain_text")
+          parentInputs.push(item.detail.text);
       },
       { replayState: false },
     );

@@ -1,5 +1,16 @@
 import { useCallback, useMemo, useState } from "react";
+import {
+  selectSidebarGroupVisibility,
+  type SidebarGroupItem,
+  type SidebarGroupVisibility,
+  type SidebarGroupVisibilityInput,
+  type SidebarGroupVisibilityPolicy,
+} from "./sidebar-group-visibility";
+import type { ActiveWorkspaceSelection } from "@/stores/last-workspace-selection";
 
+const PINNED_POLICY = { kind: "pinned" } as const;
+
+/** The per-host row cut that Fulcra used before the visibility policy. Kept for its tests. */
 export const INITIAL_VISIBLE_ITEMS = 20;
 
 /**
@@ -24,28 +35,67 @@ export function limitRowsPerHost<T>(
   return { visible, hidden: items.length - visible.length };
 }
 
-/**
- * Limits a sidebar group before "Show more". With `hostOf`, the limit is per host (status groups);
- * without it, one shared limit (pinned rows, which are few and chosen by the user).
- */
-export function useLimitedSidebarGroup<T>(items: readonly T[], hostOf?: (item: T) => string) {
+interface LimitedSidebarGroupInput<T> {
+  items: readonly T[];
+  selection: ActiveWorkspaceSelection | null;
+  policy?: SidebarGroupVisibilityPolicy<T>;
+  /**
+   * Fulcra: when set, the policy limit applies to each host's rows on its own, and the shown rows
+   * keep the group's order. Without it, one shared limit.
+   */
+  hostOf?: (item: T) => string;
+}
+
+function selectPerHostVisibility<T extends SidebarGroupItem>(
+  input: SidebarGroupVisibilityInput<T>,
+  hostOf: (item: T) => string,
+): SidebarGroupVisibility<T> {
+  const byHost = new Map<string, T[]>();
+  for (const item of input.items) {
+    const host = hostOf(item);
+    const rows = byHost.get(host);
+    if (rows) rows.push(item);
+    else byHost.set(host, [item]);
+  }
+  const shown = new Set<T>();
+  let leadingItem: T | null = null;
+  let canToggle = false;
+  for (const rows of byHost.values()) {
+    // Fulcra: each host keeps its own 20 rows (J15), where upstream keeps 7 for the whole group.
+    const result = selectSidebarGroupVisibility({
+      ...input,
+      items: rows,
+      limit: INITIAL_VISIBLE_ITEMS,
+    });
+    canToggle ||= result.canToggle;
+    leadingItem ??= result.leadingItem;
+    for (const item of result.visibleItems) shown.add(item);
+  }
+  if (input.expanded || !canToggle) {
+    return { leadingItem: null, visibleItems: input.items.slice(), canToggle };
+  }
+  return {
+    leadingItem,
+    visibleItems: input.items.filter((item) => shown.has(item)),
+    canToggle,
+  };
+}
+
+export function useLimitedSidebarGroup<T extends SidebarGroupItem>({
+  items,
+  selection,
+  policy = PINNED_POLICY,
+  hostOf,
+}: LimitedSidebarGroupInput<T>): SidebarGroupVisibility<T> & {
+  expanded: boolean;
+  toggleExpanded: () => void;
+} {
   const [expanded, setExpanded] = useState(false);
-  const limited = useMemo(
-    () =>
-      hostOf
-        ? limitRowsPerHost(items, hostOf)
-        : {
-            visible: items.slice(0, INITIAL_VISIBLE_ITEMS),
-            hidden: Math.max(0, items.length - INITIAL_VISIBLE_ITEMS),
-          },
-    [items, hostOf],
-  );
-  const visibleItems = useMemo(
-    () => (expanded ? items.slice() : limited.visible),
-    [expanded, items, limited],
-  );
-  const canToggle = limited.hidden > 0;
+  const visibility = useMemo(() => {
+    const input = { items, expanded, policy, selection };
+    return hostOf ? selectPerHostVisibility(input, hostOf) : selectSidebarGroupVisibility(input);
+  }, [expanded, items, policy, selection, hostOf]);
   const toggleExpanded = useCallback(() => setExpanded((current) => !current), []);
 
-  return { visibleItems, expanded, canToggle, toggleExpanded };
+  return { ...visibility, expanded, toggleExpanded };
 }

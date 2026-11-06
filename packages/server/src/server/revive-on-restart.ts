@@ -827,6 +827,7 @@ export async function holdNotice(deps: ReviveDeps, leadId: string, prompt: strin
         agentId: leadId,
         prompt,
         messageId: `${FINISH_NOTIFICATION_MESSAGE_PREFIX}restart:${randomUUID()}`,
+        systemNotice: true,
         activeTurnBehavior: "steer",
         steerOnly: true,
         unarchive: false,

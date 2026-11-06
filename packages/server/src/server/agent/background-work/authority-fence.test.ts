@@ -14,7 +14,9 @@ import type { AgentClient, AgentSession, AgentStreamEvent } from "../agent-sdk-t
 // admission, trusted plugins or management may read it. Idle nudges can exclude busy project sessions.
 
 const SERVER_ROOT = path.resolve(__dirname, "../..");
-const MENTION = /backgroundWork|background_work|BackgroundWork/;
+// FULCRA(FU-657): upstream v0.15 adds the unrelated `backgroundWorkspaces` server capability flag
+// in websocket-server.ts. It is not background work, so the match skips only that one word.
+const MENTION = /backgroundWork(?!spaces)|background_work|BackgroundWork/;
 
 /** Every non-test file in the server package allowed to mention background work, and why. */
 const ALLOWED = new Map<string, string>([

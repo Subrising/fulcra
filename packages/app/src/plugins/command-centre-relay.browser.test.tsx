@@ -3,6 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "@/i18n/i18next";
 import { lightTheme } from "@/styles/theme";
+import { PluginTranslationRuntime } from "@getpaseo/plugin/client/host";
 
 // L46: the real Command Centre surface screen, over a relay-only host and over a direct one.
 const state = vi.hoisted(() => ({
@@ -77,6 +78,9 @@ const installed = {
   serverId: "srv_mini",
   lifetime: new AbortController(),
   queryClient: new (await import("@tanstack/react-query")).QueryClient(),
+  // FU-657: an installed plugin now carries its locale and translation runtime (upstream 0.15.0).
+  locale: "en",
+  i18n: new PluginTranslationRuntime({ getLocale: () => "en", subscribe: () => () => {} }),
   legacySidebarItems: [
     { id: "organization", title: "Command Centre", icon: "ShieldAlert", surface: "main" },
   ],
