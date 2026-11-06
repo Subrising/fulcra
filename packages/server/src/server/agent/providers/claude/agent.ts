@@ -4403,6 +4403,7 @@ class ClaudeAgentSession implements AgentSession {
     const historyPath = await this.resolveHistoryPath(this.claudeSessionId);
     if (!historyPath || !(await pathExists(historyPath))) return "unknown";
     const uuid = providerMessageId(messageId);
+    if (this.historyAbort.signal.aborted) return "unknown";
     const file = await promises.open(historyPath, "r");
     try {
       const before = await file.stat();
@@ -4419,6 +4420,10 @@ class ClaudeAgentSession implements AgentSession {
         before.mtimeMs === after.mtimeMs
         ? "absent"
         : "unknown";
+    } catch (error) {
+      // FU-694: a close (account switch, quiet MCP reload) during the read proves nothing.
+      if (this.historyAbort.signal.aborted) return "unknown";
+      throw error;
     } finally {
       await file.close();
     }

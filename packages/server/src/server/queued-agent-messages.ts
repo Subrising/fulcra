@@ -156,8 +156,12 @@ export class QueuedAgentMessages {
   private readonly instances = new Map<string, string>();
   private readonly closedInstances = new Set<string>();
   private readonly unsubscribe: () => void;
+  private readonly clearDeliveryProbe: () => void;
 
   constructor(private readonly deps: Deps) {
+    this.clearDeliveryProbe =
+      deps.agentManager.setInputDeliveryProbe?.((agentId) => this.isDelivering(agentId)) ??
+      (() => undefined);
     for (const agent of deps.agentManager.listAgents())
       if (agent.instanceId) this.instances.set(agent.id, agent.instanceId);
     this.unsubscribe = deps.agentManager.subscribe(
@@ -484,6 +488,7 @@ export class QueuedAgentMessages {
     this.pauseWatcher?.close();
     for (const listener of this.deliveryListeners) listener();
     this.unsubscribe();
+    this.clearDeliveryProbe();
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
     await Promise.all(this.pendingDrains);
@@ -588,6 +593,11 @@ export class QueuedAgentMessages {
       });
     }
     return true;
+  }
+
+  /** FU-694: true while a drain writes input to this agent or reads its native receipt. */
+  isDelivering(agentId: string): boolean {
+    return this.draining.has(agentId);
   }
 
   private kick(agentId: string): void {

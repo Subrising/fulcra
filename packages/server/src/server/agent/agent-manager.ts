@@ -2927,6 +2927,20 @@ export class AgentManager {
     return new Date(nextMs).toISOString();
   }
 
+  private inputDeliveryProbe: ((agentId: string) => boolean) | null = null;
+
+  /** FU-694: the queued input delivery reports when it writes input to, or reads a receipt from, an agent. */
+  setInputDeliveryProbe(probe: ((agentId: string) => boolean) | null): () => void {
+    this.inputDeliveryProbe = probe;
+    return () => {
+      if (this.inputDeliveryProbe === probe) this.inputDeliveryProbe = null;
+    };
+  }
+
+  private inputBeingDelivered(agentId: string): boolean {
+    return this.inputDeliveryProbe?.(agentId) === true;
+  }
+
   hasInFlightRun(agentId: string): boolean {
     const agent = this.agents.get(agentId);
     if (!agent) {
@@ -4015,6 +4029,8 @@ export class AgentManager {
         const busy = () =>
           (existing.lifecycle !== "idle" && !restartable()) ||
           this.hasInFlightRun(agentId) ||
+          // FU-694: an account switch during an input write or receipt read aborts it. Wait until it ends.
+          this.inputBeingDelivered(agentId) ||
           existing.activeTurnId !== null ||
           existing.pendingReplacement ||
           existing.pendingPermissions.size > 0 ||
