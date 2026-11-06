@@ -49,10 +49,11 @@ foreach ($r in $acl.GetAccessRules($true, $true, $sid)) {
 'SAFE'
 `;
 
-/** Runs the ACL rule for one path. owner is "me" or "trusted". Returns true only for a clear SAFE answer. */
-export function windowsAclProbe(file, mask, owner = "trusted") {
+/** Runs the ACL rule for one path. owner is "me" or "trusted". Returns true only for a clear SAFE answer.
+ * runFile is for tests only (an execFileSync stand-in; no shell). */
+export function windowsAclProbe(file, mask, owner = "trusted", runFile = execFileSync) {
   try {
-    const out = execFileSync(
+    const out = runFile(
       powershellExe(),
       ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", SCRIPT],
       {
@@ -64,9 +65,10 @@ export function windowsAclProbe(file, mask, owner = "trusted") {
         },
         encoding: "utf8",
         timeout: 20000,
+        // FU-678 wanted no console window: windowsHide gives CREATE_NO_WINDOW. FU-714: never add detached here.
+        // libuv maps it to DETACHED_PROCESS, and powershell.exe then writes nothing to the pipe, so every
+        // private path refuses and the daemon cannot start on Windows.
         windowsHide: true,
-        // FU-678: no console for the child. libuv maps detached to DETACHED_PROCESS on Windows.
-        detached: true,
         stdio: ["ignore", "pipe", "ignore"],
       },
     );

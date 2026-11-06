@@ -109,13 +109,13 @@ const READ_TIMEOUT_MS = 15_000;
 const READ_MAX_BYTES = 16 * 1024 * 1024;
 
 /**
- * execFile ignores `detached`, so use spawn. DETACHED_PROCESS gives PowerShell no console,
- * so each sample starts no conhost.exe.
+ * windowsHide starts PowerShell with CREATE_NO_WINDOW, so no console window shows.
+ * FU-714: never add `detached`. libuv maps it to DETACHED_PROCESS, and powershell.exe then writes
+ * nothing to the pipe (checked on the PC with 0.2.43), so every sample read an empty table.
  */
-function runDetachedPowerShell(args: string[]): Promise<string> {
+function runHiddenPowerShell(args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn("powershell.exe", args, {
-      detached: true,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -144,6 +144,7 @@ function runDetachedPowerShell(args: string[]): Promise<string> {
       clearTimeout(timer);
       if (failure) reject(failure);
       else if (code !== 0) reject(new Error(`powershell.exe exited with code ${code}`));
+      else if (bytes === 0) reject(new Error("powershell.exe wrote no output"));
       else resolve(Buffer.concat(chunks).toString("utf8"));
     });
   });
@@ -157,7 +158,7 @@ export async function readWindowsResourceProcesses(
   const script = path.join(directory, "read.ps1");
   try {
     await fs.writeFile(script, WINDOWS_RESOURCE_SCRIPT, { mode: 0o600 });
-    const stdout = await runDetachedPowerShell([
+    const stdout = await runHiddenPowerShell([
       "-NoProfile",
       "-NonInteractive",
       "-ExecutionPolicy",
