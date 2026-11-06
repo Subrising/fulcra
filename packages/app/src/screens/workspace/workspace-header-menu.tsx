@@ -32,6 +32,7 @@ import {
   type UseWorkspaceScriptsMenuPagesInput,
 } from "@/screens/workspace/scripts";
 import { usePluginWorkspaceMenu } from "@/plugins";
+import { ContextMenuItem } from "@/context/launcher";
 
 const ThemedEllipsis = withUnistyles(Ellipsis);
 const ThemedCopy = withUnistyles(Copy);
@@ -211,6 +212,8 @@ export interface WorkspaceHeaderMenuMobileProps extends WorkspaceHeaderWorkspace
   createTerminalDisabled: boolean;
   onCreateTerminalWithProfile: (profile: TerminalProfile) => void;
   onCreateBrowser: () => void;
+  /** FULCRA(FU-702): show the Context row first, when the header has no room for its button. */
+  showContext?: boolean;
 }
 
 /**
@@ -229,6 +232,7 @@ export function WorkspaceHeaderMenuMobile({
   createTerminalDisabled,
   onCreateTerminalWithProfile,
   onCreateBrowser,
+  showContext,
   ...workspaceActions
 }: WorkspaceHeaderMenuMobileProps) {
   const { t } = useTranslation();
@@ -276,6 +280,9 @@ export function WorkspaceHeaderMenuMobile({
         pages={pages}
         sheetTitle={t("workspace.header.actions.workspaceActions")}
       >
+        {showContext ? (
+          <ContextMenuItem serverId={normalizedServerId} workspaceId={normalizedWorkspaceId} />
+        ) : null}
         {scriptsMenu.trigger}
         {pluginMenu.rows}
         {pluginMenu.rows.length > 0 ? <DropdownMenuSeparator /> : null}
