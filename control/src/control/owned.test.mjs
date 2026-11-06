@@ -170,7 +170,7 @@ test("FU-678: no file state means no cache; a damaged cache file is ignored", ()
   assert.equal(store.get("x"), undefined);
   assert.match(
     aclCacheFile({ LOCALAPPDATA: "C:\\Users\\a\\AppData\\Local" }),
-    /acl-cache-v1\.json$/,
+    /\\Fulcra\\acl-cache-v2\.json$/,
   );
   rmSync(t.dir, { recursive: true });
 });
@@ -188,15 +188,17 @@ test("FU-714: the probe starts PowerShell hidden and NOT detached (detached Powe
   assert.equal(calls[0].options.env.FULCRA_ACL_OWNER, "me");
   assert.equal(calls[0].options.env.FULCRA_ACL_MASK, String(PRIVATE_MASK));
 });
-test("FU-714: only a clear SAFE answer passes; empty output, UNSAFE, other text and errors refuse", () => {
+test("FU-714/FU-716: SAFE passes, UNSAFE is a definite refusal, any other output is no answer", () => {
   const answer = (out) => windowsAclProbe("C:\\p714", PRIVATE_MASK, "me", () => out);
   assert.equal(answer("SAFE"), true);
   assert.equal(answer("SAFE\r\n"), true);
-  assert.equal(answer(""), false); // what a detached PowerShell returns
-  assert.equal(answer("\r\n"), false);
   assert.equal(answer("UNSAFE"), false);
-  assert.equal(answer("SAFE\r\nUNSAFE"), false);
-  assert.equal(answer("NOT SAFE"), false);
+  assert.equal(answer("UNSAFE\r\n"), false);
+  assert.equal(answer(""), undefined); // what a detached PowerShell returns
+  assert.equal(answer("\r\n"), undefined);
+  assert.equal(answer("SAFE\r\nUNSAFE"), undefined);
+  assert.equal(answer("NOT SAFE"), undefined);
+  assert.equal(answer("safe"), undefined);
   const thrown = windowsAclProbe("C:\\p714", PRIVATE_MASK, "me", () => {
     throw Object.assign(new Error("timeout"), { code: "ETIMEDOUT" });
   });
@@ -209,6 +211,54 @@ test("FU-714: only a clear SAFE answer passes; empty output, UNSAFE, other text 
     privateOwned(s, "p714u", { platform: "win32", probe: () => undefined, store }),
     false,
   );
+});
+test("FU-716: an empty probe output is never saved, so a later SAFE answer for the same state passes", () => {
+  resetAclMemoryCache();
+  const t = tempStore();
+  try {
+    const s = { mode: 0, uid: 0, ino: 716, ctimeMs: 7, mtimeMs: 16 };
+    const file = "C:\\p716";
+    let out = ""; // the broken detached build: PowerShell wrote nothing
+    const probe = (f, mask, owner) => windowsAclProbe(f, mask, owner, () => out);
+    const store = fileStore(t.file);
+    assert.equal(privateOwned(s, file, { platform: "win32", probe, store }), false);
+    assert.equal(store.get(`me|${PRIVATE_MASK}|${file}|716|7|16`), undefined);
+    resetAclMemoryCache(); // a new process
+    out = "SAFE\r\n";
+    assert.equal(
+      privateOwned(s, file, { platform: "win32", probe, store: fileStore(t.file) }),
+      true,
+    );
+  } finally {
+    resetAclMemoryCache();
+    rmSync(t.dir, { recursive: true, force: true });
+  }
+});
+test("FU-716: a thrown probe error is never saved either", () => {
+  resetAclMemoryCache();
+  const t = tempStore();
+  try {
+    const s = { mode: 0, uid: 0, ino: 7161, ctimeMs: 1, mtimeMs: 1 };
+    let fail = true;
+    const probe = (f, mask, owner) =>
+      windowsAclProbe(f, mask, owner, () => {
+        if (fail) throw new Error("timeout");
+        return "SAFE";
+      });
+    assert.equal(
+      privateOwned(s, "C:\\p7161", { platform: "win32", probe, store: fileStore(t.file) }),
+      false,
+    );
+    resetAclMemoryCache();
+    fail = false;
+    assert.equal(
+      privateOwned(s, "C:\\p7161", { platform: "win32", probe, store: fileStore(t.file) }),
+      true,
+    );
+  } finally {
+    resetAclMemoryCache();
+    rmSync(t.dir, { recursive: true, force: true });
+  }
 });
 const win32 = process.platform === "win32";
 /** A folder that only I own and only I, SYSTEM and Administrators may use (as the release stage makes it). */
@@ -278,7 +328,7 @@ test("FU-678: no absolute LOCALAPPDATA means no cache file, and a planted file i
     const s = { mode: 0, uid: 0, ino: 201, ctimeMs: 1, mtimeMs: 1 };
     const key = `me|${PRIVATE_MASK}|p678h|201|1|1`;
     // Hostile file where the old fallback (os.tmpdir) would look.
-    writeFileSync(join(t.dir, "acl-cache-v1.json"), JSON.stringify({ [key]: true }));
+    writeFileSync(join(t.dir, "acl-cache-v2.json"), JSON.stringify({ [key]: true }));
     let n = 0;
     const probe = () => (n++, false);
     const store = fileStore(aclCacheFile({}));
@@ -286,7 +336,7 @@ test("FU-678: no absolute LOCALAPPDATA means no cache file, and a planted file i
     assert.equal(privateOwned(s, "p678h", { platform: "win32", probe, store }), false);
     assert.equal(n, 1);
     store.set(key, false);
-    assert.equal(readFileSync(join(t.dir, "acl-cache-v1.json"), "utf8").includes("false"), false);
+    assert.equal(readFileSync(join(t.dir, "acl-cache-v2.json"), "utf8").includes("false"), false);
   } finally {
     if (oldTmp === undefined) delete process.env.TMPDIR;
     else process.env.TMPDIR = oldTmp;

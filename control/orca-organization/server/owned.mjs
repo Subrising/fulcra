@@ -49,7 +49,7 @@ foreach ($r in $acl.GetAccessRules($true, $true, $sid)) {
 'SAFE'
 `;
 
-/** Runs the ACL rule for one path. owner is "me" or "trusted". Returns true only for a clear SAFE answer.
+/** Runs the ACL rule for one path. owner is "me" or "trusted". true for SAFE, false for UNSAFE, undefined otherwise.
  * runFile is for tests only (an execFileSync stand-in; no shell). */
 export function windowsAclProbe(file, mask, owner = "trusted", runFile = execFileSync) {
   try {
@@ -72,7 +72,12 @@ export function windowsAclProbe(file, mask, owner = "trusted", runFile = execFil
         stdio: ["ignore", "pipe", "ignore"],
       },
     );
-    return out.trim() === "SAFE";
+    // FU-716: only the two script answers are definite. Empty or other output (for example a PowerShell
+    // that wrote nothing) is not an answer: it refuses as undefined and is never saved.
+    const answer = out.trim();
+    if (answer === "SAFE") return true;
+    if (answer === "UNSAFE") return false;
+    return undefined;
   } catch {
     // An error is not an answer: the caller refuses, and does not save it.
     return undefined;
@@ -87,7 +92,8 @@ export function aclCacheFile(env = process.env) {
   // No per-user folder means no file: a shared folder such as C:\Windows\Temp lets another user plant SAFE answers.
   const local = env.LOCALAPPDATA;
   if (!local || !path.win32.isAbsolute(local)) return undefined;
-  return path.win32.join(local, "Fulcra", "acl-cache-v1.json");
+  // FU-716: v2, so no false saved by the detached 0.2.44 RC1 build (empty output) is read again.
+  return path.win32.join(local, "Fulcra", "acl-cache-v2.json");
 }
 /** With no file, the store keeps answers in memory only. */
 export function fileStore(file) {
