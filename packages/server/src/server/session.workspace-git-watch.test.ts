@@ -635,8 +635,9 @@ describe("workspace git watch targets", () => {
       requestId: "open",
       cwd: IDLE_CWD,
     });
-    // FU-657: no watcher saw changes before this first open, so it reads fresh git state.
-    expect(workspaceGitService.getSnapshot).toHaveBeenLastCalledWith(IDLE_CWD, {
+    // FU-657: no watcher saw changes before this first open, so it starts a fresh git read. It answers from the
+    // cached snapshot (a later plain call) and pushes the fresh result as an update.
+    expect(workspaceGitService.getSnapshot).toHaveBeenCalledWith(IDLE_CWD, {
       force: true,
       includeForge: false,
       reason: "checkout-status-first-open",
@@ -649,7 +650,13 @@ describe("workspace git watch targets", () => {
       requestId: "again",
       cwd: IDLE_CWD,
     });
-    expect(workspaceGitService.getSnapshot).toHaveBeenLastCalledWith(IDLE_CWD, undefined);
+    // FULCRA(FU-657): the plain read passes no options; only the first open made a forced read.
+    expect(workspaceGitService.getSnapshot.mock.lastCall).toEqual([IDLE_CWD]);
+    expect(
+      workspaceGitService.getSnapshot.mock.calls.filter(
+        (call) => call[0] === IDLE_CWD && (call[1] as { force?: boolean } | undefined)?.force,
+      ),
+    ).toHaveLength(1);
 
     await session.cleanup();
   });
