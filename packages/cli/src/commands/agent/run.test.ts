@@ -72,6 +72,27 @@ describe("managed agent caller context", () => {
     },
   );
 
+  it("runs without a caller when the daemon answers with no agent (FU-690)", async () => {
+    await expect(
+      resolveRunCallerAgentId({ fetchAgent: async () => null }, { PASEO_AGENT_ID: "parent-agent" }),
+    ).resolves.toBeUndefined();
+  });
+
+  it.each([
+    "Failed to read agent storage: EMFILE",
+    "Ledger file too large",
+    "Agent id is ambiguous: parent",
+  ])("fails loudly instead of dropping the caller on %s (FU-690)", async (message) => {
+    const brokenDaemon = {
+      async fetchAgent(): Promise<never> {
+        throw new Error(message);
+      },
+    };
+    await expect(
+      resolveRunCallerAgentId(brokenDaemon, { PASEO_AGENT_ID: "parent-agent" }),
+    ).rejects.toThrow(`Could not look up the calling agent parent-agent: ${message}`);
+  });
+
   it("omits blank caller ids", async () => {
     await expect(
       resolveRunCallerAgentId(daemonWithAgents(), { PASEO_AGENT_ID: "   " }),
