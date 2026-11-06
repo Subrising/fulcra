@@ -252,7 +252,7 @@ export function PluginSurfaceScreen() {
     <View style={styles.screen}>
       {compact ? (
         <CompactHeader
-          navigation="back"
+          navigation={identity?.kind === "sidebar" ? "menu" : "back"}
           onBack={close}
           title={title}
           titleTestID="plugin-surface-title"

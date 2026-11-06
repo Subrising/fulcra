@@ -61,7 +61,12 @@ function selectPerHostVisibility<T extends SidebarGroupItem>(
   let leadingItem: T | null = null;
   let canToggle = false;
   for (const rows of byHost.values()) {
-    const result = selectSidebarGroupVisibility({ ...input, items: rows });
+    // Fulcra: each host keeps its own 20 rows (J15), where upstream keeps 7 for the whole group.
+    const result = selectSidebarGroupVisibility({
+      ...input,
+      items: rows,
+      limit: INITIAL_VISIBLE_ITEMS,
+    });
     canToggle ||= result.canToggle;
     leadingItem ??= result.leadingItem;
     for (const item of result.visibleItems) shown.add(item);

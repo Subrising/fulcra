@@ -469,5 +469,7 @@ const styles = StyleSheet.create((theme) => ({
     minHeight: TOUCH_TARGET,
     alignItems: "center",
     justifyContent: "center",
+    // The 48 px target must stay inside its row: upstream's compact -14 pushes it 2 px past the right edge.
+    marginRight: { xs: -12, md: -7 },
   },
 }));

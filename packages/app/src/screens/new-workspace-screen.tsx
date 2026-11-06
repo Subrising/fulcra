@@ -336,7 +336,10 @@ async function createMultiplicityWorkspace(input: {
         },
     ...(firstAgentContext ? { firstAgentContext } : {}),
   });
-  if (payload.error || !payload.workspace) {
+  // FULCRA(FU-657): a failed first turn rejects the create, but the workspace and its agent exist.
+  // The agent tab shows the failure, so keep going when both are registered.
+  const registeredAgent = payload.workspace && payload.agent;
+  if ((payload.error && !registeredAgent) || !payload.workspace) {
     throw new Error(payload.error ?? input.createFailedMessage);
   }
   const normalizedWorkspace = normalizeWorkspaceDescriptor(payload.workspace);

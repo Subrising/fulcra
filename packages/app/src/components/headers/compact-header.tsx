@@ -65,7 +65,7 @@ export function CompactHeader({
 
   return (
     <IconButtonChromeProvider value="header-island">
-      <View style={rootStyle}>
+      <View style={rootStyle} testID="compact-header">
         <View style={styles.row}>
           <View style={styles.island}>
             {navigation === "menu" ? <SidebarMenuToggle /> : <BackButton onBack={onBack} />}

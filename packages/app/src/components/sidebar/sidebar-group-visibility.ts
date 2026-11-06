@@ -12,6 +12,8 @@ export interface SidebarGroupVisibilityInput<T> {
   policy: SidebarGroupVisibilityPolicy<T>;
   /** The workspace the group's rows highlight as selected. Null when no row can be selected. */
   selection: ActiveWorkspaceSelection | null;
+  /** Fulcra: rows kept before "Show more". Defaults to 20 for pinned and 7 for workspaces. */
+  limit?: number;
 }
 
 export interface SidebarGroupVisibility<T> {
@@ -55,7 +57,7 @@ export function selectSidebarGroupVisibility<T extends SidebarGroupItem>(
   input: SidebarGroupVisibilityInput<T>,
 ): SidebarGroupVisibility<T> {
   const { items, expanded, policy, selection } = input;
-  const limit = policy.kind === "pinned" ? 20 : 7;
+  const limit = input.limit ?? (policy.kind === "pinned" ? 20 : 7);
   const baseline: T[] = [];
   let leadingItem: T | null = null;
   let canToggle = false;

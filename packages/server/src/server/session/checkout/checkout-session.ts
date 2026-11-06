@@ -234,12 +234,20 @@ export class CheckoutSession {
     }
   }
 
-  async handleStatusRequest(msg: CheckoutStatusRequest): Promise<void> {
+  async handleStatusRequest(
+    msg: CheckoutStatusRequest,
+    options?: { refresh?: boolean },
+  ): Promise<void> {
     const { cwd, requestId } = msg;
     const resolvedCwd = expandTilde(cwd);
 
     try {
-      const snapshot = await this.workspaceGitService.getSnapshot(resolvedCwd);
+      const snapshot = await this.workspaceGitService.getSnapshot(
+        resolvedCwd,
+        options?.refresh
+          ? { force: true, includeForge: false, reason: "checkout-status-first-open" }
+          : undefined,
+      );
       this.host.emit({
         type: "checkout_status_response",
         payload: buildCheckoutStatusPayloadFromSnapshot({

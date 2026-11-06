@@ -4253,8 +4253,12 @@ export class Session {
   private dispatchCheckoutMessage(msg: SessionInboundMessage): Promise<void> | undefined {
     switch (msg.type) {
       case "checkout_status_request":
-        if (this.gitObservationDemand.noteOpenedCwd(msg.cwd))
+        // FU-657: a checkout that was not observed has a snapshot as old as its last read (no watcher saw
+        // later git changes), so the first status request for it reads fresh, as FU-590 promises.
+        if (this.gitObservationDemand.noteOpenedCwd(msg.cwd)) {
           this.scheduleGitObservationReconcile();
+          return this.checkoutSession.handleStatusRequest(msg, { refresh: true });
+        }
         return this.checkoutSession.handleStatusRequest(msg);
       case "checkout.commits.list.request":
         return this.checkoutSession.handleCommitsListRequest(msg);

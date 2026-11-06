@@ -3402,6 +3402,9 @@ function WorkspaceScreenContent({
           explorerToggleLabel={explorerSidebarToggleLabel}
           explorerToggleAccessibilityState={explorerSidebarToggleAccessibilityState}
         >
+          {/* FULCRA(FU-657): the upstream compact header has no slot for the Fulcra header actions. */}
+          <PluginHeaderButtons serverId={normalizedServerId} workspaceId={normalizedWorkspaceId} />
+          <ContextButton serverId={normalizedServerId} workspaceId={normalizedWorkspaceId} />
           <MobileWorkspaceTabSwitcher
             tabs={tabs}
             activeTabKey={activeTabKey}

@@ -36,7 +36,7 @@ import {
   validateDraftSubmission,
 } from "@/composer/draft/workspace-tab-core";
 import type { AgentCapabilityFlags } from "@getpaseo/protocol/agent-types";
-import type { AgentSnapshotPayload } from "@getpaseo/protocol/messages";
+import type { AgentSnapshotPayload, CreationSnapshot } from "@getpaseo/protocol/messages";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { WorkspaceComposerAttachment } from "@/attachments/types";
 import {
@@ -213,7 +213,22 @@ async function submitDraftCreateRequest(input: {
     ...(attachmentsArray && attachmentsArray.length > 0 ? { attachments: attachmentsArray } : {}),
   };
   const creation = useWorkspaceDraftSubmissionStore.getState().creationByDraftId[input.draftId];
-  const result = creation ? await creation.retry(options) : await client.createAgent(options);
+  // FULCRA(FU-657): the host rejects a create whose first turn failed to start, but the agent is
+  // registered by then. The tab becomes that agent, which shows the failure in its timeline.
+  let registered: AgentSnapshotPayload | undefined;
+  const observed = {
+    ...options,
+    onEvent: (snapshot: CreationSnapshot) => {
+      if (snapshot.agent) registered = snapshot.agent;
+    },
+  };
+  let result: AgentSnapshotPayload;
+  try {
+    result = creation ? await creation.retry(observed) : await client.createAgent(observed);
+  } catch (error) {
+    if (!registered) throw error;
+    result = registered;
+  }
 
   return {
     agentId: result.id,

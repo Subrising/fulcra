@@ -1,3 +1,4 @@
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { useMemo, type ReactNode } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react-native";
 import { Pressable, Text, View } from "react-native";
@@ -53,6 +54,8 @@ function CollapsibleTitle({
   testID?: string;
 }) {
   const isCompact = useIsCompactFormFactor();
+  const touch = useTouchTargets();
+  const toggleStyle = useMemo(() => [styles.toggle, touch && touchTargetStyles.text], [touch]);
   const accessibilityState = useMemo(() => ({ expanded: !collapsed }), [collapsed]);
 
   return (
@@ -60,7 +63,7 @@ function CollapsibleTitle({
       accessibilityRole="button"
       accessibilityState={accessibilityState}
       onPress={onToggle}
-      style={styles.toggle}
+      style={toggleStyle}
       testID={testID}
     >
       {({ hovered }) => (

@@ -1363,7 +1363,10 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
       onRewindComplete={handleRewindComplete}
     >
       <View style={styles.root}>
-        <CurrentSessionAccountInfo serverId={serverId} agentId={agentId} />
+        {/* FULCRA(FU-657): the account strip would offset the fullscreen composer from the viewport. */}
+        {isComposerFullscreen ? null : (
+          <CurrentSessionAccountInfo serverId={serverId} agentId={agentId} />
+        )}
         {dock}
 
         {isArchivingCurrentAgent ? (

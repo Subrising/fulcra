@@ -1078,6 +1078,9 @@ interface SettingsSidebarProps {
   layout: "desktop" | "mobile";
 }
 
+// FULCRA(FU-657): sibling Settings routes remount the sidebar; keep the Advanced fold open across them.
+let advancedOpenMemory = false;
+
 function SettingsSidebar({
   view,
   onSelectSection,
@@ -1136,13 +1139,22 @@ function SettingsSidebar({
   );
   const teamScreens = pluginScreens.filter((entry) => entry !== accountsScreen);
   const location = view.kind === "plugin" ? { kind: view.kind, screenId: view.screenId } : view;
-  const [advancedOpen, setAdvancedOpen] = useState(() => shouldOpenAdvanced(location));
+  const [advancedOpen, setAdvancedOpenState] = useState(
+    () => advancedOpenMemory || shouldOpenAdvanced(location),
+  );
+  const setAdvancedOpen = useCallback((next: boolean | ((open: boolean) => boolean)) => {
+    setAdvancedOpenState((open) => {
+      const value = typeof next === "function" ? next(open) : next;
+      advancedOpenMemory = value;
+      return value;
+    });
+  }, []);
   const advancedWanted = shouldOpenAdvanced(location);
   useEffect(() => {
     if (advancedWanted) setAdvancedOpen(true);
-  }, [advancedWanted]);
+  }, [advancedWanted, setAdvancedOpen]);
   const advancedAccessibilityState = useMemo(() => ({ expanded: advancedOpen }), [advancedOpen]);
-  const toggleAdvanced = useCallback(() => setAdvancedOpen((open) => !open), []);
+  const toggleAdvanced = useCallback(() => setAdvancedOpen((open) => !open), [setAdvancedOpen]);
   const openProviders = useCallback(() => onSelectHostSection("providers"), [onSelectHostSection]);
 
   const itemsFor = (ids: readonly SettingsSectionSlug[]) =>
