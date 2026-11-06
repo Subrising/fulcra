@@ -206,27 +206,28 @@ test.describe("Settings host page", () => {
       await openHostSection(page, serverId, "agents");
     };
     try {
-      await test.step("idle agent release starts on and turns off", async () => {
+      // FULCRA(FU-657): Fulcra keeps idle agent release off by default (server config.ts and bootstrap.ts); upstream starts on.
+      await test.step("idle agent release starts off and turns on", async () => {
         await openHostAgentsInFreshApp(daemon.serverId);
-        await expectIdleAgentRelease(page, true);
-        await setIdleAgentRelease(page, false);
-        await expectLiveSavedSetting(false);
+        await expectIdleAgentRelease(page, false);
+        await setIdleAgentRelease(page, true);
+        await expectLiveSavedSetting(true);
       });
 
       await test.step("a fresh app reads the saved setting from the same running host", async () => {
         await openHostAgentsInFreshApp(daemon.serverId);
-        await expectIdleAgentRelease(page, false);
-        await expectLiveSavedSetting(false);
-        await setIdleAgentRelease(page, true);
+        await expectIdleAgentRelease(page, true);
         await expectLiveSavedSetting(true);
         await setIdleAgentRelease(page, false);
+        await expectLiveSavedSetting(false);
+        await setIdleAgentRelease(page, true);
       });
 
       await test.step("other hosts keep their own setting", async () => {
         await selectSettingsHost(page, primaryServerId);
         await openHostSection(page, primaryServerId, "agents");
-        await expectIdleAgentRelease(page, true);
-        await expectLiveSavedSetting(false);
+        await expectIdleAgentRelease(page, false);
+        await expectLiveSavedSetting(true);
       });
     } finally {
       await client.close();
@@ -244,7 +245,8 @@ test.describe("Settings host page", () => {
       await page.reload();
       await openSettings(page);
       await openHostSection(page, daemon.serverId, "agents");
-      await expectIdleAgentRelease(page, true);
+      // FULCRA(FU-657): Fulcra keeps idle agent release off by default.
+      await expectIdleAgentRelease(page, false);
       // A real filesystem failure, with the daemon and RPC path intact.
       await rename(configPath, `${configPath}.saved`);
       await mkdir(configPath);
@@ -252,10 +254,10 @@ test.describe("Settings host page", () => {
       await expect(page.getByTestId("host-page-idle-runtime-cleanup-error")).toContainText(
         "Failed to read",
       );
-      await expectIdleAgentRelease(page, true);
+      await expectIdleAgentRelease(page, false);
       await rm(configPath, { recursive: true });
       await rename(`${configPath}.saved`, configPath);
-      await setIdleAgentRelease(page, false);
+      await setIdleAgentRelease(page, true);
       await expect(page.getByTestId("host-page-idle-runtime-cleanup-error")).toHaveCount(0);
     } finally {
       await daemon.close();

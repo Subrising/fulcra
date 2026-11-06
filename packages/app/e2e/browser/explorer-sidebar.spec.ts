@@ -289,7 +289,7 @@ async function revealPhoneExplorer(page: Parameters<typeof ensureExplorerSidebar
 }
 
 async function cycleWorkspaceTheme(page: Parameters<typeof ensureExplorerSidebar>[0]) {
-  await page.keyboard.press("Control+Alt+t");
+  await page.keyboard.press("ControlOrMeta+Alt+t");
 }
 
 test("retains the Explorer host through appearance changes and folding", async ({ page }) => {
@@ -394,7 +394,7 @@ test("updates populated code and diff appearance without losing the editor insta
     await explorerSidebar(page).getByTestId("workspace-tab-changes_tree").click();
     const diff = explorerSidebar(page).getByTestId("git-diff-canvas");
     await expect(diff).toBeVisible();
-    await page.keyboard.press("Control+,");
+    await page.keyboard.press("ControlOrMeta+,");
     await openSettingsSection(page, "appearance");
     await page.getByLabel("Code font size", { exact: true }).fill("19");
     await page.getByLabel("Code font size", { exact: true }).press("Tab");
@@ -456,7 +456,7 @@ test("retains populated Explorer chat and terminal attachments through appearanc
     const composer = explorer.getByRole("textbox", { name: "Message agent..." });
     await composer.fill("Unsubmitted Explorer draft");
     const composerNode = await composer.elementHandle();
-    await page.keyboard.press("Control+,");
+    await page.keyboard.press("ControlOrMeta+,");
     await openSettingsSection(page, "appearance");
     await page.getByLabel("Content font size", { exact: true }).fill("20");
     await page.getByLabel("Content font size", { exact: true }).press("Tab");

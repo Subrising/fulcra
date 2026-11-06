@@ -2,6 +2,7 @@ import type { Locator, Page } from "@playwright/test";
 import { expect, test } from "../support/fixtures";
 import { waitForPermissionPrompt } from "../support/helpers/permissions";
 import { openAgentRoute, seedMockAgentWorkspace } from "../support/helpers/mock-agent";
+import { workspaceAgentTabByTitle } from "../support/helpers/workspace-tabs";
 
 // Literal shell commands and copyright markers must survive Markdown rendering.
 test.describe("Plan card markdown", () => {
@@ -111,7 +112,8 @@ async function withSharedMarkdownFiles(page: Page, run: () => Promise<void>) {
 }
 
 async function returnToSharedMarkdownChat(page: Page) {
-  await page.getByRole("button", { name: "Shared Markdown", exact: true }).click();
+  // FULCRA(FU-657): the Fulcra sidebar lists sessions by title too; scope to the tab.
+  await workspaceAgentTabByTitle(page, "Shared Markdown").click();
 }
 
 async function openSharedMarkdownFile(page: Page, name: string) {
@@ -253,7 +255,8 @@ test("inline-code paths preserve stable recognition and file navigation", async 
 });
 
 async function openInlineRegressionFile(page: Page, path: string) {
-  await page.getByRole("button", { name: "Inline path regression", exact: true }).click();
+  // FULCRA(FU-657): the Fulcra sidebar lists sessions by title too; scope to the tab.
+  await workspaceAgentTabByTitle(page, "Inline path regression").click();
   await page
     .getByTestId("assistant-message")
     .getByRole("link", { name: path, exact: true })

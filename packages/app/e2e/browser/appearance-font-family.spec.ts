@@ -7,6 +7,12 @@ async function openAppearance(page: Page) {
   await openSettingsSection(page, "appearance");
 }
 
+// FULCRA(FU-657): Fulcra settings put Appearance inside the General section, so the
+// sidebar has no "Appearance" row. The General row is the row that must stay usable.
+function appearanceMenuRow(page: Page) {
+  return page.getByTestId("settings-sidebar").getByTestId("settings-section-general");
+}
+
 async function setFontFamily(page: Page, name: string, family: string) {
   const input = page.getByRole("textbox", { name });
   await input.fill(family);
@@ -21,13 +27,13 @@ for (const name of ["Code font family", "Interface font family"]) {
 
     await setFontFamily(page, name, "'foo");
     await expect(page.getByRole("textbox", { name })).toHaveValue("'Fira Code', monospace");
-    await expect(page.getByRole("button", { name: "Appearance", exact: true })).toBeInViewport();
+    await expect(appearanceMenuRow(page)).toBeInViewport();
     await expect(page.getByText("Theme", { exact: true }).first()).toHaveCSS("font-size", "12px");
 
     await page.screenshot({ path: testInfo.outputPath("rejected-font.png") });
     await page.reload();
     await expect(page.getByRole("textbox", { name })).toHaveValue("'Fira Code', monospace");
-    await expect(page.getByRole("button", { name: "Appearance", exact: true })).toBeInViewport();
+    await expect(appearanceMenuRow(page)).toBeInViewport();
     await setFontFamily(page, name, "");
     await expect(page.getByRole("textbox", { name })).toHaveValue("");
   });
@@ -43,6 +49,6 @@ test("opens settings with defaults when a malformed font was already saved", asy
   await openAppearance(page);
   await expect(page.getByRole("textbox", { name: "Code font family" })).toHaveValue("");
   await expect(page.getByRole("textbox", { name: "Interface font family" })).toHaveValue("");
-  await expect(page.getByRole("button", { name: "Appearance", exact: true })).toBeInViewport();
+  await expect(appearanceMenuRow(page)).toBeInViewport();
   await expect(page.getByText("Theme", { exact: true }).first()).toHaveCSS("font-size", "12px");
 });

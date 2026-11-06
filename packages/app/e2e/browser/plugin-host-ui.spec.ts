@@ -4,7 +4,6 @@ import {
   expectRetainedDraft,
   expectStoredPluginTitle,
   hideRetainedPreferences,
-  showRetainedPreferences,
   expectChangedPlugin,
   expectRemovedPlugin,
 } from "../support/helpers/plugin-reconnect";
@@ -199,7 +198,18 @@ test("plugin content and host labels follow app language without losing an open 
   await verifyPluginTranslations(page, info);
 });
 
-test("retains plugin state offline and reconciles settings, changed code and removal", async ({
+// FULCRA(FU-657): Fulcra tears a host's plugin surfaces down while it is disconnected and installs
+// them again after the next catalog read (registry.ts suspendHost, catalog-sync.tsx). Upstream keeps
+// the surface mounted offline. So this test checks that each offline change is reconciled after
+// reconnect, and that the screen says the host is unavailable meanwhile.
+async function expectPluginHostUnavailable(page: Page): Promise<void> {
+  await expect(
+    page.getByText("The plugin host connection is unavailable. Retry the connection.").first(),
+  ).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Plugin draft", exact: true })).toHaveCount(0);
+}
+
+test("reconciles plugin settings, changed code and removal after the host reconnects", async ({
   page,
 }) => {
   test.setTimeout(180_000);
@@ -207,31 +217,28 @@ test("retains plugin state offline and reconciles settings, changed code and rem
     await probe.open();
     await editRetainedDraft(page, "Connected draft", 0);
 
-    await test.step("local plugin UI remains mounted and usable while disconnected", async () => {
+    await test.step("the plugin surface is withdrawn while disconnected and returns after reconnect", async () => {
       await probe.disconnect();
-      await expectRetainedDraft(page, "Connected draft", 1);
-      await editRetainedDraft(page, "Offline draft", 1);
+      await expectPluginHostUnavailable(page);
       await probe.changeStoredTitle("Saved by another client");
-      await expectStoredPluginTitle(page, "Agent monitor");
       await probe.reconnect();
       await expectStoredPluginTitle(page, "Saved by another client");
-      await expectRetainedDraft(page, "Offline draft", 2);
+      await expectRetainedDraft(page, "", 0);
     });
 
-    await test.step("inactive settings refresh without replacing the installation", async () => {
+    await test.step("settings changed while disconnected are read after reconnect", async () => {
       await hideRetainedPreferences(page);
       await probe.disconnect();
+      await expectPluginHostUnavailable(page);
       await probe.changeStoredTitle("Saved while preferences hidden");
       await probe.reconnect();
-      await showRetainedPreferences(page);
       await expectStoredPluginTitle(page, "Saved while preferences hidden");
-      await expectRetainedDraft(page, "Offline draft", 2);
     });
 
-    await test.step("changed code replaces the retained installation after reconnect", async () => {
+    await test.step("changed code replaces the installation after reconnect", async () => {
       await probe.disconnect();
       await probe.changeCode();
-      await expectRetainedDraft(page, "Offline draft", 2);
+      await expectPluginHostUnavailable(page);
       await probe.reconnect();
       await expectChangedPlugin(page);
       await editRetainedDraft(page, "New code draft", 0);
@@ -240,7 +247,7 @@ test("retains plugin state offline and reconciles settings, changed code and rem
     await test.step("removal is reconciled after reconnect", async () => {
       await probe.disconnect();
       await probe.remove();
-      await expectRetainedDraft(page, "New code draft", 1);
+      await expectPluginHostUnavailable(page);
       await probe.reconnect();
       await expectRemovedPlugin(page);
     });

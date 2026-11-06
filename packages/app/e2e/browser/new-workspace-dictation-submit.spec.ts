@@ -207,7 +207,8 @@ test.describe("New Workspace dictation submit", () => {
 });
 
 async function startDictationWithShortcut(page: Page): Promise<void> {
-  await composerLocator(page).press("Control+d");
+  // The shortcut is Cmd+D on a Mac and Ctrl+D elsewhere (keyboard-shortcuts.ts), so follow the host.
+  await composerLocator(page).press("ControlOrMeta+d");
 }
 
 test("dictation shortcut leaves retained fullscreen and exposes recording controls", async ({
@@ -244,7 +245,7 @@ test("dictation shortcut leaves retained fullscreen and exposes recording contro
     await resizeComposerViewport(page, "portrait");
     await enterComposerFullscreen(page);
     await resizeComposerViewport(page, "landscape");
-    await composerLocator(page).press("Control+Shift+d");
+    await composerLocator(page).press("ControlOrMeta+Shift+d");
     await expect(page.getByRole("button", { name: "Exit fullscreen", exact: true })).toHaveCount(0);
     await expect(
       page.getByText("Realtime voice is disabled in this test.", { exact: true }),

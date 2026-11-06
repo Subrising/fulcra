@@ -988,11 +988,10 @@ test.describe("pane toolbars on touch screens", () => {
       await openWorkspaceChanges(page, workspace);
       await page.setViewportSize(size);
       const compact = isCompactViewport(size, true);
-      const explorer = page
-        .getByTestId(compact ? "explorer-content-area" : "workspace-explorer-sidebar")
-        .filter({ visible: true });
+      // FULCRA(FU-657): upstream v0.15.0 folded the compact explorer into the same sidebar and tab ids as the wide one.
+      const explorer = page.getByTestId("workspace-explorer-sidebar").filter({ visible: true });
       if (compact) {
-        const changesTab = page.getByTestId("explorer-tab-changes").filter({ visible: true });
+        const changesTab = page.getByTestId("workspace-tab-changes_tree").filter({ visible: true });
         if (!(await changesTab.isVisible()))
           await page.getByTestId("workspace-explorer-toggle").first().click();
         await changesTab.click();
@@ -1023,9 +1022,7 @@ test.describe("pane toolbars on touch screens", () => {
         });
       }
       await page.screenshot({ path: testInfo.outputPath("changes-toolbar.png") });
-      const filesTab = compact
-        ? page.getByTestId("explorer-tab-files").filter({ visible: true })
-        : explorer.getByTestId("workspace-tab-files");
+      const filesTab = explorer.getByTestId("workspace-tab-files");
       await filesTab.click();
       const filesBar = explorer.getByTestId("files-pane-header");
       await expect(filesBar).toBeVisible();

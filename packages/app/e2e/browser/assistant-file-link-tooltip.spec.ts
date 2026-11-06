@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test, expect, type Page } from "../support/fixtures";
 import { openAgentRoute, seedMockAgentWorkspace } from "../support/helpers/mock-agent";
+import { workspaceAgentTabByTitle } from "../support/helpers/workspace-tabs";
 
 async function readFileLinkTooltip(page: Page): Promise<void> {
   const link = page.getByRole("link", { name: "the guide", exact: true });
@@ -22,7 +23,8 @@ async function openLinkedFile(page: Page): Promise<void> {
 }
 
 async function returnToAgent(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Tooltip regression", exact: true }).click();
+  // FULCRA(FU-657): the Fulcra sidebar lists sessions by title too; scope to the tab.
+  await workspaceAgentTabByTitle(page, "Tooltip regression").click();
   await expect(page.getByRole("link", { name: "the guide", exact: true })).toBeVisible();
   await leaveFileLink(page);
 }
@@ -77,7 +79,8 @@ async function readLinkedGuide(page: Page, linkName: string, content: string): P
 }
 
 async function returnToNestedLinks(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Nested file links", exact: true }).click();
+  // FULCRA(FU-657): the Fulcra sidebar lists sessions by title too; scope to the tab.
+  await workspaceAgentTabByTitle(page, "Nested file links").click();
   await expect(page.getByRole("link", { name: "nested guide", exact: true })).toBeVisible();
 }
 

@@ -73,7 +73,10 @@ export const createTempGitRepo = async (
   const withRemote = options?.withRemote ?? false;
 
   execSync("git init -b main", { cwd: repoPath, stdio: "ignore" });
-  execSync('git config user.email "e2e@paseo.test"', { cwd: repoPath, stdio: "ignore" });
+  execSync('git config user.email "paseo-e2e@users.noreply.github.com"', {
+    cwd: repoPath,
+    stdio: "ignore",
+  });
   execSync('git config user.name "Paseo E2E"', { cwd: repoPath, stdio: "ignore" });
   execSync("git config commit.gpgsign false", { cwd: repoPath, stdio: "ignore" });
   await writeFile(path.join(repoPath, "README.md"), "# Temp Repo\n");
@@ -184,7 +187,10 @@ export async function trackForkUpstream(repoPath: string): Promise<string> {
   execSync("git push upstream main", { cwd: repoPath, stdio: "ignore" });
 
   execSync(`git clone ${upstreamDir} ${upstreamClone}`, { stdio: "ignore" });
-  execSync('git config user.email "e2e@paseo.test"', { cwd: upstreamClone, stdio: "ignore" });
+  execSync('git config user.email "paseo-e2e@users.noreply.github.com"', {
+    cwd: upstreamClone,
+    stdio: "ignore",
+  });
   execSync('git config user.name "Paseo E2E"', { cwd: upstreamClone, stdio: "ignore" });
   execSync("git config commit.gpgsign false", { cwd: upstreamClone, stdio: "ignore" });
   execSync('git commit --allow-empty -m "upstream only"', {

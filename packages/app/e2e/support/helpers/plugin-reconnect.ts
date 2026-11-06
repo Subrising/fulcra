@@ -59,6 +59,7 @@ async function createProbe(page: Page) {
   const gate = await installDaemonWebSocketGate(page);
   const clientEntry = path.join(example.directory, "index.client.tsx");
   let catalogCount = 0;
+  let catalogType = "plugin.catalog.get";
   try {
     await writeFile(
       path.join(example.directory, "paseo-plugin.json"),
@@ -80,13 +81,17 @@ async function createProbe(page: Page) {
       await expect(page.getByText("Stored title: Agent monitor", { exact: true })).toBeVisible();
     },
     async disconnect() {
-      catalogCount = gate.getClientRequestCount("plugin.catalog.get.request");
+      // FULCRA(FU-657): Fulcra reads the catalog in pages when the host offers paging.
+      catalogType = gate.getClientRequestCount("plugin.catalog.page.request")
+        ? "plugin.catalog.page"
+        : "plugin.catalog.get";
+      catalogCount = gate.getClientRequestCount(`${catalogType}.request`);
       await gate.drop();
       await gate.waitForBlockedConnection();
     },
     async reconnect() {
       gate.restore();
-      await gate.waitForServerMessage("plugin.catalog.get.response", catalogCount + 1);
+      await gate.waitForServerMessage(`${catalogType}.response`, catalogCount + 1);
     },
     async changeStoredTitle(title: string) {
       const rpc = settingsRpc("display");

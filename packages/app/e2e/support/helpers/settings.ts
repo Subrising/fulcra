@@ -84,9 +84,10 @@ export async function revealSettingsSidebarSection(
   page: Page,
   section: SettingsSection,
 ): Promise<number> {
+  await openSettingsAdvanced(page);
   await page
-    .getByRole("navigation", { name: "Settings" })
-    .getByRole("button", { name: SECTION_LABELS[section], exact: true })
+    .getByTestId("settings-sidebar")
+    .getByTestId(`settings-section-${menuSectionFor(section)}`)
     .scrollIntoViewIfNeeded();
   const offset = await page
     .getByTestId("settings-sidebar-scroll-body")
@@ -106,15 +107,11 @@ export async function expectSettingsSidebarScrollSettled(
 
 export async function selectSettingsHostSectionsRapidly(page: Page): Promise<void> {
   for (let selection = 0; selection < 5; selection += 1) {
-    await page
-      .getByRole("navigation", { name: "Settings" })
-      .getByRole("button", { name: "Providers", exact: true })
-      .click();
-    await page
-      .getByRole("navigation", { name: "Settings" })
-      .getByRole("button", { name: "Terminals", exact: true })
-      .click();
-    await expectSettingsHeader(page, "Terminals");
+    // FULCRA(FU-657): Fulcra names the host rows by test id and folds them under Advanced.
+    await openSettingsAdvanced(page);
+    await page.getByTestId("settings-host-section-providers").click();
+    await page.getByTestId("settings-host-section-terminals").click();
+    await expectSettingsHeader(page, "Terminal profiles");
   }
 }
 
@@ -131,6 +128,8 @@ export async function changeSettingsInterfaceFontSize(page: Page, size: number):
 }
 
 export async function scrollSettingsSidebarToEnd(page: Page): Promise<number> {
+  // FULCRA(FU-657): the Fulcra sidebar folds most sections under "Advanced"; open it so the list can scroll.
+  await openSettingsAdvanced(page);
   const scrollBody = page.locator('[data-testid="settings-sidebar-scroll-body"]:visible');
   await scrollBody.hover();
   await page.mouse.wheel(0, 2000);

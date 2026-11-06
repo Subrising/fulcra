@@ -1,3 +1,4 @@
+import type { Locator } from "@playwright/test";
 import { expect, test, type Page } from "../support/fixtures";
 import { gotoAppShell } from "../support/helpers/app";
 import { waitForSidebarHydration } from "../support/helpers/workspace-ui";
@@ -146,7 +147,7 @@ test.describe("New workspace: launching a terminal", () => {
       await selectProfile(PROMPT_PROFILE);
       await expect(terminalPromptInput(page)).toHaveValue("Short draft");
       await expect(fullscreen).toHaveCount(0);
-      await terminalPromptInput(page).press("End");
+      await moveCaretToEnd(terminalPromptInput(page));
       await terminalPromptInput(page).press("Shift+Enter");
       await terminalPromptInput(page).pressSequentially("Second");
       await terminalPromptInput(page).press("Shift+Enter");
@@ -156,6 +157,16 @@ test.describe("New workspace: launching a terminal", () => {
     });
   });
 });
+
+// End scrolls and leaves the caret in place on a Mac host, so move the caret directly.
+async function moveCaretToEnd(input: Locator): Promise<void> {
+  await input.evaluate((element) => {
+    const textarea = element as HTMLTextAreaElement;
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    textarea.dispatchEvent(new Event("select", { bubbles: true }));
+  });
+}
 
 async function expectNewWorkspaceHeaderHidden(page: Page): Promise<void> {
   await expect(page.getByTestId("menu-button").filter({ visible: true })).toHaveCount(0);

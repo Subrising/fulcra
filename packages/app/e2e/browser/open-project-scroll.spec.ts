@@ -11,16 +11,12 @@ async function scrollToHomeFooter(page: Page) {
   await page.mouse.wheel(0, 1500);
 }
 
+// FULCRA(FU-657): Fulcra removed the upstream Community links from home (Fulcra v0.1.0), so the
+// last home action is the providers card. It must still be fully reachable.
 async function expectHomeActionsReachable(page: Page) {
   const providers = page.getByTestId("open-project-setup-providers");
-  const community = page.getByRole("button", { name: "Community", exact: true });
   await expect(providers).toBeInViewport({ ratio: 1 });
-  await expect(community).toBeInViewport({ ratio: 1 });
-  const providerBounds = await providers.boundingBox();
-  const communityBounds = await community.boundingBox();
-  expect(providerBounds).not.toBeNull();
-  expect(communityBounds).not.toBeNull();
-  expect(communityBounds!.y).toBeGreaterThanOrEqual(providerBounds!.y + providerBounds!.height);
+  await expect(page.getByRole("button", { name: "Community", exact: true })).toHaveCount(0);
 }
 
 test("home actions remain reachable on a short phone screen", async ({ page }, testInfo) => {

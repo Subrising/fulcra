@@ -65,14 +65,18 @@ test.describe("Composer recall", () => {
     try {
       await openAgentRoute(page, session);
       await expectComposerVisible(page);
-      await sendAndWaitForMessage(page, "/tdd", 1);
+      // FULCRA(FU-657): Fulcra rejects a slash command the agent does not list (see
+      // unhandledSlashCommandError), so the recalled message is a command the mock agent lists.
+      await sendAndWaitForMessage(page, "/mock handled-command", 1);
 
       const popover = page.getByTestId("composer-autocomplete-popover").filter({ visible: true });
       await pressInComposer(page, "ArrowUp");
-      await expectComposerDraft(page, "/tdd");
+      await expectComposerDraft(page, "/mock handled-command");
       await expect(popover).toHaveCount(0);
 
-      await typeIntoFocusedComposer(page, "x");
+      // Replacing the recalled text with a new slash prefix opens the picker again.
+      await page.keyboard.press("ControlOrMeta+A");
+      await typeIntoFocusedComposer(page, "/mo");
       await expect(popover.first()).toBeVisible({ timeout: 30_000 });
     } finally {
       await session.cleanup();

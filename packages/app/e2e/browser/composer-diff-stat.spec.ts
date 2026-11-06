@@ -832,7 +832,11 @@ async function scrollReviewToLastLine(page: Page) {
   const surface = compactReviewSurface(page);
   const bounds = await surface.boundingBox();
   if (!bounds) throw new Error("Compact review has no bounds");
-  await page.mouse.move(bounds.x + 120, bounds.y + 200);
+  // FULCRA(FU-657): Fulcra's "Code architecture" banner sits above the diff list, so a fixed offset from the
+  // surface top lands on the banner, not the scroller. Wheel over the first visible diff body instead.
+  const visibleBody = await surface.getByTestId("diff-file-1-body").boundingBox();
+  if (!visibleBody) throw new Error("Compact review has no diff body");
+  await page.mouse.move(bounds.x + 120, Math.max(visibleBody.y, bounds.y) + 150);
   await page.mouse.wheel(0, 10000);
   await expect
     .poll(async () => {

@@ -509,10 +509,20 @@ test.describe("Mobile sidebar panelState transition", () => {
     await openMobileAgentSidebar(page);
     await expectMobileAgentSidebarVisible(page);
 
-    const firstRow = await page.getByTestId("sidebar-global-new-workspace").boundingBox();
+    // FULCRA(FU-657): Fulcra's first sidebar row is the pinned main assistant (it can be empty), then
+    // New chat. The close button shares that first row, so it sits beside or above the nav rows, never over one.
     const closeButton = await page.getByTestId("sidebar-close").boundingBox();
-    if (!firstRow || !closeButton) throw new Error("first nav row and close button must render");
-    expect(closeButton.x).toBeGreaterThanOrEqual(firstRow.x + firstRow.width);
+    if (!closeButton) throw new Error("close button must render");
+    for (const testId of ["sidebar-new-chat", "sidebar-global-new-workspace"]) {
+      const row = await page.getByTestId(testId).boundingBox();
+      if (!row) throw new Error(`${testId} must render`);
+      const overlaps =
+        closeButton.x < row.x + row.width &&
+        row.x < closeButton.x + closeButton.width &&
+        closeButton.y < row.y + row.height &&
+        row.y < closeButton.y + closeButton.height;
+      expect(overlaps, `close button overlaps ${testId}`).toBe(false);
+    }
   });
 
   test("keeps a pinned workspace rendered while the retained sidebar is closed", async ({

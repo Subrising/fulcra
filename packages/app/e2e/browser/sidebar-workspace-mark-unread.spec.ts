@@ -187,6 +187,9 @@ async function openCompactWorkspace(page: Page, workspace: MockAgentWorkspace) {
 async function markUnreadThenResumeChat(page: Page, workspaceId: string) {
   await test.step("interacting with the visible chat clears manual unread", async () => {
     await markAsUnread(page, workspaceId);
+    // FULCRA(FU-657): the close button sits in the first row, which scrolls with the list (FU-62, left-sidebar.tsx),
+    // so scroll back up to it as a user does.
+    await page.getByTestId("sidebar-close").scrollIntoViewIfNeeded();
     await closeMobileAgentSidebar(page);
     await page.getByRole("textbox", { name: "Message agent..." }).click();
     await openMobileAgentSidebar(page);

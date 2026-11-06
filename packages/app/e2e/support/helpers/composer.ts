@@ -7,6 +7,7 @@ import { connectWorkspaceSetupClient } from "./workspace-setup";
 import { selectWorkspaceInSidebar } from "./sidebar";
 import { getServerId } from "./server-id";
 import { waitForTabBar } from "./launcher";
+import { workspaceAgentTabByTitle } from "./workspace-tabs";
 import { waitForSettledPosition } from "./sheet-layout";
 import { installDaemonWebSocketGate } from "./daemon-websocket-gate";
 
@@ -516,7 +517,8 @@ export async function roundTripComposerTabBeforePaint(
   page: Page,
   activeChatTitle: string,
 ): Promise<void> {
-  const activeTab = page.getByRole("button", { name: activeChatTitle, exact: true });
+  // FULCRA(FU-657): the Fulcra sidebar lists sessions by title too; scope to the tab.
+  const activeTab = workspaceAgentTabByTitle(page, activeChatTitle);
   await expect(activeTab).toHaveAttribute("aria-selected", "true");
   const result = await activeTab.evaluate((tab) => {
     const editor = document.activeElement;

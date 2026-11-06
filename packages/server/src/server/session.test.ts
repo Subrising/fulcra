@@ -4088,7 +4088,12 @@ describe("session checkout status handling", () => {
     });
 
     expect(workspaceGitService.getSnapshot).toHaveBeenCalledTimes(1);
-    expect(workspaceGitService.getSnapshot).toHaveBeenCalledWith("/tmp/service-worktree");
+    // FU-657: the first request for a checkout nobody observed reads fresh git state.
+    expect(workspaceGitService.getSnapshot).toHaveBeenCalledWith("/tmp/service-worktree", {
+      force: true,
+      includeForge: false,
+      reason: "checkout-status-first-open",
+    });
     expect(checkoutGitMocks.getCheckoutStatus).not.toHaveBeenCalled();
     expect(messages).toContainEqual({
       type: "checkout_status_response",

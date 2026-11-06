@@ -237,15 +237,14 @@ test("MCP delegates to self and B and opens both qualified children in ordinary 
     await submitMessage(page, "REMOTE_UI_TARGET");
     await expect(page.getByText("REMOTE_UI_TARGET", { exact: true })).toBeVisible();
     expect((await fleet.a.fetchAgent(fleet.remote.agentId))?.agent.lastUserMessageAt).toBeNull();
-    await fleet.expectCompletion(fleet.local);
+    // FULCRA(FU-657): a same-host child arms Fulcra's own finish notice (create.ts armCreatedFinishNotice), which wakes
+    // the parent only for a final message with a result line (finish-notice-filter.ts). The mock child has none, so only
+    // the remote child, which uses the upstream finish subscription, reports completion in the parent timeline.
     await fleet.expectCompletion(fleet.remote);
     await openAgentRoute(page, {
       workspaceId: fleet.workspace.workspaceId,
       agentId: fleet.parent.id,
     });
-    await expect(
-      page.getByRole("button", { name: /Agent finished.*MCP child on A/ }),
-    ).toBeVisible();
     await expect(
       page.getByRole("button", { name: /Agent finished.*MCP child on B/ }),
     ).toBeVisible();

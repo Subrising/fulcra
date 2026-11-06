@@ -180,6 +180,10 @@ export async function startIsolatedHostDaemon(
         "--home",
         paseoHome,
         "--force",
+        // FULCRA(FU-657): Fulcra's default graceful deadline is 40 s (FU-74), above this 30 s
+        // limit, so a stuck daemon never reached forced cleanup. Keep upstream's 15 s here.
+        "--timeout",
+        "15",
       ],
       { timeout: 30_000 },
     );
@@ -190,10 +194,11 @@ export async function startIsolatedHostDaemon(
       cwd: serverDir,
       env: withDisabledE2ESpeechEnv({
         ...process.env,
+        ...options.environment,
         // Agent subprocesses inherit packaged launcher flags. Test homes use the source daemon.
+        // FULCRA(FU-657): after the caller's environment, which can be a copy of process.env.
         FULCRA_COMMAND_CENTRE: "0",
         FULCRA_COMMAND_CENTRE_AUTH_HASH: undefined,
-        ...options.environment,
         PASEO_HOME: paseoHome,
         PASEO_SKILLS_HOME: skillsHome,
         PASEO_SERVER_ID: serverId,

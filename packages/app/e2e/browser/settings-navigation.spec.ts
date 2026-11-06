@@ -10,6 +10,7 @@ import { gotoAppShell, openSettings } from "../support/helpers/app";
 import { getE2EDaemonPort } from "../support/helpers/daemon-port";
 import {
   closeCompactSettings,
+  openSettingsAdvanced,
   scrollSettingsSidebarToEnd,
   revealSettingsSidebarSection,
   expectSettingsSidebarScrollSettled,
@@ -73,7 +74,7 @@ test.describe("Settings sidebar scroll position", () => {
     await gotoAppShell(page);
     await openSettings(page);
     await scrollSettingsSidebarToEnd(page);
-    await page.setViewportSize({ width: 1000, height: 1100 });
+    await page.setViewportSize({ width: 1000, height: 2400 });
     await expectSettingsSidebarScrollOffset(page, 0);
     await page.setViewportSize({ width: 1000, height: 500 });
     await openSettingsSection(page, "appearance");
@@ -139,7 +140,7 @@ test.describe("Settings sidebar scroll position", () => {
     ] as const) {
       await openSettingsHostSection(page, getServerId(), section);
       await expect(page.getByTestId("page-title")).toHaveText(
-        section === "providers" ? "Providers" : "Terminals",
+        section === "providers" ? "AI providers" : "Terminal profiles",
       );
       await expectSettingsSidebarScrollOffset(page, hostScrollTop);
     }
@@ -264,12 +265,16 @@ test.describe("Settings sidebar navigation", () => {
     await selectSettingsHost(page, secondaryServerId);
     await openSettingsHostSection(page, secondaryServerId, "connections");
     await openSettingsSection(page, "appearance");
+    // FULCRA(FU-657): the host picker sits in the folded Advanced "computer" group; Appearance is an everyday page.
+    await openSettingsAdvanced(page);
     await expectSettingsHostPickerLabel(page, "Stable horse");
     await openSettingsSection(page, "general");
+    await openSettingsAdvanced(page);
     await expectSettingsHostPickerLabel(page, "Stable horse");
     await openSettingsHostSection(page, secondaryServerId, "connections");
     await selectSettingsHost(page, primaryServerId);
     await openSettingsSection(page, "about");
+    await openSettingsAdvanced(page);
     await expectSettingsHostPickerLabel(page, "First horse");
   });
 

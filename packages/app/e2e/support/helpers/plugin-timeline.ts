@@ -14,7 +14,10 @@ const PLUGIN_ID = "timeline-transform-e2e";
 export function trackPluginChatRecovery(page: Page) {
   const messages: {
     type: string;
-    payload?: { plugins?: { id: string; clientBundle?: string }[] };
+    payload?: {
+      plugins?: { id: string; clientBundle?: string }[];
+      entries?: { id: string; clientBundle?: string }[];
+    };
   }[] = [];
   page.on("websocket", (socket) => {
     const collect = ({ payload }: { payload: string | Buffer }) => {
@@ -30,20 +33,18 @@ export function trackPluginChatRecovery(page: Page) {
       messages.length = 0;
     },
     async expectCatalogWithoutRetransmission() {
-      await expect
-        .poll(() =>
-          messages.some(
-            (message) =>
-              message.type === "plugin.catalog.get.response" &&
-              message.payload?.plugins?.some((plugin) => plugin.id === PLUGIN_ID),
-          ),
-        )
-        .toBe(true);
-      const entry = messages
-        .find((message) => message.type === "plugin.catalog.get.response")
-        ?.payload?.plugins?.find((plugin) => plugin.id === PLUGIN_ID);
-      expect(entry).toBeDefined();
-      expect(entry).not.toHaveProperty("clientBundle");
+      // FULCRA(FU-657): Fulcra reads the catalog in pages (plugin.catalog.page.*, L17) when the
+      // host offers it, so plugin.catalog.get.response never arrives. A page entry is a
+      // descriptor with a bundle reference, never the inline client bundle.
+      const entriesOf = (message: (typeof messages)[number]) => {
+        if (message.type === "plugin.catalog.get.response") return message.payload?.plugins ?? [];
+        if (message.type === "plugin.catalog.page.response") return message.payload?.entries ?? [];
+        return [];
+      };
+      const catalogEntry = () =>
+        messages.flatMap(entriesOf).find((plugin) => plugin.id === PLUGIN_ID);
+      await expect.poll(() => catalogEntry() !== undefined).toBe(true);
+      expect(catalogEntry()).not.toHaveProperty("clientBundle");
     },
     async expectRecoveredWithoutRetransmission() {
       await this.expectCatalogWithoutRetransmission();

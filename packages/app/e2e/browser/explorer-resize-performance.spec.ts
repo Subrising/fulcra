@@ -108,6 +108,9 @@ test("Explorer drag previews without rerendering panes or rewriting the shared s
       ),
     ),
   ).toBe(true);
+  // FULCRA(FU-657): Fulcra's sidebar and workspace rows mount extra components (for example the diff stat) that
+  // register their Unistyles classes on first render. Warm them up so the measured drags only see drag work.
+  await previewExplorerResize(page, -10);
   const grown = await previewExplorerResize(page, -100);
   const shrunk = await previewExplorerResize(page, 50);
   expect(grown.stylesheetMutations).toBe(0);

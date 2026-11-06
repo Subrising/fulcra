@@ -1879,7 +1879,7 @@ it("creates a PR from a restored exact base using the host metadata and a forge 
   try {
     git(root, "init", "-b", "main", repo);
     git(repo, "config", "user.name", "Test");
-    git(repo, "config", "user.email", "test@example.com");
+    git(repo, "config", "user.email", "paseo-e2e@users.noreply.github.com");
     git(repo, "commit", "--allow-empty", "-m", "base");
     git(root, "init", "--bare", remote);
     git(repo, "remote", "add", "origin", remote);

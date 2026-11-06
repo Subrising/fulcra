@@ -109,6 +109,13 @@ test.describe("retained terminal tab streams", () => {
     },
   ]) {
     test(`reattach preserves the ${input.name} cursor`, async ({ page }) => {
+      // ENV: xterm only draws the cursor on the WebGL renderer; headless Chromium without a GPU has no WebGL2.
+      test.skip(
+        !(await page.evaluate(
+          () => document.createElement("canvas").getContext("webgl2") !== null,
+        )),
+        "Headless Chromium on this host has no WebGL2",
+      );
       const terminal = await harness.createTerminal({
         name: "cursor-presentation",
         command: process.execPath,

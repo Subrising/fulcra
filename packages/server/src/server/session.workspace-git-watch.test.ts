@@ -635,8 +635,21 @@ describe("workspace git watch targets", () => {
       requestId: "open",
       cwd: IDLE_CWD,
     });
-    expect(workspaceGitService.getSnapshot).toHaveBeenCalledWith(IDLE_CWD);
+    // FU-657: no watcher saw changes before this first open, so it reads fresh git state.
+    expect(workspaceGitService.getSnapshot).toHaveBeenLastCalledWith(IDLE_CWD, {
+      force: true,
+      includeForge: false,
+      reason: "checkout-status-first-open",
+    });
     await vi.waitFor(() => expect(watched()).toEqual([REPO_CWD, IDLE_CWD]));
+
+    // A second request for the same open checkout uses the observed snapshot.
+    await session.handleMessage({
+      type: "checkout_status_request",
+      requestId: "again",
+      cwd: IDLE_CWD,
+    });
+    expect(workspaceGitService.getSnapshot).toHaveBeenLastCalledWith(IDLE_CWD, undefined);
 
     await session.cleanup();
   });
