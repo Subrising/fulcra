@@ -62,6 +62,7 @@ async function dismissStackedModelPickerWithBackdrop(page: Page) {
     .getByTestId("agent-controls-settings-list")
     .getByRole("button", { name: /Select model/ })
     .click();
+<<<<<<< HEAD
   await expect(page.getByTestId("agent-controls-model-browser-sheet")).toBeVisible();
   // A backdrop click that lands while the sheet still presents is swallowed or intercepted by
   // the tab strip behind it, so press again until the sheet leaves.
@@ -75,6 +76,13 @@ async function dismissStackedModelPickerWithBackdrop(page: Page) {
       timeout: 1_500,
     });
   }).toPass({ timeout: 15_000 });
+=======
+  await expect(page.getByTestId("agent-controls-model-browser-sheet")).toBeInViewport();
+  await page.mouse.click(MOBILE_VIEWPORT.width / 2, 24);
+  // In CI, Gorhom retains the dismissed sheet below the viewport.
+  // Dismissal is complete when it leaves the displayed surface.
+  await expect(page.getByTestId("agent-controls-model-browser-sheet")).not.toBeInViewport();
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
   await expect(page.getByTestId("agent-controls-model-sheet")).toBeVisible();
   await expect(page.getByTestId("agent-controls-settings-list")).toBeVisible();
 }
@@ -122,8 +130,12 @@ test.describe("mobile bottom sheet reopen", () => {
         await expect(sheet).toBeVisible();
         await expect(page.getByTestId("agent-controls-settings-list")).toBeVisible();
         await expect(page.getByTestId("agent-controls-model")).toContainText("Ten second stream");
+<<<<<<< HEAD
         await expect(page.getByTestId("agent-controls-model-browser-sheet")).not.toBeVisible();
         await page.screenshot({ path: test.info().outputPath("model-sheet-reopened.png") });
+=======
+        await expect(page.getByTestId("agent-controls-model-browser-sheet")).not.toBeInViewport();
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
       });
     } finally {
       await session.cleanup();

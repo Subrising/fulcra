@@ -31,6 +31,7 @@ export interface SidebarWorkspacePlacement {
   workspaceDirectory?: string;
   projectKind: WorkspaceStructureProject["projectKind"];
   workspaceKind: WorkspaceDescriptor["workspaceKind"];
+  background?: boolean;
   name: string;
 }
 
@@ -180,7 +181,12 @@ export function createSidebarWorkspaceEntry(input: {
       input.workspace.worktreeSlug ?? shortenPath(input.workspace.workspaceDirectory),
     projectKind: input.workspace.projectKind,
     workspaceKind: input.workspace.workspaceKind,
+<<<<<<< HEAD
     name: sessionDisplayName(input.workspace.name, input.workspace.title),
+=======
+    background: input.workspace.background,
+    name: input.workspace.name,
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
     title: input.workspace.title ?? null,
     pinnedAt: input.workspace.pinnedAt,
     labels: input.workspace.labels ?? EMPTY_WORKSPACE_LABELS,
@@ -384,13 +390,15 @@ export function buildSidebarWorkspaceEntries(input: {
   sessions: SidebarWorkspaceSession[];
   pendingCreateAttempts?: Record<string, PendingCreateAttempt>;
   previousEntries?: ReadonlyMap<string, SidebarWorkspaceEntry>;
-}): Map<string, SidebarWorkspaceEntry> {
+}): ReadonlyMap<string, SidebarWorkspaceEntry> {
   if (input.placements.length === 0 || input.sessions.length === 0) {
     return new Map();
   }
 
   const sessionByServerId = new Map(input.sessions.map((session) => [session.serverId, session]));
   const entries = new Map<string, SidebarWorkspaceEntry>();
+  const previousKeys = input.previousEntries?.keys();
+  let unchanged = input.previousEntries !== undefined;
 
   for (const placement of input.placements) {
     const session = sessionByServerId.get(placement.serverId);
@@ -422,15 +430,22 @@ export function buildSidebarWorkspaceEntries(input: {
     )
       entry.projectName = placement.conversationProjectName;
     const previousEntry = input.previousEntries?.get(placement.workspaceKey);
-    entries.set(
-      placement.workspaceKey,
+    const nextEntry =
       previousEntry && areSidebarWorkspaceEntriesEqual(previousEntry, entry)
         ? previousEntry
-        : entry,
-    );
+        : entry;
+    entries.set(placement.workspaceKey, nextEntry);
+    unchanged =
+      previousKeys?.next().value === placement.workspaceKey &&
+      previousEntry === nextEntry &&
+      unchanged;
   }
 
-  return entries;
+  // Resuming a retained sidebar must not invalidate its project/filter projections
+  // when the directory has not changed while it was hidden.
+  return unchanged && input.previousEntries?.size === entries.size
+    ? input.previousEntries
+    : entries;
 }
 
 function areSidebarWorkspaceEntriesEqual(

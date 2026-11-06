@@ -320,7 +320,7 @@ const PROVIDER_IMAGE_MARKDOWN = new RegExp(
 );
 
 export function isProviderImageMarkdown(text: string): boolean {
-  return PROVIDER_IMAGE_MARKDOWN.test(text);
+  return PROVIDER_IMAGE_MARKDOWN.test(text.trimStart());
 }
 
 interface RenderProviderImageOutputOptions {
@@ -390,7 +390,8 @@ export function renderProviderImageOutputAsAssistantMarkdown(
     const altText = escapeMarkdownImageAlt(nonEmptyString(image.altText) ?? "Image");
     return {
       type: "assistant_message",
-      text: `![${altText}](${escapeMarkdownImageSource(source)})`,
+      // Image outputs remain standalone paragraphs when adjacent assistant chunks merge.
+      text: `\n\n![${altText}](${escapeMarkdownImageSource(source)})\n\n`,
     };
   }
 
@@ -420,6 +421,6 @@ export function renderProviderImageOutputAsAssistantMarkdown(
   const altText = escapeMarkdownImageAlt(nonEmptyString(image.altText) ?? "Image");
   return {
     type: "assistant_message",
-    text: `![${altText}](${escapeMarkdownImageSource(materialized.path)})`,
+    text: `\n\n![${altText}](${escapeMarkdownImageSource(materialized.path)})\n\n`,
   };
 }

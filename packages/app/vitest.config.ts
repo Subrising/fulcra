@@ -4,6 +4,9 @@ import { playwright } from "@vitest/browser-playwright";
 import path from "path";
 import fs from "fs";
 
+// Set this before Vite resolves dependencies and Vitest starts its workers.
+Object.assign(process.env, { NODE_ENV: "test" });
+
 const appNodeModules = path.resolve(__dirname, "node_modules");
 const rootNodeModules = path.resolve(__dirname, "../../node_modules");
 const appTestWorkers = Number(process.env.APP_TEST_MAX_WORKERS ?? 2);
@@ -48,7 +51,12 @@ export default defineConfig({
           include: [
             "src/**/*.{test,spec}.{ts,tsx}",
             "native-release-version.test.ts",
+<<<<<<< HEAD
             "plugins/with-fdroid-autolinking.test.ts",
+=======
+            "app.config.test.ts",
+            "vitest-environment.test.ts",
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
           ],
           setupFiles: [path.resolve(__dirname, "vitest.setup.ts")],
           exclude: [...configDefaults.exclude, "e2e/**", "src/**/*.browser.{test,spec}.{ts,tsx}"],

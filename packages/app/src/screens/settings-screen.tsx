@@ -142,6 +142,7 @@ import { MetadataGenerationPage } from "@/screens/settings/metadata-generation-p
 import ProjectsScreen from "@/screens/projects-screen";
 import ProjectSettingsScreen from "@/screens/project-settings-screen";
 import { SETTINGS_DESKTOP_SIDEBAR_WIDTH, useIsCompactFormFactor } from "@/constants/layout";
+import { densityIconBox, densityIconSize } from "@/styles/density";
 import { useLocalDaemonServerId } from "@/hooks/use-is-local-daemon";
 import {
   type EnableBuiltInDaemonOption,
@@ -336,15 +337,26 @@ function renderHostSettingsContent(
 // Trigger + sidebar style helpers
 // ---------------------------------------------------------------------------
 
-function sidebarItemStyle({ hovered }: PressableStateCallbackType & { hovered?: boolean }) {
-  return [sidebarStyles.item, Boolean(hovered) && sidebarStyles.itemHovered];
+function sidebarItemStyle({
+  hovered,
+  pressed,
+}: PressableStateCallbackType & { hovered?: boolean }) {
+  return [
+    sidebarStyles.item,
+    Boolean(hovered) && sidebarStyles.itemHovered,
+    pressed && sidebarStyles.itemPressed,
+  ];
 }
 
-function selectedSidebarItemStyle({ hovered }: PressableStateCallbackType & { hovered?: boolean }) {
+function selectedSidebarItemStyle({
+  hovered,
+  pressed,
+}: PressableStateCallbackType & { hovered?: boolean }) {
   return [
     sidebarStyles.item,
     Boolean(hovered) && sidebarStyles.itemHovered,
     sidebarStyles.itemSelected,
+    pressed && sidebarStyles.itemPressed,
   ];
 }
 
@@ -817,6 +829,7 @@ function MenuRow({
   description,
   icon: IconComponent,
   isSelected,
+<<<<<<< HEAD
   onPress,
   testID,
 }: MenuRowProps) {
@@ -824,6 +837,14 @@ function MenuRow({
   // On a phone the list is the whole page, not a sidebar beside a detail: its titles read at full contrast.
   const isCompact = useIsCompactFormFactor();
   const { theme } = useUnistyles();
+=======
+  onSelect,
+}: SidebarSectionButtonProps) {
+  const { theme, rt } = useUnistyles();
+  const handlePress = useCallback(() => {
+    onSelect(itemId);
+  }, [onSelect, itemId]);
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
   const accessibilityState = useMemo(() => ({ selected: isSelected }), [isSelected]);
   const labelStyle = useMemo(
     () => [sidebarStyles.label, (isSelected || isCompact) && { color: theme.colors.foreground }],
@@ -847,7 +868,7 @@ function MenuRow({
       style={rowStyle}
     >
       <IconComponent
-        size={theme.iconSize.md}
+        size={densityIconSize(rt, "md")}
         color={isSelected ? theme.colors.foreground : theme.colors.foregroundMuted}
       />
       <View style={sidebarStyles.labelColumn}>
@@ -897,6 +918,7 @@ function SidebarHostSectionButton({
   isSelected,
   showDescription,
   onSelect,
+<<<<<<< HEAD
 }: {
   item: HostSectionItem;
   isSelected: boolean;
@@ -905,6 +927,18 @@ function SidebarHostSectionButton({
 }) {
   const { t } = useTranslation();
   const handlePress = useCallback(() => onSelect(item.id), [onSelect, item.id]);
+=======
+}: SidebarHostSectionButtonProps) {
+  const { theme, rt } = useUnistyles();
+  const handlePress = useCallback(() => {
+    onSelect(itemId);
+  }, [onSelect, itemId]);
+  const accessibilityState = useMemo(() => ({ selected: isSelected }), [isSelected]);
+  const labelStyle = useMemo(
+    () => [sidebarStyles.label, isSelected && { color: theme.colors.foreground }],
+    [isSelected, theme.colors.foreground],
+  );
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
   return (
     <MenuRow
       label={t(item.labelKey)}
@@ -912,6 +946,7 @@ function SidebarHostSectionButton({
       icon={item.icon}
       isSelected={isSelected}
       onPress={handlePress}
+<<<<<<< HEAD
       testID={`settings-host-section-${item.id}`}
     />
   );
@@ -974,6 +1009,20 @@ function PluginScreenRow({
       onPress={handlePress}
       testID={`settings-plugin-screen-${entry.screenId}`}
     />
+=======
+      testID={`settings-host-section-${itemId}`}
+      style={isSelected ? selectedSidebarItemStyle : sidebarItemStyle}
+    >
+      <IconComponent
+        size={densityIconSize(rt, "md")}
+        color={isSelected ? theme.colors.foreground : theme.colors.foregroundMuted}
+        strokeWidth={SIDEBAR_ICON_STROKE_WIDTH}
+      />
+      <Text style={labelStyle} numberOfLines={1}>
+        {label}
+      </Text>
+    </Pressable>
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
   );
 }
 
@@ -1012,10 +1061,11 @@ function HostPicker({
     [],
   );
   const triggerStyle = useCallback(
-    ({ hovered = false }: PressableStateCallbackType & { hovered?: boolean }) => [
+    ({ hovered = false, pressed }: PressableStateCallbackType & { hovered?: boolean }) => [
       sidebarStyles.pickerTrigger,
       touch && touchTargetStyles.text,
       hovered && sidebarStyles.pickerTriggerHovered,
+      pressed && sidebarStyles.itemPressed,
     ],
     [touch],
   );
@@ -1062,6 +1112,16 @@ function HostPicker({
   );
 }
 
+/** A labelled group of sidebar rows. On compact layouts the rows sit together in one island. */
+function SidebarGroup({ label, children }: { label?: string; children: ReactNode }) {
+  return (
+    <View style={sidebarStyles.group}>
+      {label ? <Text style={sidebarStyles.groupLabel}>{label}</Text> : null}
+      <View style={sidebarStyles.island}>{children}</View>
+    </View>
+  );
+}
+
 interface SettingsSidebarProps {
   view: SettingsView;
   onSelectSection: (section: SettingsSectionSlug) => void;
@@ -1083,6 +1143,7 @@ function SettingsSidebar({
   activeHostServerId,
   layout,
 }: SettingsSidebarProps) {
+<<<<<<< HEAD
   const touch = useTouchTargets();
   const isCompact = layout === "mobile";
   const advancedStyle = useCallback(
@@ -1095,6 +1156,9 @@ function SettingsSidebar({
     [isCompact, touch],
   );
   const { theme } = useUnistyles();
+=======
+  const { theme, rt } = useUnistyles();
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
   const { t } = useTranslation();
   const hosts = useHosts();
   const localServerId = useLocalDaemonServerId();
@@ -1251,12 +1315,84 @@ function SettingsSidebar({
   // Advanced toggle reads as a row (full-contrast title, chevron on the trailing edge).
   const sidebarBody = (
     <>
+<<<<<<< HEAD
       {isCompact ? (
         <View style={sidebarStyles.compactCard}>
           <View style={sidebarStyles.compactCardBody}>{everydayRows}</View>
         </View>
       ) : (
         <View style={sidebarStyles.list}>{everydayRows}</View>
+=======
+      <SidebarGroup label={t("settings.groups.app")}>
+        {items.map((item) => (
+          <SidebarSectionButton
+            key={item.id}
+            itemId={item.id}
+            label={t(item.labelKey)}
+            icon={item.icon}
+            isSelected={selectedSectionId === item.id}
+            onSelect={onSelectSection}
+          />
+        ))}
+      </SidebarGroup>
+      {hasHosts ? (
+        <SidebarGroup label={t("settings.groups.host")}>
+          <HostPicker
+            activeServerId={activeHostServerId}
+            sortedHosts={sortedHosts}
+            onSelectHost={onSelectHost}
+            onAddHost={onAddHost}
+            enableBuiltInDaemonOption={enableBuiltInDaemonOption}
+          />
+          {HOST_SECTION_ITEMS.map((item) => (
+            <SidebarHostSectionButton
+              key={item.id}
+              itemId={item.id}
+              label={t(item.labelKey)}
+              icon={item.icon}
+              isSelected={selectedHostSection === item.id}
+              onSelect={onSelectHostSection}
+            />
+          ))}
+        </SidebarGroup>
+      ) : (
+        <SidebarGroup>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t("settings.addHost")}
+            onPress={onAddHost}
+            testID="settings-add-host"
+            style={sidebarItemStyle}
+          >
+            <Plus
+              size={densityIconSize(rt, "md")}
+              color={theme.colors.foregroundMuted}
+              strokeWidth={SIDEBAR_ICON_STROKE_WIDTH}
+            />
+            <Text style={sidebarStyles.label} numberOfLines={1}>
+              {t("settings.addHost")}
+            </Text>
+          </Pressable>
+          {enableBuiltInDaemonOption.visible ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t("settings.enableBuiltInDaemon")}
+              onPress={enableBuiltInDaemonOption.onPress}
+              testID="settings-enable-built-in-daemon"
+              style={sidebarItemStyle}
+            >
+              <Server
+                size={densityIconSize(rt, "md")}
+                color={theme.colors.foregroundMuted}
+                strokeWidth={SIDEBAR_ICON_STROKE_WIDTH}
+              />
+              <Text style={sidebarStyles.label} numberOfLines={1}>
+                {t("settings.enableBuiltInDaemon")}
+              </Text>
+            </Pressable>
+          ) : null}
+        </SidebarGroup>
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
       )}
       {isCompact ? null : <SidebarSeparator />}
       <View style={isCompact ? sidebarStyles.compactAdvanced : sidebarStyles.list}>
@@ -1920,9 +2056,11 @@ const sidebarStyles = StyleSheet.create((theme) => ({
   compactLabel: {
     color: theme.colors.foreground,
   },
-  list: {
+  // Compact values draw each group as an island of tiles; desktop keeps a plain list.
+  group: {
     paddingVertical: theme.spacing[2],
     paddingHorizontal: theme.spacing[2],
+<<<<<<< HEAD
     gap: theme.spacing[1],
   },
   groupLabel: {
@@ -1930,16 +2068,39 @@ const sidebarStyles = StyleSheet.create((theme) => ({
     fontWeight: theme.fontWeight.medium,
     color: theme.colors.foregroundMuted,
     paddingHorizontal: theme.spacing[2],
+=======
+    gap: { xs: theme.spacing[1], md: theme.spacing[0.5] },
+  },
+  groupLabel: {
+    fontSize: theme.fontSize.base,
+    fontWeight: theme.fontWeight.normal,
+    color: theme.colors.foregroundExtraMuted,
+    paddingHorizontal: { xs: theme.spacing[4], md: theme.spacing[2] },
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
     paddingVertical: theme.spacing[1],
+  },
+  island: {
+    gap: { xs: 2, md: theme.spacing[0.5] },
+    borderRadius: { xs: theme.borderRadius["2xl"], md: 0 },
+    overflow: "hidden",
   },
   item: {
     flexDirection: "row",
     alignItems: "center",
+<<<<<<< HEAD
     gap: theme.spacing[2],
     minHeight: 36,
     paddingVertical: theme.spacing[2],
     paddingHorizontal: theme.spacing[2],
     borderRadius: theme.borderRadius.lg,
+=======
+    gap: { xs: theme.spacing[3], md: theme.spacing[2] },
+    minHeight: { xs: 52, md: 28 },
+    paddingVertical: theme.spacing[1],
+    paddingHorizontal: { xs: theme.spacing[4], md: theme.spacing[2] },
+    borderRadius: { xs: 0, md: theme.borderRadius.lg },
+    backgroundColor: { xs: theme.colors.surface1, md: "transparent" },
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
   },
   itemHovered: {
     backgroundColor: theme.colors.surfaceSidebarHover,
@@ -1947,8 +2108,12 @@ const sidebarStyles = StyleSheet.create((theme) => ({
   itemSelected: {
     backgroundColor: theme.colors.surfaceSidebarHover,
   },
+  // The workspace rows' pressed fill.
+  itemPressed: {
+    backgroundColor: theme.colors.surface2,
+  },
   label: {
-    fontSize: theme.fontSize.base,
+    fontSize: { xs: theme.fontSize.lg, md: theme.fontSize.base },
     color: theme.colors.foregroundMuted,
     fontWeight: theme.fontWeight.normal,
     flex: 1,
@@ -1979,11 +2144,20 @@ const sidebarStyles = StyleSheet.create((theme) => ({
   pickerTrigger: {
     flexDirection: "row",
     alignItems: "center",
+<<<<<<< HEAD
     gap: theme.spacing[2],
     minHeight: 36,
     paddingVertical: theme.spacing[2],
     paddingHorizontal: theme.spacing[2],
     borderRadius: theme.borderRadius.lg,
+=======
+    gap: { xs: theme.spacing[3], md: theme.spacing[2] },
+    minHeight: { xs: 52, md: 28 },
+    paddingVertical: theme.spacing[1],
+    paddingHorizontal: { xs: theme.spacing[4], md: theme.spacing[2] },
+    borderRadius: { xs: 0, md: theme.borderRadius.lg },
+    backgroundColor: { xs: theme.colors.surface1, md: "transparent" },
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
   },
   pickerTriggerHovered: {
     backgroundColor: theme.colors.surfaceSidebarHover,
@@ -1991,14 +2165,14 @@ const sidebarStyles = StyleSheet.create((theme) => ({
   pickerTriggerLabel: {
     flex: 1,
     minWidth: 0,
-    fontSize: theme.fontSize.base,
+    fontSize: { xs: theme.fontSize.lg, md: theme.fontSize.base },
     color: theme.colors.foreground,
     fontWeight: theme.fontWeight.normal,
   },
   // Match the setting items' icon footprint so the host label aligns with them.
   pickerTriggerDot: {
-    width: theme.iconSize.md,
-    height: theme.iconSize.md,
+    width: densityIconBox("md"),
+    height: densityIconBox("md"),
     alignItems: "center",
     justifyContent: "center",
   },

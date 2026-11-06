@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import {
   chmodSync,
   closeSync,
@@ -8,6 +9,9 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+=======
+import { chmodSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { writeWindowsPrivateFileAtomicSync } from "./windows-private-file.js";
@@ -39,6 +43,7 @@ export function writePrivateFileAtomicSync(
   options: { durable?: boolean } = {},
 ): void {
   ensurePrivateDirectory(path.dirname(filePath));
+<<<<<<< HEAD
   if (options.durable && process.platform === "win32") {
     writeWindowsPrivateFileAtomicSync(filePath, data);
     return;
@@ -63,8 +68,29 @@ export function writePrivateFileAtomicSync(
       }
     }
     ensurePrivateFile(filePath);
+=======
+  const destination = resolveSymlinkedFile(filePath);
+  const temporary = path.join(
+    path.dirname(destination),
+    `.${path.basename(destination)}.${process.pid}.${randomUUID()}`,
+  );
+  try {
+    writeFileSync(temporary, data, { mode: PRIVATE_FILE_MODE });
+    renameSync(temporary, destination);
+    ensurePrivateFile(destination);
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
   } catch (error) {
     rmSync(temporary, { force: true });
+    throw error;
+  }
+}
+
+// Renaming onto a symlink replaces the link, so write to the file it points at.
+function resolveSymlinkedFile(filePath: string): string {
+  try {
+    return realpathSync(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return filePath;
     throw error;
   }
 }

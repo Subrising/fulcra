@@ -22,6 +22,7 @@ export default defineConfig({
     setupFiles: [path.resolve(__dirname, "./src/test-utils/vitest-setup.ts")],
     pool: "forks",
     fileParallelism: false,
+<<<<<<< HEAD
     // Windows runners intermittently starve subprocess-heavy Git tests at the
     // default worker count, leaving child processes alive past their deadlines.
     maxWorkers: process.platform === "win32" ? 1 : undefined,
@@ -33,5 +34,8 @@ export default defineConfig({
       // Controller private-store tests require POSIX ownership and file modes.
       ...(process.platform === "win32" ? ["**/*.posix.test.ts"] : []),
     ],
+=======
+    exclude: ["**/node_modules/**", "**/dist/**", "**/.claude/**", "**/.dev/**"],
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
   },
 });

@@ -158,6 +158,7 @@ export function toAgentPayload(
     pendingPermissions: sanitizePendingPermissions(agent.pendingPermissions),
     persistence: projectPersistenceHandleForWire(agent.persistence),
     title: options?.title ?? null,
+<<<<<<< HEAD
     labels: (() => {
       const labels = { ...agent.labels };
       delete labels["fulcra.account-name"];
@@ -165,6 +166,10 @@ export function toAgentPayload(
       if (account) labels["fulcra.account-name"] = account.slice(0, 60);
       return labels;
     })(),
+=======
+    labels: agent.labels,
+    ...(agent.internal ? { internal: true } : {}),
+>>>>>>> refs/remotes/upstream/tags/v0.12.0
   };
 
   const cost = sessionCost(agent.costRecords);
@@ -303,7 +308,9 @@ export function buildStoredAgentPayload(
     attentionReason: record.attentionReason ?? null,
     attentionTimestamp: record.attentionTimestamp ?? null,
     archivedAt: record.archivedAt ?? null,
+    ...(record.internal ? { internal: true } : {}),
     labels: normalizeLabels(record.labels),
+    ...(typeof record.lastError === "string" ? { lastError: record.lastError } : {}),
     ...(providerAvailable ? {} : { providerUnavailable: true }),
     ...interruptedTurnField(record),
   };
