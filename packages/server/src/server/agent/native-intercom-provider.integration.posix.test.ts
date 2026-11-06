@@ -77,6 +77,28 @@ interface FixtureUserMessage {
   text: string;
 }
 
+function openFixtureParent(
+  manager: AgentManager,
+  input: {
+    provider: "codex" | "claude";
+    resumed: boolean;
+    cwd: string;
+    workspaceId: string | undefined;
+  },
+) {
+  const config = { cwd: input.cwd, model: "gpt-5.4" };
+  return input.resumed
+    ? manager.resumeAgentFromPersistence(
+        { provider: "codex", sessionId: "thread-1", nativeHandle: "thread-1" },
+        config,
+        undefined,
+        { workspaceId: input.workspaceId },
+      )
+    : manager.createAgent({ provider: input.provider, ...config }, undefined, {
+        workspaceId: input.workspaceId,
+      });
+}
+
 async function fixture(
   reply: "valid" | "malformed" = "valid",
   reports = false,
@@ -84,6 +106,7 @@ async function fixture(
   journalHooks = false,
   installedQueue = false,
   parentProvider: "codex" | "claude" = "codex",
+  parentOpen: "resume" | "create" = "resume",
 ) {
   const directory = await mkdtemp(path.join(tmpdir(), "native-provider-integration-"));
   let turn = 0;
@@ -270,20 +293,15 @@ async function fixture(
   const resumeSession = vi.spyOn(provider, "resumeSession");
   // FULCRA(FU-657): since upstream #8393 a new Codex thread has no native identity until its first
   // turn. A parent lead is a saved Codex thread, so the fixture opens it from its stored handle.
-  if (parentProvider === "codex" && reports) thread = 1;
-  const agent =
-    parentProvider === "codex"
-      ? await manager.resumeAgentFromPersistence(
-          { provider: "codex", sessionId: "thread-1", nativeHandle: "thread-1" },
-          { cwd: directory, model: "gpt-5.4" },
-          undefined,
-          { workspaceId: reports ? randomUUID() : undefined },
-        )
-      : await manager.createAgent(
-          { provider: parentProvider, cwd: directory, model: "gpt-5.4" },
-          undefined,
-          { workspaceId: reports ? randomUUID() : undefined },
-        );
+  // "create" opens a new Codex parent before its first turn (no handle yet): the case #8393 adds.
+  const resumed = parentProvider === "codex" && parentOpen === "resume";
+  if (resumed && reports) thread = 1;
+  const agent = await openFixtureParent(manager, {
+    provider: parentProvider,
+    resumed,
+    cwd: directory,
+    workspaceId: reports ? randomUUID() : undefined,
+  });
   const messageId = randomUUID();
   return {
     manager,
@@ -4688,6 +4706,253 @@ test("FU-334 restart delivers each retained result once with its original text",
     service.stop();
     offReportUp();
     f.server.completeTurn({ threadId: childThread });
+    await f.cleanup();
+  }
+});
+
+// FULCRA(FU-657) security fence: since upstream #8393 a Codex agent has no persistence handle and no
+// runtime session id before its first turn. The three native identity guards accept an absent id,
+// but a present id that is not the live native thread (also an empty one) must still refuse.
+type GuardFixture = Awaited<ReturnType<typeof fixture>>;
+type IdField = "describePersistence" | "persistence" | "runtimeInfo";
+const STALE_IDS = ["other-thread", ""] as const;
+
+function liveAgent(f: GuardFixture, agentId: string) {
+  return Reflect.get(f.manager, "agents").get(agentId) as {
+    session: { id: string | null; describePersistence(): unknown };
+    persistence: unknown;
+    runtimeInfo: unknown;
+  };
+}
+
+function reportIdentity(f: GuardFixture, agentId: string): { sessionId: string } | null {
+  return Reflect.get(f.manager, "currentReportIdentity").call(f.manager, agentId);
+}
+
+/** Sets one id source to `sessionId`, or all three to null. Returns a restore function. */
+function setNativeId(
+  f: GuardFixture,
+  agentId: string,
+  field: IdField | "all-null",
+  sessionId: string | null,
+): () => void {
+  const agent = liveAgent(f, agentId);
+  const saved = { persistence: agent.persistence, runtimeInfo: agent.runtimeInfo };
+  const spies: { mockRestore(): void }[] = [];
+  const handle = sessionId === null ? null : { provider: "codex", sessionId };
+  if (field === "describePersistence" || field === "all-null")
+    spies.push(vi.spyOn(agent.session, "describePersistence").mockReturnValue(handle));
+  if (field === "persistence" || field === "all-null") agent.persistence = handle;
+  if (field === "runtimeInfo" || field === "all-null")
+    agent.runtimeInfo = sessionId === null ? null : { provider: "codex", sessionId, model: null };
+  return () => {
+    for (const spy of spies) spy.mockRestore();
+    agent.persistence = saved.persistence;
+    agent.runtimeInfo = saved.runtimeInfo;
+  };
+}
+
+test("FU-657 report identity guard: absent ids are allowed, a different or empty id refuses", async () => {
+  const f = await fixture("valid", true);
+  try {
+    const native = liveAgent(f, f.agent.id).session.id;
+    expect(native).toBe("thread-1");
+    const restoreNull = setNativeId(f, f.agent.id, "all-null", null);
+    expect(reportIdentity(f, f.agent.id)).toMatchObject({ sessionId: "thread-1" });
+    restoreNull();
+    for (const field of ["describePersistence", "persistence", "runtimeInfo"] as const) {
+      for (const stale of STALE_IDS) {
+        const restore = setNativeId(f, f.agent.id, field, stale);
+        try {
+          expect(reportIdentity(f, f.agent.id), `${field}=${JSON.stringify(stale)}`).toBeNull();
+        } finally {
+          restore();
+        }
+      }
+      const restoreSame = setNativeId(f, f.agent.id, field, "thread-1");
+      expect(reportIdentity(f, f.agent.id)).toMatchObject({ sessionId: "thread-1" });
+      restoreSame();
+    }
+  } finally {
+    await f.cleanup();
+  }
+});
+
+async function unlinkedChildCleanup(
+  field: "describePersistence" | "persistence" | "all-null",
+  sessionId: string | null,
+) {
+  const f = await fixture("valid", true);
+  await registerPrime(f);
+  const snapshots = Object.create(ProviderSnapshotManager.prototype) as ProviderSnapshotManager;
+  vi.spyOn(snapshots, "resolveCreateConfig").mockResolvedValue({
+    modeId: undefined,
+    featureValues: undefined,
+  });
+  const catalog = createPaseoToolCatalog({
+    paseoToolPolicy: sessionPaseoToolPolicy(undefined, { "fulcra.mcp": "lead" }),
+    agentManager: f.manager,
+    agentStorage: f.agentStorage,
+    daemonConfigStore: f.finishConfig,
+    providerSnapshotManager: snapshots,
+    logger: createTestLogger(),
+    callerAgentId: f.agent.id,
+    nativeReportOrigin: f.nativeOrigin(),
+    ensureWorkspaceForCreate: async () => randomUUID(),
+  });
+  // The parent is replaced during the child launch, so enrollment fails and cleanup runs.
+  f.onChildStart(() =>
+    Reflect.set(f.manager.getAgent(f.agent.id)!.session!, "currentThreadId", "external-parent"),
+  );
+  const restores: (() => void)[] = [];
+  const register = Reflect.get(f.manager, "registerSession") as (...args: unknown[]) => unknown;
+  const spy = vi
+    .spyOn(
+      f.manager as unknown as { registerSession(...args: unknown[]): unknown },
+      "registerSession",
+    )
+    .mockImplementation(async function (this: AgentManager, ...args: unknown[]) {
+      const agent = (await register.apply(this, args)) as { id: string; persistence: unknown };
+      if (field === "persistence") {
+        // The cleanup guard reads the agent captured at registration.
+        const saved = agent.persistence;
+        agent.persistence = { provider: "codex", sessionId };
+        restores.push(() => (agent.persistence = saved));
+      } else restores.push(setNativeId(f, agent.id, field, sessionId));
+      return agent;
+    });
+  const result = catalog
+    .executeTool("create_agent", {
+      provider: "codex",
+      title: "Fixture child",
+      initialPrompt: "must not run",
+    })
+    .then(
+      () => "created",
+      (error: Error) => error.message,
+    );
+  const outcome = await result;
+  spy.mockRestore();
+  for (const restore of restores) restore();
+  const live = f.manager.listAgents().map((agent) => agent.id);
+  for (const id of live) if (id !== f.agent.id) await f.manager.closeAgent(id).catch(() => {});
+  await f.cleanup();
+  return { outcome, live: live.length };
+}
+
+test("FU-657 unlinked child cleanup guard: absent ids close the child, a different or empty id refuses", async () => {
+  const allowed = await unlinkedChildCleanup("all-null", null);
+  expect(allowed.outcome).toContain("Native report child enrollment refused");
+  expect(allowed.live).toBe(1);
+  for (const field of ["describePersistence", "persistence"] as const) {
+    for (const stale of STALE_IDS) {
+      const refused = await unlinkedChildCleanup(field, stale);
+      expect(refused.outcome, `${field}=${JSON.stringify(stale)}`).toContain(
+        "Unlinked native child replacement prevents cleanup",
+      );
+      expect(refused.live).toBe(2);
+    }
+  }
+}, 30000);
+
+async function retirementClose(field: IdField | "all-null", sessionId: string | null) {
+  const { f, childId, childThread, offReportUp } = await defaultOwnedNoticeFixture(false, {
+    nativeFinishNotices: true,
+  });
+  try {
+    f.server.completeTurn({ threadId: childThread });
+    await vi.waitFor(() => expect(f.manager.getAgent(childId)?.lifecycle).toBe("idle"));
+    expect(reportIdentity(f, childId)).toMatchObject({ sessionId: childThread });
+    // closeAgent captures the retiring identity at once; the guard checks it again before close.
+    const closing = f.manager.closeAgent(childId).then(
+      () => "closed",
+      (error: Error) => error.message,
+    );
+    const restore = setNativeId(f, childId, field, sessionId);
+    const outcome = await closing;
+    restore();
+    return outcome;
+  } finally {
+    offReportUp();
+    if (f.manager.getAgent(childId)) await f.manager.closeAgent(childId).catch(() => {});
+    await f.cleanup();
+  }
+}
+
+test("FU-657 retirement close guard: absent ids close, a different or empty id refuses", async () => {
+  expect(await retirementClose("all-null", null)).toBe("closed");
+  for (const field of ["describePersistence", "persistence", "runtimeInfo"] as const) {
+    for (const stale of STALE_IDS) {
+      expect(await retirementClose(field, stale), `${field}=${JSON.stringify(stale)}`).toBe(
+        "Retiring native identity changed before close",
+      );
+    }
+  }
+}, 60000);
+
+test("FU-657 a new Codex parent before its first turn keeps its report identity and links a child", async () => {
+  const f = await fixture("valid", true, false, false, false, "codex", "create");
+  try {
+    const parent = liveAgent(f, f.agent.id);
+    expect(parent.session.id).toBe("thread-1");
+    expect(parent.session.describePersistence()).toBeNull();
+    expect(parent.persistence ?? null).toBeNull();
+    expect(f.turnCount()).toBe(0);
+    expect(reportIdentity(f, f.agent.id)).toMatchObject({ sessionId: "thread-1" });
+    await registerPrime(f);
+    await f.finishConfig.patch({ nativeFinishNotices: true });
+    const snapshots = Object.create(ProviderSnapshotManager.prototype) as ProviderSnapshotManager;
+    vi.spyOn(snapshots, "resolveCreateConfig").mockResolvedValue({
+      modeId: undefined,
+      featureValues: undefined,
+    });
+    const catalog = createPaseoToolCatalog({
+      paseoToolPolicy: sessionPaseoToolPolicy(undefined, { "fulcra.mcp": "lead" }),
+      agentManager: f.manager,
+      agentStorage: f.agentStorage,
+      daemonConfigStore: f.finishConfig,
+      providerSnapshotManager: snapshots,
+      logger: createTestLogger(),
+      callerAgentId: f.agent.id,
+      nativeReportOrigin: f.nativeOrigin(),
+      ensureWorkspaceForCreate: async () => f.agent.workspaceId!,
+    });
+    const created = await catalog.executeTool("create_agent", {
+      provider: "codex",
+      title: "Fixture worker",
+      initialPrompt: "fixture child work",
+      notifyOnFinish: true,
+    });
+    const childId = (created.structuredContent as { agentId: string }).agentId;
+    expect(f.manager.nativeReportOwnsFinish(childId, f.agent.id)).toBe(true);
+    f.server.completeTurn({ threadId: liveAgent(f, childId).session.id! });
+    await vi.waitFor(() => expect(f.manager.getAgent(childId)?.lifecycle).toBe("idle"));
+    await f.manager.closeAgent(childId);
+  } finally {
+    await f.cleanup();
+  }
+}, 20000);
+
+test("FU-657 a thread change with no turn clears no identity: the stored id still refuses", async () => {
+  const f = await fixture("valid", true);
+  try {
+    expect(reportIdentity(f, f.agent.id)).toMatchObject({ sessionId: "thread-1" });
+    // The resumed session Y moves to a new thread X, and no turn follows. (Codex routes a
+    // thread/started for an unknown thread as a sub-agent, so the provider thread is set directly,
+    // as the replacement tests do, and the provider then reports thread_started for X.)
+    const agent = liveAgent(f, f.agent.id);
+    Reflect.set(agent.session, "currentThreadId", "thread-x");
+    Reflect.get(agent.session, "emitEvent").call(agent.session, {
+      type: "thread_started",
+      provider: "codex",
+      sessionId: "thread-x",
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(agent.session.id).toBe("thread-x");
+    expect(agent.session.describePersistence()).toBeNull();
+    expect(agent.persistence).toMatchObject({ sessionId: "thread-1" });
+    expect(reportIdentity(f, f.agent.id)).toBeNull();
+  } finally {
     await f.cleanup();
   }
 });
