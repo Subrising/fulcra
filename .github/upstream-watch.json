@@ -15,7 +15,7 @@
     "archify": {
       "repo": "tt-a1i/archify",
       "kind": "pin",
-      "version": "2.16.0",
+      "version": "3.0.1",
       "role": "Source of the Architecture IR v1 format the architecture map reads. No Archify code ships; the MIT notice sits beside the fixtures."
     }
   }
