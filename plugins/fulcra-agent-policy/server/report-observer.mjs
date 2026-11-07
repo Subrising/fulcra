@@ -1,3 +1,26 @@
+/**
+ * FU-736: the prompt that starts a turn, as the timeline shows it. Paseo v0.15.0 shows a `<paseo-system>` prompt as a
+ * "heartbeat" tool call (callId `paseo-system:`, the submitted id in metadata) and a chat's message as an
+ * "agent_message" tool call. Before this check knew those shapes, no notice turn was seen as one, and a worker whose
+ * lead is on another computer got a new notice after every notice turn (about 7,750 turns on one worker).
+ */
+function promptProvenance(item, isSystemInjectedEnvelope) {
+  if (item?.type === "user_message") {
+    const text = typeof item.text === "string" ? item.text : "";
+    return {
+      system: isSystemInjectedEnvelope(text),
+      messageId: typeof item.clientMessageId === "string" ? item.clientMessageId : "",
+    };
+  }
+  if (item?.type !== "tool_call" || typeof item.callId !== "string") return null;
+  if (item.callId.startsWith("paseo-system:")) {
+    const submitted = item.metadata?.submittedMessageId;
+    return { system: true, messageId: typeof submitted === "string" ? submitted : "" };
+  }
+  if (item.callId.startsWith("paseo-agent-message:")) return { system: false, messageId: "" };
+  return null;
+}
+
 /** Native observations select notices. The host checks ownership and dispatches them. */
 export class ReportUpObserver {
   turns = new Map();
@@ -22,15 +45,15 @@ export class ReportUpObserver {
   }
 
   firstMessage(id, item) {
-    if (this.stopped || item?.type !== "user_message") return;
+    if (this.stopped) return;
+    const provenance = promptProvenance(item, this.deps.isSystemInjectedEnvelope);
+    if (!provenance) return;
     const turn = this.turns.get(id) ?? { open: false, fromNotice: null };
     if (turn.fromNotice !== null) return;
-    const messageId = typeof item.clientMessageId === "string" ? item.clientMessageId : "";
-    const text = typeof item.text === "string" ? item.text : "";
+    const { messageId } = provenance;
     turn.open = true;
     turn.startedAt ??= this.deps.now();
-    turn.fromNotice =
-      messageId.startsWith(this.deps.noticePrefix) || this.deps.isSystemInjectedEnvelope(text);
+    turn.fromNotice = provenance.system || messageId.startsWith(this.deps.noticePrefix);
     turn.fromNudge = messageId.startsWith(`${this.deps.noticePrefix}idle-nudge:`);
     this.turns.set(id, turn);
   }
