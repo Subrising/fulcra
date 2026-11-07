@@ -141,7 +141,9 @@ export class Team {
    */
   async confirmMacOpsSeat(sessionId) {
     const native = this.control.native;
-    const others = (await native.labelled(SEAT_LABEL, MAC_OPS_LEAD)).filter((id) => id !== sessionId);
+    const others = (await native.labelled(SEAT_LABEL, MAC_OPS_LEAD)).filter(
+      (id) => id !== sessionId,
+    );
     if (!others.length) return;
     await native.setLabels(sessionId, { [SEAT_LABEL]: "" });
     refuse(`Another chat holds the Mac ops lead seat (${others[0]}). Clear it first.`);

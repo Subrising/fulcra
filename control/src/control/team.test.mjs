@@ -332,7 +332,8 @@ test("FU-709: a holder written from outside during the write makes the new chat 
   const setLabels = w.control.native.setLabels;
   w.control.native.setLabels = async (id, patch) => {
     await setLabels(id, patch);
-    if (id === a && patch["fulcra.seat"] === "mac-ops") w.labels[outside] = { "fulcra.seat": "mac-ops" };
+    if (id === a && patch["fulcra.seat"] === "mac-ops")
+      w.labels[outside] = { "fulcra.seat": "mac-ops" };
   };
   await assert.rejects(
     w.dispatch("team-line", { sessionId: a, seat: "mac-ops", note: NOTE }),
