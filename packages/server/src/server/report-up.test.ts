@@ -4,7 +4,12 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import pino from "pino";
 import { afterEach, beforeEach, describe, expect, test, vi as mock } from "vitest";
-import { REPORTS_TO_LABEL, REPORTS_TO_OWNER, SEAT_LABEL } from "@getpaseo/protocol/agent-labels";
+import {
+  MAIN_ASSISTANT_ROLE,
+  REPORTS_TO_LABEL,
+  REPORTS_TO_OWNER,
+  SEAT_LABEL,
+} from "@getpaseo/protocol/agent-labels";
 import type { AgentManager, AgentManagerEvent } from "./agent/agent-manager.js";
 import { AgentStorage, type FinishNotice } from "./agent/agent-storage.js";
 import { createTestLogger } from "../test-utils/test-logger.js";
@@ -14,7 +19,9 @@ import {
   COLD_LEAD_HOLD_MS,
   COMBINED_LIST_LIMIT,
   FINISH_RETRY_BASE_MS,
+  NOTICE_BACKOFF_MS,
   NUDGE_MESSAGE_PREFIX,
+  REMOTE_RETRY_DELAYS_MS,
   PERMISSION_COMMAND_CHARS,
   PERMISSION_NOTICE_GRACE_MS,
   REPORT_UP_SNIPPET_CHARS,
@@ -82,6 +89,7 @@ function fixture(
     ) => Promise<boolean>;
     leadMoves?: ReportUpDeps["leadMoves"];
     relay?: ReportUpDeps["relay"];
+    remoteSend?: ReportUpDeps["remoteSend"];
   } = {},
 ) {
   const clock = { now: options.now ?? Date.now() };
@@ -113,6 +121,7 @@ function fixture(
     remoteNotice: options.remoteNotice,
     ...(options.leadMoves ? { leadMoves: options.leadMoves } : {}),
     ...(options.relay ? { relay: options.relay } : {}),
+    ...(options.remoteSend ? { remoteSend: options.remoteSend } : {}),
     routing: options.routing,
     agentManager: manager,
     agentStorage: storage,
@@ -637,6 +646,101 @@ describe("a result or question in the final text is never silent (FU-402)", () =
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test("FU-736: after the cap a notice is held 1 hour, then 6 hours; the main assistant gets one notice", async () => {
+    const MAIN = "44444444-4444-4444-8444-444444444444";
+    const main = { id: MAIN, title: "Main", labels: { [SEAT_LABEL]: MAIN_ASSISTANT_ROLE } };
+    const now = Date.now();
+    const f = fixture([lead, worker(), main], { now });
+    const notice = "<paseo-system>\nThe same nudge.\n</paseo-system>";
+    const send = async (times: number) => {
+      for (let n = 0; n < times; n++)
+        await (
+          f.service as unknown as {
+            toLead: (from: string, to: string, prompt: string, kind: string) => Promise<boolean>;
+          }
+        ).toLead(WORKER, LEAD, notice, "report-up");
+      await f.settle();
+    };
+    const toLead = () => f.delivered.filter((d) => d.leadId === LEAD).length;
+    const toMain = () => f.delivered.filter((d) => d.leadId === MAIN);
+    await send(6);
+    expect(toLead()).toBe(3);
+    expect(toMain()).toHaveLength(1);
+    expect(toMain()[0]!.prompt).toContain(LEAD);
+    expect(toMain()[0]!.prompt).toContain("4 times");
+    expect(toMain()[0]!.prompt).toContain("The same nudge.");
+    f.clock.now = now + NOTICE_BACKOFF_MS[0] - 1000;
+    await send(1);
+    expect(toLead()).toBe(3);
+    // The first hold ends: three more, then the 6-hour hold. The main assistant is not told again.
+    f.clock.now = now + NOTICE_BACKOFF_MS[0] + 1000;
+    await send(5);
+    expect(toLead()).toBe(6);
+    f.clock.now += NOTICE_BACKOFF_MS[1] - 60_000;
+    await send(1);
+    expect(toLead()).toBe(6);
+    f.clock.now += 120_000;
+    await send(1);
+    expect(toLead()).toBe(7);
+    expect(toMain()).toHaveLength(1);
+  });
+
+  test("FU-736: the daemon sends a remote lead's result and retries a failed send itself, without waking the worker", async () => {
+    const remote = {
+      ...worker({ [REPORTS_TO_LABEL]: `${LEAD}@srv_other` }),
+      lastMessage: "DONE merged",
+    };
+    const sends: string[] = [];
+    let failures = 2;
+    const f = fixture([remote], {
+      enabled: false,
+      remoteSend: async (identifier, prompt) => {
+        sends.push(identifier);
+        if (failures-- > 0) throw new Error("ssh: connect to host: Connection refused");
+        expect(prompt).toContain("DONE merged");
+        return "sent";
+      },
+    });
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.timers.map((timer) => timer.ms)).toEqual([REMOTE_RETRY_DELAYS_MS[0]]);
+    f.timers.shift()!.run();
+    await f.settle();
+    expect(f.timers.map((timer) => timer.ms)).toEqual([REMOTE_RETRY_DELAYS_MS[1]]);
+    f.timers.shift()!.run();
+    await f.settle();
+    expect(sends).toEqual([LEAD, LEAD, LEAD]);
+    expect(f.delivered).toEqual([]);
+  });
+
+  test("FU-736: when no send reaches a remote lead, the main assistant gets the result once, not the worker", async () => {
+    const remote = {
+      ...worker({ [REPORTS_TO_LABEL]: `${LEAD}@srv_other` }),
+      lastMessage: "DONE merged",
+    };
+    const sends: Array<{ identifier: string; prompt: string }> = [];
+    const f = fixture([remote], {
+      enabled: false,
+      remoteSend: async (identifier, prompt) => {
+        sends.push({ identifier, prompt });
+        if (identifier === LEAD) throw new Error("ssh: connect to host: Connection refused");
+        return "sent";
+      },
+    });
+    for (let n = 0; n < 5; n++) {
+      f.turn(WORKER, n ? projectedNotice(n) : { text: "do the task" });
+      await f.settle();
+      while (f.timers.length) f.timers.shift()!.run();
+      await f.settle();
+    }
+    expect(sends.filter((s) => s.identifier === LEAD)).toHaveLength(3);
+    const toMain = sends.filter((s) => s.identifier === "role:main-assistant");
+    expect(toMain).toHaveLength(1);
+    expect(toMain[0]!.prompt).toContain(WORKER);
+    expect(toMain[0]!.prompt).toContain("DONE merged");
+    expect(f.delivered).toEqual([]);
   });
 
   test("FU-736: an SSH relay to a bare lead ID on another computer counts as sent", async () => {
