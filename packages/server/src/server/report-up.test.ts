@@ -4,7 +4,12 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import pino from "pino";
 import { afterEach, beforeEach, describe, expect, test, vi as mock } from "vitest";
-import { REPORTS_TO_LABEL, REPORTS_TO_OWNER, SEAT_LABEL } from "@getpaseo/protocol/agent-labels";
+import {
+  MAIN_ASSISTANT_ROLE,
+  REPORTS_TO_LABEL,
+  REPORTS_TO_OWNER,
+  SEAT_LABEL,
+} from "@getpaseo/protocol/agent-labels";
 import type { AgentManager, AgentManagerEvent } from "./agent/agent-manager.js";
 import { AgentStorage, type FinishNotice } from "./agent/agent-storage.js";
 import { createTestLogger } from "../test-utils/test-logger.js";
@@ -14,7 +19,9 @@ import {
   COLD_LEAD_HOLD_MS,
   COMBINED_LIST_LIMIT,
   FINISH_RETRY_BASE_MS,
+  NOTICE_BACKOFF_MS,
   NUDGE_MESSAGE_PREFIX,
+  REMOTE_RETRY_DELAYS_MS,
   PERMISSION_COMMAND_CHARS,
   PERMISSION_NOTICE_GRACE_MS,
   REPORT_UP_SNIPPET_CHARS,
@@ -82,6 +89,7 @@ function fixture(
     ) => Promise<boolean>;
     leadMoves?: ReportUpDeps["leadMoves"];
     relay?: ReportUpDeps["relay"];
+    remoteSend?: ReportUpDeps["remoteSend"];
   } = {},
 ) {
   const clock = { now: options.now ?? Date.now() };
@@ -113,6 +121,7 @@ function fixture(
     remoteNotice: options.remoteNotice,
     ...(options.leadMoves ? { leadMoves: options.leadMoves } : {}),
     ...(options.relay ? { relay: options.relay } : {}),
+    ...(options.remoteSend ? { remoteSend: options.remoteSend } : {}),
     routing: options.routing,
     agentManager: manager,
     agentStorage: storage,
@@ -563,6 +572,190 @@ describe("a result or question in the final text is never silent (FU-402)", () =
       await f.settle();
       expect(f.delivered).toHaveLength(1);
     }
+  });
+
+  // FU-736: Paseo v0.15.0 shows a `<paseo-system>` prompt as a "heartbeat" tool call, not as a user message.
+  const projectedNotice = (n: number) => ({
+    type: "tool_call",
+    callId: `paseo-system:${n}`,
+    name: "heartbeat",
+    status: "completed",
+    error: null,
+    detail: { type: "plain_text", text: "Your lead is on another computer." },
+    metadata: { submittedMessageId: `daemon-finish:report-up:${n}` },
+  });
+
+  test("FU-736: a notice turn in the v0.15.0 timeline shape starts no further notice", async () => {
+    const remote = {
+      ...worker({ [REPORTS_TO_LABEL]: `${LEAD}@srv_other` }),
+      lastMessage: "DONE merged",
+    };
+    const f = fixture([lead, remote], { enabled: false });
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered.map((notice) => notice.leadId)).toEqual([WORKER]);
+    expect(f.delivered[0]!.prompt).toContain(`fulcra send ${LEAD} --no-wait`);
+    // Before the fix, each answer turn got a new notice: 20 answer turns, 21 notices.
+    for (let n = 0; n < 20; n++) {
+      remote.lastMessage = `DONE merged, sent over SSH (${n})`;
+      f.turn(WORKER, projectedNotice(n));
+      await f.settle();
+    }
+    expect(f.delivered).toHaveLength(1);
+  });
+
+  test("FU-736: one notice per result; the same notice reaches a chat at most 3 times per hour, also after a restart", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "report-up-cap-"));
+    const statePath = join(dir, "state.json");
+    try {
+      const remote = { ...worker({ [REPORTS_TO_LABEL]: LEAD }), lastMessage: "DONE one" };
+      const warnings: string[] = [];
+      const logger = pino({ level: "warn" }, { write: (line: string) => warnings.push(line) });
+      const now = Date.now();
+      const f = fixture([remote], { enabled: false, statePath, now, logger });
+      // The same result after a later turn: no second notice.
+      for (let n = 0; n < 3; n++) {
+        f.turn(WORKER);
+        await f.settle();
+      }
+      expect(f.delivered).toHaveLength(1);
+      // New results each turn (turns started by people, not notices): the cap stops the fourth notice.
+      for (let n = 0; n < 10; n++) {
+        remote.lastMessage = `DONE step ${n}`;
+        f.turn(WORKER);
+        await f.settle();
+      }
+      expect(f.delivered).toHaveLength(3);
+      expect(warnings.some((line) => line.includes("too often in the last hour"))).toBe(true);
+      // A daemon restart keeps the cap.
+      const restarted = fixture([remote], { enabled: false, statePath, now: now + 60_000 });
+      remote.lastMessage = "DONE after restart";
+      restarted.turn(WORKER);
+      await restarted.settle();
+      expect(restarted.delivered).toEqual([]);
+      // After the hour, the notice can go again.
+      const later = fixture([remote], {
+        enabled: false,
+        statePath,
+        now: now + 60 * 60_000 + 1000,
+      });
+      remote.lastMessage = "DONE an hour later";
+      later.turn(WORKER);
+      await later.settle();
+      expect(later.delivered.map((notice) => notice.leadId)).toEqual([WORKER]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("FU-736: after the cap a notice is held 1 hour, then 6 hours; the main assistant gets one notice", async () => {
+    const MAIN = "44444444-4444-4444-8444-444444444444";
+    const main = { id: MAIN, title: "Main", labels: { [SEAT_LABEL]: MAIN_ASSISTANT_ROLE } };
+    const now = Date.now();
+    const f = fixture([lead, worker(), main], { now });
+    const notice = "<paseo-system>\nThe same nudge.\n</paseo-system>";
+    const send = async (times: number) => {
+      for (let n = 0; n < times; n++)
+        await (
+          f.service as unknown as {
+            toLead: (from: string, to: string, prompt: string, kind: string) => Promise<boolean>;
+          }
+        ).toLead(WORKER, LEAD, notice, "report-up");
+      await f.settle();
+    };
+    const toLead = () => f.delivered.filter((d) => d.leadId === LEAD).length;
+    const toMain = () => f.delivered.filter((d) => d.leadId === MAIN);
+    await send(6);
+    expect(toLead()).toBe(3);
+    expect(toMain()).toHaveLength(1);
+    expect(toMain()[0]!.prompt).toContain(LEAD);
+    expect(toMain()[0]!.prompt).toContain("4 times");
+    expect(toMain()[0]!.prompt).toContain("The same nudge.");
+    f.clock.now = now + NOTICE_BACKOFF_MS[0] - 1000;
+    await send(1);
+    expect(toLead()).toBe(3);
+    // The first hold ends: three more, then the 6-hour hold. The main assistant is not told again.
+    f.clock.now = now + NOTICE_BACKOFF_MS[0] + 1000;
+    await send(5);
+    expect(toLead()).toBe(6);
+    f.clock.now += NOTICE_BACKOFF_MS[1] - 60_000;
+    await send(1);
+    expect(toLead()).toBe(6);
+    f.clock.now += 120_000;
+    await send(1);
+    expect(toLead()).toBe(7);
+    expect(toMain()).toHaveLength(1);
+  });
+
+  test("FU-736: the daemon sends a remote lead's result and retries a failed send itself, without waking the worker", async () => {
+    const remote = {
+      ...worker({ [REPORTS_TO_LABEL]: `${LEAD}@srv_other` }),
+      lastMessage: "DONE merged",
+    };
+    const sends: string[] = [];
+    let failures = 2;
+    const f = fixture([remote], {
+      enabled: false,
+      remoteSend: async (identifier, prompt) => {
+        sends.push(identifier);
+        if (failures-- > 0) throw new Error("ssh: connect to host: Connection refused");
+        expect(prompt).toContain("DONE merged");
+        return "sent";
+      },
+    });
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.timers.map((timer) => timer.ms)).toEqual([REMOTE_RETRY_DELAYS_MS[0]]);
+    f.timers.shift()!.run();
+    await f.settle();
+    expect(f.timers.map((timer) => timer.ms)).toEqual([REMOTE_RETRY_DELAYS_MS[1]]);
+    f.timers.shift()!.run();
+    await f.settle();
+    expect(sends).toEqual([LEAD, LEAD, LEAD]);
+    expect(f.delivered).toEqual([]);
+  });
+
+  test("FU-736: when no send reaches a remote lead, the main assistant gets the result once, not the worker", async () => {
+    const remote = {
+      ...worker({ [REPORTS_TO_LABEL]: `${LEAD}@srv_other` }),
+      lastMessage: "DONE merged",
+    };
+    const sends: Array<{ identifier: string; prompt: string }> = [];
+    const f = fixture([remote], {
+      enabled: false,
+      remoteSend: async (identifier, prompt) => {
+        sends.push({ identifier, prompt });
+        if (identifier === LEAD) throw new Error("ssh: connect to host: Connection refused");
+        return "sent";
+      },
+    });
+    for (let n = 0; n < 5; n++) {
+      f.turn(WORKER, n ? projectedNotice(n) : { text: "do the task" });
+      await f.settle();
+      while (f.timers.length) f.timers.shift()!.run();
+      await f.settle();
+    }
+    expect(sends.filter((s) => s.identifier === LEAD)).toHaveLength(3);
+    const toMain = sends.filter((s) => s.identifier === "role:main-assistant");
+    expect(toMain).toHaveLength(1);
+    expect(toMain[0]!.prompt).toContain(WORKER);
+    expect(toMain[0]!.prompt).toContain("DONE merged");
+    expect(f.delivered).toEqual([]);
+  });
+
+  test("FU-736: an SSH relay to a bare lead ID on another computer counts as sent", async () => {
+    resetAgentMessageLogForTests();
+    const remoteLead = "88b1e035-23be-4d19-bcdc-2a09aa2dfc01";
+    const f = fixture([{ ...worker({ [REPORTS_TO_LABEL]: remoteLead }), lastMessage: "DONE ok" }], {
+      enabled: false,
+    });
+    f.stream(WORKER, { type: "turn_started", provider: "claude" });
+    noteAgentMessage(WORKER, remoteLead, f.clock.now + 1000);
+    f.clock.now += 2000;
+    f.stream(WORKER, { type: "turn_completed", provider: "claude" });
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+    resetAgentMessageLogForTests();
   });
 
   test("FU-622: a bare lead ID that is no chat here is a lead on another computer, never a silent drop", async () => {

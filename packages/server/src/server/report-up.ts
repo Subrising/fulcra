@@ -22,7 +22,7 @@ export type {
   PermissionRequest,
   LimitedChat,
 } from "../../../../plugins/fulcra-agent-policy/server/report-notices.mjs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { writePrivateFileAtomicSync } from "./private-files.js";
@@ -71,6 +71,7 @@ import {
 import { addressesLead, finishNoticeWanted } from "./finish-notice-filter.js";
 import { lastAgentMessageAt, lastAgentMessageDeliveredAt } from "./agent-message-log.js";
 import type { HostLinkNoticeKind } from "./host-link-contracts.js";
+import { type RemoteSendOutcome, sendThroughSshRoute } from "./ssh-send-route.js";
 import { classifyEndingAssistantMessage, classifyFailedTurn } from "./limit-resume/detect.js";
 import {
   decideSend,
@@ -165,6 +166,11 @@ export interface ReportUpDeps {
   logger: Logger;
   /** FU-444: the leads that moved (lead-moves.ts). A notice for an old lead goes to its new lead. */
   leadMoves?: () => readonly LeadMove[];
+  /**
+   * FU-736: sends a notice to a chat on another computer (a chat ID or `role:main-assistant`) through the SSH send
+   * route. Unset means no route. Production uses the routes in ~/.config/fulcra/pause.json.
+   */
+  remoteSend?: (identifier: string, prompt: string) => Promise<RemoteSendOutcome>;
   /** Runs a relay command for a lead on another computer; tests replace it. */
   relay?: (file: string, args: string[]) => Promise<void>;
   /** The delivery step; tests replace it. */
@@ -216,7 +222,26 @@ interface PersistedState {
   limited: Record<string, LimitedChat>;
   held: Record<string, Array<string | HeldReport>>;
   nudgeDeliveredAt?: Record<string, number>;
+  /** FU-736: when each notice (receiver and text hash) was sent in the last hour. */
+  noticeLog?: Record<string, number[]>;
+  /** FU-736: notices held back after the repeat cap, by the same key. */
+  noticeBlocks?: Record<string, NoticeBlock>;
 }
+
+interface NoticeBlock {
+  until: number;
+  /** 1: the first hold (1 hour); 2: a repeat after a hold (6 hours). */
+  level: 1 | 2;
+  blocked: number;
+}
+
+/** FU-736: the same notice goes to the same chat at most this many times per hour, also across a restart. */
+export const NOTICE_REPEAT_LIMIT = 3;
+export const NOTICE_REPEAT_WINDOW_MS = 60 * 60_000;
+/** FU-736: after the cap, the notice is held 1 hour; when it repeats after that hold, 6 hours. */
+export const NOTICE_BACKOFF_MS = [60 * 60_000, 6 * 60 * 60_000] as const;
+/** FU-736: the daemon retries a failed send to a lead on another computer after these waits. */
+export const REMOTE_RETRY_DELAYS_MS = [30_000, 5 * 60_000] as const;
 
 const ASYNC_QUESTION_TOOL = "request_user_input_async";
 
@@ -236,6 +261,19 @@ function looksLikeWorker(worker: LineAgent): boolean {
 
 const LEAD_ON_ANOTHER_COMPUTER = "lead on another computer";
 
+/** FU-736: the command that sends a result to a lead on another computer, given once per result. */
+export function remoteLeadNotice(line: string): string {
+  const leadId = line.split("@", 1)[0]!;
+  return (
+    `Your lead ${line} is on another computer. Fulcra did not deliver your last message to it. ` +
+    "Send your DONE, BLOCKED or DECISION line to that lead once, with this command: " +
+    `fulcra send ${leadId} --no-wait --prompt-file <file with your line>. ` +
+    "That command uses the SSH send route in ~/.config/fulcra/pause.json. If this computer has no route for that " +
+    "lead, run the same command on the lead's computer over SSH (on Windows, use the notify command). " +
+    "Fulcra gives this notice once for each result. Do not answer this notice with a new result line."
+  );
+}
+
 interface UnseenTurn {
   worker: LineAgent;
   failed: boolean;
@@ -251,10 +289,13 @@ function sentToLeadDuring(
   worker: LineAgent,
   startedAt: number | undefined,
   localServerId: string | null,
+  leadElsewhere = false,
 ): boolean {
   const [leadId, server] = reportsTo(worker)?.split("@", 2) ?? [];
   if (!leadId || startedAt === undefined) return false;
-  const remote = server !== undefined && server !== localServerId;
+  // FU-736: a bare lead ID that is no chat here (FU-622) is remote too. Its SSH relay is a source check, never a
+  // local delivery.
+  const remote = leadElsewhere || (server !== undefined && server !== localServerId);
   const at = remote
     ? lastAgentMessageAt(worker.id, leadId)
     : lastAgentMessageDeliveredAt(worker.id, leadId);
@@ -345,6 +386,11 @@ export class ReportUpService {
   private ledgerWatcher?: LedgerDirectoryWatch;
   private ledgerDebounce?: ReturnType<typeof setTimeout>;
   private readonly nudgeDeliveredAt = new Map<string, number>();
+  /** FU-736: send times per notice key (receiver and text hash), the last hour only; persisted. */
+  private readonly noticeLog = new Map<string, number[]>();
+  private readonly noticeBlocks = new Map<string, NoticeBlock>();
+  /** FU-736: the last result each worker was told about (a lead on another computer). One notice per result. */
+  private readonly remoteToldFor = new Map<string, string>();
   private readonly coldHolds = new Map<string, ColdHold>();
   /** FU-434: finish notices (message ids) that wait in a cold hold; the idle sweep leaves them to the hold. */
   private readonly coldHeldFinishes = new Set<string>();
@@ -358,8 +404,10 @@ export class ReportUpService {
       ? {
           ...deps,
           deliver: async (leadId, prompt, messageId) => {
+            if (!this.noticeAllowed(leadId, prompt)) return;
             const to = await this.routeMovedLead(leadId, prompt);
             if (to) await deliver(to, prompt, messageId);
+            this.noteNoticeSent(leadId, prompt);
           },
         }
       : deps;
@@ -433,6 +481,26 @@ export class ReportUpService {
     return this.ledgerWatcher?.covers(project) === true;
   }
 
+  /** FU-736: the notice times of the last hour, so a restart keeps the repeat cap. */
+  private loadNoticeLog(state: Partial<PersistedState>, now: number): void {
+    for (const [key, times] of Object.entries(state.noticeLog ?? {})) {
+      if (!Array.isArray(times)) continue;
+      const recent = times.filter(
+        (at) =>
+          Number.isSafeInteger(at) && at > now - NOTICE_REPEAT_WINDOW_MS && at <= now + 60_000,
+      );
+      if (recent.length) this.noticeLog.set(key, recent.slice(-NOTICE_REPEAT_LIMIT));
+    }
+    for (const [key, block] of Object.entries(state.noticeBlocks ?? {})) {
+      if (Number.isSafeInteger(block?.until) && (block.level === 1 || block.level === 2))
+        this.noticeBlocks.set(key, {
+          until: block.until,
+          level: block.level,
+          blocked: Number.isSafeInteger(block.blocked) ? block.blocked : 0,
+        });
+    }
+  }
+
   /** Reads the kept state: limits that have not passed, and reports still held. Held reports are released after the reset. */
   private load(): void {
     const file = this.deps.statePath;
@@ -444,9 +512,10 @@ export class ReportUpService {
       this.archiveStateKnown = (error as NodeJS.ErrnoException).code === "ENOENT";
       return;
     }
+    const now = this.now();
+    this.loadNoticeLog(state, now);
     this.archiveStateKnown = archiveReportStateKnown(state, MAX_HELD_REPORTS);
     if (!this.archiveStateKnown) return;
-    const now = this.now();
     for (const [id, at] of Object.entries(state.nudgeDeliveredAt ?? {})) {
       if (Number.isSafeInteger(at) && at >= 0) this.nudgeDeliveredAt.set(id, at);
     }
@@ -507,6 +576,8 @@ export class ReportUpService {
       limited: Object.fromEntries(this.limited),
       held: Object.fromEntries(this.held),
       nudgeDeliveredAt: Object.fromEntries(this.nudgeDeliveredAt),
+      noticeLog: Object.fromEntries(this.noticeLog),
+      noticeBlocks: Object.fromEntries(this.noticeBlocks),
     };
     try {
       writePrivateFileAtomicSync(file, JSON.stringify(state));
@@ -2012,6 +2083,111 @@ export class ReportUpService {
     return reason;
   }
 
+  private noticeKey(receiverId: string, prompt: string): string {
+    return `${receiverId}:${createHash("sha256").update(prompt).digest("hex").slice(0, 32)}`;
+  }
+
+  /**
+   * FU-736: a hard cap for every notice and nudge. The same text goes to the same chat at most NOTICE_REPEAT_LIMIT
+   * times per hour. Then it is held 1 hour, and 6 hours when it repeats after that hold. At the first hold the main
+   * assistant gets one notice instead. The state is kept in the state file, so a daemon restart keeps the cap.
+   */
+  private noticeAllowed(receiverId: string, prompt: string): boolean {
+    const key = this.noticeKey(receiverId, prompt);
+    const now = this.now();
+    const block = this.noticeBlocks.get(key);
+    if (block && now < block.until) {
+      block.blocked += 1;
+      this.save();
+      this.deps.logger.warn(
+        { agentId: receiverId, until: block.until, blocked: block.blocked },
+        "Notice not sent: this repeated notice is on hold",
+      );
+      return false;
+    }
+    const recent = (this.noticeLog.get(key) ?? []).filter(
+      (at) => at > now - NOTICE_REPEAT_WINDOW_MS,
+    );
+    if (recent.length < NOTICE_REPEAT_LIMIT) return true;
+    // A repeat soon after a hold ends gets the longer hold.
+    const level = block && now < block.until + NOTICE_BACKOFF_MS[1] ? 2 : 1;
+    this.noticeBlocks.set(key, { until: now + NOTICE_BACKOFF_MS[level - 1], level, blocked: 1 });
+    this.save();
+    this.deps.logger.warn(
+      {
+        agentId: receiverId,
+        limit: NOTICE_REPEAT_LIMIT,
+        holdMinutes: NOTICE_BACKOFF_MS[level - 1] / 60_000,
+      },
+      "Notice not sent: the same notice reached this chat too often in the last hour",
+    );
+    if (level === 1)
+      void this.escalateRepeat(receiverId, prompt, recent.length + 1).catch((err: unknown) =>
+        this.deps.logger.warn({ err, agentId: receiverId }, "Repeat notice escalation failed"),
+      );
+    return false;
+  }
+
+  /** FU-736: the one notice to the main assistant when a notice to a chat is put on hold. */
+  private async escalateRepeat(receiverId: string, prompt: string, count: number): Promise<void> {
+    const text = prompt
+      .replace(/<\/?paseo-system[^>]*>/g, "")
+      .trim()
+      .slice(0, 400);
+    await this.toMainAssistant(
+      receiverId,
+      `Fulcra stopped a repeated notice. Session ${receiverId} got the same notice ${count} times in the last hour. ` +
+        "Fulcra holds it for 1 hour, then 6 hours if it repeats. Check that session.\n\nNotice text:\n" +
+        text,
+    );
+  }
+
+  /**
+   * FU-736: a notice to the main assistant: here when it is on this computer, else through its SSH send route.
+   * Returns false when no route reaches it.
+   */
+  private async toMainAssistant(aboutId: string, text: string): Promise<boolean> {
+    const prompt = formatSystemNotificationPrompt(text);
+    const ref = `${ROLE_REF_PREFIX}${MAIN_ASSISTANT_ROLE}`;
+    const role = await resolveRoleTarget(this.store, ref);
+    if (role?.ok) {
+      if (role.agentId === aboutId) return false;
+      return this.toLead(aboutId, role.agentId, prompt, "report-up");
+    }
+    if (await this.sendRemote(ref, prompt)) return true;
+    this.deps.logger.warn({ agentId: aboutId }, "No route to the main assistant for this notice");
+    return false;
+  }
+
+  /** FU-736: a send to another computer through the SSH send route, under the same repeat cap. */
+  private async sendRemote(identifier: string, prompt: string): Promise<boolean> {
+    if (!this.deps.remoteSend || !this.noticeEnabled("report-up")) return false;
+    if (!this.noticeAllowed(identifier, prompt)) return false;
+    try {
+      if ((await this.deps.remoteSend(identifier, prompt)) !== "sent") return false;
+    } catch (err) {
+      this.deps.logger.warn({ err, target: identifier }, "SSH send to another computer failed");
+      throw err;
+    }
+    this.noteNoticeSent(identifier, prompt);
+    return true;
+  }
+
+  private noteNoticeSent(receiverId: string, prompt: string): void {
+    const key = this.noticeKey(receiverId, prompt);
+    const now = this.now();
+    const recent = (this.noticeLog.get(key) ?? []).filter(
+      (at) => at > now - NOTICE_REPEAT_WINDOW_MS,
+    );
+    recent.push(now);
+    this.noticeLog.set(key, recent.slice(-NOTICE_REPEAT_LIMIT));
+    for (const [other, times] of this.noticeLog)
+      if (!times.some((at) => at > now - NOTICE_REPEAT_WINDOW_MS)) this.noticeLog.delete(other);
+    for (const [other, block] of this.noticeBlocks)
+      if (block.until + NOTICE_BACKOFF_MS[1] < now) this.noticeBlocks.delete(other);
+    this.save();
+  }
+
   private async relayUnseenResult({ worker, observedLast, startedAt }: UnseenTurn): Promise<void> {
     if (!looksLikeWorker(worker) || (await this.hasWorkers(worker.id))) return;
     const lastMessage =
@@ -2026,9 +2202,10 @@ export class ReportUpService {
       )
     )
       return;
-    // The worker already messaged its lead during this turn, so its result is not unseen.
-    if (sentToLeadDuring(worker, startedAt, this.deps.localServerId)) return;
     const lead = await this.leadOf(worker);
+    const elsewhere = "skip" in lead && lead.skip === LEAD_ON_ANOTHER_COMPUTER;
+    // The worker already messaged its lead during this turn, so its result is not unseen.
+    if (sentToLeadDuring(worker, startedAt, this.deps.localServerId, elsewhere)) return;
     if ("id" in lead) {
       const leadAgent = await this.store.get(lead.id);
       if (!leadAgent || leadAgent.archivedAt) return;
@@ -2039,20 +2216,69 @@ export class ReportUpService {
       await this.toLead(worker.id, lead.id, prompt, "report-up");
       return;
     }
-    if (lead.skip !== LEAD_ON_ANOTHER_COMPUTER) return;
+    if (!elsewhere) return;
+    // FU-736: one try for each result. The same final text after a later turn is not sent again.
+    const result = createHash("sha256").update(lastMessage).digest("hex");
+    if (this.remoteToldFor.get(worker.id) === result) return;
+    this.remoteToldFor.set(worker.id, result);
+    const prompt = formatSystemNotificationPrompt(
+      formatReportUpNotice({ worker: this.workerWithSpend(worker), failed: false, lastMessage }),
+    );
+    await this.deliverRemoteResult(worker, prompt, lastMessage, 0);
+  }
+
+  /**
+   * FU-736: the daemon sends a worker's result to its lead on another computer and retries a failed send itself. When
+   * no send reaches the lead, the main assistant gets one notice. The worker is told only when nothing else can be
+   * reached, once for each result.
+   */
+  private async deliverRemoteResult(
+    worker: LineAgent,
+    prompt: string,
+    lastMessage: string,
+    attempt: number,
+  ): Promise<void> {
     const line = reportsTo(worker)!;
+    const leadId = line.split("@", 1)[0]!;
+    let failure = "no SSH send route for that lead";
+    try {
+      if (await this.sendRemote(leadId, prompt)) {
+        this.deps.logger.info(
+          { agentId: worker.id, lead: line },
+          "Report-up sent to another computer",
+        );
+        return;
+      }
+    } catch {
+      failure = "the SSH send failed";
+      const wait = REMOTE_RETRY_DELAYS_MS[attempt];
+      if (wait !== undefined) {
+        this.schedule(() => {
+          void this.deliverRemoteResult(worker, prompt, lastMessage, attempt + 1).catch(
+            (retryErr: unknown) =>
+              this.deps.logger.warn(
+                { err: retryErr, agentId: worker.id },
+                "Report-up retry failed",
+              ),
+          );
+        }, wait);
+        return;
+      }
+    }
     this.deps.logger.warn(
-      { agentId: worker.id, lead: line },
+      { agentId: worker.id, lead: line, reason: failure },
       "Worker result has no route to its lead on another computer",
     );
+    const sentToMain = await this.toMainAssistant(
+      worker.id,
+      `Worker ${titleOf(worker)} (${worker.id}) has a result for its lead ${line} on another computer. ` +
+        `Fulcra could not deliver it (${failure}). Pass it to that lead.\n\nResult:\n${lastMessage}`,
+    ).catch(() => false);
+    if (sentToMain) return;
     await this.toLead(
       worker.id,
       worker.id,
-      formatSystemNotificationPrompt(
-        `Your lead ${line} is on another computer. Fulcra did not deliver your last message to it. ` +
-          "Send your DONE, BLOCKED or DECISION line to that lead now, through a route that reaches that computer " +
-          "(the notify command on Windows, or fulcra send over SSH).",
-      ),
+      formatSystemNotificationPrompt(remoteLeadNotice(line)),
       "report-up",
     );
   }
@@ -2367,6 +2593,7 @@ export class ReportUpService {
     } as const;
     const cause = causes[kind];
     const dispatch = async () => {
+      if (!this.noticeAllowed(leadId, prompt)) return "capped" as const;
       const finalCheck = createFinalInputCheck(checkCurrent);
       captureHandoff?.(finalCheck);
       const result = await sendPromptToAgent({
@@ -2388,6 +2615,7 @@ export class ReportUpService {
         logger,
       });
       await waitForFinalInputHandoff(finalCheck);
+      this.noteNoticeSent(leadId, prompt);
       return result.disposition;
     };
     if (!waitForProviderStart)
@@ -2471,6 +2699,7 @@ export function startReportUp(input: {
         (config) => config.enabled && config.leadId === id,
       ),
     remoteNotice: input.remoteNotice,
+    remoteSend: sendThroughSshRoute,
     ...(input.paseoHome
       ? {
           leadMoves: () =>
