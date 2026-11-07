@@ -54,6 +54,12 @@ const MAX_REFRESH_TIMEOUT_MS = 2_147_483_647;
 const DEFAULT_DIAGNOSTIC_TIMEOUT_MS = 120_000;
 const PROVIDER_REFRESH_DEADLINE_ENV = "PASEO_PROVIDER_REFRESH_TIMEOUT_MS";
 export const GLOBAL_PROVIDER_SNAPSHOT_KEY = "paseo:global";
+// FU-729: a failed discovery (for example an installed OpenCode that rejects the
+// generated config) must not start the provider again for every new workspace or
+// passive read. Passive loads wait out a provider-wide backoff; explicit refresh
+// still probes at once.
+export const PROVIDER_REFRESH_FAILURE_BACKOFF_MS = 5 * 60_000;
+export const PROVIDER_REFRESH_FAILURE_MAX_BACKOFF_MS = 60 * 60_000;
 
 function validRefreshDeadline(value: unknown): number | undefined {
   return typeof value === "number" &&
@@ -252,6 +258,10 @@ export class ProviderSnapshotManager {
   private generation: RegistryGeneration;
   private providerClients: Record<AgentProvider, AgentClient>;
   private readonly ownedClients = new Set<AgentClient>();
+  private readonly refreshFailures = new Map<
+    AgentProvider,
+    { until: number; delayMs: number; error: string }
+  >();
   private readonly pluginProviders: PluginAgentClientRegistry;
   private pluginProvidersSettled = false;
 
@@ -655,6 +665,8 @@ export class ProviderSnapshotManager {
   ): void {
     for (const provider of changed) {
       this.generation.providerStates.get(provider)?.discoveryLimit.clearQueue();
+      // New provider settings may fix the failure; let the next read probe again.
+      this.refreshFailures.delete(provider);
     }
     this.generation = generation;
     this.providerClients = clients;
@@ -976,6 +988,22 @@ export class ProviderSnapshotManager {
       return catalog.load;
     }
     if (!force && catalog.result && !catalog.stale) return;
+    const failure = force ? undefined : this.refreshFailures.get(provider);
+    if (failure && failure.until > Date.now()) {
+      catalog.stale = false;
+      catalog.result = identifyEntry({
+        ...(catalog.lastGood?.entry ?? initial),
+        status: "error",
+        enabled: true,
+        error: failure.error,
+      });
+      this.publishTargets(
+        [...this.targets].flatMap(([cwd, target]) =>
+          target.bindings.get(provider)?.key === key ? [cwd] : [],
+        ),
+      );
+      return;
+    }
     catalog.stale = false;
 
     const current = catalog;
@@ -1082,7 +1110,9 @@ export class ProviderSnapshotManager {
         },
       });
       if (!catalog) {
-        setEntry({ ...base, status: "unavailable", enabled: true });
+        if (setEntry({ ...base, status: "unavailable", enabled: true })) {
+          this.refreshFailures.delete(provider);
+        }
         return;
       }
 
@@ -1093,7 +1123,7 @@ export class ProviderSnapshotManager {
           "Provider catalog contains repeated model IDs; retaining the first definition",
         );
       }
-      setEntry({
+      const published = setEntry({
         ...base,
         defaultModeId:
           catalog.defaultModeId === undefined ? base.defaultModeId : catalog.defaultModeId,
@@ -1103,6 +1133,7 @@ export class ProviderSnapshotManager {
         modes: catalog.modes,
         fetchedAt: new Date().toISOString(),
       });
+      if (published) this.refreshFailures.delete(provider);
     } catch (error) {
       const emitted = setEntry({
         // Error status makes these rows explicitly stale, never fresh availability.
@@ -1113,8 +1144,17 @@ export class ProviderSnapshotManager {
         error: toErrorMessage(error),
       });
       if (emitted) {
+        const previous = this.refreshFailures.get(provider);
+        const delayMs = previous
+          ? Math.min(previous.delayMs * 2, PROVIDER_REFRESH_FAILURE_MAX_BACKOFF_MS)
+          : PROVIDER_REFRESH_FAILURE_BACKOFF_MS;
+        this.refreshFailures.set(provider, {
+          until: Date.now() + delayMs,
+          delayMs,
+          error: toErrorMessage(error),
+        });
         this.logger.warn(
-          { err: error, provider, target: catalogOptions },
+          { err: error, provider, target: catalogOptions, retryAfterMs: delayMs },
           "Failed to refresh provider snapshot",
         );
       }

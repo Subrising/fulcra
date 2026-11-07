@@ -3800,3 +3800,85 @@ test("model overrides preserve negotiated plugin capabilities and connection shu
     manager.destroy();
   }
 });
+
+describe("ProviderSnapshotManager failed discovery backoff (FU-729)", () => {
+  function createFailingOpenCode() {
+    const isAvailable = vi.fn(async () => true);
+    const fetchCatalog = vi.fn(async (): Promise<never> => {
+      throw new Error("Failed to fetch OpenCode providers: ConfigInvalidError");
+    });
+    // No catalogue cache key: like OpenCode, every workspace has its own catalogue.
+    const client = createExtraClient("opencode", { isAvailable, fetchCatalog });
+    return { client, fetchCatalog };
+  }
+
+  test("a failed provider is not started again for each new workspace", async () => {
+    const { client, fetchCatalog } = createFailingOpenCode();
+    const manager = new ProviderSnapshotManager({
+      logger: createTestLogger(),
+      extraClients: { opencode: client },
+    });
+    try {
+      const first = await manager.getProvider({ cwd: "/tmp/a", provider: "opencode", wait: true });
+      expect(first.status).toBe("error");
+      for (const cwd of ["/tmp/b", "/tmp/c", "/tmp/d"]) {
+        const entry = await manager.getProvider({ cwd, provider: "opencode", wait: true });
+        expect(entry.status).toBe("error");
+        expect(entry.error).toContain("ConfigInvalidError");
+      }
+      expect(fetchCatalog).toHaveBeenCalledTimes(1);
+    } finally {
+      manager.destroy();
+    }
+  });
+
+  test("explicit refresh probes at once; passive reads retry after the backoff, which doubles", async () => {
+    vi.useFakeTimers();
+    const { client, fetchCatalog } = createFailingOpenCode();
+    const manager = new ProviderSnapshotManager({
+      logger: createTestLogger(),
+      extraClients: { opencode: client },
+    });
+    try {
+      await manager.getProvider({ cwd: "/tmp/a", provider: "opencode", wait: true });
+      await manager.refreshSnapshotForCwd({ cwd: "/tmp/a", providers: ["opencode"] });
+      expect(fetchCatalog).toHaveBeenCalledTimes(2);
+
+      // Second failure doubled the backoff to 10 minutes.
+      vi.setSystemTime(Date.now() + 9 * 60_000);
+      await manager.getProvider({ cwd: "/tmp/b", provider: "opencode", wait: true });
+      expect(fetchCatalog).toHaveBeenCalledTimes(2);
+
+      vi.setSystemTime(Date.now() + 2 * 60_000);
+      await manager.getProvider({ cwd: "/tmp/c", provider: "opencode", wait: true });
+      expect(fetchCatalog).toHaveBeenCalledTimes(3);
+    } finally {
+      manager.destroy();
+      vi.useRealTimers();
+    }
+  });
+
+  test("a success clears the backoff", async () => {
+    let fail = true;
+    const fetchCatalog = vi.fn(async () => {
+      if (fail) throw new Error("boom");
+      return { models: [] as AgentModelDefinition[], modes: [] as AgentMode[] };
+    });
+    const manager = new ProviderSnapshotManager({
+      logger: createTestLogger(),
+      extraClients: {
+        opencode: createExtraClient("opencode", { isAvailable: async () => true, fetchCatalog }),
+      },
+    });
+    try {
+      await manager.getProvider({ cwd: "/tmp/a", provider: "opencode", wait: true });
+      fail = false;
+      await manager.refreshSnapshotForCwd({ cwd: "/tmp/a", providers: ["opencode"] });
+      const entry = await manager.getProvider({ cwd: "/tmp/b", provider: "opencode", wait: true });
+      expect(entry.status).toBe("ready");
+      expect(fetchCatalog).toHaveBeenCalledTimes(3);
+    } finally {
+      manager.destroy();
+    }
+  });
+});
