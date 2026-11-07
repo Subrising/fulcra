@@ -744,10 +744,10 @@ test.each(["standalone", "delegated", "no-answer", "setting off"] as const)(
           .prepare("UPDATE sessions SET mode='delegated',boot=?,grantedAt=1 WHERE id=?")
           .run(bootHost.boot, f.agent.id);
       }
-      if (kind === "setting off") f.config.patch({ autoResumeOnLimit: false });
+      // FU-717: patch() is async (it writes the config file); a timed wait raced it on a slow CI runner.
+      if (kind === "setting off") await f.config.patch({ autoResumeOnLimit: false });
       f.server.completeTurn({ threadId: "limit-thread", status: "interrupted" });
       await run;
-      await new Promise((resolve) => setTimeout(resolve, 5));
       service = startBooted();
       expect(booted.getAgent(f.agent.id)).toBeNull();
       await service.enqueueInterrupted(randomUUID());

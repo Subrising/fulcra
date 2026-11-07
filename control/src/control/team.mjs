@@ -80,6 +80,14 @@ export class Team {
    * to, whether it holds the main assistant seat, and its one direct link. Writing a label is not a seat change.
    */
   async line(a, principal) {
+    // FU-709: seat writes run one at a time, so two parallel calls cannot both read "no holder" and both write.
+    if (a.seat === undefined) return this.lineOnce(a, principal);
+    const run = (this.seatLineChain ?? Promise.resolve()).then(() => this.lineOnce(a, principal));
+    this.seatLineChain = run.catch(() => undefined);
+    return run;
+  }
+
+  async lineOnce(a, principal) {
     const labels = {};
     if (a.reportsTo !== undefined) labels["fulcra.reports-to"] = a.reportsTo;
     if (a.seat !== undefined) labels["fulcra.seat"] = a.seat;
@@ -97,6 +105,7 @@ export class Team {
     if (native.snapshot && !snapshot) refuse("That chat is not on this computer.");
     if (a.seat !== undefined) await this.checkMacOpsSeat(a, snapshot);
     await native.setLabels(a.sessionId, labels);
+    if (a.seat === MAC_OPS_LEAD) await this.confirmMacOpsSeat(a.sessionId);
     const at = this.record(
       "line",
       a.sessionId,
@@ -124,6 +133,20 @@ export class Team {
     );
     if (holders.length)
       refuse(`Another chat holds the Mac ops lead seat (${holders[0]}). Clear it first.`);
+  }
+
+  /**
+   * FU-709: check after write. A write from outside this controller (or a lost race) can still leave two holders;
+   * then this chat gives the seat back, so the earlier holder keeps it and ops sends do not fail closed.
+   */
+  async confirmMacOpsSeat(sessionId) {
+    const native = this.control.native;
+    const others = (await native.labelled(SEAT_LABEL, MAC_OPS_LEAD)).filter(
+      (id) => id !== sessionId,
+    );
+    if (!others.length) return;
+    await native.setLabels(sessionId, { [SEAT_LABEL]: "" });
+    refuse(`Another chat holds the Mac ops lead seat (${others[0]}). Clear it first.`);
   }
 
   /**

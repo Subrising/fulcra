@@ -305,6 +305,44 @@ test("FU-691: the Mac ops lead seat is the one seat a team line sets, held by on
   assert.equal(w.labels[main]["fulcra.seat"], "main-assistant");
 });
 
+test("FU-709: two parallel team lines for the Mac ops seat leave one holder", async (t) => {
+  const a = randomUUID();
+  const b = randomUUID();
+  const w = world(t, { snapshots: { [a]: chat(), [b]: chat() } });
+  const results = await Promise.allSettled([
+    w.dispatch("team-line", { sessionId: a, seat: "mac-ops", note: NOTE }),
+    w.dispatch("team-line", { sessionId: b, seat: "mac-ops", note: NOTE }),
+  ]);
+  assert.deepEqual(
+    results.map((r) => r.status),
+    ["fulfilled", "rejected"],
+  );
+  assert.match(String(results[1].reason?.message), /Another chat holds the Mac ops lead seat/);
+  const holders = Object.entries(w.labels).filter(([, l]) => l["fulcra.seat"] === "mac-ops");
+  assert.deepEqual(
+    holders.map(([id]) => id),
+    [a],
+  );
+});
+
+test("FU-709: a holder written from outside during the write makes the new chat give the seat back", async (t) => {
+  const a = randomUUID();
+  const outside = randomUUID();
+  const w = world(t, { snapshots: { [a]: chat(), [outside]: chat() } });
+  const setLabels = w.control.native.setLabels;
+  w.control.native.setLabels = async (id, patch) => {
+    await setLabels(id, patch);
+    if (id === a && patch["fulcra.seat"] === "mac-ops")
+      w.labels[outside] = { "fulcra.seat": "mac-ops" };
+  };
+  await assert.rejects(
+    w.dispatch("team-line", { sessionId: a, seat: "mac-ops", note: NOTE }),
+    /Another chat holds the Mac ops lead seat/,
+  );
+  assert.equal(w.labels[a]["fulcra.seat"], "");
+  assert.equal(w.labels[outside]["fulcra.seat"], "mac-ops");
+});
+
 test("a reporting line is written on the chat as labels and recorded with who asked", async (t) => {
   const lead = randomUUID();
   const w = world(t, { snapshots: { [lead]: chat() } });
