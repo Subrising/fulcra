@@ -181,3 +181,25 @@ test("FU-632: the first total of a resumed session with billed turns and no curs
   // A brand-new session with no billed turns still charges its whole first total.
   expect(sessionCost(fold(undefined, "only", 2))?.totalUsd).toBe(2);
 });
+
+test("FU-751: a restart with a new runtime session id books only the growth above the old cursor", () => {
+  let records = fold(undefined, "one", 1234, "account-a", undefined, "native-old")!;
+  records = SessionCostRecordsSchema.parse(JSON.parse(JSON.stringify(records)));
+  // The daemon restarts. Claude reports the lifetime total under a new session id.
+  const restarted = fold(
+    records,
+    "first-after-restart",
+    1234,
+    "account-a",
+    undefined,
+    "native-new",
+  )!;
+  expect(sessionCost(restarted)?.totalUsd).toBe(1234);
+  expect(sessionCost(restarted)?.lastTurnUsd).toBe(0);
+  const next = fold(restarted, "second-after-restart", 1236, "account-a", undefined, "native-new")!;
+  expect(sessionCost(next)?.totalUsd).toBeCloseTo(1236);
+  expect(sessionCost(next)?.lastTurnUsd).toBeCloseTo(2);
+  // Edge: a total below the old cursor is a new conversation and books in full.
+  const fresh = fold(records, "fresh", 3, "account-a", undefined, "native-fresh")!;
+  expect(sessionCost(fresh)?.totalUsd).toBe(1237);
+});

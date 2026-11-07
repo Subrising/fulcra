@@ -58,6 +58,42 @@ function isResumedHistoryTotal(
   );
 }
 
+/**
+ * A restart or resume gives a Claude session a new runtime session id, so its cursor key has no
+ * entry. The new total still holds the whole history. Use the highest cursor of the same provider
+ * as the baseline: only the growth above it is new spend. A total below it is a new conversation.
+ */
+function providerBaseline(records: SessionCostRecords, provider: string): number | undefined {
+  let baseline: number | undefined;
+  for (const [key, value] of Object.entries(records.cursors)) {
+    try {
+      const parsed: unknown = JSON.parse(key);
+      if (
+        Array.isArray(parsed) &&
+        parsed[0] === provider &&
+        (baseline === undefined || value > baseline)
+      )
+        baseline = value;
+    } catch {
+      // Ignore a key that is not in the cursor format.
+    }
+  }
+  return baseline;
+}
+
+/** FU-751: the new spend of a result under a cursor key never seen before, or undefined. */
+function historyAdjustedAmount(
+  records: SessionCostRecords,
+  provider: string,
+  cursor: number | undefined,
+  total: number,
+): number | undefined {
+  if (isResumedHistoryTotal(records, provider, cursor)) return 0;
+  if (cursor !== undefined || provider !== "claude") return undefined;
+  const baseline = providerBaseline(records, provider);
+  return baseline !== undefined && total >= baseline ? total - baseline : undefined;
+}
+
 /** Fold result records, never streaming context samples. The stable turn ID makes replay harmless. */
 export function recordSessionCost(
   previous: SessionCostRecords | undefined,
@@ -83,7 +119,7 @@ export function recordSessionCost(
   if (knownIncrement !== undefined && Number.isFinite(knownIncrement) && knownIncrement >= 0)
     amountUsd = knownIncrement;
   else if (cursor !== undefined && total >= cursor) amountUsd = total - cursor;
-  else if (isResumedHistoryTotal(records, input.provider, cursor)) amountUsd = 0;
+  else amountUsd = historyAdjustedAmount(records, input.provider, cursor, total) ?? total;
   records.revision = (records.revision ?? Object.keys(records.turns).length) + 1;
   records.cursors[key] = total;
   records.turns[turnId] = { accountId, amountUsd, at };
