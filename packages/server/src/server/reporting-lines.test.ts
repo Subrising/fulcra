@@ -256,7 +256,10 @@ describe("reporting lines", () => {
       "fulcra.seat": "mac-ops",
     });
     const roleLead = agent("lead-r", "FMC lead", { "fulcra.reports-to": "role:main-assistant" });
-    const idLead = agent("lead-i", "Ship It lead", { "fulcra.reports-to": "main-s" });
+    const idLead = agent("lead-i", "Ship It lead", {
+      "fulcra.reports-to": "main-s",
+      "fulcra.role": "orchestration",
+    });
     const fmcWorker = agent("work-f", "FMC worker", { "fulcra.reports-to": "lead-r" });
     const loose = agent("loose-r", "Remote", {});
     const all = [mainSeat, ops, roleLead, idLead, fmcWorker, loose];
@@ -290,6 +293,35 @@ describe("reporting lines", () => {
     expect(await check([...all, archived], roleLead, ops)).toEqual(allowed);
     // A chat on another computer is not a lead here.
     expect((await check(all, loose, ops, BOOK))?.allowed).toBe(false);
+  });
+
+  it("FU-710: a scratch worker of the main assistant is not a lead; a lead role label makes one", async () => {
+    const mainSeat = agent("main-s", "Main assistant", {
+      "fulcra.seat": "main-assistant",
+      "fulcra.reports-to": "owner",
+    });
+    const ops = agent("ops-1", "Fulcra lead", {
+      "fulcra.reports-to": "role:main-assistant",
+      "fulcra.seat": "mac-ops",
+    });
+    const scratch = agent("scratch-1", "Main scratch worker", { "fulcra.reports-to": "main-s" });
+    const mainWorker = agent("worker-1", "Main worker", {
+      "fulcra.reports-to": "main-s",
+      "fulcra.role": "implementation",
+    });
+    const idLead = agent("lead-i", "Ship It lead", {
+      "fulcra.reports-to": "main-s",
+      "fulcra.role": "orchestration",
+    });
+    const all = [mainSeat, ops, scratch, mainWorker, idLead];
+    const store: LineStore = {
+      get: async (id) => all.find((a) => a.id === id) ?? null,
+      list: async () => all,
+    };
+    const check = (from: LineAgent) => decideSend(store, { agentId: from.id }, ops.id, MINI);
+    expect((await check(scratch))?.allowed).toBe(false);
+    expect((await check(mainWorker))?.allowed).toBe(false);
+    expect(await check(idLead)).toEqual({ allowed: true, why: "mac ops lead" });
   });
 
   it("does not refuse a chat with no recorded line, and follows a created chat's parent", () => {

@@ -6,12 +6,22 @@ import {
   MAIN_ASSISTANT_ROLE,
 } from "@getpaseo/protocol/agent-labels";
 
+/** The "fulcra.role" values a lead carries (a worker has "implementation" or none). */
+export const LEAD_SESSION_ROLES: readonly string[] = [
+  "planning",
+  "orchestration",
+  "prime",
+  "lead",
+  "owner",
+];
+
+export function isLeadRole(labels: Record<string, string> | undefined): boolean {
+  return LEAD_SESSION_ROLES.includes(labels?.["fulcra.role"]?.trim() ?? "");
+}
+
 export function isArchiveLead(record: Pick<StoredAgentRecord, "labels">): boolean {
   const labels = record.labels ?? {};
-  return (
-    labels[SEAT_LABEL] === MAIN_ASSISTANT_ROLE ||
-    ["planning", "orchestration", "prime", "lead", "owner"].includes(labels["fulcra.role"] ?? "")
-  );
+  return labels[SEAT_LABEL] === MAIN_ASSISTANT_ROLE || isLeadRole(labels);
 }
 
 // Fulcra reporting lines own lifecycle. Old parent labels can point at an unrelated lead.
