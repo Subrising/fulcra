@@ -286,7 +286,6 @@ export function WelcomeScreen({ onHostAdded }: WelcomeScreenProps) {
 
           <Button
             variant="ghost"
-            size="sm"
             leftIcon={Settings}
             onPress={handleOpenSettings}
             style={styles.settingsButton}

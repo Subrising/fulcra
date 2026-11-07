@@ -3,26 +3,35 @@ import { useTranslation } from "react-i18next";
 import { Text, View } from "react-native";
 import { useFocusEffect } from "expo-router/react-navigation";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
+<<<<<<< HEAD
 import { Blocks, Check, Settings2 } from "lucide-react-native";
+=======
+import { Settings2 } from "lucide-react-native";
+>>>>>>> refs/remotes/upstream/tags/v0.15.3
 import type { AgentSkillOperation, AgentSkillsStatus } from "@getpaseo/protocol/messages";
 import type { TFunction } from "i18next";
+import { SettingsCard, SettingsRow, SettingsSection } from "@/components/settings";
 import { Button } from "@/components/ui/button";
-import { SettingsSection } from "@/components/settings/headings/settings-section";
+import { Switch } from "@/components/ui/switch";
 import { settingsStyles } from "@/styles/settings";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 import { confirmDialog } from "@/utils/confirm-dialog";
 import { SkillSelectionSheet } from "./selection-sheet";
-import { useAgentSkills } from "./use-agent-skills";
+import { useAgentSkills, type AgentSkillsController } from "./use-agent-skills";
+
+export { useAgentSkills, type AgentSkillsController } from "./use-agent-skills";
 
 const OP_KIND_ORDER: Record<AgentSkillOperation["kind"], number> = {
   add: 0,
   update: 1,
   delete: 2,
 };
-const ThemedBlocks = withUnistyles(Blocks);
-const ThemedCheck = withUnistyles(Check);
 const ThemedSettings = withUnistyles(Settings2);
+<<<<<<< HEAD
 const foregroundMapping = (theme: Theme) => ({ color: theme.colors.foreground });
+=======
+const SKILLS_DOCS_URL = "https://paseo.sh/docs/skills";
+>>>>>>> refs/remotes/upstream/tags/v0.15.3
 const mutedMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
 function formatUpdateMessage(ops: readonly AgentSkillOperation[], t: TFunction): string {
@@ -32,23 +41,35 @@ function formatUpdateMessage(ops: readonly AgentSkillOperation[], t: TFunction):
     .join("\n");
 }
 
+/** Whether the host has Paseo's skills installed in any form, current or not. */
+export function areSkillsInstalled(status: AgentSkillsStatus | null): boolean {
+  return status !== null && status.state !== "not-installed";
+}
+
+/** Whether the saved selection names any skill there is to install. */
+export function hasSelectedSkills(status: AgentSkillsStatus | null): boolean {
+  if (!status) return false;
+  if (status.selection.mode === "all") return status.available.length > 0;
+  return status.selection.skills.some((name) => status.available.includes(name));
+}
+
 export function AgentSkillsSection({ serverId }: { serverId: string }) {
   const { t } = useTranslation();
   const skills = useAgentSkills(serverId);
-  const refreshSkills = skills.refresh;
-  const skillsConnected = skills.connected;
-  const skillsSupported = skills.supported;
-  const [isChoosing, setIsChoosing] = useState(false);
+  const { refresh, connected, supported, reconcile, uninstall } = skills;
   useFocusEffect(
     useCallback(() => {
-      if (skillsConnected && skillsSupported) void refreshSkills();
+      if (connected && supported) void refresh();
       return undefined;
-    }, [refreshSkills, skillsConnected, skillsSupported]),
+    }, [refresh, connected, supported]),
   );
-  const maintenanceOps = useMemo(
-    () => skills.status?.ops.filter((op) => op.kind !== "delete") ?? [],
-    [skills.status?.ops],
+  const handleValueChange = useCallback(
+    (next: boolean) => {
+      void (next ? reconcile() : uninstall());
+    },
+    [reconcile, uninstall],
   );
+<<<<<<< HEAD
   const state =
     skills.status?.state === "drift" && maintenanceOps.length === 0
       ? "up-to-date"
@@ -86,14 +107,28 @@ export function AgentSkillsSection({ serverId }: { serverId: string }) {
   );
   const handleOpen = useCallback(() => setIsChoosing(true), []);
   const handleClose = useCallback(() => setIsChoosing(false), []);
+=======
+  const docsLink = useMemo(
+    () => ({
+      href: SKILLS_DOCS_URL,
+      label: t("settings.host.skills.docs"),
+      accessibilityLabel: t("settings.host.skills.openDocs"),
+    }),
+    [t],
+  );
+>>>>>>> refs/remotes/upstream/tags/v0.15.3
 
-  if (!skills.connected || !skills.supported) {
+  if (!connected || !supported) {
     return (
+<<<<<<< HEAD
       <SettingsSection title={t("settings.host.skills.sectionTitle")}>
+=======
+      <SettingsSection title={t("settings.host.skills.sectionTitle")} link={docsLink}>
+>>>>>>> refs/remotes/upstream/tags/v0.15.3
         <View style={settingsStyles.card} testID="host-agent-skills-unavailable">
           <View style={styles.emptyCard}>
             <Text style={styles.mutedText}>
-              {skills.connected
+              {connected
                 ? t("settings.host.skills.unsupported")
                 : t("settings.host.skills.unavailable")}
             </Text>
@@ -104,6 +139,7 @@ export function AgentSkillsSection({ serverId }: { serverId: string }) {
   }
 
   return (
+<<<<<<< HEAD
     <SettingsSection title={t("settings.host.skills.sectionTitle")}>
       <View style={settingsStyles.card} testID="host-agent-skills-card">
         <View style={settingsStyles.row}>
@@ -147,66 +183,114 @@ export function AgentSkillsSection({ serverId }: { serverId: string }) {
           isSaving={skills.isWorking}
           onSave={skills.saveSelection}
           onClose={handleClose}
+=======
+    <SettingsSection title={t("settings.host.skills.sectionTitle")} link={docsLink}>
+      <SettingsCard testID="host-agent-skills-card">
+        <AgentSkillsRow
+          skills={skills}
+          value={areSkillsInstalled(skills.status)}
+          onValueChange={handleValueChange}
+>>>>>>> refs/remotes/upstream/tags/v0.15.3
         />
-      ) : null}
+      </SettingsCard>
     </SettingsSection>
   );
 }
 
-function SkillsActions({
-  state,
-  isWorking,
-  onReconcile,
-  onInstall,
-  onUninstall,
+/**
+ * The orchestration skills row: a switch for whether they are installed, a gear that opens the
+ * skill picker, and Update when the installed skills fall behind the bundled ones. The caller
+ * decides what the switch is bound to; the picker and Update always act on the host.
+ */
+export function AgentSkillsRow({
+  skills,
+  value,
+  onValueChange,
+  disabled = false,
 }: {
-  state: AgentSkillsStatus["state"] | null;
-  isWorking: boolean;
-  onReconcile: () => void;
-  onInstall: () => void;
-  onUninstall: () => void;
+  skills: AgentSkillsController;
+  value: boolean;
+  onValueChange: (next: boolean) => void;
+  disabled?: boolean;
 }) {
   const { t } = useTranslation();
-  if (state === "up-to-date") {
-    return (
-      <View style={styles.actionsRow}>
-        <View style={styles.installedLabel}>
-          <ThemedCheck size={14} uniProps={mutedMapping} />
-          <Text style={styles.mutedText}>{t("settings.host.skills.actions.installed")}</Text>
-        </View>
-        <Button variant="outline" size="sm" onPress={onUninstall} disabled={isWorking}>
-          {t("settings.host.skills.actions.uninstall")}
-        </Button>
-      </View>
-    );
-  }
-  if (state === "drift") {
-    return (
-      <View style={styles.actionsRow}>
-        <Button variant="outline" size="sm" onPress={onReconcile} disabled={isWorking}>
-          {isWorking
-            ? t("settings.host.skills.actions.working")
-            : t("settings.host.skills.actions.update")}
-        </Button>
-        <Button variant="outline" size="sm" onPress={onUninstall} disabled={isWorking}>
-          {t("settings.host.skills.actions.uninstall")}
-        </Button>
-      </View>
-    );
-  }
+  const { status, isWorking, reconcile, saveSelection } = skills;
+  const [isChoosing, setIsChoosing] = useState(false);
+  // Deleting a deselected skill is a choice made in the picker, not an update to offer here.
+  const maintenanceOps = useMemo(
+    () => status?.ops.filter((op) => op.kind !== "delete") ?? [],
+    [status?.ops],
+  );
+  const needsUpdate = status?.state === "drift" && maintenanceOps.length > 0;
+
+  const handleUpdate = useCallback(async () => {
+    if (isWorking) return;
+    const confirmed = await confirmDialog({
+      title: t("settings.host.skills.updateTitle"),
+      message: formatUpdateMessage(maintenanceOps, t),
+      confirmLabel: t("settings.host.skills.actions.update"),
+    });
+    if (confirmed) await reconcile();
+  }, [isWorking, maintenanceOps, reconcile, t]);
+  const handleOpen = useCallback(() => setIsChoosing(true), []);
+  const handleClose = useCallback(() => setIsChoosing(false), []);
+  const chooseIcon = useMemo(
+    () => <ThemedSettings size={ICON_SIZE.sm} uniProps={mutedMapping} />,
+    [],
+  );
+
   return (
-    <Button variant="outline" size="sm" onPress={onInstall} disabled={isWorking}>
-      {isWorking
-        ? t("settings.host.skills.actions.installing")
-        : t("settings.host.skills.actions.install")}
-    </Button>
+    <>
+      <SettingsRow
+        label={t("settings.host.skills.title")}
+        hint={
+          needsUpdate
+            ? t("settings.host.skills.updateAvailable")
+            : t("settings.host.skills.description")
+        }
+      >
+        <View style={styles.controls}>
+          {needsUpdate ? (
+            <Button variant="outline" onPress={handleUpdate} disabled={disabled || isWorking}>
+              {isWorking
+                ? t("settings.host.skills.actions.working")
+                : t("settings.host.skills.actions.update")}
+            </Button>
+          ) : null}
+          <Button
+            variant="ghost"
+            leftIcon={chooseIcon}
+            onPress={handleOpen}
+            disabled={disabled || status === null || isWorking}
+            accessibilityLabel={t("settings.host.skills.choose")}
+          />
+          <Switch
+            value={value}
+            onValueChange={onValueChange}
+            // Nothing picked means nothing to install; the gear is the way forward.
+            disabled={
+              disabled || status === null || isWorking || (!value && !hasSelectedSkills(status))
+            }
+            accessibilityLabel={t("settings.host.skills.title")}
+          />
+        </View>
+      </SettingsRow>
+      {status ? (
+        <SkillSelectionSheet
+          visible={isChoosing}
+          available={status.available}
+          selection={status.selection}
+          isSaving={isWorking}
+          onSave={saveSelection}
+          onClose={handleClose}
+        />
+      ) : null}
+    </>
   );
 }
 
 const styles = StyleSheet.create((theme) => ({
-  rowTitleRow: { flexDirection: "row", alignItems: "center", gap: theme.spacing[2] },
-  installedLabel: { flexDirection: "row", alignItems: "center", gap: 4 },
+  controls: { flexDirection: "row", alignItems: "center", gap: theme.spacing[2] },
   mutedText: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
-  actionsRow: { flexDirection: "row", alignItems: "center", gap: theme.spacing[2] },
   emptyCard: { padding: theme.spacing[4] },
 }));
