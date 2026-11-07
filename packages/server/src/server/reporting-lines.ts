@@ -10,6 +10,7 @@ import {
   ROLE_REF_PREFIX,
 } from "@getpaseo/protocol/agent-labels";
 import type { SendAgentMessageRequest } from "@getpaseo/protocol/messages";
+import { isLeadRole } from "./agent/archive-policy.js";
 type LineSender = NonNullable<SendAgentMessageRequest["sender"]>;
 
 // FULCRA(orchestration): reporting lines (Fulcra 0.2.8). A chat sends only to the chat it reports to, to the chats
@@ -143,8 +144,9 @@ export function soleHolder(agents: readonly LineAgent[], role: string): string |
 }
 
 /**
- * FU-691: a lead is a chat that reports to the main assistant, or a chat that holds a seat. Workers report to their
- * lead, so they are not leads here.
+ * FU-691: a lead is a chat that holds a seat, or a chat whose line is the main assistant role (only team setup
+ * writes that line). FU-710: a chat whose line is the main assistant's own id is a lead only with a lead role
+ * label; a scratch worker that the main assistant started has that line too, and it is not a lead.
  */
 function isLead(
   sender: LineAgent | null,
@@ -152,9 +154,9 @@ function isLead(
   line: string | null,
   mainId: string | null,
 ) {
+  if (sender?.labels?.[SEAT_LABEL]?.trim()) return true;
   if (rawLine === MAIN_ASSISTANT_REF) return true;
-  if (mainId && line && sameChat(line, mainId, null)) return true;
-  return Boolean(sender?.labels?.[SEAT_LABEL]?.trim());
+  return Boolean(mainId && line && sameChat(line, mainId, null) && isLeadRole(sender?.labels));
 }
 
 /** A role reference becomes the chat that holds the role now; other references stay as they are. */

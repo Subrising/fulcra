@@ -997,7 +997,14 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
     // Paced reveal commits inside a message without rerendering this viewport.
     // Observe those commits too, so the next frame sees the grown content at the
     // bottom instead of waiting for the resize notification after animation frames.
+    // Only a change in content height moves the bottom. A same-height swap, such as a hovered badge
+    // trading its icon for a chevron, must not snap a reader who sits within the follow threshold
+    // but not exactly at the bottom.
+    let observedScrollHeight = scrollContainer.scrollHeight;
     const contentChanges = new MutationObserver(() => {
+      const scrollHeight = scrollContainer.scrollHeight;
+      if (scrollHeight === observedScrollHeight) return;
+      observedScrollHeight = scrollHeight;
       if (isActiveRef.current && followOutputRef.current) forceStickToBottom();
     });
     if (contentNode)

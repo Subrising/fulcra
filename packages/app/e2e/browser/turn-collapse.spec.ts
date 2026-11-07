@@ -344,25 +344,11 @@ test("opening a turn keeps the received message above it clipped on every frame"
       .filter({ has: page.getByRole("button", { name: "Sent by Reviewer", exact: true }) });
     await expect(bubble.getByRole("button", { name: "Show more", exact: true })).toBeVisible();
     await bubble.scrollIntoViewIfNeeded();
-    // FULCRA(FU-657): on this branch the first pointer move over the list scrolls it 32px (the list settles at its
-    // bottom), which moves the summary between press and release and loses the click. Move the pointer first, wait
-    // for the summary to hold still, then click.
+    // The first pointer move over the summary swaps its icon for a chevron. That DOM change must not
+    // scroll the list (FU-698), or the summary moves between press and release and loses the click.
     const toggle = page
       .getByTestId("turn-summary")
       .getByRole("button", { name: "Ran 7 commands", exact: true });
-    await toggle.hover();
-    let lastTop = Number.NaN;
-    await expect
-      .poll(
-        async () => {
-          const top = (await toggle.boundingBox())?.y;
-          const held = top === lastTop;
-          lastTop = top ?? Number.NaN;
-          return held;
-        },
-        { intervals: [250] },
-      )
-      .toBe(true);
     await watchReceivedMessagePreview(page, "Sent by Reviewer");
     await toggle.click();
     await expect(page.getByText("echo stress-6", { exact: true })).toBeVisible();
