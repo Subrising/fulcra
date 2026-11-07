@@ -15,7 +15,7 @@ export const LEAD_SESSION_ROLES: readonly string[] = [
   "owner",
 ];
 
-export function isLeadRole(labels: Record<string, string> | undefined): boolean {
+export function isLeadRole(labels: Record<string, string> | null | undefined): boolean {
   return LEAD_SESSION_ROLES.includes(labels?.["fulcra.role"]?.trim() ?? "");
 }
 
