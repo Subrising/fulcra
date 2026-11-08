@@ -12,7 +12,11 @@ export interface LedgerRow {
   owner: string;
   status: string;
   kind?: string;
+  /** FU-752: session IDs (full or 8-char short) written anywhere in the row, for example in the item text. */
+  sessionRefs?: string[];
 }
+
+const SESSION_REF = /\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b|\b[0-9a-f]{8}\b/gi;
 
 /** Where the ledgers are: FULCRA_LEDGER_DIR, else ~/shared-vault/projects. */
 export function defaultLedgerDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -34,7 +38,17 @@ export function parseOpenRows(project: string, text: string): LedgerRow[] {
     const [id, , kind, owner, status] = cells;
     if (!id || !/^[A-Za-z][A-Za-z0-9]*-\d+$/.test(id)) continue;
     if (/^(DONE|MOVED)\b/i.test(status ?? "")) continue;
-    rows.push({ project, id, owner: owner ?? "", status: status ?? "", kind: kind ?? "" });
+    const sessionRefs = [
+      ...new Set((line.match(SESSION_REF) ?? []).map((ref) => ref.toLowerCase())),
+    ];
+    rows.push({
+      project,
+      id,
+      owner: owner ?? "",
+      status: status ?? "",
+      kind: kind ?? "",
+      sessionRefs,
+    });
   }
   return rows;
 }

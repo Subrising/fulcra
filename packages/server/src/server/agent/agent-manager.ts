@@ -10,7 +10,12 @@ import {
   SessionCostOutbox,
   type PendingSessionCost,
 } from "./session-cost-outbox.js";
-import { recordSessionCost, sessionCost, type SessionCostRecords } from "./session-cost.js";
+import {
+  recordSessionCost,
+  ROLLUP_PREFIX,
+  sessionCost,
+  type SessionCostRecords,
+} from "./session-cost.js";
 import { queuedAgentMessagesFor } from "../queued-agent-messages.js";
 import { heldSendsFor } from "../held-sends.js";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -6875,7 +6880,8 @@ export class AgentManager {
       if (!cost?.billingWarning || (agentId !== undefined && id !== agentId)) continue;
       for (const [turnId, row] of Object.entries(cost.turns)) {
         const key = pendingCostKey({ agentId: id, turnId });
-        if (row.accountId !== accountId || seen.has(key)) continue;
+        if (turnId.startsWith(ROLLUP_PREFIX) || row.accountId !== accountId || seen.has(key))
+          continue;
         missing.push({
           agentId: id,
           provider: "claude",

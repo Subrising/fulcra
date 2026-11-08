@@ -1812,6 +1812,14 @@ export async function createPaseoDaemon(
     },
     readOpenLedgerRows: () => readOpenLedgerRows(defaultLedgerDir(), true),
     closedAfterHours: () => config.autoArchiveClosedAfterHours ?? 24,
+    scheduledAgentIds: async () =>
+      new Set(
+        (await scheduleService.list()).flatMap((schedule) =>
+          schedule.target.type === "agent" && schedule.status === "active"
+            ? [schedule.target.agentId]
+            : [],
+        ),
+      ),
     protectedIds: () =>
       new Set([
         ...hostLinkRuntime.service.pendingNoticeWorkers().map((worker) => worker.agentId),

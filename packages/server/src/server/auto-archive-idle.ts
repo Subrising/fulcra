@@ -19,6 +19,7 @@ import { parseWorkerResult } from "./ledger-routing/service.js";
 //   DONE_IDLE_MS of idle time. New work for the worker (a newer user message or a new notice) resets this.
 // Never archived: leads, owners, any session with a seat label, the main assistant, sessions that other sessions
 // report to, `fulcra.hold` sessions, sessions named by an open ledger row, workers with a pending host-link notice,
+// sessions with a pending heartbeat or schedule (FU-752), sessions named anywhere in an open row of any project,
 // and closed sessions whose finish notice has not reached the lead.
 
 export const DONE_IDLE_MS = 30 * 60_000;
@@ -131,7 +132,9 @@ export function pickAutoArchive(input: AutoArchiveInput): AutoArchiveCandidate[]
 }
 
 export function openLedgerTextOf(rows: readonly LedgerRow[]): string {
-  return rows.map((row) => `${row.owner} ${row.status}`).join("\n");
+  return rows
+    .map((row) => `${row.owner} ${row.status} ${(row.sessionRefs ?? []).join(" ")}`)
+    .join("\n");
 }
 
 export interface AutoArchiveIdleDeps {
@@ -141,6 +144,8 @@ export interface AutoArchiveIdleDeps {
   lastMessageOf: (id: string) => string | null;
   readOpenLedgerRows: () => Promise<LedgerRow[]>;
   protectedIds?: () => ReadonlySet<string>;
+  /** FU-752: ids of sessions with a pending heartbeat or schedule aimed at them (async: the store is read). */
+  scheduledAgentIds?: () => Promise<ReadonlySet<string>>;
   closedAfterHours: () => number;
   archive: (candidate: AutoArchiveCandidate) => Promise<AutoArchiveOutcome>;
   now?: () => number;
@@ -156,6 +161,8 @@ export async function runAutoArchivePass(deps: AutoArchiveIdleDeps): Promise<str
   const records = deps.loadedRecords();
   const refused = deps.refused ?? new Map<string, string>();
   const stamps = new Map(records.map((r) => [r.id, r.lastActivityAt ?? r.updatedAt]));
+  const scheduled = (await deps.scheduledAgentIds?.()) ?? new Set<string>();
+  const direct = deps.protectedIds?.();
   const candidates = pickAutoArchive({
     records,
     now: (deps.now ?? Date.now)(),
@@ -163,7 +170,7 @@ export async function runAutoArchivePass(deps: AutoArchiveIdleDeps): Promise<str
     lifecycleOf: deps.lifecycleOf,
     lastMessageOf: deps.lastMessageOf,
     openLedgerText: openLedgerTextOf(await deps.readOpenLedgerRows()),
-    protectedIds: deps.protectedIds?.(),
+    protectedIds: new Set([...(direct ?? []), ...scheduled]),
   });
   for (const candidate of candidates) {
     if (refused.get(candidate.id) === stamps.get(candidate.id)) continue;
