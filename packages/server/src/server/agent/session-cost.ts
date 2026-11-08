@@ -12,6 +12,8 @@ export const SessionCostRecordsSchema = z.object({
       accountId: z.string().nullable(),
       amountUsd: z.number().finite().nonnegative(),
       at: z.string(),
+      /** FU-744: set on a daily summary entry; the number of turns it replaced. */
+      count: z.number().int().positive().optional(),
     }),
   ),
 });
@@ -37,7 +39,7 @@ export function sessionCost(records?: SessionCostRecords): SessionCost | undefin
       accountId,
       totalUsd: accountTotal,
     })),
-    recordedTurns: Object.keys(records.turns).length,
+    recordedTurns: Object.values(records.turns).reduce((sum, turn) => sum + (turn.count ?? 1), 0),
   });
 }
 
@@ -94,6 +96,39 @@ function historyAdjustedAmount(
   return baseline !== undefined && total >= baseline ? total - baseline : undefined;
 }
 
+/** FU-744: how many recent turn entries stay one by one. Older ones roll into one entry per day and account. */
+export const KEEP_RECENT_TURNS = 500;
+export const ROLLUP_PREFIX = "rollup:";
+
+/**
+ * FU-744: turns grew without a limit (7,751 entries, 1.5 MB). Keep the newest `keep` turns and fold older ones into
+ * one summary entry per UTC day and account. The lifetime total, the account totals and the turn count stay equal.
+ * Summary entries are never folded again, so a second pass is a no-op until more turns arrive.
+ */
+export function compactSessionCostTurns(
+  records: SessionCostRecords,
+  keep = KEEP_RECENT_TURNS,
+): SessionCostRecords {
+  const singles = Object.entries(records.turns).filter(([id]) => !id.startsWith(ROLLUP_PREFIX));
+  if (singles.length <= keep) return records;
+  singles.sort(([, a], [, b]) => Date.parse(a.at) - Date.parse(b.at));
+  const older = singles.slice(0, singles.length - keep);
+  for (const [turnId, turn] of older) {
+    delete records.turns[turnId];
+    const stamp = Date.parse(turn.at);
+    const day = Number.isFinite(stamp) ? new Date(stamp).toISOString().slice(0, 10) : "unknown";
+    const key = `${ROLLUP_PREFIX}${day}:${JSON.stringify(turn.accountId)}`;
+    const existing = records.turns[key];
+    records.turns[key] = {
+      accountId: turn.accountId,
+      amountUsd: (existing?.amountUsd ?? 0) + turn.amountUsd,
+      at: existing && Date.parse(existing.at) > stamp ? existing.at : turn.at,
+      count: (existing?.count ?? 0) + 1,
+    };
+  }
+  return records;
+}
+
 /** Fold result records, never streaming context samples. The stable turn ID makes replay harmless. */
 export function recordSessionCost(
   previous: SessionCostRecords | undefined,
@@ -123,5 +158,5 @@ export function recordSessionCost(
   records.revision = (records.revision ?? Object.keys(records.turns).length) + 1;
   records.cursors[key] = total;
   records.turns[turnId] = { accountId, amountUsd, at };
-  return records;
+  return compactSessionCostTurns(records);
 }

@@ -10,6 +10,7 @@ import {
   type AutoArchiveInput,
   type AutoArchiveOutcome,
 } from "./auto-archive-idle.js";
+import { parseOpenRows } from "./ledger-items.js";
 import { createTestLogger } from "../test-utils/test-logger.js";
 
 const NOW = Date.parse("2026-10-21T12:00:00.000Z");
@@ -151,6 +152,64 @@ describe("pickAutoArchive finished workers", () => {
   test("a lead is never archived this way", () => {
     const lead = worker({ labels: { "fulcra.role": "lead" } });
     expect(pickAutoArchive(input([lead], idle))).toEqual([]);
+  });
+});
+
+describe("FU-752 protection", () => {
+  const delivered = (endedAt: number) =>
+    ({ parentId: "p", owner: "report-up", status: "delivered", messageId: "m", endedAt }) as const;
+  const doneWorker = () =>
+    record("9e44c406-aaaa-bbbb-cccc-dddddddddddd", {
+      lastStatus: "idle",
+      updatedAt: new Date(NOW - DONE_IDLE_MS - 1000).toISOString(),
+      finishNotice: delivered(NOW - DONE_IDLE_MS - 2000),
+    });
+  const base = (extra: object = {}) => ({
+    logger: createTestLogger(),
+    loadedRecords: () => [doneWorker()],
+    lifecycleOf: () => "idle",
+    lastMessageOf: () => "DONE merged",
+    readOpenLedgerRows: async () => [],
+    closedAfterHours: () => 24,
+    now: () => NOW,
+    ...extra,
+  });
+
+  test("a done-idle worker is archived when nothing protects it", async () => {
+    const archive = vi.fn().mockResolvedValue("archived");
+    expect(await runAutoArchivePass({ ...base(), archive })).toBe(doneWorker().id);
+  });
+  test("a done-idle worker with a pending heartbeat is not archived", async () => {
+    const archive = vi.fn().mockResolvedValue("archived");
+    const scheduledAgentIds = async () => new Set([doneWorker().id]);
+    expect(await runAutoArchivePass({ ...base({ scheduledAgentIds }), archive })).toBeNull();
+    expect(archive).not.toHaveBeenCalled();
+  });
+  test("a worker named only in the item text of an open row of another project is not archived", async () => {
+    const archive = vi.fn().mockResolvedValue("archived");
+    const readOpenLedgerRows = async () => [
+      {
+        project: "cmg",
+        id: "CMG-3",
+        owner: "CMG lead",
+        status: "IN PROGRESS",
+        sessionRefs: ["9e44c406"],
+      },
+    ];
+    expect(await runAutoArchivePass({ ...base({ readOpenLedgerRows }), archive })).toBeNull();
+  });
+});
+
+describe("parseOpenRows session refs", () => {
+  test("collects full and short session ids from the whole row, and skips closed rows", () => {
+    const text = [
+      "| CMG-3 | wait for 9E44C406 to finish | build | CMG lead | IN PROGRESS | a7c883e5-1111-2222-3333-444444444444 | x |",
+      "| CMG-4 | old 11111111 | build | lead | DONE | | |",
+    ].join("\n");
+    const rows = parseOpenRows("cmg", text);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.sessionRefs).toEqual(["9e44c406", "a7c883e5-1111-2222-3333-444444444444"]);
+    expect(openLedgerTextOf(rows)).toContain("9e44c406");
   });
 });
 

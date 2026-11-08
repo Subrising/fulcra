@@ -1,6 +1,12 @@
 import fixture from "./session-cost.fixture.json";
 import { expect, test } from "vitest";
-import { recordSessionCost, sessionCost, SessionCostRecordsSchema } from "./session-cost.js";
+import {
+  compactSessionCostTurns,
+  KEEP_RECENT_TURNS,
+  recordSessionCost,
+  sessionCost,
+  SessionCostRecordsSchema,
+} from "./session-cost.js";
 import { recordedClaudeUsage } from "./usage-recording.js";
 import type { SessionCostRecords } from "./session-cost.js";
 
@@ -202,4 +208,54 @@ test("FU-751: a restart with a new runtime session id books only the growth abov
   // Edge: a total below the old cursor is a new conversation and books in full.
   const fresh = fold(records, "fresh", 3, "account-a", undefined, "native-fresh")!;
   expect(sessionCost(fresh)?.totalUsd).toBe(1237);
+});
+
+test("FU-744: a record with 8,000 turns is trimmed and keeps the same lifetime total and turn count", () => {
+  const turns: SessionCostRecords["turns"] = {};
+  let expected = 0;
+  for (let i = 0; i < 8000; i++) {
+    const amountUsd = 0.01 + (i % 7) / 100;
+    expected += amountUsd;
+    const day = String(1 + Math.floor(i / 400)).padStart(2, "0");
+    turns[`t${i}`] = {
+      accountId: i % 2 ? "a" : null,
+      amountUsd,
+      at: `2026-10-${day}T00:00:${String(i % 60).padStart(2, "0")}.000Z`,
+    };
+  }
+  const before = sessionCost({ cursors: {}, turns });
+  const compacted = compactSessionCostTurns({ cursors: {}, turns: { ...turns } });
+  const after = sessionCost(compacted);
+  expect(Object.keys(compacted.turns).length).toBeLessThan(KEEP_RECENT_TURNS + 100);
+  expect(Object.keys(compacted.turns).filter((id) => !id.startsWith("rollup:"))).toHaveLength(
+    KEEP_RECENT_TURNS,
+  );
+  expect(after?.totalUsd).toBeCloseTo(expected, 6);
+  expect(after?.totalUsd).toBeCloseTo(before!.totalUsd, 6);
+  expect(after?.recordedTurns).toBe(8000);
+  expect(after?.lastTurnUsd).toBe(before?.lastTurnUsd);
+  for (const account of before!.accounts)
+    expect(after?.accounts.find((a) => a.accountId === account.accountId)?.totalUsd).toBeCloseTo(
+      account.totalUsd,
+      6,
+    );
+  // A second pass changes nothing.
+  expect(compactSessionCostTurns(structuredClone(compacted))).toEqual(compacted);
+});
+
+test("FU-744: recording a turn trims an oversized record and keeps the cursor and the new turn", () => {
+  const turns: SessionCostRecords["turns"] = {};
+  for (let i = 0; i < 600; i++)
+    turns[`t${i}`] = {
+      accountId: "a",
+      amountUsd: 1,
+      at: `2026-09-01T00:${String(i % 60).padStart(2, "0")}:00.000Z`,
+    };
+  const next = fold({ revision: 600, cursors: {}, turns }, "new", 5, "a", 5)!;
+  expect(sessionCost(next)?.totalUsd).toBeCloseTo(605, 6);
+  expect(next.turns.new?.amountUsd).toBe(5);
+  expect(next.cursors[JSON.stringify(["claude", "native-one"])]).toBe(5);
+  expect(Object.keys(next.turns).filter((id) => !id.startsWith("rollup:")).length).toBe(
+    KEEP_RECENT_TURNS,
+  );
 });
