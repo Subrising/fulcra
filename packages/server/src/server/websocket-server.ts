@@ -1122,8 +1122,20 @@ export class VoiceAssistantWebSocketServer {
     args: { daemonKeyPair: KeyPair; deviceGate: RelayDeviceGate } | null,
   ) {
     this.directDeviceLogin = args;
-    if (!args) this.broadcastCapabilitiesUpdate();
+    if (args) return;
+    // Turning it off ends live direct device sessions too, not only new logins.
+    for (const ws of this.directDeviceSockets) {
+      try {
+        ws.close(4403, "Not paired");
+      } catch {
+        ws.terminate();
+      }
+    }
+    this.broadcastCapabilitiesUpdate();
   }
+
+  /** Every direct device socket, admitted or not, so turning the login off can close them. */
+  private directDeviceSockets = new Set<WebSocket>();
 
   /** Upgrades that offered fulcra.device.v1 and have not yet proved a device key. Anyone can open these. */
   private unadmittedDirectDeviceSockets = 0;
@@ -1153,7 +1165,11 @@ export class VoiceAssistantWebSocketServer {
       released = true;
       this.unadmittedDirectDeviceSockets--;
     };
-    ws.once("close", release);
+    this.directDeviceSockets.add(ws);
+    ws.once("close", () => {
+      release();
+      this.directDeviceSockets.delete(ws);
+    });
     // The peer address goes into the metadata so admit and refuse log lines name who connected.
     const metadata: ExternalSocketMetadata = {
       transport: "relay",

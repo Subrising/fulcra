@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { exportPublicKey, generateKeyPair } from "@getpaseo/relay";
@@ -16,9 +16,13 @@ afterEach(async () => {
   daemon = null;
 });
 
-async function setup(auth?: { password: string }, directDeviceLogin: boolean | null = true) {
+async function setup(
+  auth?: { password: string },
+  directDeviceLogin: boolean | null = true,
+  relayEnabled = false,
+) {
   daemon = await createTestPaseoDaemon({
-    relayEnabled: false,
+    relayEnabled,
     directDeviceLogin: directDeviceLogin ?? undefined,
     logger: (await import("pino")).default({ level: "warn" }),
     ...(auth ? { auth: { password: hashDaemonPassword(auth.password) } } : {}),
@@ -184,4 +188,80 @@ describe("direct device login", () => {
     expect(info?.directRoutes).toBeUndefined();
     await plain.close();
   });
+
+  test("N2: turning the relay off closes live direct device sessions and refuses new ones", async () => {
+    const { client } = await setup({ password: "owner-secret" }, null, true);
+    const device = client();
+    await device.connect();
+    const owner = new DaemonClient({
+      url: `ws://127.0.0.1:${daemon!.port}/ws`,
+      clientId: "cid_owner_toggle",
+      clientType: "cli",
+      password: "owner-secret",
+      reconnect: { enabled: false },
+    });
+    await owner.connect();
+    await owner.patchDaemonConfig({ relay: { enabled: false } });
+    await vi.waitFor(() => expect(device.getConnectionState().status).not.toBe("connected"), {
+      timeout: 10000,
+    });
+    const refused = client();
+    await expect(refused.connect()).rejects.toBeTruthy();
+    await refused.close();
+    // Turning it back on lets a device in again.
+    await owner.patchDaemonConfig({ relay: { enabled: true } });
+    const again = client();
+    await again.connect();
+    expect(again.getLastServerInfoMessage()?.features?.directDeviceLogin).toBe(true);
+    await again.close();
+    await device.close();
+    await owner.close();
+  }, 60000);
+
+  test("L4: the override wins in both directions", async () => {
+    const off = await setup(undefined, false, true);
+    const refused = off.client();
+    await expect(refused.connect()).rejects.toBeTruthy();
+    await refused.close();
+    await daemon?.close();
+    daemon = null;
+    const on = await setup(undefined, true, false);
+    const ok = on.client();
+    await ok.connect();
+    expect(ok.getLastServerInfoMessage()?.features?.directDeviceLogin).toBe(true);
+    await ok.close();
+  }, 60000);
+
+  test("L3: an admitted device frees its slot", async () => {
+    const { client } = await setup();
+    const url = `ws://127.0.0.1:${daemon!.port}/ws`;
+    const raw: WebSocket[] = [];
+    const openRaw = async () => {
+      const ws = new WebSocket(url, ["fulcra.device.v1"]);
+      const opened = await new Promise<boolean>((resolve) => {
+        ws.once("open", () => resolve(true));
+        ws.once("close", () => resolve(false));
+      });
+      if (opened) raw.push(ws);
+      return { ws, opened };
+    };
+    try {
+      for (let i = 0; i < 31; i++) expect((await openRaw()).opened).toBe(true);
+      const admitted = client();
+      await admitted.connect(); // 32nd, admitted: its slot is released at once
+      const last = await openRaw(); // would close with 1013 if the admitted slot leaked
+      await new Promise((r) => setTimeout(r, 700));
+      expect(last.ws.readyState).toBe(WebSocket.OPEN);
+      // An upgrade always opens first; a refusal shows as a 1013 close right after.
+      const over = await openRaw();
+      const code = await new Promise<number>((resolve) => {
+        over.ws.once("close", (c) => resolve(c));
+        setTimeout(() => resolve(-1), 3000);
+      });
+      expect(code).toBe(1013);
+      await admitted.close();
+    } finally {
+      for (const ws of raw) ws.terminate();
+    }
+  }, 60000);
 });
