@@ -65,28 +65,32 @@ function wakeSlotWaiters(): void {
   while (slotWaiters.length > 0 && children.size < GIT_CHILD_LIMIT) slotWaiters.shift()!();
 }
 const RETAINED_SLOT_CHECK_MS = 5_000;
-/** Call only after the child closed. A probe sends no signal. */
+/** A slot kept for a failed cleanup is freed after this many checks even if the tree still looks alive (PID reuse). */
+const RETAINED_SLOT_MAX_CHECKS = 60;
+/** A group that outlives its slot is watched this many checks, then forgotten (PID reuse). */
+const WATCHED_GROUP_MAX_CHECKS = 720;
+/** After the git process exits, its pipes get this long to close before the tree is stopped. */
+const EXIT_WITHOUT_CLOSE_MS = 5_000;
+/** Descendants found by the last tree cleanup, by group leader. They may sit in other process groups. */
+const knownDescendants = new Map<number, Set<number>>();
+function pidGone(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    // ESRCH: no such process. EPERM: the PID is a zombie-only group on macOS, or belongs to another user
+    // (PID reuse). Either way we cannot signal it and it is not ours to wait for.
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ESRCH" || code === "EPERM";
+  }
+}
+/** A probe sends no signal. True when the owned group and every known descendant are gone. */
 function ownedTreeGone(child: ChildProcess): boolean {
   // The guardian's Job Object kills every descendant when the guardian exits.
   if (!child.pid || process.platform === "win32") return true;
-  try {
-    process.kill(-child.pid, 0);
-    return false;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ESRCH";
-  }
-}
-/** A failed tree cleanup keeps its slot only while its owned tree lives (FU-569). */
-function releaseWhenTreeGone(child: ChildProcess): void {
-  if (!ownedTreeGone(child)) {
-    setTimeout(() => releaseWhenTreeGone(child), RETAINED_SLOT_CHECK_MS).unref();
-    return;
-  }
-  releaseSlot(child);
-}
-function releaseSlot(child: ChildProcess): void {
-  children.delete(child);
-  wakeSlotWaiters();
+  if (!pidGone(-child.pid)) return false;
+  for (const pid of knownDescendants.get(child.pid) ?? []) if (!pidGone(pid)) return false;
+  return true;
 }
 const liveGroups = (runtime.liveGroups ??= new Set<number>());
 if (!runtime.exitCleanupRegistered) {
@@ -101,6 +105,12 @@ if (!runtime.exitCleanupRegistered) {
       }
     }
   });
+}
+
+/** The daemon-exit cleanup stops killing this group. Safe to call more than once. */
+function forgetGroup(pid: number): void {
+  knownDescendants.delete(pid);
+  if (liveGroups.delete(pid)) publishGitOwnership({ action: "remove", pid });
 }
 
 function publishGitOwnership(message: { action: "add" | "remove"; pid: number }): void {
@@ -145,8 +155,7 @@ async function stopUnixGitTree(root: number): Promise<void> {
   };
   // Freeze the parent before enumerating. Shell aliases can create another process group.
   if (!signal(-root, "SIGSTOP")) {
-    liveGroups.delete(root);
-    publishGitOwnership({ action: "remove", pid: root });
+    forgetGroup(root);
     return;
   }
   const owned = new Set([root]);
@@ -163,6 +172,7 @@ async function stopUnixGitTree(root: number): Promise<void> {
         .map((line) => line.trim().split(/\s+/).map(Number));
       collectUnixGitDescendants({ rows, root, owned });
       for (const pid of owned) signal(pid, "SIGSTOP");
+      knownDescendants.set(root, new Set(owned));
     }
   } catch (error) {
     errors.push(error);
@@ -329,33 +339,75 @@ export function spawnGitProcess(args: string[], options: SpawnOptions = {}): Chi
   // The daemon preserves user detached jobs during shutdown. Register these groups as owned.
   if (process.platform !== "win32" && child.pid) liveGroups.add(child.pid);
   if (child.pid) publishGitOwnership({ action: "add", pid: child.pid });
-  child.once("close", () => {
-    if (child.pid) liveGroups.delete(child.pid);
-    if (child.pid) publishGitOwnership({ action: "remove", pid: child.pid });
-  });
   children.add(child);
-  let cleanupFailed = false;
-  const stop = () => {
-    void terminateGitProcess(child).catch(() => {
-      cleanupFailed = true;
-    });
-  };
-  const timer = setTimeout(stop, timeout);
-  const abort = () => stop();
-  options.signal?.addEventListener("abort", abort, { once: true });
-  if (options.signal?.aborted) stop();
-  child.once("close", () => {
-    clearTimeout(timer);
-    options.signal?.removeEventListener("abort", abort);
-    // A failed tree cleanup keeps its slot until the tree is gone. Do not admit an unbounded series of leaks.
-    void (termination.get(child) ?? Promise.resolve())
-      .then(
-        () => !cleanupFailed,
-        () => false,
-      )
-      .then((cleaned) => (cleaned ? releaseSlot(child) : releaseWhenTreeGone(child)));
-  });
+  watchChildSlot(child, timeout, options.signal);
   return child;
+}
+
+/**
+ * The only place a git child slot is freed. Every end of a child (close, exit, error, spawn failure, timeout, abort)
+ * calls settle(); the first call retires the slot and later calls do nothing (FU-593).
+ */
+function watchChildSlot(child: ChildProcess, timeout: number, signal?: AbortSignal): void {
+  let cleanupFailed = false;
+  let retired = false;
+  let timer: NodeJS.Timeout | undefined;
+  let straggler: NodeJS.Timeout | undefined;
+  const clearTimers = () => {
+    clearTimeout(timer);
+    clearTimeout(straggler);
+    signal?.removeEventListener("abort", stop);
+  };
+  const freeSlot = () => {
+    if (!children.delete(child)) return;
+    wakeSlotWaiters();
+  };
+  // A tree cleanup that failed keeps the slot until the owned tree is gone. A tree that outlived a normal close
+  // frees the slot at once but stays in liveGroups, so daemon exit still kills it.
+  const retire = (holdSlot: boolean) => {
+    if (retired) return;
+    retired = true;
+    clearTimers();
+    if (!holdSlot) freeSlot();
+    let checks = 0;
+    const limit = holdSlot ? RETAINED_SLOT_MAX_CHECKS : WATCHED_GROUP_MAX_CHECKS;
+    const check = () => {
+      if (ownedTreeGone(child) || ++checks >= limit) {
+        if (child.pid) forgetGroup(child.pid);
+        freeSlot();
+        return;
+      }
+      setTimeout(check, RETAINED_SLOT_CHECK_MS).unref();
+    };
+    check();
+  };
+  const settle = () => {
+    if (retired) return;
+    void (termination.get(child) ?? Promise.resolve())
+      .catch(() => {
+        cleanupFailed = true;
+      })
+      .then(() => retire(cleanupFailed));
+  };
+  function stop() {
+    void terminateGitProcess(child)
+      .catch(() => {
+        cleanupFailed = true;
+      })
+      .then(settle);
+  }
+  timer = setTimeout(stop, timeout);
+  signal?.addEventListener("abort", stop, { once: true });
+  if (signal?.aborted) stop();
+  child.once("close", settle);
+  // The process ended but a descendant still holds its pipes, so close may never come (FU-593).
+  child.once("exit", () => {
+    straggler = setTimeout(stop, EXIT_WITHOUT_CLOSE_MS);
+  });
+  // A spawn failure has no PID and may emit no close.
+  child.on("error", () => {
+    if (!child.pid) settle();
+  });
 }
 
 interface GitInvocation {
