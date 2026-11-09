@@ -18,11 +18,14 @@ export class RelayDeviceGate {
     private readonly offers: OfferStore,
     private readonly registry: DeviceRegistry,
   ) {}
-  admit(devicePublicKeyB64: string, firstFrame: unknown) {
+  admit(devicePublicKeyB64: string, firstFrame: unknown, options: { allowClaim?: boolean } = {}) {
+    const allowClaim = options.allowClaim ?? true;
     importPublicKey(devicePublicKeyB64);
     let record = this.registry.find(devicePublicKeyB64);
     if (record && this.registry.isRevoked(record.deviceId)) throw new Error("Not paired");
     let claimed = false;
+    // A direct socket never pairs a device: pairing stays on the offer flow over the relay.
+    if (!allowClaim && !record) throw new Error("Not paired");
     if (
       !record ||
       (typeof firstFrame === "object" &&
@@ -30,6 +33,7 @@ export class RelayDeviceGate {
         "type" in firstFrame &&
         firstFrame.type === "pairing.claim")
     ) {
+      if (!allowClaim) throw new Error("Not paired");
       const minute = Math.floor(Date.now() / 60000);
       if (minute !== this.minute) {
         this.minute = minute;

@@ -243,6 +243,9 @@ import { startWorkerTerminalManager } from "../terminal/worker-terminal-manager.
 import { applyTerminalAgentHookSetting } from "../terminal/agent-hooks/terminal-agent-hook-setting.js";
 import { loadOrCreateDaemonKeyPair } from "./daemon-keypair.js";
 import { createRelayRuntime, type RelayRuntime } from "./relay-runtime.js";
+import { OfferStore } from "./pairing/offer-store.js";
+import { DeviceRegistry } from "./pairing/device-registry.js";
+import { RelayDeviceGate } from "./pairing/relay-device-gate.js";
 import type { PushNotificationSender } from "./push/index.js";
 import { getOrCreateServerId } from "./server-id.js";
 import { DAEMON_SERVER_ID_ENV } from "./own-session-guard.js";
@@ -2429,6 +2432,13 @@ export async function createPaseoDaemon(
             restartRecovery.resumePending();
             await finishSubscriptions.start();
             wsServer.beginAcceptingConnections();
+            wsServer.enableDirectDeviceLogin({
+              daemonKeyPair: daemonKeyPair.keyPair,
+              deviceGate: new RelayDeviceGate(
+                new OfferStore(config.paseoHome),
+                new DeviceRegistry(config.paseoHome),
+              ),
+            });
             relayRuntime = createRelayRuntime({
               config: {
                 enabled: relayEnabled,

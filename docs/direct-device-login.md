@@ -1,6 +1,8 @@
-# Device-key login on direct connections (design, not built)
+# Device-key login on direct connections
 
-Status: design note for after 0.2.9. Nothing here is built. Build it as a Paseo core change in the `pairing` ledger patch, and give it the one fresh security review.
+Status: built for FU-746 (10 Nov 2026), in the `pairing` ledger patch. It still needs the one fresh security review.
+
+What shipped: the daemon accepts the subprotocol `fulcra.device.v1` on the existing `/ws` port (`websocket-server.ts`, `attachDirectDeviceSocket`). It runs the relay v3 channel and `RelayDeviceGate.admit` with `allowClaim: false`, so a direct socket never pairs a device. After sign-in, `server_info` carries `features.directDeviceLogin` and `directRoutes` (Tailscale first, then LAN; `direct-routes.ts`). The pairing offer is unchanged. A paired app saves those routes as `directTcp` connections that hold the host key (`daemonPublicKeyB64`) and no password (`withLearnedDirectDeviceRoutes`), and the existing route ranking tries them before the relay. Acceptance rows D1, D3, D4 and D5 have tests; D2 and D6 do not yet.
 
 ## Why
 

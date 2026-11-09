@@ -147,7 +147,11 @@ function hostConnectionEquals(left: HostConnection, right: HostConnection): bool
   if (left.type === "routed" && right.type === "routed")
     return left.originServerId === right.originServerId;
   if (left.type === "directTcp" && right.type === "directTcp") {
-    return left.endpoint === right.endpoint && (left.useTls ?? false) === (right.useTls ?? false);
+    return (
+      left.endpoint === right.endpoint &&
+      (left.useTls ?? false) === (right.useTls ?? false) &&
+      left.daemonPublicKeyB64 === right.daemonPublicKeyB64
+    );
   }
   if (left.type === "directSocket" && right.type === "directSocket") {
     return left.path === right.path;
@@ -333,6 +337,81 @@ function hasProfileChanged(input: {
     (password !== undefined && password !== previous.password) ||
     connectionsDiffer(previous.connections, connections)
   );
+}
+
+const DIRECT_DEVICE_ID_PREFIX = "directDevice:";
+
+export function isDirectDeviceConnection(connection: HostConnection): boolean {
+  return connection.type === "directTcp" && Boolean(connection.daemonPublicKeyB64);
+}
+
+function isTailscaleOrLanEndpoint(endpoint: string): boolean {
+  const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3}):(\d{1,5})$/.exec(endpoint);
+  if (!match) return false;
+  const [a, b, c, d, port] = match.slice(1).map(Number);
+  if ([a, b, c, d].some((n) => n > 255) || port < 1 || port > 65535) return false;
+  return (
+    (a === 100 && b >= 64 && b <= 127) ||
+    a === 10 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168)
+  );
+}
+
+/**
+ * Direct routes a paired device learns from its host (server_info after sign-in). Each route signs in with the
+ * device key and the pinned host key, like the relay, and never with a password. The relay stays. Routes the
+ * host no longer lists are dropped. Only Tailscale and private LAN addresses are kept, at most 8, so a bad
+ * host cannot point the app at an address outside the local networks. A host without a paired relay route
+ * gets none: there is no device key to sign in with.
+ */
+export function withLearnedDirectDeviceRoutes(
+  host: HostProfile,
+  routes: ReadonlyArray<{ endpoint: string }> | undefined,
+  hostSupportsDeviceLogin: boolean,
+): HostProfile {
+  const relay = host.connections.find(
+    (connection): connection is RelayHostConnection =>
+      connection.type === "relay" && Boolean(connection.deviceId),
+  );
+  const kept = host.connections.filter((connection) => !isDirectDeviceConnection(connection));
+  const learned: HostConnection[] = [];
+  if (relay && hostSupportsDeviceLogin) {
+    for (const route of (routes ?? []).slice(0, 8)) {
+      let endpoint: string;
+      try {
+        endpoint = normalizeHostPort(route.endpoint);
+      } catch {
+        continue;
+      }
+      if (!isTailscaleOrLanEndpoint(endpoint)) continue;
+      const id = `${DIRECT_DEVICE_ID_PREFIX}${endpoint}`;
+      if (learned.some((connection) => connection.id === id)) continue;
+      learned.push({
+        id,
+        type: "directTcp",
+        endpoint,
+        useTls: false,
+        daemonPublicKeyB64: relay.daemonPublicKeyB64,
+      });
+    }
+  }
+  const unchanged =
+    kept.length + learned.length === host.connections.length &&
+    host.connections
+      .filter(isDirectDeviceConnection)
+      .every((old) => learned.some((next) => hostConnectionEquals(old, next)));
+  if (unchanged) return host;
+  const connections = [...kept, ...learned];
+  const preferred = connections.some((c) => c.id === host.preferredConnectionId)
+    ? host.preferredConnectionId
+    : (relay?.id ?? connections[0]?.id ?? null);
+  return {
+    ...host,
+    connections,
+    preferredConnectionId: preferred,
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 export function upsertHostConnectionInProfiles(input: {
@@ -537,6 +616,7 @@ const StoredHostConnectionSchema = z.discriminatedUnion("type", [
     endpoint: z.string(),
     useTls: z.boolean().optional(),
     password: z.string().optional(),
+    daemonPublicKeyB64: z.string().optional(),
   }),
   z.strictObject({
     id: z.string().optional(),
@@ -585,13 +665,20 @@ function normalizeStoredConnection(connection: StoredHostConnection): HostConnec
   if (connection.type === "directTcp") {
     try {
       const endpoint = normalizeHostPort(connection.endpoint);
+      const deviceKey = connection.daemonPublicKeyB64?.trim();
       const parsed = DirectTcpHostConnectionSchema.parse({
-        id: `direct:${endpoint}`,
+        id: deviceKey ? `${DIRECT_DEVICE_ID_PREFIX}${endpoint}` : `direct:${endpoint}`,
         type: "directTcp",
         endpoint,
         useTls: connection.useTls,
       });
-      return { id: parsed.id, type: parsed.type, endpoint: parsed.endpoint, useTls: parsed.useTls };
+      return {
+        id: parsed.id,
+        type: parsed.type,
+        endpoint: parsed.endpoint,
+        useTls: parsed.useTls,
+        ...(deviceKey ? { daemonPublicKeyB64: deviceKey } : {}),
+      };
     } catch {
       return null;
     }

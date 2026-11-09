@@ -143,3 +143,36 @@ it("accounts-manage: a device holds accounts.manage only while the owner's grant
   await registry.setAccountsManage(deviceId, false, () => {});
   expect(gate.admit(key, { type: "hello" }).admission.permissions).not.toContain("accounts.manage");
 });
+
+it("direct sockets admit a paired device and refuse claims, unknown keys and revoked devices", async () => {
+  const { offers, registry, gate } = setup();
+  const offer = offers.mint();
+  const key = Buffer.alloc(32, 7).toString("base64");
+  const claimFrame = {
+    type: "pairing.claim",
+    offerId: offer.id,
+    secret: offer.secret,
+    deviceName: "Phone",
+  };
+  // Unknown key with a valid offer: a direct socket must not pair it, and must not spend the offer.
+  expect(() => gate.admit(key, claimFrame, { allowClaim: false })).toThrow("Not paired");
+  const { admission } = gate.admit(key, claimFrame);
+  // A paired device sending a claim on a direct socket is refused too.
+  const other = offers.mint();
+  expect(() =>
+    gate.admit(
+      key,
+      { ...claimFrame, offerId: other.id, secret: other.secret },
+      { allowClaim: false },
+    ),
+  ).toThrow("Not paired");
+  // A paired device with an ordinary first frame is admitted as its own principal, never the owner.
+  const direct = gate.admit(key, { type: "hello" }, { allowClaim: false });
+  expect(direct.claimed).toBe(false);
+  expect(direct.admission.principalId).toBe(`device:${admission.deviceId}`);
+  expect(direct.admission.permissions).not.toContain("access.manage");
+  // Revoked: refused on direct and relay alike.
+  await registry.revoke(admission.deviceId, () => undefined);
+  expect(() => gate.admit(key, { type: "hello" }, { allowClaim: false })).toThrow("Not paired");
+  expect(() => gate.admit(key, { type: "hello" })).toThrow("Not paired");
+});

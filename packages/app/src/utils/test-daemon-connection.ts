@@ -194,6 +194,23 @@ export async function buildClientConfig(
     });
   }
 
+  if (connection.type === "directTcp" && connection.daemonPublicKeyB64) {
+    // Paired-device route: same E2EE channel and device gate as the relay, no host password.
+    if (!serverId) throw new Error("serverId is required to probe a device route");
+    const { password: _password, ...deviceBase } = base;
+    return {
+      ...deviceBase,
+      url: buildDaemonWebSocketUrl(connection.endpoint, { useTls: connection.useTls ?? false }),
+      e2ee: {
+        enabled: true,
+        directDevice: true,
+        serverId,
+        daemonPublicKeyB64: connection.daemonPublicKeyB64,
+        getDeviceKeyPair: () => getDeviceIdentity(),
+      },
+    };
+  }
+
   if (connection.type === "directTcp") {
     const desktopAuth = createDesktopCredentialTransport(serverId, options?.password);
     return {

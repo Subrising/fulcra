@@ -114,6 +114,11 @@ import {
   type DaemonAuthConfig,
 } from "./auth.js";
 import { resolveSessionAdmission } from "./session-admission-auth.js";
+import { DIRECT_DEVICE_PROTOCOL } from "@getpaseo/protocol/daemon-credential";
+import type { KeyPair } from "@getpaseo/client/relay-v3";
+import type { RelayDeviceGate } from "./pairing/relay-device-gate.js";
+import { attachEncryptedSocket } from "./relay-transport.js";
+import { listDirectRoutes } from "./direct-routes.js";
 import {
   WebSocketRuntimeMetricsWindow,
   type WebSocketRuntimeCounters,
@@ -997,7 +1002,10 @@ export class VoiceAssistantWebSocketServer {
       server,
       path: "/ws",
       maxPayload: MAX_WEBSOCKET_MESSAGE_BYTES,
-      handleProtocols: (protocols) => selectWebSocketProtocol(protocols, password),
+      handleProtocols: (protocols) =>
+        protocols.has(DIRECT_DEVICE_PROTOCOL)
+          ? DIRECT_DEVICE_PROTOCOL
+          : selectWebSocketProtocol(protocols, password),
       verifyClient: ({ req }, callback) => {
         this.verifyWsUpgrade(
           req,
@@ -1008,6 +1016,10 @@ export class VoiceAssistantWebSocketServer {
       },
     });
     wss.on("connection", (ws, request) => {
+      if (ws.protocol === DIRECT_DEVICE_PROTOCOL) {
+        this.attachDirectDeviceSocket(ws);
+        return;
+      }
       void this.attachAuthenticatedSocket(ws, request, password);
     });
     return wss;
@@ -1096,6 +1108,39 @@ export class VoiceAssistantWebSocketServer {
   }
 
   private pendingPasswordChecks = 0;
+
+  private directDeviceLogin: {
+    daemonKeyPair: KeyPair;
+    deviceGate: RelayDeviceGate;
+  } | null = null;
+
+  /** Turns on the paired-device login for direct sockets. The host password path stays as it is. */
+  public enableDirectDeviceLogin(args: { daemonKeyPair: KeyPair; deviceGate: RelayDeviceGate }) {
+    this.directDeviceLogin = args;
+  }
+
+  /**
+   * A direct socket that offers fulcra.device.v1 signs in with the device key, exactly like a relay socket:
+   * same E2EE channel, same RelayDeviceGate. It never pairs a device, and the host password is not used.
+   */
+  private attachDirectDeviceSocket(ws: WebSocket): void {
+    const login = this.directDeviceLogin;
+    if (!login) {
+      ws.close(4403, "Not paired");
+      return;
+    }
+    const metadata: ExternalSocketMetadata = { transport: "relay", securityMode: "legacy" };
+    void attachEncryptedSocket(
+      ws,
+      login.daemonKeyPair,
+      this.logger,
+      (socket, meta) => this.attachExternalSocket(socket, meta),
+      metadata,
+      login.deviceGate,
+      this.serverId,
+      { allowClaim: false },
+    );
+  }
 
   private async attachAuthenticatedSocket(
     ws: WebSocket,
@@ -2291,10 +2336,19 @@ export class VoiceAssistantWebSocketServer {
     connection.session.setHostSource(sourceId);
   }
 
+  private listDirectRoutes() {
+    return listDirectRoutes({
+      listenHost: this.getDaemonTcpHost?.() ?? null,
+      port: this.getDaemonTcpPort?.() ?? null,
+    });
+  }
+
   private buildServerInfoStatusPayload(session: Session, capable = false): ServerInfoStatusPayload {
     return {
       status: "server_info",
       protocolVersion: WS_PROTOCOL_VERSION,
+      // Only an admitted session gets this payload, so the addresses never reach an unauthenticated peer.
+      ...(this.directDeviceLogin ? { directRoutes: this.listDirectRoutes() } : {}),
       serverId: this.serverId,
       hostname: getHostName(),
       version: this.daemonVersion,
@@ -2334,6 +2388,8 @@ export class VoiceAssistantWebSocketServer {
         interruptedTurn: true,
         // COMPAT(pairingInvites): added 2026-09-29; remove gate after 2027-09-29.
         pairingInvites: true,
+        // COMPAT(directDeviceLogin): added 2026-11-10 (FU-746); remove gate after 2027-11-10.
+        ...(this.directDeviceLogin ? { directDeviceLogin: true } : {}),
         // COMPAT(deviceCommandCentre): added 2026-09-29 (L46 option 5); remove gate after 2027-09-29.
         deviceCommandCentre: true,
         // COMPAT(deviceReadOnlyTier): added 2026-10-01 (D13); remove gate after 2027-10-01.

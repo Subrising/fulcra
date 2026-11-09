@@ -26,6 +26,7 @@ import {
   normalizeStoredHostProfile,
   pinRelayProtectedSecurityInProfiles,
   upsertHostConnectionInProfiles,
+  withLearnedDirectDeviceRoutes,
   registryHasConnection,
   relayConnectionFromOffer,
   StoredHostRegistrySchema,
@@ -2832,7 +2833,30 @@ export class HostRuntimeStore {
     const serverInfo = snapshot.client.getLastServerInfoMessage();
     if (serverInfo) {
       sessionStore.updateSessionServerInfo(serverId, toDaemonServerInfo(serverInfo));
+      this.learnDirectDeviceRoutes(serverId, serverInfo);
     }
+  }
+
+  /** FU-746: the host lists its Tailscale and LAN addresses once this device is signed in; save them as routes. */
+  private learnDirectDeviceRoutes(
+    serverId: string,
+    serverInfo: {
+      directRoutes?: ReadonlyArray<{ endpoint: string }>;
+      features?: { directDeviceLogin?: boolean };
+    },
+  ): void {
+    const host = this.hosts.find((entry) => entry.serverId === serverId);
+    if (!host) return;
+    const next = withLearnedDirectDeviceRoutes(
+      host,
+      serverInfo.directRoutes,
+      serverInfo.features?.directDeviceLogin === true,
+    );
+    if (next === host) return;
+    this.setHostsAndSync(this.hosts.map((entry) => (entry.serverId === serverId ? next : entry)));
+    void this.persistHosts().catch((error) =>
+      console.error("[HostRuntime] Failed to persist learned direct routes", error),
+    );
   }
 
   private clearHostReplica(serverId: string): void {
