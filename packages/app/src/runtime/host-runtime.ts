@@ -26,6 +26,8 @@ import {
   normalizeStoredHostProfile,
   pinRelayProtectedSecurityInProfiles,
   upsertHostConnectionInProfiles,
+  canLearnDirectRoutesFrom,
+  withLearnedDirectDeviceRoutes,
   registryHasConnection,
   relayConnectionFromOffer,
   StoredHostRegistrySchema,
@@ -46,7 +48,11 @@ import { parseConnectionOffer, type ConnectionOffer } from "@getpaseo/protocol/c
 import { HostConfirmations, type HostConfirmationRequest } from "./host-confirmation";
 import { shouldUseDesktopDaemon } from "@/desktop/daemon/desktop-daemon";
 import { isWeb } from "@/constants/platform";
-import { connectToDaemon, getConnectionAuthFailureReason } from "@/utils/test-daemon-connection";
+import {
+  buildDeviceRouteClientConfig,
+  connectToDaemon,
+  getConnectionAuthFailureReason,
+} from "@/utils/test-daemon-connection";
 import { getOrCreateClientId } from "@/utils/client-id";
 import { z } from "zod";
 import { readValidatedJson, readValidatedString } from "@/storage/validated-storage";
@@ -585,7 +591,7 @@ function probeIntervalForConnection(
   return PROBE_MAX_BACKOFF_MS;
 }
 
-function createDefaultDeps(
+export function createDefaultDeps(
   resolveOrigin: (serverId: string) => DaemonClient | null = () => null,
 ): HostRuntimeControllerDeps {
   const browserHostAvailable =
@@ -653,6 +659,15 @@ function createDefaultDeps(
             ...(connection.daemonPort !== undefined ? { daemonPort: connection.daemonPort } : {}),
           }),
         });
+      }
+      if (connection.type === "directTcp" && connection.daemonPublicKeyB64) {
+        return new DaemonClient(
+          buildDeviceRouteClientConfig({
+            base: { ...base, ...webSocketConfig },
+            connection: { ...connection, daemonPublicKeyB64: connection.daemonPublicKeyB64 },
+            serverId: host.serverId,
+          }),
+        );
       }
       if (connection.type === "directTcp") {
         const desktopAuth = createDesktopCredentialTransport(host.serverId, host.password);
@@ -2832,7 +2847,32 @@ export class HostRuntimeStore {
     const serverInfo = snapshot.client.getLastServerInfoMessage();
     if (serverInfo) {
       sessionStore.updateSessionServerInfo(serverId, toDaemonServerInfo(serverInfo));
+      this.learnDirectDeviceRoutes(serverId, serverInfo, snapshot.activeConnectionId ?? null);
     }
+  }
+
+  /** FU-746: the host lists its Tailscale and LAN addresses once this device is signed in; save them as routes. */
+  private learnDirectDeviceRoutes(
+    serverId: string,
+    serverInfo: {
+      directRoutes?: ReadonlyArray<{ endpoint: string }>;
+      features?: { directDeviceLogin?: boolean };
+    },
+    activeConnectionId: string | null,
+  ): void {
+    const host = this.hosts.find((entry) => entry.serverId === serverId);
+    if (!host) return;
+    if (!canLearnDirectRoutesFrom(host, activeConnectionId)) return;
+    const next = withLearnedDirectDeviceRoutes(
+      host,
+      serverInfo.directRoutes,
+      serverInfo.features?.directDeviceLogin === true,
+    );
+    if (next === host) return;
+    this.setHostsAndSync(this.hosts.map((entry) => (entry.serverId === serverId ? next : entry)));
+    void this.persistHosts().catch((error) =>
+      console.error("[HostRuntime] Failed to persist learned direct routes", error),
+    );
   }
 
   private clearHostReplica(serverId: string): void {

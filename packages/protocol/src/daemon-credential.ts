@@ -12,6 +12,11 @@
 
 /** Offered alongside the credential so a current host can select a protocol that carries no secret. */
 export const DAEMON_PLAIN_PROTOCOL = "fulcra.v1";
+/**
+ * Offered by a paired device that signs in on a direct socket with its device key instead of the host password.
+ * It carries no secret. The host answers with the same relay v3 channel and RelayDeviceGate as the relay path.
+ */
+export const DIRECT_DEVICE_PROTOCOL = "fulcra.device.v1";
 export const DAEMON_AUTH_PROTOCOL_PREFIX = "fulcra.auth.";
 export const LEGACY_BEARER_PROTOCOL_PREFIX = "paseo.bearer.";
 export const ENCODED_BEARER_PREFIX = "b64u.";

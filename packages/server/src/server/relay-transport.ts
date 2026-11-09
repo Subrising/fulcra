@@ -456,7 +456,7 @@ export function startRelayTransport({
   return { stop };
 }
 
-async function attachEncryptedSocket(
+export async function attachEncryptedSocket(
   socket: RelayWebSocketLike,
   daemonKeyPair: KeyPair,
   logger: pino.Logger,
@@ -464,6 +464,7 @@ async function attachEncryptedSocket(
   metadata: ExternalSocketMetadata,
   deviceGate: RelayDeviceGate,
   serverId: string,
+  options: { allowClaim?: boolean } = {},
 ): Promise<void> {
   const handshakeTimeout = setTimeout(() => {
     logger.warn("relay_e2ee_handshake_timeout_terminating");
@@ -485,7 +486,7 @@ async function attachEncryptedSocket(
       try {
         const first = pendingMessages.shift();
         if (typeof first !== "string" || !channel.devicePublicKeyB64) throw new Error("Not paired");
-        const result = deviceGate.admit(channel.devicePublicKeyB64, JSON.parse(first));
+        const result = deviceGate.admit(channel.devicePublicKeyB64, JSON.parse(first), options);
         // The decrypted first frame proves possession of both session secrets.
         // attachSocket synchronously records the identity before its first await.
         await attachSocket(encryptedSocket, { ...metadata, admission: result.admission });
@@ -503,7 +504,7 @@ async function attachEncryptedSocket(
         for (const message of pendingMessages.splice(0)) emitter.emit("message", message);
       } catch {
         // Never log the decrypted claim, secret or device key.
-        logger.warn("Relay device admission refused");
+        logger.warn({ remoteAddress: metadata.remoteAddress }, "Relay device admission refused");
         clearTimeout(timeout);
         channel.close(4403, "Not paired");
       }

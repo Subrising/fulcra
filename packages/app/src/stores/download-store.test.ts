@@ -118,6 +118,40 @@ describe("download store transport selection", () => {
     useDownloadStore.setState({ downloads: new Map(), activeDownloadId: null });
   });
 
+  it("N1: downloads over the encrypted session, never HTTP, on a paired-device direct route", async () => {
+    const deviceRoute: DirectTcpHostConnection = {
+      id: "directDevice:192.168.1.8:6767",
+      type: "directTcp",
+      endpoint: "192.168.1.8:6767",
+      useTls: false,
+      daemonPublicKeyB64: "cHVibGljLWtleQ==",
+    };
+    const fetched: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: unknown) => {
+      fetched.push(String(url));
+      throw new Error("no HTTP expected");
+    }) as typeof fetch;
+    try {
+      const reader = createFileReader(async () => ({
+        bytes: FILE_BYTES,
+        size: FILE_BYTES.byteLength,
+      }));
+      const saver = createFileSaver();
+      const download = await startDownload({
+        profile: profileWith([deviceRoute]),
+        activeConnectionId: deviceRoute.id,
+        reader,
+        saver,
+      });
+      expect(download).toMatchObject({ status: "complete" });
+      expect(reader.requested).toEqual([FILE_PATH]);
+      expect(fetched).toEqual([]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   it("downloads over the session when the active connection is the relay", async () => {
     const token = createTokenRequest();
     const reader = createFileReader(async () => ({

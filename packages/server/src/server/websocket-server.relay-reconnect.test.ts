@@ -1248,6 +1248,31 @@ describe("relay external socket reconnect behavior", () => {
     await server.close();
   });
 
+  test("L1: a Hub session gets no directRoutes; a paired device gets the list", async () => {
+    const server = createServer();
+    server.enableDirectDeviceLogin({ daemonKeyPair: {} as never, deviceGate: {} as never });
+    const clientId = "route-audience-client";
+    const deviceSocket = new MockSocket();
+    const hubSocket = new MockSocket();
+
+    const deviceInfo = await attachRelayAndHello({ server, socket: deviceSocket, clientId });
+    await server.attachExternalSocket(
+      hubSocket,
+      { transport: "hub", hubDaemonId: "daemon-1" },
+      { principalId: "hub:daemon-1", permissions: ["hub.execute"] },
+    );
+    hubSocket.emit("message", JSON.stringify(createHelloMessage(clientId)));
+    await vi.waitFor(() => expect(hubSocket.sent.length).toBeGreaterThan(0));
+    const hubInfo = parseServerInfoStatusPayload(
+      parseSentEnvelope(hubSocket.sent[0]).message?.payload,
+    );
+
+    expect(deviceInfo.features?.directDeviceLogin).toBe(true);
+    expect(Array.isArray(deviceInfo.directRoutes)).toBe(true);
+    expect(hubInfo?.directRoutes).toBeUndefined();
+    await server.close();
+  });
+
   test("rejects session messages before hello", async () => {
     const server = createServer();
     const socket = new MockSocket();

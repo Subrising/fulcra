@@ -4423,9 +4423,19 @@ const ServerCapabilitiesFromUnknownSchema = z
     return parsed.data;
   });
 
+// Addresses this host listens on for a direct socket. Sent only to an admitted session, never in an offer.
+export const DirectRouteSchema = z.object({
+  kind: z.enum(["tailscale", "lan"]),
+  endpoint: z.string().min(1).max(128),
+});
+export type DirectRoute = z.infer<typeof DirectRouteSchema>;
+
 export const ServerInfoStatusPayloadSchema = z
   .object({
     status: z.literal("server_info"),
+    // COMPAT(directDeviceLogin): added 2026-11-10 (FU-746); older hosts omit it.
+    // No .max: a wire schema never narrows. The host caps the list; the app keeps at most 8.
+    directRoutes: z.array(DirectRouteSchema).optional(),
     protocolVersion: z.number().int().optional(),
     serverId: z.string().trim().min(1),
     hostname: ServerInfoHostnameSchema.optional(),
@@ -4465,6 +4475,9 @@ export const ServerInfoStatusPayloadSchema = z
         interruptedTurn: z.boolean().optional(),
         // COMPAT(pairingInvites): added 2026-09-29; remove gate after 2027-09-29.
         pairingInvites: z.boolean().optional(),
+        // COMPAT(directDeviceLogin): added 2026-11-10 (FU-746); remove gate after 2027-11-10.
+        // The host accepts the paired-device login on its direct socket (subprotocol fulcra.device.v1).
+        directDeviceLogin: z.boolean().optional(),
         // COMPAT(deviceCommandCentre): added 2026-09-29 (L46 option 5); remove gate after 2027-09-29.
         deviceCommandCentre: z.boolean().optional(),
         // COMPAT(deviceReadOnlyTier): added 2026-10-01 (D13); a daemon without it ignores readOnly on the grant.

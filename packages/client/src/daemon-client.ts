@@ -242,6 +242,7 @@ import {
 import { TerminalStreamRouter, type TerminalStreamEvent } from "./terminal-stream-router.js";
 import {
   daemonAuthProtocols,
+  DIRECT_DEVICE_PROTOCOL,
   daemonAuthorizationHeader,
   redactCredential,
 } from "@getpaseo/protocol/daemon-credential";
@@ -330,6 +331,14 @@ function chooseConnectionAuth(
   localCredential: string | undefined,
 ): { helloAuth: HelloAuth; headers: Record<string, string>; protocols?: string[] } {
   const password = normalizePassword(config.password);
+  if (config.e2ee?.enabled === true && config.e2ee.directDevice === true) {
+    // The device key signs in. No credential travels in the upgrade request, which is not encrypted.
+    return {
+      helloAuth: undefined,
+      headers: {},
+      protocols: [DIRECT_DEVICE_PROTOCOL],
+    };
+  }
   let helloAuth: HelloAuth;
   if (localCredential) helloAuth = { kind: "localCredential", token: localCredential };
   else if (password) helloAuth = { kind: "password", password };
@@ -520,6 +529,13 @@ export interface DaemonClientConfig {
   connectTimeoutMs?: number;
   e2ee?: {
     enabled?: boolean;
+    /**
+     * Sign in on a direct socket with the device key (subprotocol fulcra.device.v1) instead of the host password.
+     * The socket then carries the same E2EE channel as the relay. The password is never put in the upgrade.
+     */
+    directDevice?: boolean;
+    /** Daemon identity the channel binds to; a relay URL carries it as ?serverId=, a direct URL does not. */
+    serverId?: string;
     daemonPublicKeyB64?: string;
     getDeviceKeyPair?: () => Promise<import("./relay-v3/index.js").KeyPair>;
     /** Refuse connections whose negotiated endpoint security is below this mode. */
@@ -1740,12 +1756,15 @@ export class DaemonClient {
     const baseTransportFactory =
       this.config.transportFactory ??
       createWebSocketTransportFactory(this.config.webSocketFactory ?? defaultWebSocketFactory);
-    const isRelayTransport = isRelayClientWebSocketUrl(this.config.url);
+    const directDevice = this.config.e2ee?.directDevice === true;
+    const isRelayTransport = isRelayClientWebSocketUrl(this.config.url) || directDevice;
     const shouldUseRelayE2ee = this.config.e2ee?.enabled === true && isRelayTransport;
 
-    let transportFactory = isRelayTransport
-      ? createRelayUpgradeTransportFactory(baseTransportFactory)
-      : baseTransportFactory;
+    // A relay upgrade carries routing only. A direct device socket must carry its subprotocol to the host.
+    let transportFactory =
+      isRelayTransport && !directDevice
+        ? createRelayUpgradeTransportFactory(baseTransportFactory)
+        : baseTransportFactory;
     if (shouldUseRelayE2ee) {
       const daemonPublicKeyB64 = this.config.e2ee?.daemonPublicKeyB64;
       if (!daemonPublicKeyB64) {
@@ -1754,8 +1773,11 @@ export class DaemonClient {
       transportFactory = createRelayE2eeTransportFactory({
         baseFactory: transportFactory,
         daemonPublicKeyB64,
-        serverId: new URL(this.config.url).searchParams.get("serverId") ?? "",
+        serverId:
+          this.config.e2ee?.serverId ??
+          (directDevice ? "" : (new URL(this.config.url).searchParams.get("serverId") ?? "")),
         getDeviceKeyPair: this.config.e2ee?.getDeviceKeyPair,
+        ...(directDevice ? { directDevice: true } : {}),
         logger: this.logger,
         ...(this.relaySecurityFloorValue ? { minimumMode: this.relaySecurityFloorValue } : {}),
         onSecurityMode: (mode) => {
@@ -1795,7 +1817,8 @@ export class DaemonClient {
       // Reconnect can overlap with browser close/error delivery ordering.
       // Always dispose previous transport before constructing the next one.
       this.disposeTransport();
-      const isRelayTransport = isRelayClientWebSocketUrl(this.config.url);
+      const isRelayTransport =
+        isRelayClientWebSocketUrl(this.config.url) || this.config.e2ee?.directDevice === true;
       this.assertEncryptedRelayAuth(selected.helloAuth, isRelayTransport);
       const transportFactory = this.resolveAttemptTransportFactory();
       const transportUrl = this.resolveTransportUrlForAttempt();

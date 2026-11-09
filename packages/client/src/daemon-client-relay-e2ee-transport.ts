@@ -31,6 +31,8 @@ export interface RelayE2eeTransportOptions {
   logger: TransportLogger;
   serverId?: string;
   getDeviceKeyPair?: () => Promise<KeyPair>;
+  /** Direct device login: offer the device subprotocol on the upgrade. */
+  directDevice?: boolean;
   assertOutboundCapacity?: (wireBytes: number) => void;
   /** Not supported on the Fulcra relay channel: a request for "protected" fails the handshake. */
   minimumMode?: SecurityMode;
@@ -42,7 +44,13 @@ export function createRelayE2eeTransportFactory(
   args: RelayE2eeTransportOptions & { baseFactory: DaemonTransportFactory },
 ): DaemonTransportFactory {
   const { baseFactory, ...options } = args;
-  return ({ url }) => createEncryptedTransport(baseFactory({ url }), options);
+  // A relay upgrade carries routing only. Subprotocols pass through only for a direct device socket, where
+  // they name the login (fulcra.device.v1) and carry no secret.
+  return ({ url, protocols }) =>
+    createEncryptedTransport(
+      baseFactory(options.directDevice && protocols ? { url, protocols } : { url }),
+      options,
+    );
 }
 
 /**

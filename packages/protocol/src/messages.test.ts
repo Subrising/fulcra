@@ -867,3 +867,23 @@ test.each(["all", "base", "uncommitted"] as const)(
     expect(parsed.attachments).toEqual([attachment]);
   },
 );
+
+describe("server_info directRoutes (FU-746 M1)", () => {
+  test("parses a list longer than 8 so an old cap can never hide a host", () => {
+    const directRoutes = Array.from({ length: 12 }, (_, i) => ({
+      kind: "lan" as const,
+      endpoint: `10.0.0.${i + 1}:6767`,
+    }));
+    const parsed = parseServerInfoStatusPayload({
+      status: "server_info",
+      serverId: "srv_x",
+      directRoutes,
+    });
+    expect(parsed?.directRoutes).toHaveLength(12);
+  });
+  test("parses a host that omits the field", () => {
+    expect(
+      parseServerInfoStatusPayload({ status: "server_info", serverId: "srv_x" }),
+    ).not.toBeNull();
+  });
+});

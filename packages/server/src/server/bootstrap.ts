@@ -243,6 +243,9 @@ import { startWorkerTerminalManager } from "../terminal/worker-terminal-manager.
 import { applyTerminalAgentHookSetting } from "../terminal/agent-hooks/terminal-agent-hook-setting.js";
 import { loadOrCreateDaemonKeyPair } from "./daemon-keypair.js";
 import { createRelayRuntime, type RelayRuntime } from "./relay-runtime.js";
+import { OfferStore } from "./pairing/offer-store.js";
+import { DeviceRegistry } from "./pairing/device-registry.js";
+import { RelayDeviceGate } from "./pairing/relay-device-gate.js";
 import type { PushNotificationSender } from "./push/index.js";
 import { getOrCreateServerId } from "./server-id.js";
 import { DAEMON_SERVER_ID_ENV } from "./own-session-guard.js";
@@ -534,6 +537,8 @@ export interface PaseoDaemonConfig {
   relayRequireProtectedSecurity?: boolean;
   relayEndpoint?: string;
   relayPairingOfferTtlSeconds?: number;
+  /** Device-key login on direct sockets. Unset: follows relay enabled/disabled. */
+  directDeviceLogin?: boolean;
   relayPublicEndpoint?: string;
   relayUseTls?: boolean;
   relayPublicUseTls?: boolean;
@@ -2429,6 +2434,20 @@ export async function createPaseoDaemon(
             restartRecovery.resumePending();
             await finishSubscriptions.start();
             wsServer.beginAcceptingConnections();
+            const directDeviceLogin = {
+              daemonKeyPair: daemonKeyPair.keyPair,
+              deviceGate: new RelayDeviceGate(
+                new OfferStore(config.paseoHome),
+                new DeviceRegistry(config.paseoHome),
+              ),
+            };
+            // L4: default follows relay.enabled (a host with the relay off pairs nobody and offers no device login).
+            // PASEO_DIRECT_DEVICE_LOGIN overrides it.
+            const applyDirectDeviceLogin = (relayOn: boolean) =>
+              wsServer?.enableDirectDeviceLogin(
+                (config.directDeviceLogin ?? relayOn) ? directDeviceLogin : null,
+              );
+            applyDirectDeviceLogin(relayEnabled);
             relayRuntime = createRelayRuntime({
               config: {
                 enabled: relayEnabled,
@@ -2451,6 +2470,7 @@ export async function createPaseoDaemon(
               paseoHome: config.paseoHome,
             });
             daemonConfigStore.onFieldChange("relay.enabled", (value) => {
+              applyDirectDeviceLogin(value === true);
               relayRuntime?.setEnabled(value === true);
             });
             daemonConfigStore.onFieldChange("relay.endpoint", (value) => {

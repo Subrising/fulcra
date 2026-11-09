@@ -114,6 +114,11 @@ import {
   type DaemonAuthConfig,
 } from "./auth.js";
 import { resolveSessionAdmission } from "./session-admission-auth.js";
+import { DIRECT_DEVICE_PROTOCOL } from "@getpaseo/protocol/daemon-credential";
+import type { KeyPair } from "@getpaseo/client/relay-v3";
+import type { RelayDeviceGate } from "./pairing/relay-device-gate.js";
+import { attachEncryptedSocket } from "./relay-transport.js";
+import { listDirectRoutes } from "./direct-routes.js";
 import {
   WebSocketRuntimeMetricsWindow,
   type WebSocketRuntimeCounters,
@@ -162,6 +167,8 @@ export interface ExternalSocketMetadata {
   securityMode?: SecurityMode;
   hubDaemonId?: string;
   admission?: SessionAdmission;
+  /** Peer address of a direct device socket, for log lines. */
+  remoteAddress?: string;
 }
 
 export interface SessionAdmission {
@@ -538,6 +545,7 @@ const SLOW_REQUEST_THRESHOLD_MS = 500;
 const INVITE_TTL_SECONDS = 300;
 const EXTERNAL_SESSION_DISCONNECT_GRACE_MS = 90_000;
 const HELLO_TIMEOUT_MS = 15_000;
+const MAX_UNADMITTED_DIRECT_DEVICE_SOCKETS = 32;
 const WS_CLOSE_HELLO_TIMEOUT = 4001;
 const WS_CLOSE_INVALID_HELLO = 4002;
 const WS_CLOSE_INCOMPATIBLE_PROTOCOL = 4003;
@@ -997,7 +1005,10 @@ export class VoiceAssistantWebSocketServer {
       server,
       path: "/ws",
       maxPayload: MAX_WEBSOCKET_MESSAGE_BYTES,
-      handleProtocols: (protocols) => selectWebSocketProtocol(protocols, password),
+      handleProtocols: (protocols) =>
+        protocols.has(DIRECT_DEVICE_PROTOCOL)
+          ? DIRECT_DEVICE_PROTOCOL
+          : selectWebSocketProtocol(protocols, password),
       verifyClient: ({ req }, callback) => {
         this.verifyWsUpgrade(
           req,
@@ -1008,6 +1019,10 @@ export class VoiceAssistantWebSocketServer {
       },
     });
     wss.on("connection", (ws, request) => {
+      if (ws.protocol === DIRECT_DEVICE_PROTOCOL) {
+        this.attachDirectDeviceSocket(ws, request);
+        return;
+      }
       void this.attachAuthenticatedSocket(ws, request, password);
     });
     return wss;
@@ -1096,6 +1111,85 @@ export class VoiceAssistantWebSocketServer {
   }
 
   private pendingPasswordChecks = 0;
+
+  private directDeviceLogin: {
+    daemonKeyPair: KeyPair;
+    deviceGate: RelayDeviceGate;
+  } | null = null;
+
+  /** Turns on the paired-device login for direct sockets. The host password path stays as it is. */
+  public enableDirectDeviceLogin(
+    args: { daemonKeyPair: KeyPair; deviceGate: RelayDeviceGate } | null,
+  ) {
+    this.directDeviceLogin = args;
+    if (args) return;
+    // Turning it off ends live direct device sessions too, not only new logins.
+    for (const ws of this.directDeviceSockets) {
+      try {
+        ws.close(4403, "Not paired");
+      } catch {
+        ws.terminate();
+      }
+    }
+    this.broadcastCapabilitiesUpdate();
+  }
+
+  /** Every direct device socket, admitted or not, so turning the login off can close them. */
+  private directDeviceSockets = new Set<WebSocket>();
+
+  /** Upgrades that offered fulcra.device.v1 and have not yet proved a device key. Anyone can open these. */
+  private unadmittedDirectDeviceSockets = 0;
+
+  /**
+   * A direct socket that offers fulcra.device.v1 signs in with the device key, exactly like a relay socket:
+   * same E2EE channel, same RelayDeviceGate. It never pairs a device, and the host password is not used.
+   */
+  private attachDirectDeviceSocket(ws: WebSocket, request: IncomingMessage): void {
+    const login = this.directDeviceLogin;
+    if (!login) {
+      ws.close(4403, "Not paired");
+      return;
+    }
+    if (this.unadmittedDirectDeviceSockets >= MAX_UNADMITTED_DIRECT_DEVICE_SOCKETS) {
+      this.logger.warn(
+        { remoteAddress: request.socket.remoteAddress },
+        "Direct device login busy; refusing socket",
+      );
+      ws.close(1013, "Busy; retry shortly");
+      return;
+    }
+    this.unadmittedDirectDeviceSockets++;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      this.unadmittedDirectDeviceSockets--;
+    };
+    this.directDeviceSockets.add(ws);
+    ws.once("close", () => {
+      release();
+      this.directDeviceSockets.delete(ws);
+    });
+    // The peer address goes into the metadata so admit and refuse log lines name who connected.
+    const metadata: ExternalSocketMetadata = {
+      transport: "relay",
+      securityMode: "legacy",
+      remoteAddress: request.socket.remoteAddress,
+    };
+    void attachEncryptedSocket(
+      ws,
+      login.daemonKeyPair,
+      this.logger,
+      (socket, meta) => {
+        release();
+        return this.attachExternalSocket(socket, meta);
+      },
+      metadata,
+      login.deviceGate,
+      this.serverId,
+      { allowClaim: false },
+    );
+  }
 
   private async attachAuthenticatedSocket(
     ws: WebSocket,
@@ -2291,10 +2385,21 @@ export class VoiceAssistantWebSocketServer {
     connection.session.setHostSource(sourceId);
   }
 
+  private listDirectRoutes() {
+    return listDirectRoutes({
+      listenHost: this.getDaemonTcpHost?.() ?? null,
+      port: this.getDaemonTcpPort?.() ?? null,
+    });
+  }
+
   private buildServerInfoStatusPayload(session: Session, capable = false): ServerInfoStatusPayload {
     return {
       status: "server_info",
       protocolVersion: WS_PROTOCOL_VERSION,
+      // Only an admitted session gets this payload, so the addresses never reach an unauthenticated peer.
+      ...(this.directDeviceLogin && isRouteAudience(session.getHostSourceId())
+        ? { directRoutes: this.listDirectRoutes() }
+        : {}),
       serverId: this.serverId,
       hostname: getHostName(),
       version: this.daemonVersion,
@@ -2334,6 +2439,8 @@ export class VoiceAssistantWebSocketServer {
         interruptedTurn: true,
         // COMPAT(pairingInvites): added 2026-09-29; remove gate after 2027-09-29.
         pairingInvites: true,
+        // COMPAT(directDeviceLogin): added 2026-11-10 (FU-746); remove gate after 2027-11-10.
+        ...(this.directDeviceLogin ? { directDeviceLogin: true } : {}),
         // COMPAT(deviceCommandCentre): added 2026-09-29 (L46 option 5); remove gate after 2027-09-29.
         deviceCommandCentre: true,
         // COMPAT(deviceReadOnlyTier): added 2026-10-01 (D13); remove gate after 2027-10-01.
@@ -3738,7 +3845,9 @@ function createWebSocketConnectionIdentity(
     ...(requestMetadata.host ? { host: requestMetadata.host } : {}),
     ...(requestMetadata.origin ? { origin: requestMetadata.origin } : {}),
     ...(requestMetadata.userAgent ? { userAgent: requestMetadata.userAgent } : {}),
-    ...(requestMetadata.remoteAddress ? { remoteAddress: requestMetadata.remoteAddress } : {}),
+    ...(requestMetadata.remoteAddress || metadata?.remoteAddress
+      ? { remoteAddress: requestMetadata.remoteAddress ?? metadata?.remoteAddress }
+      : {}),
     ...(metadata?.relayConnectionId ? { relayConnectionId: metadata.relayConnectionId } : {}),
     ...(metadata?.securityMode ? { securityMode: metadata.securityMode } : {}),
     ...(metadata?.hubDaemonId ? { hubDaemonId: metadata.hubDaemonId } : {}),
@@ -3913,6 +4022,11 @@ export function isWebSocketSameOrigin(
   }
 
   return isLoopbackAlias(originUrl.hostname) && isLoopbackAlias(requestAuthority.hostname);
+}
+
+/** Only the owner and a paired device may learn the host's addresses; a host link or plugin principal may not. */
+export function isRouteAudience(sourceId: string): boolean {
+  return sourceId === "owner" || sourceId.startsWith("device:");
 }
 
 function selectWebSocketProtocol(

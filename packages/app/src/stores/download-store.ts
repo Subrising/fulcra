@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { File as FSFile, Paths } from "expo-file-system";
 import * as LegacyFileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
-import type { HostProfile } from "@/types/host-connection";
+import { isDirectDeviceConnection, type HostProfile } from "@/types/host-connection";
 import { buildDaemonWebSocketUrl } from "@/utils/daemon-endpoints";
 import { openExternalUrl } from "@/utils/open-external-url";
 import { isWeb } from "@/constants/platform";
@@ -297,6 +297,11 @@ function resolveDaemonDownloadTarget(
 ): DownloadTarget | null {
   const connection = daemon?.connections.find((conn) => conn.id === activeConnectionId);
   if (connection?.type !== "directTcp") {
+    return null;
+  }
+  // A paired-device route is E2EE on the session socket only. An HTTP request to its address would carry the file
+  // and its one-time token in clear text on the network, so the file goes over the encrypted session instead.
+  if (isDirectDeviceConnection(connection)) {
     return null;
   }
 
