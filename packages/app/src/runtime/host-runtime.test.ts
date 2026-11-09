@@ -34,6 +34,7 @@ import type { HostConfirmationRequest } from "./host-confirmation";
 import type { ReplicaRow, ReplicaRowStore } from "./replica-cache/row-store";
 
 import { subscriptionFixture } from "./subscription-fixture";
+import { createDefaultDeps } from "./host-runtime";
 import { readDesktopManagedLocalCredential } from "@/desktop/daemon/local-credential";
 
 it("requests the managed connection credential through desktop main without a web hint", async () => {
@@ -5430,4 +5431,82 @@ it("stable host confirmation admits exactly one V3 device proof and keeps the fu
   } finally {
     f.store.syncHosts([]);
   }
+});
+
+describe("FU-746 device routes (H1)", () => {
+  const deviceRoute: HostConnection = {
+    id: "directDevice:10.0.0.5:6767",
+    type: "directTcp",
+    endpoint: "10.0.0.5:6767",
+    useTls: false,
+    daemonPublicKeyB64: "pk_host_pinned",
+  };
+
+  it("createClient for a device route uses the E2EE device channel and sends no password", () => {
+    const host = makeHost({ password: "host-secret", connections: [deviceRoute] });
+    const client = createDefaultDeps().createClient({
+      host,
+      connection: deviceRoute,
+      clientId: "cid_test",
+      runtimeGeneration: 1,
+    });
+    const config = (client as unknown as { config: Record<string, unknown> }).config;
+    expect(config.e2ee).toMatchObject({
+      enabled: true,
+      directDevice: true,
+      serverId: "srv_test",
+      daemonPublicKeyB64: "pk_host_pinned",
+    });
+    expect(config.password).toBeUndefined();
+    expect(config.localCredential).toBeUndefined();
+    expect(config.url).toBe("ws://10.0.0.5:6767/ws");
+    expect(
+      JSON.stringify(config, (_k, v) => (typeof v === "function" ? undefined : v)),
+    ).not.toContain("host-secret");
+    void client.close();
+  });
+
+  it("an adaptive switch from the relay ends on an encrypted device client", async () => {
+    useHostRuntimeClock();
+    const relay = makeHost().connections.find((c) => c.type === "relay") as HostConnection;
+    const host = makeHost({
+      password: "host-secret",
+      connections: [relay, deviceRoute],
+      preferredConnectionId: relay.id,
+    });
+    const clients: FakeDaemonClient[] = [];
+    const latencies: Record<string, number | Error> = {
+      [relay.id]: 20,
+      [deviceRoute.id]: new Error("unreachable"),
+    };
+    const fake = makeDeps(latencies, clients);
+    const created: Record<string, unknown>[] = [];
+    const controller = new HostRuntimeController({
+      host,
+      deps: {
+        ...fake,
+        createClient: (input) => {
+          if (input.connection.id !== deviceRoute.id) return fake.createClient(input);
+          const real = createDefaultDeps().createClient(input);
+          created.push((real as unknown as { config: Record<string, unknown> }).config);
+          return real;
+        },
+      },
+    });
+    await controller.start({ autoProbe: false });
+    const activeClient = controller.getSnapshot().client as unknown as FakeDaemonClient;
+    latencies[deviceRoute.id] = 90;
+    for (let i = 0; i < 8 && created.length === 0; i += 1) {
+      activeClient.heartbeatReportsRtt(20);
+      await vi.advanceTimersByTimeAsync(120_000);
+      // The real client's connect never settles under fake timers, so do not await the cycle.
+      void controller.runProbeCycleNow();
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    expect(created.length).toBeGreaterThan(0);
+    for (const config of created) {
+      expect(config.e2ee).toMatchObject({ enabled: true, directDevice: true });
+      expect(config.password).toBeUndefined();
+    }
+  });
 });

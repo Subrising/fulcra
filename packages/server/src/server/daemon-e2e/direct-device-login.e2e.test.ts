@@ -6,6 +6,7 @@ import { hashDaemonPassword } from "../auth.js";
 import { DeviceRegistry } from "../pairing/device-registry.js";
 import { loadOrCreateDaemonKeyPair } from "../daemon-keypair.js";
 import { getOrCreateServerId } from "../server-id.js";
+import { isRouteAudience } from "../websocket-server.js";
 import { createTestPaseoDaemon, type TestPaseoDaemon } from "../test-utils/paseo-daemon.js";
 
 // FU-746: a paired device signs in on the direct socket with its device key. Scratch daemon, own home.
@@ -15,9 +16,10 @@ afterEach(async () => {
   daemon = null;
 });
 
-async function setup(auth?: { password: string }) {
+async function setup(auth?: { password: string }, directDeviceLogin: boolean | null = true) {
   daemon = await createTestPaseoDaemon({
     relayEnabled: false,
+    directDeviceLogin: directDeviceLogin ?? undefined,
     logger: (await import("pino")).default({ level: "warn" }),
     ...(auth ? { auth: { password: hashDaemonPassword(auth.password) } } : {}),
   });
@@ -108,4 +110,78 @@ describe("direct device login", () => {
     });
     expect(code).not.toBe(-1);
   }, 30000);
+
+  test("L1: the owner and a paired device get directRoutes; isRouteAudience refuses other principals", async () => {
+    const { client } = await setup({ password: "owner-secret" });
+    const device = client();
+    await device.connect();
+    expect(Array.isArray(device.getLastServerInfoMessage()?.directRoutes)).toBe(true);
+    await device.close();
+    const owner = new DaemonClient({
+      url: `ws://127.0.0.1:${daemon!.port}/ws`,
+      clientId: "cid_owner",
+      clientType: "cli",
+      password: "owner-secret",
+      reconnect: { enabled: false },
+    });
+    await owner.connect();
+    expect(Array.isArray(owner.getLastServerInfoMessage()?.directRoutes)).toBe(true);
+    await owner.close();
+    expect(isRouteAudience("owner")).toBe(true);
+    expect(isRouteAudience("device:dev_1")).toBe(true);
+    for (const other of ["", "plugin:x", "host-link:abc", "route:owner:a:b", "devices:x"])
+      expect(isRouteAudience(other)).toBe(false);
+  });
+
+  test("L3: the 33rd unadmitted device-protocol upgrade is closed with 1013", async () => {
+    await setup();
+    const url = `ws://127.0.0.1:${daemon!.port}/ws`;
+    const open: WebSocket[] = [];
+    try {
+      for (let i = 0; i < 32; i++) {
+        const ws = new WebSocket(url, ["fulcra.device.v1"]);
+        await new Promise<void>((resolve, reject) => {
+          ws.once("open", () => resolve());
+          ws.once("error", reject);
+        });
+        open.push(ws);
+      }
+      const extra = new WebSocket(url, ["fulcra.device.v1"]);
+      const code = await new Promise<number>((resolve) => {
+        extra.on("close", (c) => resolve(c));
+        setTimeout(() => resolve(-1), 10000);
+      });
+      expect(code).toBe(1013);
+      // Closing one frees a slot.
+      open.pop()?.close();
+      await new Promise((r) => setTimeout(r, 300));
+      const again = new WebSocket(url, ["fulcra.device.v1"]);
+      const opened = await new Promise<boolean>((resolve) => {
+        again.once("open", () => resolve(true));
+        again.once("close", () => resolve(false));
+      });
+      expect(opened).toBe(true);
+      again.close();
+    } finally {
+      for (const ws of open) ws.terminate();
+    }
+  }, 60000);
+
+  test("L4: with the relay off and no override, device login is off", async () => {
+    const { client } = await setup(undefined, null);
+    const c = client();
+    await expect(c.connect()).rejects.toBeTruthy();
+    await c.close();
+    const plain = new DaemonClient({
+      url: `ws://127.0.0.1:${daemon!.port}/ws`,
+      clientId: "cid_plain",
+      clientType: "cli",
+      reconnect: { enabled: false },
+    });
+    await plain.connect();
+    const info = plain.getLastServerInfoMessage();
+    expect(info?.features?.directDeviceLogin).toBeUndefined();
+    expect(info?.directRoutes).toBeUndefined();
+    await plain.close();
+  });
 });

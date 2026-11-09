@@ -537,6 +537,8 @@ export interface PaseoDaemonConfig {
   relayRequireProtectedSecurity?: boolean;
   relayEndpoint?: string;
   relayPairingOfferTtlSeconds?: number;
+  /** Device-key login on direct sockets. Unset: follows relay enabled/disabled. */
+  directDeviceLogin?: boolean;
   relayPublicEndpoint?: string;
   relayUseTls?: boolean;
   relayPublicUseTls?: boolean;
@@ -2432,13 +2434,20 @@ export async function createPaseoDaemon(
             restartRecovery.resumePending();
             await finishSubscriptions.start();
             wsServer.beginAcceptingConnections();
-            wsServer.enableDirectDeviceLogin({
+            const directDeviceLogin = {
               daemonKeyPair: daemonKeyPair.keyPair,
               deviceGate: new RelayDeviceGate(
                 new OfferStore(config.paseoHome),
                 new DeviceRegistry(config.paseoHome),
               ),
-            });
+            };
+            // L4: default follows relay.enabled (a host with the relay off pairs nobody and offers no device login).
+            // PASEO_DIRECT_DEVICE_LOGIN overrides it.
+            const applyDirectDeviceLogin = (relayOn: boolean) =>
+              wsServer?.enableDirectDeviceLogin(
+                (config.directDeviceLogin ?? relayOn) ? directDeviceLogin : null,
+              );
+            applyDirectDeviceLogin(relayEnabled);
             relayRuntime = createRelayRuntime({
               config: {
                 enabled: relayEnabled,
@@ -2461,6 +2470,7 @@ export async function createPaseoDaemon(
               paseoHome: config.paseoHome,
             });
             daemonConfigStore.onFieldChange("relay.enabled", (value) => {
+              applyDirectDeviceLogin(value === true);
               relayRuntime?.setEnabled(value === true);
             });
             daemonConfigStore.onFieldChange("relay.endpoint", (value) => {

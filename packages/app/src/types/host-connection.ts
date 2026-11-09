@@ -345,6 +345,18 @@ export function isDirectDeviceConnection(connection: HostConnection): boolean {
   return connection.type === "directTcp" && Boolean(connection.daemonPublicKeyB64);
 }
 
+/**
+ * Learn routes only from a connection that proved the host key: the relay or a device route. A password route
+ * (a typed address, a desktop socket, a routed host) could be anything on the network.
+ */
+export function canLearnDirectRoutesFrom(
+  host: HostProfile,
+  activeConnectionId: string | null,
+): boolean {
+  const active = host.connections.find((entry) => entry.id === activeConnectionId);
+  return Boolean(active && (active.type === "relay" || isDirectDeviceConnection(active)));
+}
+
 function isTailscaleOrLanEndpoint(endpoint: string): boolean {
   const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3}):(\d{1,5})$/.exec(endpoint);
   if (!match) return false;

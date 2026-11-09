@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { defaultHostAppearance } from "@/hosts/appearance";
 import { selectBestConnection } from "@/utils/connection-selection";
 import {
+  canLearnDirectRoutesFrom,
   isDirectDeviceConnection,
   normalizeStoredHostProfile,
   withLearnedDirectDeviceRoutes,
@@ -116,5 +117,25 @@ describe("route order: direct first, relay as fallback", () => {
       ["directDevice:10.0.0.5:1", { status: "unavailable" as const, latencyMs: null }],
     ]);
     expect(selectBestConnection({ candidates, probeByConnectionId: probes })).toBe(relay.id);
+  });
+});
+
+describe("L2: learn routes only from a connection that proved the host key", () => {
+  const typed: HostConnection = { id: "direct:evil:1", type: "directTcp", endpoint: "evil:1" };
+  const learned = withLearnedDirectDeviceRoutes(
+    host([relay, typed]),
+    [{ endpoint: "10.0.0.5:1" }],
+    true,
+  );
+  it("accepts the relay and a device route", () => {
+    expect(canLearnDirectRoutesFrom(learned, relay.id)).toBe(true);
+    expect(canLearnDirectRoutesFrom(learned, "directDevice:10.0.0.5:1")).toBe(true);
+  });
+  it("refuses a password route, a socket, an unknown id and no active route", () => {
+    expect(canLearnDirectRoutesFrom(learned, typed.id)).toBe(false);
+    expect(canLearnDirectRoutesFrom(learned, "nope")).toBe(false);
+    expect(canLearnDirectRoutesFrom(learned, null)).toBe(false);
+    const socket: HostConnection = { id: "socket:/tmp/x", type: "directSocket", path: "/tmp/x" };
+    expect(canLearnDirectRoutesFrom(host([relay, socket]), socket.id)).toBe(false);
   });
 });

@@ -167,6 +167,8 @@ export interface ExternalSocketMetadata {
   securityMode?: SecurityMode;
   hubDaemonId?: string;
   admission?: SessionAdmission;
+  /** Peer address of a direct device socket, for log lines. */
+  remoteAddress?: string;
 }
 
 export interface SessionAdmission {
@@ -543,6 +545,7 @@ const SLOW_REQUEST_THRESHOLD_MS = 500;
 const INVITE_TTL_SECONDS = 300;
 const EXTERNAL_SESSION_DISCONNECT_GRACE_MS = 90_000;
 const HELLO_TIMEOUT_MS = 15_000;
+const MAX_UNADMITTED_DIRECT_DEVICE_SOCKETS = 32;
 const WS_CLOSE_HELLO_TIMEOUT = 4001;
 const WS_CLOSE_INVALID_HELLO = 4002;
 const WS_CLOSE_INCOMPATIBLE_PROTOCOL = 4003;
@@ -1017,7 +1020,7 @@ export class VoiceAssistantWebSocketServer {
     });
     wss.on("connection", (ws, request) => {
       if (ws.protocol === DIRECT_DEVICE_PROTOCOL) {
-        this.attachDirectDeviceSocket(ws);
+        this.attachDirectDeviceSocket(ws, request);
         return;
       }
       void this.attachAuthenticatedSocket(ws, request, password);
@@ -1115,26 +1118,56 @@ export class VoiceAssistantWebSocketServer {
   } | null = null;
 
   /** Turns on the paired-device login for direct sockets. The host password path stays as it is. */
-  public enableDirectDeviceLogin(args: { daemonKeyPair: KeyPair; deviceGate: RelayDeviceGate }) {
+  public enableDirectDeviceLogin(
+    args: { daemonKeyPair: KeyPair; deviceGate: RelayDeviceGate } | null,
+  ) {
     this.directDeviceLogin = args;
+    if (!args) this.broadcastCapabilitiesUpdate();
   }
+
+  /** Upgrades that offered fulcra.device.v1 and have not yet proved a device key. Anyone can open these. */
+  private unadmittedDirectDeviceSockets = 0;
 
   /**
    * A direct socket that offers fulcra.device.v1 signs in with the device key, exactly like a relay socket:
    * same E2EE channel, same RelayDeviceGate. It never pairs a device, and the host password is not used.
    */
-  private attachDirectDeviceSocket(ws: WebSocket): void {
+  private attachDirectDeviceSocket(ws: WebSocket, request: IncomingMessage): void {
     const login = this.directDeviceLogin;
     if (!login) {
       ws.close(4403, "Not paired");
       return;
     }
-    const metadata: ExternalSocketMetadata = { transport: "relay", securityMode: "legacy" };
+    if (this.unadmittedDirectDeviceSockets >= MAX_UNADMITTED_DIRECT_DEVICE_SOCKETS) {
+      this.logger.warn(
+        { remoteAddress: request.socket.remoteAddress },
+        "Direct device login busy; refusing socket",
+      );
+      ws.close(1013, "Busy; retry shortly");
+      return;
+    }
+    this.unadmittedDirectDeviceSockets++;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      this.unadmittedDirectDeviceSockets--;
+    };
+    ws.once("close", release);
+    // The peer address goes into the metadata so admit and refuse log lines name who connected.
+    const metadata: ExternalSocketMetadata = {
+      transport: "relay",
+      securityMode: "legacy",
+      remoteAddress: request.socket.remoteAddress,
+    };
     void attachEncryptedSocket(
       ws,
       login.daemonKeyPair,
       this.logger,
-      (socket, meta) => this.attachExternalSocket(socket, meta),
+      (socket, meta) => {
+        release();
+        return this.attachExternalSocket(socket, meta);
+      },
       metadata,
       login.deviceGate,
       this.serverId,
@@ -2348,7 +2381,9 @@ export class VoiceAssistantWebSocketServer {
       status: "server_info",
       protocolVersion: WS_PROTOCOL_VERSION,
       // Only an admitted session gets this payload, so the addresses never reach an unauthenticated peer.
-      ...(this.directDeviceLogin ? { directRoutes: this.listDirectRoutes() } : {}),
+      ...(this.directDeviceLogin && isRouteAudience(session.getHostSourceId())
+        ? { directRoutes: this.listDirectRoutes() }
+        : {}),
       serverId: this.serverId,
       hostname: getHostName(),
       version: this.daemonVersion,
@@ -3794,7 +3829,9 @@ function createWebSocketConnectionIdentity(
     ...(requestMetadata.host ? { host: requestMetadata.host } : {}),
     ...(requestMetadata.origin ? { origin: requestMetadata.origin } : {}),
     ...(requestMetadata.userAgent ? { userAgent: requestMetadata.userAgent } : {}),
-    ...(requestMetadata.remoteAddress ? { remoteAddress: requestMetadata.remoteAddress } : {}),
+    ...(requestMetadata.remoteAddress || metadata?.remoteAddress
+      ? { remoteAddress: requestMetadata.remoteAddress ?? metadata?.remoteAddress }
+      : {}),
     ...(metadata?.relayConnectionId ? { relayConnectionId: metadata.relayConnectionId } : {}),
     ...(metadata?.securityMode ? { securityMode: metadata.securityMode } : {}),
     ...(metadata?.hubDaemonId ? { hubDaemonId: metadata.hubDaemonId } : {}),
@@ -3969,6 +4006,11 @@ export function isWebSocketSameOrigin(
   }
 
   return isLoopbackAlias(originUrl.hostname) && isLoopbackAlias(requestAuthority.hostname);
+}
+
+/** Only the owner and a paired device may learn the host's addresses; a host link or plugin principal may not. */
+export function isRouteAudience(sourceId: string): boolean {
+  return sourceId === "owner" || sourceId.startsWith("device:");
 }
 
 function selectWebSocketProtocol(

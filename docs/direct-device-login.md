@@ -4,6 +4,14 @@ Status: built for FU-746 (10 Nov 2026), in the `pairing` ledger patch. It still 
 
 What shipped: the daemon accepts the subprotocol `fulcra.device.v1` on the existing `/ws` port (`websocket-server.ts`, `attachDirectDeviceSocket`). It runs the relay v3 channel and `RelayDeviceGate.admit` with `allowClaim: false`, so a direct socket never pairs a device. After sign-in, `server_info` carries `features.directDeviceLogin` and `directRoutes` (Tailscale first, then LAN; `direct-routes.ts`). The pairing offer is unchanged. A paired app saves those routes as `directTcp` connections that hold the host key (`daemonPublicKeyB64`) and no password (`withLearnedDirectDeviceRoutes`), and the existing route ranking tries them before the relay. Acceptance rows D1, D3, D4 and D5 have tests; D2 and D6 do not yet.
 
+Rules from the FU-746 security review:
+
+- **Switch:** Direct device login follows `relay.enabled`: a host with the relay off pairs nobody and offers no device login. Set `PASEO_DIRECT_DEVICE_LOGIN=true` or `false` to override (`config.ts`, `directDeviceLogin`).
+- **Audience:** `server_info.directRoutes` goes only to the owner and to a paired device (`isRouteAudience`). The host lists at most 8 routes, Tailscale first. The wire schema has no cap, so a longer list from a newer host still parses.
+- **Learning:** An app learns routes only while its active connection is the relay or a device route (`canLearnDirectRoutesFrom`). A typed address or desktop socket never teaches routes.
+- **Client:** Every path that opens a device route builds its config with `buildDeviceRouteClientConfig`. It sends no host password and no local credential.
+- **Load:** At most 32 `fulcra.device.v1` upgrades may wait for a device proof. The 33rd closes with 1013.
+
 ## Why
 
 A paired device reaches Command Centre over the relay with its own device key, while the owner's "Allow Command Centre" grant stands ([permissions](permissions.md)). A direct connection (local network or a Tailscale address) still signs in only with the host password (`websocket-server.ts`, password by subprotocol or `Authorization` header). The paired-device login exists only on relay sockets (`pairing/relay-device-gate.ts`).

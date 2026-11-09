@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { listDirectRoutes } from "./direct-routes.js";
+import { listDirectRoutes, MAX_DIRECT_ROUTES } from "./direct-routes.js";
 
 type Nets = NonNullable<Parameters<typeof listDirectRoutes>[0]["interfaces"]>;
 const v4 = (address: string, internal = false) => ({
@@ -45,5 +45,16 @@ describe("listDirectRoutes", () => {
     expect(listDirectRoutes({ listenHost: "100.64.0.9", port: 8 })).toEqual([
       { kind: "tailscale", endpoint: "100.64.0.9:8" },
     ]);
+  });
+  it("returns at most 8 routes, Tailscale first, for a host with many virtual interfaces (M1)", () => {
+    const interfaces = {
+      docker0: Array.from({ length: 9 }, (_, i) => v4(`172.17.${i}.1`)),
+      en0: [v4("192.168.1.20"), v4("192.168.1.21")],
+      utun9: [v4("100.101.102.103")],
+    } as unknown as Nets;
+    const routes = listDirectRoutes({ listenHost: "0.0.0.0", port: 6767, interfaces });
+    expect(MAX_DIRECT_ROUTES).toBe(8);
+    expect(routes).toHaveLength(8);
+    expect(routes[0]).toEqual({ kind: "tailscale", endpoint: "100.101.102.103:6767" });
   });
 });

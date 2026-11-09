@@ -1,6 +1,9 @@
 import os from "node:os";
 import type { DirectRoute } from "@getpaseo/protocol/messages";
 
+/** The wire list must stay small: a host with many virtual interfaces still gets its best routes first. */
+export const MAX_DIRECT_ROUTES = 8;
+
 type Interfaces = ReturnType<typeof os.networkInterfaces>;
 
 function ipv4Parts(address: string): number[] | null {
@@ -63,5 +66,5 @@ export function listDirectRoutes(args: {
     routes.push({ kind, endpoint: `${address}:${port}` });
   }
   const rank = (route: DirectRoute) => (route.kind === "tailscale" ? 0 : 1);
-  return routes.sort((a, b) => rank(a) - rank(b));
+  return routes.sort((a, b) => rank(a) - rank(b)).slice(0, MAX_DIRECT_ROUTES);
 }

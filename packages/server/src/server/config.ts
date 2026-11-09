@@ -679,6 +679,8 @@ export function resolveConfigFromPersisted(
     relayPublicEndpoint: relay.publicEndpoint,
     relayUseTls: relay.useTls,
     relayPairingOfferTtlSeconds: persisted.daemon?.relay?.pairingOfferTtlSeconds,
+    // PASEO_DIRECT_DEVICE_LOGIN=true|false overrides the default, which follows relay.enabled.
+    directDeviceLogin: parseBooleanEnv(env.PASEO_DIRECT_DEVICE_LOGIN),
     relayPublicUseTls: relay.publicUseTls,
     serviceProxy: resolveServiceProxyConfig(env, persisted),
     webUi: resolveWebUiConfig(paseoHome, env, cli, persisted),

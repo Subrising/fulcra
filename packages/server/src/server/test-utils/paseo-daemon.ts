@@ -38,6 +38,7 @@ interface TestPaseoDaemonOptions {
   relayUseTls?: boolean;
   relayPublicUseTls?: boolean;
   relayRequireProtectedSecurity?: boolean;
+  directDeviceLogin?: boolean;
   daemonStatusRpcCapability?: boolean;
   relayConfigCapability?: boolean;
   agentClients?: Partial<Record<AgentProvider, AgentClient>>;
@@ -222,6 +223,7 @@ async function prepareTestDaemonConfig(
     relayUseTls: options.relayUseTls,
     relayPublicUseTls: options.relayPublicUseTls,
     relayRequireProtectedSecurity: options.relayRequireProtectedSecurity,
+    directDeviceLogin: options.directDeviceLogin,
     appBaseUrl: "fulcra://pair",
     auth: options.auth,
     pushNotificationSender: options.pushNotificationSender,

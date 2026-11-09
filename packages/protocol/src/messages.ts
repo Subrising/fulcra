@@ -4434,7 +4434,8 @@ export const ServerInfoStatusPayloadSchema = z
   .object({
     status: z.literal("server_info"),
     // COMPAT(directDeviceLogin): added 2026-11-10 (FU-746); older hosts omit it.
-    directRoutes: z.array(DirectRouteSchema).max(8).optional(),
+    // No .max: a wire schema never narrows. The host caps the list; the app keeps at most 8.
+    directRoutes: z.array(DirectRouteSchema).optional(),
     protocolVersion: z.number().int().optional(),
     serverId: z.string().trim().min(1),
     hostname: ServerInfoHostnameSchema.optional(),

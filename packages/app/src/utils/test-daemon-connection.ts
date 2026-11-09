@@ -136,6 +136,36 @@ function resolveConnectionCredentials(
   };
 }
 
+type DeviceRouteConnection = Extract<HostConnection, { type: "directTcp" }> & {
+  daemonPublicKeyB64: string;
+};
+
+/**
+ * The one config for a learned device route. Every path that opens one (probe, adaptive switch, failover) must use
+ * it: the host password and the desktop local credential never go to a learned address, and the channel is the
+ * relay's E2EE channel pinned to the host key.
+ */
+export function buildDeviceRouteClientConfig(input: {
+  base: Omit<DaemonClientConfig, "url">;
+  connection: DeviceRouteConnection;
+  serverId: string;
+}): DaemonClientConfig {
+  const { password: _password, localCredential: _localCredential, ...rest } = input.base;
+  return {
+    ...rest,
+    url: buildDaemonWebSocketUrl(input.connection.endpoint, {
+      useTls: input.connection.useTls ?? false,
+    }),
+    e2ee: {
+      enabled: true,
+      directDevice: true,
+      serverId: input.serverId,
+      daemonPublicKeyB64: input.connection.daemonPublicKeyB64,
+      getDeviceKeyPair: () => getDeviceIdentity(),
+    },
+  };
+}
+
 export async function buildClientConfig(
   connection: HostConnection,
   serverId?: string,
@@ -197,18 +227,11 @@ export async function buildClientConfig(
   if (connection.type === "directTcp" && connection.daemonPublicKeyB64) {
     // Paired-device route: same E2EE channel and device gate as the relay, no host password.
     if (!serverId) throw new Error("serverId is required to probe a device route");
-    const { password: _password, ...deviceBase } = base;
-    return {
-      ...deviceBase,
-      url: buildDaemonWebSocketUrl(connection.endpoint, { useTls: connection.useTls ?? false }),
-      e2ee: {
-        enabled: true,
-        directDevice: true,
-        serverId,
-        daemonPublicKeyB64: connection.daemonPublicKeyB64,
-        getDeviceKeyPair: () => getDeviceIdentity(),
-      },
-    };
+    return buildDeviceRouteClientConfig({
+      base,
+      connection: { ...connection, daemonPublicKeyB64: connection.daemonPublicKeyB64 },
+      serverId,
+    });
   }
 
   if (connection.type === "directTcp") {

@@ -504,7 +504,7 @@ export async function attachEncryptedSocket(
         for (const message of pendingMessages.splice(0)) emitter.emit("message", message);
       } catch {
         // Never log the decrypted claim, secret or device key.
-        logger.warn("Relay device admission refused");
+        logger.warn({ remoteAddress: metadata.remoteAddress }, "Relay device admission refused");
         clearTimeout(timeout);
         channel.close(4403, "Not paired");
       }
