@@ -11,6 +11,8 @@ import {
   type PendingSessionCost,
 } from "./session-cost-outbox.js";
 import {
+  dropFoldedReplays,
+  isFoldedTurn,
   recordSessionCost,
   ROLLUP_PREFIX,
   sessionCost,
@@ -6758,13 +6760,15 @@ export class AgentManager {
       runtimeSessionId: target.persistence?.sessionId ?? null,
       records: beforeRecords,
     });
-    if (!live) return sessionCost(result.records);
+    // FU-772: billing holds every turn, but folded turns are in a rollup. Never import them again.
+    const records = result.records && dropFoldedReplays(beforeRecords, result.records);
+    if (!live) return sessionCost(records);
     const current = this.agents.get(id);
     if (current !== live || live.costRecords !== beforeRecords)
       return sessionCost(current?.costRecords);
     // Normal snapshot writes retain imported billing facts.
-    live.costRecords = result.records;
-    return sessionCost(result.records);
+    live.costRecords = records;
+    return sessionCost(records);
   }
 
   private sessionCostAccount(agent: ActiveManagedAgent): string | null {
@@ -6847,11 +6851,13 @@ export class AgentManager {
         live?.costRecords ?? stored?.costRecords ?? { cursors: {}, turns: {} },
       );
       for (const entry of rows) {
-        records.turns[entry.turnId] ??= {
-          accountId: entry.accountId,
-          amountUsd: entry.costUsd,
-          at: entry.at,
-        };
+        // FU-772: a recovered row of a folded turn is in a rollup already.
+        if (!isFoldedTurn(records, entry.turnId, entry.at))
+          records.turns[entry.turnId] ??= {
+            accountId: entry.accountId,
+            amountUsd: entry.costUsd,
+            at: entry.at,
+          };
         if (entry.revision >= (records.revision ?? 0)) {
           records.cursors = { ...records.cursors, ...entry.cursors };
           records.revision = entry.revision;

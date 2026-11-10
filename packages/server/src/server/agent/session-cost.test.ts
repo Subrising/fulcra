@@ -1,7 +1,12 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir as osTmpdir } from "node:os";
+import path from "node:path";
 import fixture from "./session-cost.fixture.json";
 import { expect, test } from "vitest";
+import { readSessionBilling as readBillingHook } from "../../../../../control/orca-organization/server/account-billing.mjs";
 import {
   compactSessionCostTurns,
+  dropFoldedReplays,
   KEEP_RECENT_TURNS,
   recordSessionCost,
   sessionCost,
@@ -258,4 +263,125 @@ test("FU-744: recording a turn trims an oversized record and keeps the cursor an
   expect(Object.keys(next.turns).filter((id) => !id.startsWith("rollup:")).length).toBe(
     KEEP_RECENT_TURNS,
   );
+});
+
+/** FU-772: a session that billed `count` turns, one minute apart, and its billing file with every turn. */
+function billedSession(count: number) {
+  const pool = mkdtempSync(path.join(osTmpdir(), "fu772-"));
+  const calls: Record<string, { accountId: string; costUsd: number; at: string }> = {};
+  let records: SessionCostRecords | undefined;
+  const start = Date.parse("2026-10-18T00:00:00.000Z");
+  let next = 0;
+  const turn = (amount = 1) => {
+    const id = `t${next}`;
+    const at = new Date(start + next * 60_000).toISOString();
+    next++;
+    records = recordSessionCost(records, {
+      provider: "claude",
+      turnId: id,
+      accountId: "a",
+      at,
+      usage: { totalCostUsd: amount, turnCostUsd: amount },
+    });
+    calls[`turn:agent-1:${id}`] = { accountId: "a", costUsd: amount, at };
+    mkdirSync(path.join(pool, "accounts"), { recursive: true });
+    writeFileSync(
+      path.join(pool, "accounts", "billing.json"),
+      JSON.stringify({ v: 1, calls, events: [] }),
+    );
+  };
+  for (let i = 0; i < count; i++) turn();
+  return {
+    turn,
+    get records() {
+      return records!;
+    },
+    /** What `refreshSessionCost` keeps of a cost read through the real billing hook. */
+    read() {
+      const result = readBillingHook(pool, {
+        agentId: "agent-1",
+        provider: "claude",
+        runtimeSessionId: null,
+        records,
+      }) as { records: SessionCostRecords };
+      records = dropFoldedReplays(records, result.records);
+    },
+    close: () => rmSync(pool, { recursive: true, force: true }),
+  };
+}
+
+test("FU-772: a billing read after compaction gives back no folded turn", () => {
+  const session = billedSession(KEEP_RECENT_TURNS + 100);
+  try {
+    expect(sessionCost(session.records)?.totalUsd).toBe(600);
+    session.read();
+    expect(sessionCost(session.records)?.totalUsd).toBe(600);
+    expect(sessionCost(session.records)?.recordedTurns).toBe(600);
+  } finally {
+    session.close();
+  }
+});
+
+test("FU-772: 11 reads, each followed by a new turn, add only the new turns", () => {
+  const session = billedSession(KEEP_RECENT_TURNS + 100);
+  try {
+    for (let i = 0; i < 11; i++) {
+      session.read();
+      session.turn(2);
+    }
+    // Before the fix each read gave back the 100 folded turns and the next turn folded them again: 1,700.
+    expect(sessionCost(session.records)?.totalUsd).toBe(600 + 11 * 2);
+    expect(sessionCost(session.records)?.recordedTurns).toBe(611);
+  } finally {
+    session.close();
+  }
+});
+
+test("FU-772: a replayed result of a folded turn adds nothing, and a new turn still counts", () => {
+  const session = billedSession(KEEP_RECENT_TURNS + 100);
+  try {
+    const before = session.records;
+    const replay = recordSessionCost(before, {
+      provider: "claude",
+      turnId: "t3",
+      accountId: "a",
+      at: "2026-10-18T00:03:00.000Z",
+      usage: { totalCostUsd: 1, turnCostUsd: 1 },
+    });
+    expect(replay).toBe(before);
+    const fresh = recordSessionCost(before, {
+      provider: "claude",
+      turnId: "late",
+      accountId: "a",
+      at: "2026-11-10T00:00:00.000Z",
+      usage: { totalCostUsd: 4, turnCostUsd: 4 },
+    });
+    expect(sessionCost(fresh)?.totalUsd).toBe(604);
+  } finally {
+    session.close();
+  }
+});
+
+test("FU-772: a recovered row is kept when its turn is newer than every folded turn", () => {
+  const session = billedSession(KEEP_RECENT_TURNS + 100);
+  try {
+    const records = session.records;
+    const added = {
+      ...records,
+      turns: {
+        ...records.turns,
+        old: { accountId: "a", amountUsd: 9, at: "2026-10-18T00:01:00.000Z" },
+        recent: { accountId: "a", amountUsd: 5, at: "2026-11-10T00:00:00.000Z" },
+      },
+    };
+    const kept = dropFoldedReplays(records, added);
+    expect(kept.turns.old).toBeUndefined();
+    expect(kept.turns.recent?.amountUsd).toBe(5);
+    // A record with no rollup drops nothing.
+    expect(dropFoldedReplays({ cursors: {}, turns: {} }, added)).toBe(added);
+    // Compaction twice is a no-op.
+    expect(compactSessionCostTurns(structuredClone(records))).toEqual(records);
+  } finally {
+    session.close();
+  }
 });
