@@ -11,8 +11,9 @@ import type {
 export class ControllerFrameError extends Error {
   readonly code: "invalid" | "expired" | "unauthorised" | "unavailable" | "uncertain";
   readonly publicMessage?: string;
-  constructor(code: ControllerFrameError["code"], message?: string) {
-    super(`Controller frame ${code}`);
+  /** `detail` replaces the default text in the daemon log only; the code is what clients see. */
+  constructor(code: ControllerFrameError["code"], message?: string, detail?: string) {
+    super(detail ?? `Controller frame ${code}`);
     this.code = code;
     if (code === "invalid" && typeof message === "string" && message.length <= 2000)
       this.publicMessage = message;

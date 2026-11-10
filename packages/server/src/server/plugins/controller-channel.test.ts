@@ -422,7 +422,22 @@ test("FU-766: a full id history refuses new requests as expired and reports full
   }
   expect(channel.requestCount).toBe(65536);
   expect(channel.full).toBe(true);
+  expect(channel.rotationDue).toBe(true);
   await expect(
     channel.receive(child, { id: "next", epoch: channel.epoch, type: "daemon-rpc", frame: {} }),
   ).resolves.toMatchObject({ ok: false, code: "expired" });
+  // The log names the cause: the id space is full, not a stale frame.
+  const claim = Reflect.get(channel, "claim") as (ids: Set<string>, id: string) => void;
+  const full = new Set(Array.from({ length: 65536 }, (_, i) => String(i)));
+  expect(() => claim.call(channel, full, "x")).toThrow("Controller id space full");
+  expect(() => claim.call(channel, new Set(["x"]), "x")).toThrow("Controller frame expired");
+  expect(
+    new ControllerChannel({
+      child,
+      issue: () => "t",
+      revoke: () => {},
+      rpc: async () => null,
+      send: async () => null,
+    }).rotationDue,
+  ).toBe(false);
 });

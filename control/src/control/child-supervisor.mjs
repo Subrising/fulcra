@@ -80,6 +80,16 @@ export function createChildSupervisor({
   // FU-766 self-heal. An "expired" refusal or a request timeout is a failed call; any answer from the controller resets.
   function noteAnswer(owner) {
     owner.failures.length = 0;
+    rotateIfDue(owner);
+  }
+  // FU-766: the channel refuses all work once its id history is full. At 90% a planned restart starts a new epoch.
+  function rotateIfDue(owner) {
+    if (owner.rotating || current !== owner || owner.revoked || !owner.channel.rotationDue) return;
+    owner.rotating = true;
+    log(
+      `INFO controller pid ${owner.child.pid} used ${owner.channel.commandCount + owner.channel.requestCount} ids (commands ${owner.channel.commandCount}, requests ${owner.channel.requestCount}); restarting for a new epoch before the id space is full`,
+    );
+    terminate(owner);
   }
   function noteFailure(owner, why) {
     if (current !== owner || owner.revoked || owner.terminating) return;

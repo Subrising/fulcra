@@ -105,12 +105,18 @@ export class ControllerChannel {
   get requestCount(): number {
     return this.requests.size;
   }
+  /** FU-766: true at 90% of one id space. The supervisor then starts a new epoch before work is refused. */
+  get rotationDue(): boolean {
+    return this.commands.size + this.requests.size >= MAX_IDS * 0.9;
+  }
   get full(): boolean {
     return this.commands.size >= MAX_IDS || this.requests.size >= MAX_IDS;
   }
   private claim(ids: Set<string>, id: string): void {
     // Bounded replay history: a full epoch refuses new work until V4 replaces it.
-    if (ids.has(id) || ids.size >= MAX_IDS) throw new ControllerFrameError("expired");
+    if (ids.size >= MAX_IDS)
+      throw new ControllerFrameError("expired", undefined, "Controller id space full");
+    if (ids.has(id)) throw new ControllerFrameError("expired");
     ids.add(id);
   }
   private check(child: object): void {

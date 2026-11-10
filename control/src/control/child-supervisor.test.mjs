@@ -510,3 +510,34 @@ test("a request that times out counts as a failed call", async () => {
   }
   assert.equal(h.f.children[0].killed, true);
 });
+
+test("at 90% of the id space the controller is restarted once; below it nothing happens", async () => {
+  const h = expiringFixture();
+  h.setMode("ok");
+  h.f.supervisor.start();
+  h.f.ready(h.f.children[0]);
+  const ch = h.f.channels[0];
+  ch.commandCount = 100;
+  ch.requestCount = 100;
+  ch.rotationDue = false;
+  const answer = async () => {
+    const p = h.f.supervisor.management({ method: "list" }, {});
+    const sent = h.f.children[0].sent.at(-1);
+    h.f.children[0].emit("message", { id: sent.id, epoch: sent.epoch, ok: true, result: null });
+    await p;
+  };
+  await answer();
+  await answer();
+  assert.equal(h.f.children[0].killed, false);
+  assert.equal(h.logs.filter((l) => l.startsWith("INFO")).length, 0);
+  ch.rotationDue = true;
+  ch.commandCount = 59000;
+  await answer();
+  assert.equal(h.f.children[0].killed, true);
+  assert.equal(h.logs.filter((l) => l.startsWith("INFO controller pid 100")).length, 1);
+  // The controller is only stopped once.
+  h.f.children[0].kill = () => assert.fail("second stop");
+  ch.rotationDue = true;
+  h.f.children[0].emit("message", { type: "noise" });
+  assert.equal(h.logs.filter((l) => l.startsWith("INFO")).length, 1);
+});
