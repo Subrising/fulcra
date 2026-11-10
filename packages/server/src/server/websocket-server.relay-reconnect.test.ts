@@ -1318,6 +1318,34 @@ describe("relay external socket reconnect behavior", () => {
     await server.close();
   });
 
+  test("F4: a direct device is not admitted when the relay went off or the socket closed during the handshake", async () => {
+    const server = createServer();
+    const internals = asInternals<{
+      directDeviceChannels: Set<unknown>;
+      admitDirectDeviceChannel: (ws: unknown, channel: unknown, meta: unknown) => Promise<void>;
+    }>(server);
+    const open = () => Object.assign(new EventEmitter(), { readyState: 1, OPEN: 1 });
+    const meta = { transport: "relay", admission: deviceAdmission };
+
+    // Relay off mid-handshake: login is null.
+    const offChannel = new MockSocket();
+    expect(() => internals.admitDirectDeviceChannel(open(), offChannel, meta)).toThrow();
+    expect(internals.directDeviceChannels.size).toBe(0);
+    expect(sessionMock.instances).toHaveLength(0);
+
+    server.enableDirectDeviceLogin({ daemonKeyPair: {} as never, deviceGate: {} as never });
+    // Raw socket already closing.
+    const closing = Object.assign(new EventEmitter(), { readyState: 2, OPEN: 1 });
+    expect(() => internals.admitDirectDeviceChannel(closing, new MockSocket(), meta)).toThrow();
+    expect(internals.directDeviceChannels.size).toBe(0);
+
+    // Open and enabled: admitted and tracked.
+    const okChannel = new MockSocket();
+    await internals.admitDirectDeviceChannel(open(), okChannel, meta);
+    expect(internals.directDeviceChannels.has(okChannel)).toBe(true);
+    await server.close();
+  });
+
   test("rejects session messages before hello", async () => {
     const server = createServer();
     const socket = new MockSocket();

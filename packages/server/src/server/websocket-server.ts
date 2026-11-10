@@ -1149,6 +1149,21 @@ export class VoiceAssistantWebSocketServer {
   }
 
   /**
+   * Runs when the device proof passed. The handshake awaited, so the raw socket may be closing and device login
+   * may have been turned off meanwhile. It throws then, so attachEncryptedSocket refuses with 4403: a device that
+   * ignores the close frame must not be admitted and served.
+   */
+  private admitDirectDeviceChannel(
+    ws: Pick<WebSocket, "readyState" | "once" | "OPEN">,
+    channel: WebSocketLike,
+    meta: ExternalSocketMetadata | undefined,
+  ): Promise<void> {
+    if (ws.readyState !== ws.OPEN || !this.directDeviceLogin) throw new Error("Not paired");
+    this.trackDirectDeviceChannel(ws, channel);
+    return this.attachExternalSocket(channel, meta);
+  }
+
+  /**
    * The raw socket may have closed during the awaited handshake: its close event already fired, so a channel
    * added now would stay in the set for good. Track only a socket that is still open.
    */
@@ -1212,8 +1227,7 @@ export class VoiceAssistantWebSocketServer {
       this.logger,
       (socket, meta) => {
         release();
-        this.trackDirectDeviceChannel(ws, socket);
-        return this.attachExternalSocket(socket, meta);
+        return this.admitDirectDeviceChannel(ws, socket, meta);
       },
       metadata,
       login.deviceGate,
