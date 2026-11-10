@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { DeviceRegistry } from "./pairing/device-registry.js";
 import { RELAY_DEVICE_DEFAULT_PERMISSIONS } from "./authorization/index.js";
 import { createControllerService } from "./plugins/controller-service.js";
@@ -1294,6 +1295,26 @@ describe("relay external socket reconnect behavior", () => {
     );
     await Promise.resolve();
     expect(session.handleMessage).not.toHaveBeenCalled();
+    await server.close();
+  });
+
+  test("F3: a direct device channel is tracked only while the raw socket is open, and untracked on close", async () => {
+    const server = createServer();
+    const internals = asInternals<{
+      directDeviceChannels: Set<unknown>;
+      trackDirectDeviceChannel: (ws: unknown, channel: unknown) => void;
+    }>(server);
+    const closedRaw = Object.assign(new EventEmitter(), { readyState: 3, OPEN: 1 });
+    const closedChannel = {};
+    internals.trackDirectDeviceChannel(closedRaw, closedChannel);
+    expect(internals.directDeviceChannels.has(closedChannel)).toBe(false);
+
+    const openRaw = Object.assign(new EventEmitter(), { readyState: 1, OPEN: 1 });
+    const openChannel = {};
+    internals.trackDirectDeviceChannel(openRaw, openChannel);
+    expect(internals.directDeviceChannels.has(openChannel)).toBe(true);
+    openRaw.emit("close");
+    expect(internals.directDeviceChannels.has(openChannel)).toBe(false);
     await server.close();
   });
 

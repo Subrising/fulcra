@@ -499,7 +499,7 @@
           "type": "object",
           "properties": {
             "advertise": {
-              "description": "Direct routes to tell paired devices, when set. Replaces the auto list. For a daemon behind a proxy such as tailscale serve. Host: Tailscale or private IPv4, or a *.ts.net name. Max 8.",
+              "description": "Direct routes to tell paired devices, when set. Replaces the auto list. For a daemon behind a proxy such as tailscale serve. Host: Tailscale or private IPv4, or a *.ts.net name. Max 8. tls: connect with TLS (default true for a *.ts.net name).",
               "type": "array",
               "items": {
                 "type": "object",
@@ -509,6 +509,9 @@
                   },
                   "port": {
                     "type": "number"
+                  },
+                  "tls": {
+                    "type": "boolean"
                   }
                 },
                 "required": ["host", "port"],

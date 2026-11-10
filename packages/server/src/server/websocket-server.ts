@@ -1148,6 +1148,19 @@ export class VoiceAssistantWebSocketServer {
     this.advertisedDirectRoutes = routes;
   }
 
+  /**
+   * The raw socket may have closed during the awaited handshake: its close event already fired, so a channel
+   * added now would stay in the set for good. Track only a socket that is still open.
+   */
+  private trackDirectDeviceChannel(
+    ws: Pick<WebSocket, "readyState" | "once" | "OPEN">,
+    channel: WebSocketLike,
+  ): void {
+    if (ws.readyState !== ws.OPEN) return;
+    this.directDeviceChannels.add(channel);
+    ws.once("close", () => this.directDeviceChannels.delete(channel));
+  }
+
   /** Every direct device socket, admitted or not, so turning the login off can close them. */
   private directDeviceSockets = new Set<WebSocket>();
 
@@ -1199,8 +1212,7 @@ export class VoiceAssistantWebSocketServer {
       this.logger,
       (socket, meta) => {
         release();
-        this.directDeviceChannels.add(socket);
-        ws.once("close", () => this.directDeviceChannels.delete(socket));
+        this.trackDirectDeviceChannel(ws, socket);
         return this.attachExternalSocket(socket, meta);
       },
       metadata,

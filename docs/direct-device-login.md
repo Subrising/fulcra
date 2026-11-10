@@ -25,7 +25,10 @@ A daemon behind a proxy (the Mac mini listens on `127.0.0.1:6767` behind `tailsc
 - `host` is a Tailscale IPv4 (`100.64.0.0/10`), a private LAN IPv4, or a `*.ts.net` name. `port` is 1 to 65535.
 - The daemon drops bad entries and repeats, keeps the first 8, and writes one warning (`resolveAdvertisedDirectRoutes`). It reads the list at start.
 - The list only names where to connect. The route still needs the paired-device login, and no password goes in the list, the offer or the QR code.
-- A `*.ts.net` name with a non-Tailscale proxy port must really reach this daemon's `/ws`. The daemon does not check it.
+- `tls` is optional and goes to the app as `DirectRoute.tls` (an optional protocol field). A `*.ts.net` name defaults to `true`, because `tailscale serve` terminates HTTPS; an IP defaults to plain `ws`. The app saves `useTls` from the flag.
+- The Mac mini case: it listens on `127.0.0.1:6767` behind `tailscale serve`, so advertise its tailnet name on the HTTPS port: `{ "host": "<mini>.<tailnet>.ts.net", "port": 443 }`.
+- Host and app use the same rules: canonical decimal octets only (`010.0.0.1`, `0xa.0.0.1`, `10..0.1` are refused) and an anchored lower-case `*.ts.net` name.
+- The daemon does not check that the name and port reach this daemon's `/ws`.
 
 ## Why
 

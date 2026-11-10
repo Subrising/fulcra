@@ -6,11 +6,14 @@ export const MAX_DIRECT_ROUTES = 8;
 
 type Interfaces = ReturnType<typeof os.networkInterfaces>;
 
+/** Canonical decimal octets only: "010.0.0.1" and "0xa.0.0.1" are not addresses the URL parser reads the same way. */
+const CANONICAL_OCTET = /^(0|[1-9]\d{0,2})$/;
+
 function ipv4Parts(address: string): number[] | null {
-  const parts = address.split(".").map(Number);
-  return parts.length === 4 && parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)
-    ? parts
-    : null;
+  const parts = address.split(".");
+  if (parts.length !== 4 || !parts.every((part) => CANONICAL_OCTET.test(part))) return null;
+  const numbers = parts.map(Number);
+  return numbers.every((n) => n <= 255) ? numbers : null;
 }
 
 /** Tailscale gives each device an address in 100.64.0.0/10 (CGNAT). */
@@ -83,11 +86,12 @@ function advertisedKind(host: string): DirectRoute["kind"] | null {
  * Checks the `daemon.directRoutes.advertise` setting. A host behind a proxy (for example `tailscale serve`)
  * listens on loopback, so the auto list is empty and the operator names the routes instead.
  * An entry must be a Tailscale or private LAN IPv4 address, or a `*.ts.net` name, with a port from 1 to 65535.
+ * `tls` is optional; a `*.ts.net` name defaults to true.
  * It drops bad entries and repeats, keeps the first 8, and calls `warn` once if it dropped anything.
  * Entries never carry a password: they only name where to connect.
  */
 export function resolveAdvertisedDirectRoutes(
-  entries: ReadonlyArray<{ host?: unknown; port?: unknown }> | undefined,
+  entries: ReadonlyArray<{ host?: unknown; port?: unknown; tls?: unknown }> | undefined,
   warn: (message: string, dropped: number) => void,
 ): DirectRoute[] {
   if (!entries || entries.length === 0) return [];
@@ -98,7 +102,15 @@ export function resolveAdvertisedDirectRoutes(
     const host = typeof entry.host === "string" ? entry.host.trim().toLowerCase() : "";
     const port = entry.port;
     const kind = host ? advertisedKind(host) : null;
-    if (!kind || typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535) {
+    const tlsValid = entry.tls === undefined || typeof entry.tls === "boolean";
+    if (
+      !kind ||
+      !tlsValid ||
+      typeof port !== "number" ||
+      !Number.isInteger(port) ||
+      port < 1 ||
+      port > 65535
+    ) {
       dropped++;
       continue;
     }
@@ -112,7 +124,9 @@ export function resolveAdvertisedDirectRoutes(
       continue;
     }
     seen.add(endpoint);
-    routes.push({ kind, endpoint });
+    // A tailnet name is served over HTTPS by `tailscale serve`, so it defaults to TLS; an entry can say otherwise.
+    const tls = entry.tls === undefined ? TAILNET_HOSTNAME.test(host) : entry.tls;
+    routes.push(tls ? { kind, endpoint, tls: true } : { kind, endpoint });
   }
   if (dropped > 0) {
     warn(

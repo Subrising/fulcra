@@ -2855,7 +2855,7 @@ export class HostRuntimeStore {
   private learnDirectDeviceRoutes(
     serverId: string,
     serverInfo: {
-      directRoutes?: ReadonlyArray<{ endpoint: string }>;
+      directRoutes?: ReadonlyArray<{ endpoint: string; tls?: boolean }>;
       features?: { directDeviceLogin?: boolean };
     },
     activeConnectionId: string | null,

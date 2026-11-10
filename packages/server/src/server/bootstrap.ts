@@ -541,7 +541,7 @@ export interface PaseoDaemonConfig {
   /** Device-key login on direct sockets. Unset: follows relay enabled/disabled. */
   directDeviceLogin?: boolean;
   /** Routes to advertise to paired devices instead of the auto list (`daemon.directRoutes.advertise`). */
-  directRoutesAdvertise?: Array<{ host: string; port: number }>;
+  directRoutesAdvertise?: Array<{ host: string; port: number; tls?: boolean }>;
   relayPublicEndpoint?: string;
   relayUseTls?: boolean;
   relayPublicUseTls?: boolean;

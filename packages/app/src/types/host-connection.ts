@@ -357,11 +357,22 @@ export function canLearnDirectRoutesFrom(
   return Boolean(active && (active.type === "relay" || isDirectDeviceConnection(active)));
 }
 
+// Same rules as the host (`direct-routes.ts`): canonical decimal octets only, and an anchored *.ts.net name.
+const CANONICAL_OCTET = /^(0|[1-9]\d{0,2})$/;
+const CANONICAL_PORT = /^[1-9]\d{0,4}$/;
+const TAILNET_HOSTNAME = /^(?=.{1,100}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+ts\.net$/;
+
 function isTailscaleOrLanEndpoint(endpoint: string): boolean {
-  const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3}):(\d{1,5})$/.exec(endpoint);
-  if (!match) return false;
-  const [a, b, c, d, port] = match.slice(1).map(Number);
-  if ([a, b, c, d].some((n) => n > 255) || port < 1 || port > 65535) return false;
+  const split = endpoint.lastIndexOf(":");
+  if (split < 1) return false;
+  const host = endpoint.slice(0, split);
+  const portText = endpoint.slice(split + 1);
+  if (!CANONICAL_PORT.test(portText) || Number(portText) > 65535) return false;
+  if (TAILNET_HOSTNAME.test(host)) return true;
+  const parts = host.split(".");
+  if (parts.length !== 4 || !parts.every((part) => CANONICAL_OCTET.test(part))) return false;
+  const [a, b, c, d] = parts.map(Number);
+  if ([a, b, c, d].some((n) => n > 255)) return false;
   return (
     (a === 100 && b >= 64 && b <= 127) ||
     a === 10 ||
@@ -379,7 +390,7 @@ function isTailscaleOrLanEndpoint(endpoint: string): boolean {
  */
 export function withLearnedDirectDeviceRoutes(
   host: HostProfile,
-  routes: ReadonlyArray<{ endpoint: string }> | undefined,
+  routes: ReadonlyArray<{ endpoint: string; tls?: boolean }> | undefined,
   hostSupportsDeviceLogin: boolean,
 ): HostProfile {
   const relay = host.connections.find(
@@ -390,20 +401,22 @@ export function withLearnedDirectDeviceRoutes(
   const learned: HostConnection[] = [];
   if (relay && hostSupportsDeviceLogin) {
     for (const route of (routes ?? []).slice(0, 8)) {
+      // Check the raw text before any parser: a lenient parser reads "010.0.0.1" as another address.
+      if (!isTailscaleOrLanEndpoint(route.endpoint)) continue;
       let endpoint: string;
       try {
         endpoint = normalizeHostPort(route.endpoint);
       } catch {
         continue;
       }
-      if (!isTailscaleOrLanEndpoint(endpoint)) continue;
+      if (endpoint !== route.endpoint) continue;
       const id = `${DIRECT_DEVICE_ID_PREFIX}${endpoint}`;
       if (learned.some((connection) => connection.id === id)) continue;
       learned.push({
         id,
         type: "directTcp",
         endpoint,
-        useTls: false,
+        useTls: route.tls === true,
         daemonPublicKeyB64: relay.daemonPublicKeyB64,
       });
     }

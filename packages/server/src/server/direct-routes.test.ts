@@ -73,7 +73,7 @@ describe("advertised direct routes", () => {
       () => undefined,
     );
     expect(advertised).toEqual([
-      { kind: "tailscale", endpoint: "mini.tail1234.ts.net:443" },
+      { kind: "tailscale", endpoint: "mini.tail1234.ts.net:443", tls: true },
       { kind: "tailscale", endpoint: "100.100.1.2:6767" },
     ]);
     expect(listDirectRoutes({ listenHost: "127.0.0.1", port: 6767, advertised })).toEqual(
@@ -122,4 +122,40 @@ describe("advertised direct routes", () => {
     expect(resolveAdvertisedDirectRoutes(many, warn)).toHaveLength(MAX_DIRECT_ROUTES);
     expect(warn).toHaveBeenCalledTimes(1);
   });
+});
+
+describe("F1/F2: tls flag and canonical IPv4", () => {
+  it("a *.ts.net name defaults to tls; an IP does not; an explicit tls wins", () => {
+    const routes = resolveAdvertisedDirectRoutes(
+      [
+        { host: "mini.tail1234.ts.net", port: 443 },
+        { host: "100.100.1.2", port: 6767 },
+        { host: "100.100.1.3", port: 443, tls: true },
+        { host: "other.tail1234.ts.net", port: 80, tls: false },
+      ],
+      () => undefined,
+    );
+    expect(routes).toEqual([
+      { kind: "tailscale", endpoint: "mini.tail1234.ts.net:443", tls: true },
+      { kind: "tailscale", endpoint: "100.100.1.2:6767" },
+      { kind: "tailscale", endpoint: "100.100.1.3:443", tls: true },
+      { kind: "tailscale", endpoint: "other.tail1234.ts.net:80" },
+    ]);
+  });
+  it("drops a non-boolean tls", () => {
+    const warn = vi.fn();
+    expect(
+      resolveAdvertisedDirectRoutes([{ host: "10.0.0.1", port: 1, tls: "yes" }], warn),
+    ).toEqual([]);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+  it.each(["010.0.0.1", "100.064.0.1", "0xa.0.0.1", "1e1.0.0.1", "10..0.1", "10. 0.0.1"])(
+    "refuses the non-canonical address %s in an advertised entry and in the auto list",
+    (address) => {
+      const warn = vi.fn();
+      expect(resolveAdvertisedDirectRoutes([{ host: address, port: 6767 }], warn)).toEqual([]);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(listDirectRoutes({ listenHost: address, port: 6767 })).toEqual([]);
+    },
+  );
 });

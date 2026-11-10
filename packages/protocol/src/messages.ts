@@ -4427,6 +4427,8 @@ const ServerCapabilitiesFromUnknownSchema = z
 export const DirectRouteSchema = z.object({
   kind: z.enum(["tailscale", "lan"]),
   endpoint: z.string().min(1).max(128),
+  // Optional: older hosts omit it. True means connect with TLS (wss), as for a `tailscale serve` HTTPS port.
+  tls: z.boolean().optional(),
 });
 export type DirectRoute = z.infer<typeof DirectRouteSchema>;
 
