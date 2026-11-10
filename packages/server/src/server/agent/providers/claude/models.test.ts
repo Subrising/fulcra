@@ -62,7 +62,8 @@ async function createClaudeConfigDirWithRawSettings(settings: string): Promise<s
 
 // A failed probe reports nothing, so the catalog omits Mythos, which Claude Code must advertise.
 function getClaudeModelsWithoutMythos() {
-  return getClaudeModels().filter((model) => model.id !== "claude-mythos-5-1");
+  // Same Claude Code version as createCatalogClient, so version-gated models match.
+  return getClaudeModels("2.1.293").filter((model) => model.id !== "claude-mythos-5-1");
 }
 
 function createCatalogClient(
@@ -88,6 +89,7 @@ describe("getClaudeModels", () => {
       "claude-opus-5-5",
       "claude-opus-5",
       "claude-mythos-5-1",
+      "claude-fable-5-2",
       "claude-fable-5-1",
       "claude-fable-5",
       "claude-fable-5[1m]",
@@ -136,6 +138,7 @@ describe("getClaudeModels", () => {
         ["claude-opus-5-5", 1_000_000],
         ["claude-opus-5", 1_000_000],
         ["claude-mythos-5-1", 1_000_000],
+        ["claude-fable-5-2", 1_000_000],
         ["claude-fable-5-1", 1_000_000],
         ["claude-fable-5", 1_000_000],
         ["claude-fable-5[1m]", 1_000_000],
@@ -251,6 +254,7 @@ describe("getClaudeModels", () => {
     ["claude-sonnet-5[1m]", true, "high"],
     ["claude-sonnet-5-20260101", true, "high"],
     ["claude-fable-5", false, "high"],
+    ["claude-fable-5-2", false, "medium"],
     ["claude-fable-5-1", false, "high"],
     ["claude-haiku-5-5", true, "medium"],
     ["claude-haiku-5-5-20261007", true, "medium"],
@@ -764,6 +768,57 @@ describe("Claude Fable 5 catalog", () => {
   });
 });
 
+describe("Claude Fable 5.2 catalog", () => {
+  it("offers one Fable 5.2 entry above Fable 5.1, with medium default thinking", () => {
+    const fableModels = getClaudeModels()
+      .filter((model) => model.id.startsWith("claude-fable-5-"))
+      .map(({ id, label, description, contextWindowMaxTokens, defaultThinkingOptionId }) => ({
+        id,
+        label,
+        description,
+        contextWindowMaxTokens,
+        defaultThinkingOptionId,
+      }));
+
+    expect(fableModels.slice(0, 2)).toEqual([
+      {
+        id: "claude-fable-5-2",
+        label: "Fable 5.2",
+        description: "Fable 5.2 · Most powerful model",
+        contextWindowMaxTokens: 1_000_000,
+        defaultThinkingOptionId: "medium",
+      },
+      {
+        id: "claude-fable-5-1",
+        label: "Fable 5.1",
+        description: "Fable 5.1 · Previous release",
+        contextWindowMaxTokens: 1_000_000,
+        defaultThinkingOptionId: "high",
+      },
+    ]);
+  });
+
+  it("offers Fable 5.2 only from Claude Code 2.1.321", () => {
+    const hasFable52 = (version: string) =>
+      getClaudeModels(version).some((model) => model.id === "claude-fable-5-2");
+    expect(hasFable52("2.1.320")).toBe(false);
+    expect(hasFable52("2.1.321")).toBe(true);
+  });
+
+  it("does not change the default or the worker default", () => {
+    const models = getClaudeModels("2.1.321");
+    expect(models.filter((m) => m.isDefault).map((m) => m.id)).toEqual(["claude-opus-5-5"]);
+    expect(models.filter((m) => m.metadata?.workerDefault === true).map((m) => m.id)).toEqual([
+      "claude-sonnet-5-5",
+    ]);
+  });
+
+  it("resolves suffixed and dated Fable 5.2 IDs to the catalog entry", () => {
+    expect(findClaudeModel("claude-fable-5-2[1m]")?.id).toBe("claude-fable-5-2");
+    expect(findClaudeModel("claude-fable-5-2-20261110")?.id).toBe("claude-fable-5-2");
+  });
+});
+
 describe("Claude Fable 5.1 catalog", () => {
   it("offers one Fable 5.1 entry with a 1M context window", () => {
     const fable51Models = getClaudeModels()
@@ -912,6 +967,7 @@ describe("claudeManifestModelSupportsFastMode", () => {
     expect(claudeManifestModelSupportsFastMode("claude-sonnet-5")).toBe(false);
     expect(claudeManifestModelSupportsFastMode("claude-fable-5")).toBe(false);
     expect(claudeManifestModelSupportsFastMode("claude-fable-5-1")).toBe(false);
+    expect(claudeManifestModelSupportsFastMode("claude-fable-5-2")).toBe(true);
   });
 });
 
