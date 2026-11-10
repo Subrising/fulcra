@@ -1,4 +1,5 @@
 import { initializeWindowsPrivateFiles } from "./windows-private-file.js";
+import { resolveAdvertisedDirectRoutes } from "./direct-routes.js";
 import { resourceCleanupMode } from "./agent/session-resources.js";
 import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 // FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
@@ -539,6 +540,8 @@ export interface PaseoDaemonConfig {
   relayPairingOfferTtlSeconds?: number;
   /** Device-key login on direct sockets. Unset: follows relay enabled/disabled. */
   directDeviceLogin?: boolean;
+  /** Routes to advertise to paired devices instead of the auto list (`daemon.directRoutes.advertise`). */
+  directRoutesAdvertise?: Array<{ host: string; port: number; tls?: boolean }>;
   relayPublicEndpoint?: string;
   relayUseTls?: boolean;
   relayPublicUseTls?: boolean;
@@ -2448,6 +2451,11 @@ export async function createPaseoDaemon(
                 (config.directDeviceLogin ?? relayOn) ? directDeviceLogin : null,
               );
             applyDirectDeviceLogin(relayEnabled);
+            wsServer.setAdvertisedDirectRoutes(
+              resolveAdvertisedDirectRoutes(config.directRoutesAdvertise, (message, dropped) =>
+                logger.warn({ dropped }, message),
+              ),
+            );
             relayRuntime = createRelayRuntime({
               config: {
                 enabled: relayEnabled,

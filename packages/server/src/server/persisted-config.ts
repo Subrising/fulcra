@@ -347,6 +347,21 @@ export const PersistedConfigSchema = z
           })
           .strict()
           .optional(),
+        directRoutes: z
+          .object({
+            advertise: z
+              .array(
+                z
+                  .object({ host: z.string(), port: z.number(), tls: z.boolean().optional() })
+                  .strict(),
+              )
+              .optional()
+              .describe(
+                "Direct routes to tell paired devices, when set. Replaces the auto list. For a daemon behind a proxy such as tailscale serve. Host: Tailscale or private IPv4, or a *.ts.net name. Max 8. tls: connect with TLS (default true for a *.ts.net name).",
+              ),
+          })
+          .strict()
+          .optional(),
         serviceProxy: z
           .object({
             // COMPAT(serviceProxyEnabled): added 2026-06-02, remove after 2026-12-02.

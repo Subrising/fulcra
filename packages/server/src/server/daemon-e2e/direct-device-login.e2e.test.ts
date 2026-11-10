@@ -137,6 +137,25 @@ describe("direct device login", () => {
       expect(isRouteAudience(other)).toBe(false);
   });
 
+  test("D2: a direct device without the Command Centre grant has no Command Centre permission; with it, it has", async () => {
+    const { client, registry, device } = await setup({ password: "owner-secret" });
+    const off = client();
+    await off.connect();
+    const offPermissions = JSON.stringify(off.getLastServerInfoMessage()?.permissions ?? []);
+    // Sessions and chat work: the device still holds its default permissions.
+    expect(offPermissions).not.toBe("[]");
+    expect(offPermissions).not.toContain("command-centre.manage");
+    await off.close();
+
+    await registry.setCommandCentre(device.deviceId, true, () => {});
+    const on = client();
+    await on.connect();
+    expect(JSON.stringify(on.getLastServerInfoMessage()?.permissions ?? [])).toContain(
+      "command-centre.manage",
+    );
+    await on.close();
+  });
+
   test("L3: the 33rd unadmitted device-protocol upgrade is closed with 1013", async () => {
     await setup();
     const url = `ws://127.0.0.1:${daemon!.port}/ws`;

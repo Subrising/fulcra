@@ -96,6 +96,89 @@ describe("withLearnedDirectDeviceRoutes", () => {
   });
 });
 
+describe("D6: a phone paired through a device route stores no host password", () => {
+  it("the saved host profile, after learning routes and a reload, has no password or secret field", () => {
+    const next = withLearnedDirectDeviceRoutes(
+      host([relay]),
+      [{ endpoint: "100.101.102.103:6767" }, { endpoint: "192.168.1.20:6767" }],
+      true,
+    );
+    const stored = JSON.stringify(normalizeStoredHostProfile(JSON.parse(JSON.stringify(next))));
+    for (const word of ["password", "secret", "token", "credential"]) {
+      expect(stored.toLowerCase()).not.toContain(word);
+    }
+    // Every route that signs in with the device key has the host key and no password field.
+    for (const c of next.connections.filter(isDirectDeviceConnection)) {
+      expect(Object.keys(c)).not.toContain("password");
+    }
+  });
+});
+
+describe("F1: a *.ts.net route", () => {
+  it("is kept with TLS from the flag, and tried before the relay", () => {
+    const next = withLearnedDirectDeviceRoutes(
+      host([relay]),
+      [{ endpoint: "mini.tail1234.ts.net:443", tls: true }],
+      true,
+    );
+    const direct = next.connections.filter(isDirectDeviceConnection);
+    expect(direct).toHaveLength(1);
+    expect(direct[0]).toMatchObject({
+      endpoint: "mini.tail1234.ts.net:443",
+      useTls: true,
+      daemonPublicKeyB64: KEY,
+    });
+    expect(JSON.stringify(direct[0]).toLowerCase()).not.toContain("password");
+    const candidates = next.connections.map((connection) => ({
+      connectionId: connection.id,
+      connection,
+    }));
+    const probes = new Map([
+      [relay.id, { status: "available" as const, latencyMs: 5 }],
+      [direct[0].id, { status: "available" as const, latencyMs: 400 }],
+    ]);
+    expect(selectBestConnection({ candidates, probeByConnectionId: probes })).toBe(direct[0].id);
+  });
+  it("uses ws without the flag, and drops look-alike names", () => {
+    const next = withLearnedDirectDeviceRoutes(
+      host([relay]),
+      [
+        { endpoint: "a.tail1.ts.net:80" },
+        { endpoint: "evil.ts.net.example.com:443", tls: true },
+        { endpoint: "ts.net:443" },
+        { endpoint: "A.TAIL1.ts.net:443" },
+      ],
+      true,
+    );
+    const direct = next.connections.filter(isDirectDeviceConnection);
+    expect(direct.map((c) => c.type === "directTcp" && [c.endpoint, c.useTls])).toEqual([
+      ["a.tail1.ts.net:80", false],
+    ]);
+  });
+});
+
+describe("F2: only canonical decimal IPv4 addresses", () => {
+  it.each([
+    "010.0.0.1:6767",
+    "100.064.0.1:6767",
+    "0xa.0.0.1:6767",
+    "1e1.0.0.1:6767",
+    "10..0.1:6767",
+    "10. 0.0.1:6767",
+  ])("drops %s", (endpoint) => {
+    const h = host([relay]);
+    expect(withLearnedDirectDeviceRoutes(h, [{ endpoint }], true)).toBe(h);
+  });
+  it("keeps a canonical address", () => {
+    const next = withLearnedDirectDeviceRoutes(
+      host([relay]),
+      [{ endpoint: "10.0.0.1:6767" }],
+      true,
+    );
+    expect(next.connections.filter(isDirectDeviceConnection)).toHaveLength(1);
+  });
+});
+
 describe("route order: direct first, relay as fallback", () => {
   const next = withLearnedDirectDeviceRoutes(host([relay]), [{ endpoint: "10.0.0.5:1" }], true);
   const candidates = next.connections.map((connection) => ({

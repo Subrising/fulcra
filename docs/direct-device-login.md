@@ -2,7 +2,7 @@
 
 Status: built for FU-746 (10 Nov 2026), in the `pairing` ledger patch. It still needs the one fresh security review.
 
-What shipped: the daemon accepts the subprotocol `fulcra.device.v1` on the existing `/ws` port (`websocket-server.ts`, `attachDirectDeviceSocket`). It runs the relay v3 channel and `RelayDeviceGate.admit` with `allowClaim: false`, so a direct socket never pairs a device. After sign-in, `server_info` carries `features.directDeviceLogin` and `directRoutes` (Tailscale first, then LAN; `direct-routes.ts`). The pairing offer is unchanged. A paired app saves those routes as `directTcp` connections that hold the host key (`daemonPublicKeyB64`) and no password (`withLearnedDirectDeviceRoutes`), and the existing route ranking tries them before the relay. Acceptance rows D1, D3, D4 and D5 have tests; D2 and D6 do not yet.
+What shipped: the daemon accepts the subprotocol `fulcra.device.v1` on the existing `/ws` port (`websocket-server.ts`, `attachDirectDeviceSocket`). It runs the relay v3 channel and `RelayDeviceGate.admit` with `allowClaim: false`, so a direct socket never pairs a device. After sign-in, `server_info` carries `features.directDeviceLogin` and `directRoutes` (Tailscale first, then LAN; `direct-routes.ts`). The pairing offer is unchanged. A paired app saves those routes as `directTcp` connections that hold the host key (`daemonPublicKeyB64`) and no password (`withLearnedDirectDeviceRoutes`), and the existing route ranking tries them before the relay. Acceptance rows D1 to D6 all have tests (FU-765 added D2 and D6).
 
 Rules from the FU-746 security review:
 
@@ -10,7 +10,25 @@ Rules from the FU-746 security review:
 - **Audience:** `server_info.directRoutes` goes only to the owner and to a paired device (`isRouteAudience`). The host lists at most 8 routes, Tailscale first. The wire schema has no cap, so a longer list from a newer host still parses.
 - **Learning:** An app learns routes only while its active connection is the relay or a device route (`canLearnDirectRoutesFrom`). A typed address or desktop socket never teaches routes.
 - **Client:** Every path that opens a device route builds its config with `buildDeviceRouteClientConfig`. It sends no host password and no local credential.
+- **Relay off:** Turning device login off detaches each admitted direct channel at once (`enableDirectDeviceLogin`), then closes it with 4403. A device that ignores the close frame gets no more requests served.
 - **Load:** At most 32 `fulcra.device.v1` upgrades may wait for a device proof. The 33rd closes with 1013.
+
+## Advertised routes
+
+A daemon behind a proxy (the Mac mini listens on `127.0.0.1:6767` behind `tailscale serve`) has no routes the auto list can find. Set `daemon.directRoutes.advertise` in `config.json`:
+
+```json
+{ "daemon": { "directRoutes": { "advertise": [{ "host": "mini.tail1234.ts.net", "port": 443 }] } } }
+```
+
+- A non-empty list replaces the auto list. An empty or missing list keeps the auto list.
+- `host` is a Tailscale IPv4 (`100.64.0.0/10`), a private LAN IPv4, or a `*.ts.net` name. `port` is 1 to 65535.
+- The daemon drops bad entries and repeats, keeps the first 8, and writes one warning (`resolveAdvertisedDirectRoutes`). It reads the list at start.
+- The list only names where to connect. The route still needs the paired-device login, and no password goes in the list, the offer or the QR code.
+- `tls` is optional and goes to the app as `DirectRoute.tls` (an optional protocol field). A `*.ts.net` name defaults to `true`, because `tailscale serve` terminates HTTPS; an IP defaults to plain `ws`. The app saves `useTls` from the flag.
+- The Mac mini case: it listens on `127.0.0.1:6767` behind `tailscale serve`, so advertise its tailnet name on the HTTPS port: `{ "host": "<mini>.<tailnet>.ts.net", "port": 443 }`.
+- Host and app use the same rules: canonical decimal octets only (`010.0.0.1`, `0xa.0.0.1`, `10..0.1` are refused) and an anchored lower-case `*.ts.net` name.
+- The daemon does not check that the name and port reach this daemon's `/ws`.
 
 ## Why
 

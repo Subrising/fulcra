@@ -118,6 +118,7 @@ import { DIRECT_DEVICE_PROTOCOL } from "@getpaseo/protocol/daemon-credential";
 import type { KeyPair } from "@getpaseo/client/relay-v3";
 import type { RelayDeviceGate } from "./pairing/relay-device-gate.js";
 import { attachEncryptedSocket } from "./relay-transport.js";
+import type { DirectRoute } from "@getpaseo/protocol/messages";
 import { listDirectRoutes } from "./direct-routes.js";
 import {
   WebSocketRuntimeMetricsWindow,
@@ -1124,6 +1125,12 @@ export class VoiceAssistantWebSocketServer {
     this.directDeviceLogin = args;
     if (args) return;
     // Turning it off ends live direct device sessions too, not only new logins.
+    // Detach the admitted channel first: a device that ignores the close frame must not run requests
+    // until the close timeout. The session is keyed by the channel, not by the raw socket.
+    for (const channel of this.directDeviceChannels) {
+      void this.detachSocket(channel, { code: 4403, reason: "Not paired" });
+    }
+    this.directDeviceChannels.clear();
     for (const ws of this.directDeviceSockets) {
       try {
         ws.close(4403, "Not paired");
@@ -1134,8 +1141,46 @@ export class VoiceAssistantWebSocketServer {
     this.broadcastCapabilitiesUpdate();
   }
 
+  private advertisedDirectRoutes: DirectRoute[] = [];
+
+  /** Routes from `daemon.directRoutes.advertise`. A non-empty list replaces the auto list. */
+  public setAdvertisedDirectRoutes(routes: DirectRoute[]): void {
+    this.advertisedDirectRoutes = routes;
+  }
+
+  /**
+   * Runs when the device proof passed. The handshake awaited, so the raw socket may be closing and device login
+   * may have been turned off meanwhile. It throws then, so attachEncryptedSocket refuses with 4403: a device that
+   * ignores the close frame must not be admitted and served.
+   */
+  private admitDirectDeviceChannel(
+    ws: Pick<WebSocket, "readyState" | "once" | "OPEN">,
+    channel: WebSocketLike,
+    meta: ExternalSocketMetadata | undefined,
+  ): Promise<void> {
+    if (ws.readyState !== ws.OPEN || !this.directDeviceLogin) throw new Error("Not paired");
+    this.trackDirectDeviceChannel(ws, channel);
+    return this.attachExternalSocket(channel, meta);
+  }
+
+  /**
+   * The raw socket may have closed during the awaited handshake: its close event already fired, so a channel
+   * added now would stay in the set for good. Track only a socket that is still open.
+   */
+  private trackDirectDeviceChannel(
+    ws: Pick<WebSocket, "readyState" | "once" | "OPEN">,
+    channel: WebSocketLike,
+  ): void {
+    if (ws.readyState !== ws.OPEN) return;
+    this.directDeviceChannels.add(channel);
+    ws.once("close", () => this.directDeviceChannels.delete(channel));
+  }
+
   /** Every direct device socket, admitted or not, so turning the login off can close them. */
   private directDeviceSockets = new Set<WebSocket>();
+
+  /** The admitted channel for each direct device socket. The session is keyed by the channel. */
+  private directDeviceChannels = new Set<WebSocketLike>();
 
   /** Upgrades that offered fulcra.device.v1 and have not yet proved a device key. Anyone can open these. */
   private unadmittedDirectDeviceSockets = 0;
@@ -1182,7 +1227,7 @@ export class VoiceAssistantWebSocketServer {
       this.logger,
       (socket, meta) => {
         release();
-        return this.attachExternalSocket(socket, meta);
+        return this.admitDirectDeviceChannel(ws, socket, meta);
       },
       metadata,
       login.deviceGate,
@@ -2389,6 +2434,7 @@ export class VoiceAssistantWebSocketServer {
     return listDirectRoutes({
       listenHost: this.getDaemonTcpHost?.() ?? null,
       port: this.getDaemonTcpPort?.() ?? null,
+      advertised: this.advertisedDirectRoutes,
     });
   }
 
