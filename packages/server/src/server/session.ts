@@ -149,7 +149,11 @@ import {
   isStoredAgentProviderAvailable,
   toAgentPersistenceHandle,
 } from "./persistence-hooks.js";
-import { ensureAgentLoaded, ensureUnarchivedAgentLoaded } from "./agent/agent-loading.js";
+import {
+  agentLoadInProgress,
+  ensureAgentLoaded,
+  ensureUnarchivedAgentLoaded,
+} from "./agent/agent-loading.js";
 import {
   sendPromptToAgent,
   SteerUnavailableError,
@@ -406,6 +410,7 @@ type ProviderSubagentManagerEvent = Extract<
 // the entire session message if they encounter an unknown provider.
 // Review explanations and map summaries are short and read by people deciding where to look: a cheap model is enough.
 const REVIEW_EXPLAIN_MODEL = "claude-haiku-4-5-20251001";
+const COLD_RECEIVER_NOTE = "accepted, delivered after load";
 const LEGACY_PROVIDER_IDS = new Set(["claude", "codex", "opencode"]);
 const MIN_VERSION_ALL_PROVIDERS = "0.1.45";
 const TIMELINE_TURN_PAGE_DEFAULT = 100;
@@ -10212,6 +10217,7 @@ export class Session {
     prompt: ReturnType<typeof buildAgentPrompt>,
     deliveryNote: (note: string, state?: "held") => void,
     expectedSessionId?: string | null,
+    deferToQueue = false,
   ): () => Promise<void> {
     const checkSendActive = captureSendRequestCheck();
     // FULCRA(orchestration): The owner, 10 Oct: "human messages should steer". Nothing changes for an idle target.
@@ -10356,7 +10362,7 @@ export class Session {
           agentStorage: this.agentStorage,
           logger: this.sessionLogger,
         });
-        if (msg.activeTurnBehavior === "steer") {
+        if (msg.activeTurnBehavior === "steer" && !deferToQueue) {
           const result = await tryAgentSteer();
           if (result.delivered) return;
           resumeAt = result.resumeAt;
@@ -10367,6 +10373,7 @@ export class Session {
             deliveryNote(
               `accepted; held: the receiver's queue waits for a usage-limit reset at ${new Date(heldUntil).toISOString()}`,
             );
+          else if (deferToQueue) deliveryNote(COLD_RECEIVER_NOTE);
           else if (this.agentManager.hasInFlightRun(agentId))
             deliveryNote("accepted; delivered after the current turn");
           else deliveryNote("accepted; delivered now");
@@ -10389,7 +10396,7 @@ export class Session {
         return;
       }
       const busy = this.agentManager.hasInFlightRun(agentId);
-      if (msg.queue) {
+      if (msg.queue || deferToQueue) {
         if (msg.inputProvenance !== undefined) throw new ProvenanceRefusedError();
         const queue = queuedAgentMessagesFor({
           agentManager: this.agentManager,
@@ -10414,7 +10421,7 @@ export class Session {
           .catch((error) => {
             this.handleAgentRunError(agentId, error, "Failed to deliver held message");
           });
-        deliveryNote("Message queued for the end of the turn.");
+        deliveryNote(deferToQueue ? COLD_RECEIVER_NOTE : "Message queued for the end of the turn.");
         return;
       }
       if (!busy || msg.activeTurnBehavior === "interrupt") {
@@ -10493,8 +10500,9 @@ export class Session {
   private async queuedMessageSessionId(
     msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
     agentId: string,
+    deferToQueue = false,
   ): Promise<string | null | undefined> {
-    if (!msg.sender && !msg.queue) return undefined;
+    if (!msg.sender && !msg.queue && !deferToQueue) return undefined;
     const target = this.agentManager.getAgent(agentId) ?? (await this.agentStorage.get(agentId));
     if (
       !target ||
@@ -10896,7 +10904,15 @@ export class Session {
       }
       let deliveryNote: string | undefined;
       let deliveryState: "held" | undefined;
-      let queuedSessionId = await this.queuedMessageSessionId(msg, agentId);
+      // FU-565: a receiver whose history is not loaded gets the message through the durable queue. The queue loads
+      // the history outside the 15 s send deadline and delivers once, in order, when the receiver is resident.
+      // A message with a plugin's provenance token cannot wait, so it keeps the direct path.
+      const deferToQueue =
+        !this.pluginOriginId &&
+        msg.inputProvenance === undefined &&
+        (!this.agentManager.getAgent(agentId) || agentLoadInProgress(agentId)) &&
+        (await this.queuedMessageSessionId(msg, agentId, true)) !== null;
+      let queuedSessionId = await this.queuedMessageSessionId(msg, agentId, deferToQueue);
       const send = () =>
         this.agentMessageSender(
           msg,
@@ -10907,12 +10923,13 @@ export class Session {
             deliveryState = state;
           },
           queuedSessionId,
+          deferToQueue,
         )();
       await this.sendAgentMessageWithReceipt(msg, agentId, prompt, send, async () => {
         // Queue admission saves the receiver's durable session identity. History loads at dispatch.
         // Direct input still prepares the receiver before capturing its live session identity.
         if (
-          (msg.sender ? msg.activeTurnBehavior === "steer" : !msg.queue) ||
+          (!deferToQueue && (msg.sender ? msg.activeTurnBehavior === "steer" : !msg.queue)) ||
           queuedSessionId === null
         ) {
           await this.prepareAgentMessage(
