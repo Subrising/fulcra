@@ -118,6 +118,7 @@ import { DIRECT_DEVICE_PROTOCOL } from "@getpaseo/protocol/daemon-credential";
 import type { KeyPair } from "@getpaseo/client/relay-v3";
 import type { RelayDeviceGate } from "./pairing/relay-device-gate.js";
 import { attachEncryptedSocket } from "./relay-transport.js";
+import type { DirectRoute } from "@getpaseo/protocol/messages";
 import { listDirectRoutes } from "./direct-routes.js";
 import {
   WebSocketRuntimeMetricsWindow,
@@ -1124,6 +1125,12 @@ export class VoiceAssistantWebSocketServer {
     this.directDeviceLogin = args;
     if (args) return;
     // Turning it off ends live direct device sessions too, not only new logins.
+    // Detach the admitted channel first: a device that ignores the close frame must not run requests
+    // until the close timeout. The session is keyed by the channel, not by the raw socket.
+    for (const channel of this.directDeviceChannels) {
+      void this.detachSocket(channel, { code: 4403, reason: "Not paired" });
+    }
+    this.directDeviceChannels.clear();
     for (const ws of this.directDeviceSockets) {
       try {
         ws.close(4403, "Not paired");
@@ -1134,8 +1141,18 @@ export class VoiceAssistantWebSocketServer {
     this.broadcastCapabilitiesUpdate();
   }
 
+  private advertisedDirectRoutes: DirectRoute[] = [];
+
+  /** Routes from `daemon.directRoutes.advertise`. A non-empty list replaces the auto list. */
+  public setAdvertisedDirectRoutes(routes: DirectRoute[]): void {
+    this.advertisedDirectRoutes = routes;
+  }
+
   /** Every direct device socket, admitted or not, so turning the login off can close them. */
   private directDeviceSockets = new Set<WebSocket>();
+
+  /** The admitted channel for each direct device socket. The session is keyed by the channel. */
+  private directDeviceChannels = new Set<WebSocketLike>();
 
   /** Upgrades that offered fulcra.device.v1 and have not yet proved a device key. Anyone can open these. */
   private unadmittedDirectDeviceSockets = 0;
@@ -1182,6 +1199,8 @@ export class VoiceAssistantWebSocketServer {
       this.logger,
       (socket, meta) => {
         release();
+        this.directDeviceChannels.add(socket);
+        ws.once("close", () => this.directDeviceChannels.delete(socket));
         return this.attachExternalSocket(socket, meta);
       },
       metadata,
@@ -2389,6 +2408,7 @@ export class VoiceAssistantWebSocketServer {
     return listDirectRoutes({
       listenHost: this.getDaemonTcpHost?.() ?? null,
       port: this.getDaemonTcpPort?.() ?? null,
+      advertised: this.advertisedDirectRoutes,
     });
   }
 

@@ -1273,6 +1273,30 @@ describe("relay external socket reconnect behavior", () => {
     await server.close();
   });
 
+  test("N3: relay off detaches a direct device channel that ignores the close frame", async () => {
+    const server = createServer();
+    server.enableDirectDeviceLogin({ daemonKeyPair: {} as never, deviceGate: {} as never });
+    const socket = new MockSocket();
+    await attachRelayAndHello({ server, socket, clientId: "n3-client" });
+    // attachDirectDeviceSocket tracks the admitted channel; this test registers it directly.
+    asInternals<{ directDeviceChannels: Set<unknown> }>(server).directDeviceChannels.add(socket);
+    const session = sessionMock.instances[0];
+
+    server.enableDirectDeviceLogin(null);
+    expect(asInternals<{ sessions: Map<unknown, unknown> }>(server).sessions.has(socket)).toBe(
+      false,
+    );
+
+    // The device sends a request after relay off and never answers the close frame.
+    socket.emit(
+      "message",
+      JSON.stringify({ type: "session", message: { type: "ping", requestId: "late" } }),
+    );
+    await Promise.resolve();
+    expect(session.handleMessage).not.toHaveBeenCalled();
+    await server.close();
+  });
+
   test("rejects session messages before hello", async () => {
     const server = createServer();
     const socket = new MockSocket();

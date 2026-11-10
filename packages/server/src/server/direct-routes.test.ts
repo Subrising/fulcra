@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { listDirectRoutes, MAX_DIRECT_ROUTES } from "./direct-routes.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  listDirectRoutes,
+  MAX_DIRECT_ROUTES,
+  resolveAdvertisedDirectRoutes,
+} from "./direct-routes.js";
 
 type Nets = NonNullable<Parameters<typeof listDirectRoutes>[0]["interfaces"]>;
 const v4 = (address: string, internal = false) => ({
@@ -56,5 +60,66 @@ describe("listDirectRoutes", () => {
     expect(MAX_DIRECT_ROUTES).toBe(8);
     expect(routes).toHaveLength(8);
     expect(routes[0]).toEqual({ kind: "tailscale", endpoint: "100.101.102.103:6767" });
+  });
+});
+
+describe("advertised direct routes", () => {
+  it("a configured list replaces the auto list, even on a loopback daemon", () => {
+    const advertised = resolveAdvertisedDirectRoutes(
+      [
+        { host: "mini.tail1234.ts.net", port: 443 },
+        { host: "100.100.1.2", port: 6767 },
+      ],
+      () => undefined,
+    );
+    expect(advertised).toEqual([
+      { kind: "tailscale", endpoint: "mini.tail1234.ts.net:443" },
+      { kind: "tailscale", endpoint: "100.100.1.2:6767" },
+    ]);
+    expect(listDirectRoutes({ listenHost: "127.0.0.1", port: 6767, advertised })).toEqual(
+      advertised,
+    );
+    const interfaces = { en0: [v4("192.168.1.20")] } as unknown as Nets;
+    expect(listDirectRoutes({ listenHost: "0.0.0.0", port: 6767, interfaces, advertised })).toEqual(
+      advertised,
+    );
+  });
+
+  it("drops invalid entries with one warn and keeps valid ones", () => {
+    const warn = vi.fn();
+    const routes = resolveAdvertisedDirectRoutes(
+      [
+        { host: "8.8.8.8", port: 6767 },
+        { host: "example.com", port: 6767 },
+        { host: "evil.ts.net.example.com", port: 6767 },
+        { host: "100.100.1.2", port: 0 },
+        { host: "100.100.1.2", port: 65536 },
+        { host: "100.100.1.2", port: 1.5 },
+        { host: 5, port: 1 },
+        { host: "192.168.1.9", port: 6767 },
+        { host: "192.168.1.9", port: 6767 },
+      ],
+      warn,
+    );
+    expect(routes).toEqual([{ kind: "lan", endpoint: "192.168.1.9:6767" }]);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("empty or missing list gives no override, so the auto list stays", () => {
+    const warn = vi.fn();
+    expect(resolveAdvertisedDirectRoutes([], warn)).toEqual([]);
+    expect(resolveAdvertisedDirectRoutes(undefined, warn)).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
+    const interfaces = { en0: [v4("10.0.0.5")] } as unknown as Nets;
+    expect(
+      listDirectRoutes({ listenHost: "0.0.0.0", port: 1, interfaces, advertised: [] }),
+    ).toEqual([{ kind: "lan", endpoint: "10.0.0.5:1" }]);
+  });
+
+  it("keeps at most 8 routes", () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({ host: `100.100.1.${i + 1}`, port: 1 }));
+    const warn = vi.fn();
+    expect(resolveAdvertisedDirectRoutes(many, warn)).toHaveLength(MAX_DIRECT_ROUTES);
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 });

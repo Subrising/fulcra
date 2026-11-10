@@ -96,6 +96,24 @@ describe("withLearnedDirectDeviceRoutes", () => {
   });
 });
 
+describe("D6: a phone paired through a device route stores no host password", () => {
+  it("the saved host profile, after learning routes and a reload, has no password or secret field", () => {
+    const next = withLearnedDirectDeviceRoutes(
+      host([relay]),
+      [{ endpoint: "100.101.102.103:6767" }, { endpoint: "192.168.1.20:6767" }],
+      true,
+    );
+    const stored = JSON.stringify(normalizeStoredHostProfile(JSON.parse(JSON.stringify(next))));
+    for (const word of ["password", "secret", "token", "credential"]) {
+      expect(stored.toLowerCase()).not.toContain(word);
+    }
+    // Every route that signs in with the device key has the host key and no password field.
+    for (const c of next.connections.filter(isDirectDeviceConnection)) {
+      expect(Object.keys(c)).not.toContain("password");
+    }
+  });
+});
+
 describe("route order: direct first, relay as fallback", () => {
   const next = withLearnedDirectDeviceRoutes(host([relay]), [{ endpoint: "10.0.0.5:1" }], true);
   const candidates = next.connections.map((connection) => ({
