@@ -396,35 +396,70 @@ type SelectionProofWindow = Window & { __lateImageSelection?: { start: Node; end
 
 async function selectImageFixtureParagraphs(page: Page): Promise<string> {
   const message = page.getByTestId("assistant-message");
-  await message
-    .getByText("Paragraph one stays selected while the workspace image loads.", { exact: true })
-    .scrollIntoViewIfNeeded();
-  const bounds = await message.evaluate((root) => {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    let start: Text | undefined;
-    let end: Text | undefined;
-    while (walker.nextNode()) {
-      const text = walker.currentNode as Text;
-      if (text.data.startsWith("Paragraph one stays")) start = text;
-      if (text.data.startsWith("Paragraph three is")) end = text;
-    }
-    if (!start || !end) throw new Error("Selection paragraphs are missing");
-    (window as SelectionProofWindow).__lateImageSelection = { start, end };
-    const first = document.createRange();
-    first.selectNodeContents(start);
-    const last = document.createRange();
-    last.selectNodeContents(end);
-    return {
-      first: first.getBoundingClientRect().toJSON(),
-      last: last.getBoundingClientRect().toJSON(),
-    };
-  });
-  await page.mouse.move(bounds.first.x + 1, bounds.first.y + 5);
-  await page.mouse.down();
-  await page.mouse.move(bounds.last.right - 1, bounds.last.bottom - 2, { steps: 20 });
-  await page.mouse.up();
-  const selected = await page.evaluate(() => window.getSelection()?.toString() ?? "");
-  expect(selected).toContain("Paragraph one");
+  const firstParagraph = message.getByText(
+    "Paragraph one stays selected while the workspace image loads.",
+    { exact: true },
+  );
+  let selected = "";
+  // The timeline can still scroll to the bottom after the diagram settles. A drag that uses
+  // bounds measured before that scroll lands on empty space and selects nothing. Measure the
+  // bounds again after the scroll settles, and drag again if the list moved during the drag.
+  await expect
+    .poll(
+      async () => {
+        await firstParagraph.scrollIntoViewIfNeeded();
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              let last = "";
+              let stable = 0;
+              const scrollers = () =>
+                Array.from(document.querySelectorAll<HTMLElement>("*"))
+                  .filter((el) => el.scrollHeight > el.clientHeight)
+                  .map((el) => el.scrollTop)
+                  .join(",");
+              const tick = () => {
+                const now = scrollers();
+                stable = now === last ? stable + 1 : 0;
+                last = now;
+                if (stable >= 5) resolve();
+                else requestAnimationFrame(tick);
+              };
+              requestAnimationFrame(tick);
+            }),
+        );
+        const bounds = await message.evaluate((root) => {
+          const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+          let start: Text | undefined;
+          let end: Text | undefined;
+          while (walker.nextNode()) {
+            const text = walker.currentNode as Text;
+            if (text.data.startsWith("Paragraph one stays")) start = text;
+            if (text.data.startsWith("Paragraph three is")) end = text;
+          }
+          if (!start || !end) throw new Error("Selection paragraphs are missing");
+          (window as SelectionProofWindow).__lateImageSelection = { start, end };
+          const first = document.createRange();
+          first.selectNodeContents(start);
+          const last = document.createRange();
+          last.selectNodeContents(end);
+          return {
+            first: first.getBoundingClientRect().toJSON(),
+            last: last.getBoundingClientRect().toJSON(),
+            viewportHeight: window.innerHeight,
+          };
+        });
+        if (bounds.first.y < 0 || bounds.last.bottom > bounds.viewportHeight) return "";
+        await page.mouse.move(bounds.first.x + 1, bounds.first.y + 5);
+        await page.mouse.down();
+        await page.mouse.move(bounds.last.right - 1, bounds.last.bottom - 2, { steps: 20 });
+        await page.mouse.up();
+        selected = await page.evaluate(() => window.getSelection()?.toString() ?? "");
+        return selected;
+      },
+      { timeout: 15_000 },
+    )
+    .toContain("Paragraph one");
   expect(selected).toContain("Paragraph three");
   return selected;
 }
