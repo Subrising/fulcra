@@ -129,6 +129,52 @@ export function compactSessionCostTurns(
   return records;
 }
 
+/**
+ * FU-772: the newest `at` of a folded turn. Compaction folds the oldest turns first, so a turn ID that is not in
+ * `turns` and has an `at` at or before this time is already in a rollup. Each rollup keeps the newest `at` it folded,
+ * so records written before FU-772 give the same answer.
+ */
+function foldedThrough(records: SessionCostRecords): number | undefined {
+  let newest: number | undefined;
+  for (const [id, turn] of Object.entries(records.turns)) {
+    if (!id.startsWith(ROLLUP_PREFIX)) continue;
+    const stamp = Date.parse(turn.at);
+    if (Number.isFinite(stamp) && (newest === undefined || stamp > newest)) newest = stamp;
+  }
+  return newest;
+}
+
+/** FU-772: true when this turn is already counted in a rollup of `records`. */
+export function isFoldedTurn(records: SessionCostRecords, turnId: string, at: string): boolean {
+  if (Object.hasOwn(records.turns, turnId)) return false;
+  const watermark = foldedThrough(records);
+  const stamp = Date.parse(at);
+  return watermark !== undefined && Number.isFinite(stamp) && stamp <= watermark;
+}
+
+/** A turn that is in `turns` or in a rollup. */
+function isRecordedTurn(records: SessionCostRecords, turnId: string, at: string): boolean {
+  return Object.hasOwn(records.turns, turnId) || isFoldedTurn(records, turnId, at);
+}
+
+/**
+ * FU-772: remove the turns that `next` adds over `previous` and that `previous` already folded. A billing import
+ * or a recovery checkpoint gives back old turns with their first `at`; without this, each read folds them again.
+ */
+export function dropFoldedReplays(
+  previous: SessionCostRecords | undefined,
+  next: SessionCostRecords,
+): SessionCostRecords {
+  if (!previous) return next;
+  const replays = Object.entries(next.turns).filter(
+    ([id, turn]) => !id.startsWith(ROLLUP_PREFIX) && isFoldedTurn(previous, id, turn.at),
+  );
+  if (replays.length === 0) return next;
+  const turns = { ...next.turns };
+  for (const [id] of replays) delete turns[id];
+  return { ...next, turns };
+}
+
 /** Fold result records, never streaming context samples. The stable turn ID makes replay harmless. */
 export function recordSessionCost(
   previous: SessionCostRecords | undefined,
@@ -145,7 +191,7 @@ export function recordSessionCost(
   const turnId = input.instanceId ? JSON.stringify([input.instanceId, input.turnId]) : input.turnId;
   const total = usage.recorded?.estimate?.amountUsd ?? usage.totalCostUsd;
   if (total === undefined || !Number.isFinite(total) || total < 0) return previous;
-  if (previous?.turns[turnId]) return previous;
+  if (previous && isRecordedTurn(previous, turnId, at)) return previous;
   const records = structuredClone(previous ?? { cursors: {}, turns: {} });
   const key = JSON.stringify([input.provider, usage.recorded?.runtimeSessionId ?? "unknown"]);
   const cursor = records.cursors[key];
