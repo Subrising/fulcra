@@ -402,3 +402,111 @@ test("an explicit stop ends the automatic retries after a refused recovery", asy
   assert.throws(() => f.supervisor.retry(), /Controller stopped/);
   assert.equal(f.children.length, 1);
 });
+
+// FU-766: a controller that answers nothing is stopped and replaced.
+function expiringFixture(options = {}) {
+  let clock = 0,
+    mode = "expired";
+  const logs = [];
+  const f = fixture({
+    now: () => clock,
+    log: (line) => logs.push(line),
+    ...options,
+  });
+  // Replace the channel management so it refuses or answers on demand.
+  const channel = () => f.channels.at(-1);
+  const patch = () => {
+    const ch = channel();
+    if (ch.patched) return;
+    ch.patched = true;
+    const original = ch.management.bind(ch);
+    ch.management = (command, principal) =>
+      mode === "expired"
+        ? Promise.reject(Object.assign(Error("Controller frame expired"), { code: "expired" }))
+        : original(command, principal);
+  };
+  const call = async () => {
+    patch();
+    return f.supervisor.management({ method: "list" }, {}).catch((e) => e);
+  };
+  return { f, logs, call, setMode: (m) => (mode = m), tick: (ms) => (clock += ms) };
+}
+
+test("five expired calls in a row stop the controller once, with one diagnostic and one warn line", async () => {
+  const h = expiringFixture();
+  h.f.supervisor.start();
+  h.f.ready(h.f.children[0]);
+  for (let i = 0; i < 4; i++) await h.call();
+  assert.equal(h.f.children[0].killed, false);
+  await h.call();
+  assert.equal(h.f.children[0].killed, true);
+  assert.equal(h.logs.filter((l) => l.startsWith("WARN controller pid 100")).length, 1);
+  assert.equal(h.logs.filter((l) => l.startsWith("diagnostic controller pid 100")).length, 1);
+  // Calls after the stop do not stop it again.
+  await h.call();
+  assert.equal(h.logs.filter((l) => l.startsWith("WARN")).length, 1);
+});
+
+test("one answer between expired calls resets the count", async () => {
+  const h = expiringFixture();
+  h.f.supervisor.start();
+  h.f.ready(h.f.children[0]);
+  for (let i = 0; i < 4; i++) await h.call();
+  h.setMode("ok");
+  const answered = h.f.supervisor.management({ method: "list" }, {});
+  const sent = h.f.children[0].sent.at(-1);
+  h.f.children[0].emit("message", { id: sent.id, epoch: sent.epoch, ok: true, result: null });
+  await answered;
+  h.setMode("expired");
+  for (let i = 0; i < 4; i++) await h.call();
+  assert.equal(h.f.children[0].killed, false);
+  assert.equal(h.logs.filter((l) => l.startsWith("WARN")).length, 0);
+});
+
+test("expired calls older than the window do not add up", async () => {
+  const h = expiringFixture();
+  h.f.supervisor.start();
+  h.f.ready(h.f.children[0]);
+  for (let i = 0; i < 4; i++) await h.call();
+  h.tick(61000);
+  await h.call();
+  assert.equal(h.f.children[0].killed, false);
+});
+
+test("self-heal stops are limited to 3 per 10 minutes, then one error line", async () => {
+  const h = expiringFixture();
+  h.f.supervisor.start();
+  let stops = 0;
+  for (let round = 0; round < 5; round++) {
+    const child = h.f.children.at(-1);
+    h.f.ready(child);
+    for (let i = 0; i < 5; i++) await h.call();
+    if (child.killed) {
+      stops++;
+      child.emit("exit", 0, "SIGTERM");
+      for (const t of [...h.f.timers]) t(); // run the restart timer
+      h.tick(1000);
+    }
+  }
+  assert.equal(stops, 3);
+  assert.equal(h.logs.filter((l) => l.startsWith("WARN")).length, 3);
+  assert.equal(h.logs.filter((l) => l.startsWith("ERROR")).length, 1);
+  assert.match(
+    h.logs.find((l) => l.startsWith("ERROR")),
+    /not restarting/,
+  );
+});
+
+test("a request that times out counts as a failed call", async () => {
+  const h = expiringFixture();
+  h.setMode("ok");
+  h.f.supervisor.start();
+  h.f.ready(h.f.children[0]);
+  for (let i = 0; i < 5; i++) {
+    const p = h.f.supervisor.management({ method: "list" }, {}).catch((e) => e);
+    // Fire the request timer (the last scheduled function that is not the stable/handshake timer).
+    h.f.timers.at(-1)();
+    assert.equal((await p).code, "uncertain");
+  }
+  assert.equal(h.f.children[0].killed, true);
+});

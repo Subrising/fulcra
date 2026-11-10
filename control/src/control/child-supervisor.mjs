@@ -24,6 +24,12 @@ export function createChildSupervisor({
   handshakeMs = 15000,
   startupMs = 180000,
   requestMs = 15000,
+  // FU-766: a controller that stops answering (idle, not crashed) is stopped and replaced. healExpiries failed calls
+  // within healWindowMs, with no answer between them, start one stop; at most healMaxRestarts stops per healRateMs.
+  healExpiries = 5,
+  healWindowMs = 60000,
+  healMaxRestarts = 3,
+  healRateMs = 600000,
   log = (reason) => console.error(`Controller lifecycle: ${reason}`),
 }) {
   if (
@@ -44,6 +50,7 @@ export function createChildSupervisor({
     slowRetries = 0,
     nextRetryAt = null,
     stopping = null,
+    healStops = [],
     cancelRestart = () => {};
   const uncertain = () =>
     Object.assign(Error("Controller outcome uncertain; do not replay"), { code: "uncertain" });
@@ -70,6 +77,37 @@ export function createChildSupervisor({
     }, 5000);
     owner.child.once("exit", cancel);
   }
+  // FU-766 self-heal. An "expired" refusal or a request timeout is a failed call; any answer from the controller resets.
+  function noteAnswer(owner) {
+    owner.failures.length = 0;
+  }
+  function noteFailure(owner, why) {
+    if (current !== owner || owner.revoked || owner.terminating) return;
+    const t = now();
+    owner.failures.push(t);
+    while (owner.failures.length && t - owner.failures[0] > healWindowMs) owner.failures.shift();
+    if (owner.failures.length < healExpiries) return;
+    healStops = healStops.filter((at) => t - at < healRateMs);
+    if (healStops.length >= healMaxRestarts) {
+      if (!owner.healRefusedLogged) {
+        owner.healRefusedLogged = true;
+        log(
+          `ERROR controller pid ${owner.child.pid} not answering (${owner.failures.length} failed calls, last: ${why}); restart limit reached (${healMaxRestarts} per ${Math.round(healRateMs / 60000)} min), not restarting`,
+        );
+      }
+      return;
+    }
+    healStops.push(t);
+    const oldest = [...owner.pending.values()].reduce((a, c) => Math.min(a, c.at), t);
+    log(
+      `diagnostic controller pid ${owner.child.pid}: pending ${owner.pending.size}, oldest pending ${owner.pending.size ? t - oldest : 0} ms, up ${t - owner.startedAt} ms, ids used (commands ${owner.channel.commandCount ?? "?"}, requests ${owner.channel.requestCount ?? "?"}, full ${owner.channel.full === true})`,
+    );
+    log(
+      `WARN controller pid ${owner.child.pid} not answering: ${owner.failures.length} failed calls within ${Math.round(healWindowMs / 1000)} s (last: ${why}); stopping it for a new controller (stop ${healStops.length} of ${healMaxRestarts})`,
+    );
+    owner.failures.length = 0;
+    terminate(owner);
+  }
   function launch() {
     if (stopped || current) return;
     nextRetryAt = null;
@@ -81,6 +119,8 @@ export function createChildSupervisor({
       exited: false,
       terminating: false,
       pending: new Map(),
+      failures: [],
+      startedAt: now(),
       cancelHandshake: () => {},
       cancelStable: () => {},
     };
@@ -94,8 +134,9 @@ export function createChildSupervisor({
           const cancel = schedule(() => {
             owner.pending.delete(frame.id);
             reject(uncertain());
+            noteFailure(owner, "request timeout");
           }, requestMs);
-          owner.pending.set(frame.id, { resolve, reject, cancel });
+          owner.pending.set(frame.id, { resolve, reject, cancel, at: now() });
           try {
             child.send(frame, (error) => {
               if (error) {
@@ -174,12 +215,15 @@ export function createChildSupervisor({
         if (call) {
           owner.pending.delete(frame.id);
           call.cancel();
+          if (frame.code !== "expired") noteAnswer(owner);
           call.resolve(frame);
         }
         return; // ControllerChannel validates the entire reply before exposing it.
       }
       try {
         const reply = await owner.channel.receive(child, frame);
+        if (reply?.ok === false && reply.code === "expired") noteFailure(owner, "expired");
+        else noteAnswer(owner);
         if (current === owner && !owner.revoked) child.send(reply);
       } catch {
         /* No trustworthy correlation means there is no reply destination. */
@@ -301,7 +345,18 @@ export function createChildSupervisor({
     },
     management(command, principal) {
       if (!isReady()) return Promise.reject(Error("Controller unavailable"));
-      return current.channel.management(command, principal);
+      const owner = current;
+      // A full id history makes the channel refuse every call as "expired" (FU-766): count it like a hang.
+      return owner.channel.management(command, principal).then(
+        (result) => {
+          noteAnswer(owner);
+          return result;
+        },
+        (error) => {
+          if (error?.code === "expired") noteFailure(owner, "expired");
+          throw error;
+        },
+      );
     },
     async stop() {
       if (stopping) return stopping;
