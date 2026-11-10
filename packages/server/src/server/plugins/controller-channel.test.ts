@@ -400,3 +400,44 @@ test("owned precondition refusal preserves its message through the management ch
   });
   channel.close();
 });
+
+test("FU-766: a full id history refuses new requests as expired and reports full", async () => {
+  const child = {};
+  const channel = new ControllerChannel({
+    child,
+    issue: () => "t",
+    revoke: () => {},
+    rpc: async () => null,
+    send: async () => null,
+  });
+  expect(channel.full).toBe(false);
+  for (let i = 0; i < 65536; i++) {
+    const reply = await channel.receive(child, {
+      id: `id-${i}`,
+      epoch: channel.epoch,
+      type: "daemon-rpc",
+      frame: {},
+    });
+    if (!reply.ok) throw new Error(`request ${i} refused: ${reply.code}`);
+  }
+  expect(channel.requestCount).toBe(65536);
+  expect(channel.full).toBe(true);
+  expect(channel.rotationDue).toBe(true);
+  await expect(
+    channel.receive(child, { id: "next", epoch: channel.epoch, type: "daemon-rpc", frame: {} }),
+  ).resolves.toMatchObject({ ok: false, code: "expired" });
+  // The log names the cause: the id space is full, not a stale frame.
+  const claim = Reflect.get(channel, "claim") as (ids: Set<string>, id: string) => void;
+  const full = new Set(Array.from({ length: 65536 }, (_, i) => String(i)));
+  expect(() => claim.call(channel, full, "x")).toThrow("Controller id space full");
+  expect(() => claim.call(channel, new Set(["x"]), "x")).toThrow("Controller frame expired");
+  expect(
+    new ControllerChannel({
+      child,
+      issue: () => "t",
+      revoke: () => {},
+      rpc: async () => null,
+      send: async () => null,
+    }).rotationDue,
+  ).toBe(false);
+});
