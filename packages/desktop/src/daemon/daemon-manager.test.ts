@@ -728,6 +728,16 @@ describe("L39 local service of this home", () => {
   });
 });
 
+async function untilCalled(mock: { mock: { calls: unknown[] } }): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (mock.mock.calls.length === 0 && Date.now() < deadline) await pause(5);
+}
+function pause(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 describe("owned startup and Settings recovery", () => {
   const stopped = { localDaemon: "stopped", connectedDaemon: "not_probed" };
   const instance = {
@@ -951,6 +961,94 @@ describe("owned startup and Settings recovery", () => {
     await manager.createDaemonCommandHandlers().start_desktop_daemon();
     expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
     expect(mocks.stopDaemonInstance).not.toHaveBeenCalled();
+  });
+  describe("FU-780 a boot-started daemon without Command Centre", () => {
+    const bootInstance = { ...instance, startedAt: "boot-fixture", desktopManaged: false };
+    const bootStatus = {
+      localDaemon: "running",
+      connectedDaemon: "reachable",
+      ...bootInstance,
+      daemonVersion: "1.2.3",
+    };
+    let agents: unknown = [];
+    async function cliAnswer(args: string[]) {
+      if (args[0] !== "ls") return bootStatus;
+      if (agents instanceof Error) throw agents;
+      return agents;
+    }
+    async function stopBoot() {
+      mocks.readInstance.mockResolvedValue(null);
+      mocks.runExternalCliJsonCommand.mockResolvedValue(stopped);
+    }
+    function lsCall() {
+      for (const call of mocks.runExternalCliJsonCommand.mock.calls)
+        if (call[0][0] === "ls") return call;
+      return undefined;
+    }
+    beforeEach(async () => {
+      const replace = await import("./boot-daemon-replace");
+      replace.BOOT_DAEMON_IDLE_WAIT.totalMs = 500;
+      replace.BOOT_DAEMON_IDLE_WAIT.stepMs = 5;
+      agents = [{ status: "idle", note: "" }];
+      mocks.readInstance.mockResolvedValue(bootInstance);
+      mocks.runExternalCliJsonCommand.mockImplementation(cliAnswer);
+      mocks.stopDaemonInstance.mockImplementation(stopBoot);
+      mocks.logError.mockReset();
+    });
+    function launchedWithCommandCentre() {
+      expect(mocks.startDaemonInstance).toHaveBeenCalledTimes(1);
+      const options = mocks.startDaemonInstance.mock.lastCall?.[0];
+      expect(options.desktopManaged).toBe(true);
+      expect(options.env.FULCRA_COMMAND_CENTRE).toBe("1");
+    }
+    it("is replaced at once when no turn runs", async () => {
+      await manager.createDaemonCommandHandlers().start_desktop_daemon();
+      const probe = lsCall();
+      expect(probe?.[1]?.env).toMatchObject({ PASEO_PASSWORD: "" });
+      expect(probe?.[1]?.env.PASEO_HOME).not.toBe(root);
+      expect(mocks.stopDaemonInstance.mock.lastCall?.[1].instance).toEqual(bootInstance);
+      expect(mocks.stopDaemonInstance.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.startDaemonInstance.mock.invocationCallOrder[0],
+      );
+      launchedWithCommandCentre();
+    });
+    it("is kept while a turn runs, then replaced when the turn ends", async () => {
+      agents = [{ status: "running", note: "" }];
+      const status = await manager.createDaemonCommandHandlers().start_desktop_daemon();
+      expect(status).toMatchObject({ status: "running", pid: bootInstance.pid });
+      expect(mocks.stopDaemonInstance).not.toHaveBeenCalled();
+      expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
+      agents = [{ status: "idle", note: "" }];
+      await untilCalled(mocks.startDaemonInstance);
+      expect(mocks.stopDaemonInstance).toHaveBeenCalledTimes(1);
+      launchedWithCommandCentre();
+    });
+    it.each([
+      [
+        "the home stores a daemon password",
+        () => (mocks.config = { daemon: { auth: { password: "x" } } }),
+      ],
+      [
+        "the daemon needs a credential",
+        () => (agents = new Error("The daemon requires a password.")),
+      ],
+    ])("is adopted unchanged when %s", async (_name, arrange) => {
+      arrange();
+      const status = await manager.createDaemonCommandHandlers().start_desktop_daemon();
+      expect(status).toMatchObject({ status: "running", pid: bootInstance.pid });
+      expect(mocks.stopDaemonInstance).not.toHaveBeenCalled();
+      expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
+    });
+    it("stays running with one error line when the stop fails", async () => {
+      mocks.stopDaemonInstance.mockRejectedValue(new Error("stop timed out"));
+      const status = await manager.createDaemonCommandHandlers().start_desktop_daemon();
+      expect(status).toMatchObject({ status: "running", pid: bootInstance.pid });
+      expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
+      expect(mocks.logError).toHaveBeenCalledTimes(1);
+      expect(mocks.logError.mock.lastCall?.[1]).toBe(
+        "boot daemon replace failed; the old daemon stays",
+      );
+    });
   });
   describe("a desktop-managed daemon that does not answer", () => {
     const silent = {

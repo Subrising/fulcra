@@ -14,6 +14,10 @@ Use a generated daemon password stored in a dedicated `ai.fulcra.command-centre.
 
 Do not replace an existing user-configured daemon credential. Keychain failures must leave the setting disabled and show an actionable error. Automated verification uses a fake Keychain or dedicated `ai.fulcra.test.*` items, never a user's real items. Paired-device authentication is a later feature.
 
+### A boot daemon without Command Centre
+
+When Command Centre is on and the app starts, it replaces a script-started daemon that has no Command Centre, such as a boot task that ran before sign-in. The app treats the daemon as one without Command Centre only when all three are true: the app did not start it, the home stores no daemon password and no `command-centre-password` file, and it answers an agent list with no credential. A Command Centre daemon always requires a credential. When no turn runs, the app stops that daemon and starts its own. When turns run, the app keeps the daemon and checks every 30 s for up to 2 h, then replaces it when no turn runs. If the stop fails, the old daemon stays and the app log gets one error line. In every other case the app adopts the daemon unchanged. See `packages/desktop/src/daemon/boot-daemon-replace.ts`.
+
 ### Shared password file for script starts
 
 A daemon that a script starts (a boot or recovery task) has no Command Centre unless the script turns it on. To give the app, the script and remote controllers one password, put it in a file named `command-centre-password` in the daemon home. When this file exists, the app uses it instead of the generated Keychain or safeStorage credential, and passes only its bcrypt hash to the worker.
