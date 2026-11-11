@@ -25,7 +25,8 @@ import {
 import { expect, test, vi, onTestFinished } from "vitest";
 import { spawn } from "node:child_process";
 import { readOwnedProcessTable } from "../../utils/tree-kill.js";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { withWorktreeRemovalLock } from "../../utils/worktree-path-lock.js";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -10824,6 +10825,56 @@ test("unarchiveSnapshot skips native provider unarchive for active records", asy
 
   expect(unarchived).toBe(false);
   expect(client.unarchivedHandles).toEqual([]);
+});
+
+// FU-679: resume and unarchive take a shared hold on the agent cwd. A worktree removal that
+// holds the path first makes them wait until it ends.
+async function expectWaitsForRemoval<T>(path: string, start: () => Promise<T>): Promise<T> {
+  let release = () => {};
+  const released = new Promise<void>((done) => {
+    release = done;
+  });
+  const removal = withWorktreeRemovalLock([realpathSync(path)], () => released);
+  let settled = false;
+  const running = start().finally(() => {
+    settled = true;
+  });
+  await new Promise((done) => setTimeout(done, 200));
+  expect(settled).toBe(false);
+  release();
+  await removal;
+  return running;
+}
+
+test("FU-679: resumeAgentFromPersistence waits while a worktree removal holds its cwd", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-resume-removal-"));
+  const manager = new AgentManager({ clients: { codex: new TestAgentClient() }, logger });
+  const agent = await expectWaitsForRemoval(workdir, () =>
+    manager.resumeAgentFromPersistence(
+      { provider: "codex", sessionId: "fu679-resume" },
+      { cwd: workdir },
+    ),
+  );
+  expect(agent.cwd).toBe(workdir);
+});
+
+test("FU-679: unarchiveSnapshot waits while a worktree removal holds its cwd", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-unarchive-removal-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const manager = new AgentManager({
+    clients: { codex: new NativeArchiveRecordingClient() },
+    registry: storage,
+    logger,
+  });
+  const agent = await manager.createAgent(
+    { provider: "codex", cwd: workdir, title: "Unarchive during removal" },
+    undefined,
+    { workspaceId: undefined },
+  );
+  await manager.archiveAgent(agent.id);
+  expect(await expectWaitsForRemoval(workdir, () => manager.unarchiveSnapshot(agent.id))).toBe(
+    true,
+  );
 });
 
 test("unarchiveSnapshot unarchives native provider storage before clearing archivedAt", async () => {

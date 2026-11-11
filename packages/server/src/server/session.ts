@@ -1,3 +1,4 @@
+import { withWorktreeUse } from "../utils/worktree-path-lock.js";
 import { reviewWork } from "./agent/work-review.js";
 import { randomUUID } from "node:crypto";
 import { hostLinksFor } from "./host-links.js";
@@ -7656,7 +7657,11 @@ export class Session {
   }
 
   private async restoreWorkspaceAndEmit(workspaceId: string): Promise<void> {
-    await this.workspaceRecovery.restore(workspaceId);
+    // FU-679: a worktree removal of this folder waits for the restore, or runs first.
+    const archived = await this.workspaceRegistry.get(workspaceId);
+    const folder = archived?.worktreeRoot ?? archived?.cwd;
+    const restore = () => this.workspaceRecovery.restore(workspaceId);
+    await (folder ? withWorktreeUse(folder, restore) : restore());
     const workspace = await this.workspaceRegistry.get(workspaceId);
     if (!workspace) {
       throw new Error(`Recovered workspace record not found: ${workspaceId}`);
@@ -8657,7 +8662,10 @@ export class Session {
       for (const workspaceRecord of await this.workspaceRegistry.list()) {
         workspacesBefore.set(workspaceRecord.workspaceId, workspaceRecord);
       }
-      const workspace = await this.workspaceProvisioning.findOrCreateWorkspaceForDirectory(cwd);
+      // FU-679: a worktree removal of this path waits until the workspace is open, or runs first.
+      const workspace = await withWorktreeUse(cwd, () =>
+        this.workspaceProvisioning.findOrCreateWorkspaceForDirectory(cwd),
+      );
       const project = await this.projectRegistry.get(workspace.projectId);
       await this.syncWorkspaceGitObserverForWorkspace(workspace);
       const descriptor = await this.describeWorkspaceRecord(workspace);

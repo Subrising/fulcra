@@ -1,4 +1,5 @@
 import { removeWithCleanupGuard } from "./cleanup-guard.js";
+import type { WorktreeAgentProof } from "./worktree-removal-policy.js";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import {
@@ -1141,6 +1142,10 @@ export interface DeletePaseoWorktreeOptions {
   // gone, where the marker proof can no longer be verified. Only pass
   // this when the record was matched against the path by the caller.
   registryProven?: boolean;
+  // FU-679 agent proof: resolves null when every agent bound to the workspace is archived and
+  // none is held, or the reason to keep. Without it the guard keeps the worktree (for example on
+  // a rollback of a failed create).
+  agentProof?: WorktreeAgentProof;
 }
 
 // Project scoping for delete: a proof for some other repo's worktree must
@@ -1169,6 +1174,7 @@ export async function deletePaseoWorktree({
   paseoHome,
   worktreesBaseRoot,
   registryProven,
+  agentProof,
 }: DeletePaseoWorktreeOptions): Promise<boolean> {
   if (!worktreePath && !worktreeSlug) {
     throw new Error("worktreePath or worktreeSlug is required");
@@ -1218,7 +1224,10 @@ export async function deletePaseoWorktree({
 
   // The shared guard owns checks and removal. No teardown or force fallback can bypass it.
   // Keep the original path. Normalization must not hide a link before the guard checks it.
-  return removeWithCleanupGuard(requestedPath);
+  return removeWithCleanupGuard(requestedPath, {
+    worktreesRoot: resolvePaseoWorktreesBaseRoot({ paseoHome, worktreesRoot: worktreesBaseRoot }),
+    agentProof,
+  });
 }
 
 export async function rollbackCreatedPaseoWorktree(

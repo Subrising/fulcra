@@ -1,3 +1,4 @@
+import { withWorktreeUse } from "../../utils/worktree-path-lock.js";
 import { testFixtureInUse } from "./test-fixture-ownership.js";
 import { withCleanupAdmission } from "../../utils/cleanup-admission.js";
 import {
@@ -3408,7 +3409,9 @@ export class AgentManager {
     options: CreateAgentOptions,
   ): Promise<ManagedAgent> {
     return this.trackAgentRegistrationOperation(
-      withCleanupAdmission(() => this.createAgentInternal(config, agentId, options)),
+      withCleanupAdmission(() =>
+        withWorktreeUse(config.cwd, () => this.createAgentInternal(config, agentId, options)),
+      ),
     );
   }
 
@@ -3588,7 +3591,39 @@ export class AgentManager {
     );
   }
 
-  private async resumeAgentFromPersistenceInternal(
+  // FU-679: a worktree removal of the agent's cwd waits for the resume, or runs first.
+  private resumeAgentFromPersistenceInternal(
+    handle: AgentPersistenceHandle,
+    overrides?: Partial<AgentSessionConfig>,
+    agentId?: string,
+    options?: {
+      createdAt?: Date;
+      updatedAt?: Date;
+      lastUserMessageAt?: Date | null;
+      labels?: Record<string, string>;
+      workspaceId?: string;
+      owner?: AgentOwner;
+      attention?: AttentionState;
+    },
+    resumeOptions?: AgentResumeSessionOptions,
+    requireRecord?: (record: StoredAgentRecord | null) => void,
+    beforeResume?: () => void,
+  ): Promise<ManagedAgent> {
+    const cwd = overrides?.cwd ?? (handle.metadata as Partial<AgentSessionConfig> | undefined)?.cwd;
+    const resume = () =>
+      this.resumeAgentFromPersistenceUnlocked(
+        handle,
+        overrides,
+        agentId,
+        options,
+        resumeOptions,
+        requireRecord,
+        beforeResume,
+      );
+    return typeof cwd === "string" && cwd ? withWorktreeUse(cwd, resume) : resume();
+  }
+
+  private async resumeAgentFromPersistenceUnlocked(
     handle: AgentPersistenceHandle,
     overrides?: Partial<AgentSessionConfig>,
     agentId?: string,
@@ -6339,9 +6374,12 @@ export class AgentManager {
               admittedHandle,
             );
           });
-        return captured?.persistence
-          ? this.withPersistenceRestore(captured.persistence, execute)
-          : execute();
+        const restore = () =>
+          captured?.persistence
+            ? this.withPersistenceRestore(captured.persistence, execute)
+            : execute();
+        // FU-679: a worktree removal of the agent's cwd waits for the unarchive, or runs first.
+        return captured?.cwd ? withWorktreeUse(captured.cwd, restore) : restore();
       },
       commandPayload("unarchive", updates),
       operationHandle,

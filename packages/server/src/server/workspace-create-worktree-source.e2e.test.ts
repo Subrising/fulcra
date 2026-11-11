@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -14,6 +14,7 @@ import {
   type WebSocketLike,
 } from "@getpaseo/client/internal/daemon-client";
 import { createTestPaseoDaemon } from "./test-utils/paseo-daemon.js";
+import { withWorktreeRemovalLock } from "../utils/worktree-path-lock.js";
 import { expectKeptByCleanupGuard, watchCleanupKeeps } from "./test-utils/cleanup-guard-keep.js";
 
 // The reshaped workspace.create.request forwards its worktree `source`
@@ -239,6 +240,48 @@ test("existing branch changes remain visible after archive and restore", async (
   const after = await client.getCheckoutDiff(cwd, { mode: "base" });
   expect(after.error).toBeNull();
   expect(after.files.map((file) => file.path)).toEqual(["feature.txt"]);
+}, 180000);
+
+test("FU-679: a workspace restore waits while a worktree removal holds the folder", async () => {
+  const daemon = await createTestPaseoDaemon();
+  const { repoDir, tempRoot } = createGitRepoWithBranch();
+  const client = new DaemonClient({
+    url: `ws://127.0.0.1:${daemon.port}/ws`,
+    appVersion: "0.11.2",
+  });
+  onTestFinished(async () => {
+    await client.close().catch(() => undefined);
+    await daemon.close();
+    await rm(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  });
+  await client.connect();
+  const created = await client.createWorkspace({
+    source: { kind: "worktree", cwd: repoDir, worktreeSlug: "restore-during-removal" },
+  });
+  expect(created.error).toBeNull();
+  const workspace = created.workspace!;
+  const keeps = watchCleanupKeeps();
+  expect((await client.archiveWorkspace(workspace.id)).error).toBeNull();
+  expectKeptByCleanupGuard(keeps, workspace.workspaceDirectory);
+
+  let release = () => {};
+  const released = new Promise<void>((done) => {
+    release = done;
+  });
+  const removal = withWorktreeRemovalLock(
+    [realpathSync(workspace.workspaceDirectory)],
+    () => released,
+  );
+  let restored = false;
+  const restore = client.restoreWorkspace(workspace.id).finally(() => {
+    restored = true;
+  });
+  await new Promise((done) => setTimeout(done, 500));
+  expect(restored).toBe(false);
+  release();
+  await removal;
+  await restore;
+  expect(restored).toBe(true);
 }, 180000);
 
 test("workspace.create keeps a branch-off name separate from its worktree slug", async () => {

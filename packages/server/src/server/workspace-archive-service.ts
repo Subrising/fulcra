@@ -21,7 +21,8 @@ import type {
   WorkspaceArchiveContext,
   WorkspaceRegistry,
 } from "./workspace-registry.js";
-import { createRealpathAwarePathMatcher } from "../utils/path.js";
+import { createRealpathAwarePathMatcher, isRealpathInsideRoot } from "../utils/path.js";
+import { keepWorktree } from "../utils/cleanup-guard.js";
 import { runWithGitCommandPriority } from "../utils/run-git-command.js";
 import { WorkspaceAutomationBlockedError } from "./workspace-automation-gate.js";
 
@@ -45,7 +46,7 @@ export interface ArchiveDependencies {
     | "trustedPlugins"
     | "preflightArchiveDescendants"
   >;
-  agentStorage: Pick<AgentStorage, "listByWorkspace">;
+  agentStorage: Pick<AgentStorage, "listByWorkspace" | "list">;
   // Resolves the worktree at a path to its workspaceId for archive-by-path. The
   // path uniquely identifies a worktree workspace; this is a directory lookup for
   // the archive target, not status/ownership.
@@ -469,6 +470,13 @@ async function maybeRemoveDirectory(
     return { removedDirectory: false };
   }
 
+  // FU-679: an agent or hold that keeps the tree also skips its teardown.
+  const agentRefusal = await findAgentRefusal(dependencies, backing.path, archivedWorkspaceIds);
+  if (agentRefusal !== null) {
+    keepWorktree(backing.path, `${agentRefusal} Teardown skipped.`);
+    return { removedDirectory: false };
+  }
+
   const archivedWorkspaceIdSet = new Set(archivedWorkspaceIds);
   const teardownTargets = target.teardownTargets.filter(
     (teardownTarget) =>
@@ -512,6 +520,7 @@ async function maybeRemoveDirectory(
 
   try {
     const removed = await deletePaseoWorktree({
+      agentProof: () => worktreeRemovalProof(dependencies, backing.path, archivedWorkspaceIds),
       cwd: backing.mainRepoRoot,
       worktreePath: backing.path,
       teardownCwds: [],
@@ -532,6 +541,74 @@ async function maybeRemoveDirectory(
     );
     return { removedDirectory: false };
   }
+}
+
+// FU-679 check 1: every agent bound to the workspace is archived, and no agent is held
+// (fulcra.hold). Returns the reason to keep the worktree, or null.
+// FU-679: the proof that the removal runs before and again inside its per-path lock. A workspace
+// opened on the tree after the first check, or a new agent, keeps it.
+export async function worktreeRemovalProof(
+  dependencies: Pick<
+    ArchiveDependencies,
+    | "agentManager"
+    | "agentStorage"
+    | "listActiveWorkspaces"
+    | "paseoHome"
+    | "paseoWorktreesBaseRoot"
+  >,
+  worktreePath: string,
+  archivedWorkspaceIds: string[],
+): Promise<string | null> {
+  const active = await dependencies.listActiveWorkspaces();
+  // A workspace restored after the first check is active again.
+  const restored = active.find((workspace) => archivedWorkspaceIds.includes(workspace.workspaceId));
+  if (restored) return `Workspace ${restored.workspaceId} is no longer archived.`;
+  if (
+    !(await isDirectoryUnreferenced(
+      active,
+      worktreePath,
+      new Set(archivedWorkspaceIds),
+      dependencies,
+    ))
+  ) {
+    return "An active workspace uses the worktree.";
+  }
+  return findAgentRefusal(dependencies, worktreePath, archivedWorkspaceIds);
+}
+
+export async function findAgentRefusal(
+  dependencies: Pick<ArchiveDependencies, "agentManager" | "agentStorage">,
+  worktreePath: string,
+  workspaceIds: string[],
+): Promise<string | null> {
+  const isInside = (cwd: string) => isRealpathInsideRoot(worktreePath, cwd);
+  // Stored records of the workspaces, plus every stored record (loaded or not) whose cwd is
+  // inside the tree.
+  const records = new Map<string, StoredAgentRecord>();
+  try {
+    for (const workspaceId of workspaceIds) {
+      for (const record of await dependencies.agentStorage.listByWorkspace(workspaceId)) {
+        records.set(record.id, record);
+      }
+    }
+    for (const record of await dependencies.agentStorage.list()) {
+      if (isInside(record.cwd)) records.set(record.id, record);
+    }
+  } catch {
+    return "The agent records could not be read.";
+  }
+  for (const record of records.values()) {
+    if (record.labels?.["fulcra.hold"]?.trim()) return `Agent ${record.id} is held.`;
+    if (!record.archivedAt) return `Agent ${record.id} is not archived.`;
+  }
+  const workspaceIdSet = new Set(workspaceIds);
+  for (const agent of dependencies.agentManager.listAgents({ includeInternal: true })) {
+    const bound =
+      (agent.workspaceId !== undefined && workspaceIdSet.has(agent.workspaceId)) ||
+      isInside(agent.cwd);
+    if (bound && !records.has(agent.id)) return `Agent ${agent.id} is still live.`;
+  }
+  return null;
 }
 
 async function filterAllowedTeardownTargets(
