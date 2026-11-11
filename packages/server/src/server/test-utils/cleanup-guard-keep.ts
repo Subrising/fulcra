@@ -2,9 +2,9 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { expect, vi } from "vitest";
 
-// FU-657: the Fulcra cleanup guard keeps every worktree directory (cleanup_guard.py:284,
-// "Worktree removal is disabled"). The directory and its git registration stay, and the
-// daemon logs a KEEP receipt. Whether Fulcra may remove worktrees is a separate ledger item.
+// FU-679: the cleanup guard keeps a worktree when any removal check fails (see
+// utils/worktree-removal-policy.ts). Test repos without a verified, merged origin/main are kept.
+// The directory and its git registration stay, and the daemon logs a KEEP line.
 export function watchCleanupKeeps() {
   return vi.spyOn(console, "warn");
 }

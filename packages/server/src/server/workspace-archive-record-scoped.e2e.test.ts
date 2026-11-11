@@ -58,6 +58,31 @@ function createGitRepo(): string {
   return repoDir;
 }
 
+// FU-679: Fulcra removes a worktree only when its HEAD is merged into origin/main (checked with
+// git ls-remote) and its status is clean. Publish main to a local bare origin with a fetch inside
+// the bare repository (no push), and ignore the files the tests write.
+function markMainPushed(repoDir: string): void {
+  writeFileSync(
+    path.join(repoDir, ".gitignore"),
+    ["node_modules/", "setup-started", "stop-setup", "writer-started", "stop-writer", ""].join(
+      "\n",
+    ),
+  );
+  execFileSync("git", ["add", ".gitignore"], { cwd: repoDir, stdio: "pipe" });
+  execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "ignore"], {
+    cwd: repoDir,
+    stdio: "pipe",
+  });
+  const origin = `${repoDir}-origin.git`;
+  execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin], { stdio: "pipe" });
+  execFileSync("git", ["fetch", "-q", repoDir, "+refs/heads/main:refs/heads/main"], {
+    cwd: origin,
+    stdio: "pipe",
+  });
+  execFileSync("git", ["remote", "add", "origin", origin], { cwd: repoDir, stdio: "pipe" });
+  execFileSync("git", ["fetch", "-q", "origin"], { cwd: repoDir, stdio: "pipe" });
+}
+
 async function runCli(args: string[], cwd: string): Promise<string> {
   const result = await promisify(execFile)(
     process.execPath,
@@ -358,6 +383,7 @@ test("archiving an unregistered worktree in a bare repo keeps it listed in the m
 
 test("archiving the last reference to a worktree removes it from disk regardless of the disk flag", async () => {
   const repoDir = createGitRepo();
+  markMainPushed(repoDir);
 
   const keepResult = await ctx.client.createWorkspace({
     source: { kind: "worktree", cwd: repoDir, worktreeSlug: "keep-on-disk", baseBranch: "main" },
@@ -430,6 +456,7 @@ test.skipIf(process.platform === "win32")(
       ["-c", "commit.gpgsign=false", "commit", "-m", "add active worktree setup"],
       { cwd: repoDir, stdio: "pipe" },
     );
+    markMainPushed(repoDir);
 
     const result = await ctx.client.createWorkspace({
       source: {
@@ -464,9 +491,11 @@ test.skipIf(process.platform === "win32")(
 );
 
 test.skipIf(process.platform === "win32")(
+  // FU-679: the writer keeps a file open, so the first archive keeps the tree (open handle).
   "repeating archive removes a residual worktree for an already-archived workspace",
   async () => {
     const repoDir = createGitRepo();
+    markMainPushed(repoDir);
     const result = await ctx.client.createWorkspace({
       source: {
         kind: "worktree",
@@ -490,7 +519,7 @@ test.skipIf(process.platform === "win32")(
       process.execPath,
       [
         "-e",
-        `const fs=require('fs'),path=require('path');const target=${JSON.stringify(target)};const started=${JSON.stringify(writerStartedPath)};const stop=${JSON.stringify(stopWriterPath)};fs.writeFileSync(started,'started');while(!fs.existsSync(stop)){try{fs.mkdirSync(target,{recursive:true});fs.writeFileSync(path.join(target,'active'),String(Date.now()))}catch{}}`,
+        `const fs=require('fs'),path=require('path');const target=${JSON.stringify(target)};const started=${JSON.stringify(writerStartedPath)};const stop=${JSON.stringify(stopWriterPath)};fs.mkdirSync(target,{recursive:true});const fd=fs.openSync(path.join(target,'active'),'w');fs.writeFileSync(started,'started');while(!fs.existsSync(stop)){fs.writeSync(fd,String(Date.now()),0)}`,
       ],
       { stdio: "ignore" },
     );
@@ -499,9 +528,11 @@ test.skipIf(process.platform === "win32")(
     try {
       await expect.poll(() => existsSync(writerStartedPath), { timeout: 10000 }).toBe(true);
 
+      const keeps = watchCleanupKeeps();
       const firstArchive = await ctx.client.archiveWorkspace(workspace.id);
 
       expect(firstArchive.error).toBeNull();
+      expectKeptByCleanupGuard(keeps, workspace.workspaceDirectory);
       expect((await activeWorkspaceIds()).has(workspace.id)).toBe(false);
       expect(existsSync(workspace.workspaceDirectory)).toBe(true);
 

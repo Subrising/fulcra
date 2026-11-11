@@ -1,6 +1,15 @@
 import { TrustedPlugins } from "./plugins/trusted.js";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import pino, { type Logger } from "pino";
@@ -17,6 +26,8 @@ import type { AgentStorage, StoredAgentRecord } from "./agent/agent-storage.js";
 import type { WorkspaceGitService } from "./workspace-git-service.js";
 import {
   archiveByScope,
+  findAgentRefusal,
+  worktreeRemovalProof,
   type ActiveWorkspaceRef,
   type ArchiveDependencies,
   type ArchiveResult,
@@ -177,7 +188,8 @@ function createArchiveDeps(input: ArchiveDepsInput): ArchiveTestDependencies {
     },
     agentStorage: {
       listByWorkspace: async (): Promise<StoredAgentRecord[]> => [],
-    } as Pick<AgentStorage, "listByWorkspace">,
+      list: async (): Promise<StoredAgentRecord[]> => [],
+    } as Pick<AgentStorage, "listByWorkspace" | "list">,
     findWorkspaceIdForCwd: input.findWorkspaceIdForCwd ?? vi.fn(async () => null),
     listActiveWorkspaces: async () =>
       active.filter((workspace) => !archivedWorkspaceIds.has(workspace.workspaceId)),
@@ -490,6 +502,59 @@ describe("archiveByScope", () => {
     });
 
     expect(result.archivedWorkspaceIds).toEqual([workspaceId]);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  test("FU-679: a held agent keeps the worktree and skips its teardown", async () => {
+    const { tempDir, repoDir } = createGitRepo();
+    const marker = path.join(repoDir, "held-teardown.log");
+    writeFileSync(
+      path.join(repoDir, "paseo.json"),
+      JSON.stringify({
+        worktree: { teardown: [`node -e "require('fs').writeFileSync('${marker}', 'ran')"`] },
+      }),
+    );
+    execFileSync("git", ["add", "."], { cwd: repoDir, stdio: "pipe" });
+    execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "held teardown"], {
+      cwd: repoDir,
+      stdio: "pipe",
+    });
+    const paseoHome = path.join(tempDir, ".paseo");
+    const worktree = await createPaseoOwnedWorktree(repoDir, paseoHome, "held-teardown");
+    const workspaceId = "ws-held-teardown";
+    const deps = createArchiveDeps({
+      paseoHome,
+      activeWorkspaces: [
+        {
+          workspaceId,
+          cwd: worktree.worktreePath,
+          kind: "worktree",
+          worktreeRoot: worktree.worktreePath,
+          isPaseoOwnedWorktree: true,
+          mainRepoRoot: repoDir,
+        },
+      ],
+    });
+    const held = {
+      id: "agent-held",
+      cwd: worktree.worktreePath,
+      workspaceId,
+      archivedAt: "2026-11-11T00:00:00.000Z",
+      labels: { "fulcra.hold": "1" },
+    } as unknown as StoredAgentRecord;
+    deps.agentStorage = {
+      listByWorkspace: async () => [held],
+      list: async () => [held],
+    };
+
+    const result = await archiveByScope(deps, {
+      scope: { kind: "workspace", workspaceId },
+      requestId: "req-held-teardown",
+    });
+
+    expect(result.archivedWorkspaceIds).toEqual([workspaceId]);
+    expect(result.removedDirectory).toBe(false);
+    expect(existsSync(worktree.worktreePath)).toBe(true);
     expect(existsSync(marker)).toBe(false);
   });
 
@@ -930,6 +995,7 @@ describe("archiveByScope", () => {
       }),
     };
     deps.agentStorage = {
+      list: async () => [],
       listByWorkspace: async (workspaceId: string) =>
         workspaceId === targetWorkspaceId
           ? ([
@@ -938,7 +1004,7 @@ describe("archiveByScope", () => {
           : ([
               { id: otherStoredAgentId, workspaceId: otherWorkspaceId, archivedAt: null },
             ] as StoredAgentRecord[]),
-    } as Pick<AgentStorage, "listByWorkspace">;
+    } as Pick<AgentStorage, "listByWorkspace" | "list">;
 
     const result = await archiveByScope(deps, {
       scope: { kind: "workspace", workspaceId: targetWorkspaceId },
@@ -977,9 +1043,10 @@ describe("archiveByScope", () => {
       }),
     };
     deps.agentStorage = {
+      list: async () => [],
       listByWorkspace: async () =>
         [{ id: agentId, workspaceId, archivedAt: null }] as StoredAgentRecord[],
-    } as Pick<AgentStorage, "listByWorkspace">;
+    } as Pick<AgentStorage, "listByWorkspace" | "list">;
 
     const result = await archiveByScope(deps, {
       scope: { kind: "workspace", workspaceId },
@@ -1102,3 +1169,133 @@ test.each(["preflight", "teardown"] as const)(
     }
   },
 );
+
+describe("FU-679 agent proof before worktree removal", () => {
+  const worktree = "/fixture/worktrees/hash/slug";
+  function record(overrides: Partial<StoredAgentRecord>): StoredAgentRecord {
+    return {
+      id: "a1",
+      cwd: worktree,
+      workspaceId: "w1",
+      labels: {},
+      archivedAt: "2026-11-11T00:00:00.000Z",
+      ...overrides,
+    } as StoredAgentRecord;
+  }
+  function deps(records: StoredAgentRecord[], live: Array<Partial<ManagedAgent>> = []) {
+    return {
+      agentStorage: {
+        listByWorkspace: async (workspaceId: string) =>
+          records.filter((entry) => entry.workspaceId === workspaceId),
+        list: async () => records,
+      } as Pick<AgentStorage, "listByWorkspace" | "list">,
+      agentManager: {
+        listAgents: () => live as ManagedAgent[],
+      } as unknown as ArchiveDependencies["agentManager"],
+    };
+  }
+
+  test("every agent archived and none held: no refusal", async () => {
+    expect(await findAgentRefusal(deps([record({})]), worktree, ["w1"])).toBeNull();
+  });
+
+  test("one agent that is not archived keeps the worktree", async () => {
+    const refusal = await findAgentRefusal(
+      deps([record({}), record({ id: "a2", archivedAt: null })]),
+      worktree,
+      ["w1"],
+    );
+    expect(refusal).toBe("Agent a2 is not archived.");
+  });
+
+  test("an archived agent with fulcra.hold keeps the worktree", async () => {
+    const refusal = await findAgentRefusal(
+      deps([record({ labels: { "fulcra.hold": "1" } })]),
+      worktree,
+      ["w1"],
+    );
+    expect(refusal).toBe("Agent a1 is held.");
+  });
+
+  test("a live agent from another workspace with its cwd inside the tree keeps it", async () => {
+    const refusal = await findAgentRefusal(
+      deps([record({})], [{ id: "a9", workspaceId: "w2", cwd: `${worktree}/packages/app` }]),
+      worktree,
+      ["w1"],
+    );
+    expect(refusal).toBe("Agent a9 is still live.");
+  });
+
+  test("a stored, not loaded, unarchived agent of another workspace with its cwd inside keeps it", async () => {
+    const refusal = await findAgentRefusal(
+      deps([
+        record({}),
+        record({ id: "a7", workspaceId: "w-old", cwd: `${worktree}/sub`, archivedAt: null }),
+      ]),
+      worktree,
+      ["w1"],
+    );
+    expect(refusal).toBe("Agent a7 is not archived.");
+  });
+
+  test("a stored agent whose cwd reaches the tree through a link keeps it", async () => {
+    const real = realpathSync(mkdtempSync(path.join(tmpdir(), "fu679-link-")));
+    const tree = path.join(real, "tree");
+    mkdirSync(path.join(tree, "sub"), { recursive: true });
+    const link = `${real}-link`;
+    symlinkSync(real, link);
+    try {
+      const refusal = await findAgentRefusal(
+        deps([
+          record({
+            id: "a8",
+            workspaceId: "w-old",
+            cwd: path.join(link, "tree", "sub"),
+            archivedAt: null,
+          }),
+        ]),
+        tree,
+        ["w1"],
+      );
+      expect(refusal).toBe("Agent a8 is not archived.");
+    } finally {
+      rmSync(link, { force: true });
+      rmSync(real, { recursive: true, force: true });
+    }
+  });
+
+  test("the removal proof keeps a tree that a workspace opened after the first check", async () => {
+    let active: ActiveWorkspaceRef[] = [];
+    const proofDeps = {
+      ...deps([record({})]),
+      listActiveWorkspaces: async () => active,
+      getWorkspace: async () =>
+        ({ archivedAt: "2026-11-11T00:00:00.000Z" }) as PersistedWorkspaceRecord,
+    };
+    expect(await worktreeRemovalProof(proofDeps, worktree, ["w1"])).toBeNull();
+    active = [{ workspaceId: "w-new", cwd: worktree, kind: "worktree" } as ActiveWorkspaceRef];
+    expect(await worktreeRemovalProof(proofDeps, worktree, ["w1"])).toBe(
+      "An active workspace uses the worktree.",
+    );
+  });
+
+  test("the removal proof keeps a tree whose workspace was restored after the first check", async () => {
+    let active: ActiveWorkspaceRef[] = [];
+    const proofDeps = { ...deps([record({})]), listActiveWorkspaces: async () => active };
+    expect(await worktreeRemovalProof(proofDeps, worktree, ["w1"])).toBeNull();
+    active = [{ workspaceId: "w1", cwd: worktree, kind: "worktree" } as ActiveWorkspaceRef];
+    expect(await worktreeRemovalProof(proofDeps, worktree, ["w1"])).toBe(
+      "Workspace w1 is no longer archived.",
+    );
+  });
+
+  test("unreadable agent records keep the worktree", async () => {
+    const failing = deps([]);
+    failing.agentStorage.listByWorkspace = async () => {
+      throw new Error("disk");
+    };
+    expect(await findAgentRefusal(failing, worktree, ["w1"])).toBe(
+      "The agent records could not be read.",
+    );
+  });
+});

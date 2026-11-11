@@ -1,0 +1,5 @@
+# FU-679: ignored paths that a build makes again, so worktree cleanup may delete them.
+# One .gitignore pattern per line, exactly as it appears in .gitignore.
+packages/protocol/src/generated/validation/*.aot.ts
+packages/protocol/src/generated/validation/ws-outbound-schema-metadata.ts
+packages/protocol/codegen/generated/

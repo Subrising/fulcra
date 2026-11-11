@@ -1,4 +1,5 @@
 import type { TerminalReplaySink, TerminalReplayMetadata } from "./terminal-replay.js";
+import { withWorktreeUse } from "../utils/worktree-path-lock.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import { access } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
@@ -819,35 +820,38 @@ export function createWorkerTerminalManager(
     async createTerminal(
       options: WorkerCreateTerminalOptions & { workspaceId: string },
     ): Promise<TerminalSession> {
-      const terminalId = options.id ?? randomUUID();
-      const activityToken = createActivityToken();
-      const terminalActivityUrl = managerOptions.getTerminalActivityUrl?.() ?? null;
-      terminalActivityTokenById.set(terminalId, activityToken);
-      const creation = { session: null as TerminalSession | null };
-      pendingCreationsById.set(terminalId, creation);
-      try {
-        const environment = resolveCreateEnvironment();
-        await sendRequest({
-          type: "createTerminal",
-          options: {
-            ...options,
-            id: terminalId,
-            activityToken,
-            activityUrl: terminalActivityUrl,
-            baseEnv: environment.baseEnv,
-            paseoCliPath: environment.paseoCliPath,
-          },
-        });
-        if (!creation.session) {
-          throw new Error("Terminal worker completed creation without a terminalCreated event");
+      // FU-679: a worktree removal of this cwd waits for the create, or runs first.
+      return withWorktreeUse(options.cwd, async () => {
+        const terminalId = options.id ?? randomUUID();
+        const activityToken = createActivityToken();
+        const terminalActivityUrl = managerOptions.getTerminalActivityUrl?.() ?? null;
+        terminalActivityTokenById.set(terminalId, activityToken);
+        const creation = { session: null as TerminalSession | null };
+        pendingCreationsById.set(terminalId, creation);
+        try {
+          const environment = resolveCreateEnvironment();
+          await sendRequest({
+            type: "createTerminal",
+            options: {
+              ...options,
+              id: terminalId,
+              activityToken,
+              activityUrl: terminalActivityUrl,
+              baseEnv: environment.baseEnv,
+              paseoCliPath: environment.paseoCliPath,
+            },
+          });
+          if (!creation.session) {
+            throw new Error("Terminal worker completed creation without a terminalCreated event");
+          }
+          return creation.session;
+        } catch (error) {
+          terminalActivityTokenById.delete(terminalId);
+          throw error;
+        } finally {
+          pendingCreationsById.delete(terminalId);
         }
-        return creation.session;
-      } catch (error) {
-        terminalActivityTokenById.delete(terminalId);
-        throw error;
-      } finally {
-        pendingCreationsById.delete(terminalId);
-      }
+      });
     },
 
     registerCwdEnv(options: { cwd: string; env: Record<string, string> }): void {

@@ -446,7 +446,7 @@ Unread native reports block archive until consumption or their six-hour expiry.
 Expiry records `resolved-expired` without marking the report consumed. The receipt and scoped inbox evidence remain available.
 An uncertain provider delivery still blocks archive after report expiry.
 
-`create_agent_request` can opt an agent into `autoArchive`. In that mode the daemon archives the agent after the first terminal turn event (`turn_completed`, `turn_failed`, or `turn_canceled`). When the agent owns an isolated workspace, auto-archive archives that workspace too; the managed worktree is removed when its final workspace reference is gone.
+`create_agent_request` can opt an agent into `autoArchive`. In that mode the daemon archives the agent after the first terminal turn event (`turn_completed`, `turn_failed`, or `turn_canceled`). When the agent owns an isolated workspace, auto-archive archives that workspace too; the managed worktree is removed when its final workspace reference is gone and the [worktree removal checks](#worktree-removal) pass.
 
 Archiving runs through `AgentManager.archiveAgent` (`packages/server/src/server/agent/agent-manager.ts`):
 
@@ -463,6 +463,38 @@ agent record without setting the agent's `archivedAt`, while its `workspaceId` s
 archived workspace. History navigation must not infer workspace lifecycle from `agent.archivedAt`
 or mutate either lifecycle. The workspace route asks the daemon for authoritative recovery state;
 only the route's explicit Unarchive or Restore action changes the archived workspace.
+
+### Worktree removal
+
+Workspace archive removes a Fulcra worktree only when its work is merged (owner approval, 14 Oct: merged
+git worktrees) and all of these checks pass
+(`packages/server/src/utils/worktree-removal-policy.ts`):
+
+1. No active workspace uses the tree, and no archived workspace was restored. Every agent bound to the workspace, and every stored agent
+   with its cwd in the tree, is archived. No agent has a `fulcra.hold` label. An agent refusal
+   also skips the teardown commands.
+2. `git status --ignored` shows no changed or untracked file. An ignored path is allowed only
+   when the pattern that matched it names rebuildable output: `node_modules`, `dist`, `build`,
+   `.expo`, `coverage`, `test-results`, `.turbo`, `.next`, `expo-env.d.ts` or `*.tsbuildinfo`;
+   a literal path (no glob) to one of those names; or a pattern that the repository lists in its
+   committed `.fulcra/rebuildable` file at both HEAD and `origin/main` (one `.gitignore` pattern
+   per line, for codegen output).
+   `git worktree remove` deletes ignored files, so `.env`, `.dev/`, `local/*` or an unlisted
+   `generated/` folder keep the tree.
+3. HEAD is merged into `origin/main`: an ancestor, or (squash merge, on a branch only) every file
+   the branch changed has the same content in `origin/main`. A detached HEAD must be an ancestor. `origin/main` must equal `git ls-remote origin`; a
+   stale ref or a failed `ls-remote` keeps the tree.
+4. No process has its working folder or an open file in the tree (`lsof`). Windows always keeps.
+   Linux keeps unless the daemon runs as root, because `lsof` without root sees only one user.
+5. The real path is inside the daemon worktrees root, and no folder below the root is a link.
+6. The path is a linked worktree, never a main checkout.
+
+Removal takes a per-path lock that agent create, resume and unarchive, workspace open and restore,
+and terminal create also take (`packages/server/src/utils/worktree-path-lock.ts`). Inside the lock it runs
+checks 1 to 4 again, then runs `git worktree remove` without `--force` (15-minute limit). It never runs `git worktree prune`,
+which would delete the admin data of other moved or unmounted worktrees. A failed check keeps the
+tree and logs one `KEEP cleanup: <reason>` line. A caller without an agent proof, such as the
+rollback of a failed create, always keeps the tree.
 
 History navigation opens the selected agent without changing either archive state. Workspace
 **Restore** recovers only the workspace; the selected archived agent stays open with its callout.

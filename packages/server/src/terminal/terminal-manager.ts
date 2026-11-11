@@ -1,3 +1,4 @@
+import { withWorktreeUse } from "../utils/worktree-path-lock.js";
 import {
   replayTerminal,
   type TerminalReplaySink,
@@ -347,54 +348,57 @@ export function createTerminalManager(
       baseEnv?: Record<string, string>;
       paseoCliPath?: string | null;
     }): Promise<LocalTerminalSession> {
-      assertAbsolutePath(options.cwd);
+      // FU-679: a worktree removal of this cwd waits for the create, or runs first.
+      return withWorktreeUse(options.cwd, async () => {
+        assertAbsolutePath(options.cwd);
 
-      const terminals = terminalsByCwd.get(options.cwd) ?? [];
-      const defaultName = `Terminal ${terminals.length + 1}`;
-      const inheritedEnv = resolveDefaultEnvForCwd(options.cwd);
-      const mergedEnv =
-        inheritedEnv || options.env ? { ...inheritedEnv, ...options.env } : undefined;
-      const terminalId = options.id ?? randomUUID();
-      const activityToken = options.activityToken ?? createActivityToken();
-      const terminalActivityUrl =
-        options.activityUrl === undefined
-          ? (managerOptions.getTerminalActivityUrl?.() ?? null)
-          : options.activityUrl;
-      const activityEnv = {
-        PASEO_TERMINAL_ID: terminalId,
-        PASEO_ACTIVITY_TOKEN: activityToken,
-        ...(terminalActivityUrl ? { PASEO_TERMINAL_ACTIVITY_URL: terminalActivityUrl } : {}),
-      };
-      terminalActivityTokenById.set(terminalId, activityToken);
-      let session: LocalTerminalSession;
-      try {
-        session = registerSession(
-          await createTerminal({
-            id: terminalId,
-            cwd: options.cwd,
-            workspaceId: options.workspaceId,
-            name: options.name ?? defaultName,
-            ...(options.title ? { title: options.title } : {}),
-            ...(options.command ? { command: options.command } : {}),
-            ...(options.args ? { args: options.args } : {}),
-            ...(options.rows !== undefined ? { rows: options.rows } : {}),
-            ...(options.cols !== undefined ? { cols: options.cols } : {}),
-            ...(mergedEnv ? { env: mergedEnv } : {}),
-            ...(options.baseEnv ? { baseEnv: options.baseEnv } : {}),
-            ...(options.paseoCliPath === undefined ? {} : { paseoCliPath: options.paseoCliPath }),
-            activityEnv,
-          }),
-        );
-      } catch (error) {
-        terminalActivityTokenById.delete(terminalId);
-        throw error;
-      }
+        const terminals = terminalsByCwd.get(options.cwd) ?? [];
+        const defaultName = `Terminal ${terminals.length + 1}`;
+        const inheritedEnv = resolveDefaultEnvForCwd(options.cwd);
+        const mergedEnv =
+          inheritedEnv || options.env ? { ...inheritedEnv, ...options.env } : undefined;
+        const terminalId = options.id ?? randomUUID();
+        const activityToken = options.activityToken ?? createActivityToken();
+        const terminalActivityUrl =
+          options.activityUrl === undefined
+            ? (managerOptions.getTerminalActivityUrl?.() ?? null)
+            : options.activityUrl;
+        const activityEnv = {
+          PASEO_TERMINAL_ID: terminalId,
+          PASEO_ACTIVITY_TOKEN: activityToken,
+          ...(terminalActivityUrl ? { PASEO_TERMINAL_ACTIVITY_URL: terminalActivityUrl } : {}),
+        };
+        terminalActivityTokenById.set(terminalId, activityToken);
+        let session: LocalTerminalSession;
+        try {
+          session = registerSession(
+            await createTerminal({
+              id: terminalId,
+              cwd: options.cwd,
+              workspaceId: options.workspaceId,
+              name: options.name ?? defaultName,
+              ...(options.title ? { title: options.title } : {}),
+              ...(options.command ? { command: options.command } : {}),
+              ...(options.args ? { args: options.args } : {}),
+              ...(options.rows !== undefined ? { rows: options.rows } : {}),
+              ...(options.cols !== undefined ? { cols: options.cols } : {}),
+              ...(mergedEnv ? { env: mergedEnv } : {}),
+              ...(options.baseEnv ? { baseEnv: options.baseEnv } : {}),
+              ...(options.paseoCliPath === undefined ? {} : { paseoCliPath: options.paseoCliPath }),
+              activityEnv,
+            }),
+          );
+        } catch (error) {
+          terminalActivityTokenById.delete(terminalId);
+          throw error;
+        }
 
-      terminals.push(session);
-      terminalsByCwd.set(options.cwd, terminals);
-      emitTerminalsChanged({ cwd: options.cwd });
+        terminals.push(session);
+        terminalsByCwd.set(options.cwd, terminals);
+        emitTerminalsChanged({ cwd: options.cwd });
 
-      return session;
+        return session;
+      });
     },
 
     registerCwdEnv(options: { cwd: string; env: Record<string, string> }): void {
