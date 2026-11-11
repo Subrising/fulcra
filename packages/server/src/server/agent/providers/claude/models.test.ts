@@ -18,7 +18,9 @@ import {
   findClaudeModel,
   getClaudeContextWindowMaxTokens,
   getClaudeModels,
+  logClaudeManifestGap,
   normalizeClaudeRuntimeModelId,
+  resetClaudeManifestGapLogForTests,
 } from "./models.js";
 
 describe("getClaudeContextWindowMaxTokens", () => {
@@ -1016,4 +1018,93 @@ describe("Claude Mythos 5.1 catalog", () => {
       expect(normalizeClaudeManifestModelId(id)).toBeNull();
     },
   );
+});
+
+describe("logClaudeManifestGap", () => {
+  const row = (value: string) => ({ value, displayName: value, description: "" });
+  const makeLogger = () => {
+    const warn = vi.fn();
+    return { warn, logger: { warn } as unknown as ReturnType<typeof createTestLogger> };
+  };
+  afterEach(() => resetClaudeManifestGapLogForTests());
+
+  it("warns once with probe ids, account id and version when a supported manifest model is missing", () => {
+    const { warn, logger } = makeLogger();
+    logClaudeManifestGap({
+      logger,
+      runtimeModels: [row("claude-fable-5-1"), row("claude-opus-5-5")],
+      claudeCodeVersion: "2.1.321",
+      accountId: "acct-1",
+    });
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [fields] = warn.mock.calls[0]!;
+    expect(fields.missingManifestModelIds).toContain("claude-fable-5-2");
+    expect(fields.missingManifestModelIds).not.toContain("claude-mythos-5-1");
+    expect(fields.probeModelIds).toEqual(["claude-fable-5-1", "claude-opus-5-5"]);
+    expect(fields.accountId).toBe("acct-1");
+    expect(fields.claudeCodeVersion).toBe("2.1.321");
+  });
+
+  it("does not warn when the probe lists the model, is empty, or the version is too old", () => {
+    const { warn, logger } = makeLogger();
+    const all = getClaudeModels("2.1.321")
+      .filter((m) => m.isSelectable !== false)
+      .map((m) => row(m.id));
+    logClaudeManifestGap({ logger, runtimeModels: all, claudeCodeVersion: "2.1.321" });
+    logClaudeManifestGap({ logger, runtimeModels: [], claudeCodeVersion: "2.1.321" });
+    logClaudeManifestGap({ logger, runtimeModels: null, claudeCodeVersion: "2.1.321" });
+    logClaudeManifestGap({
+      logger,
+      runtimeModels: all.filter((r) => r.value !== "claude-fable-5-2"),
+      claudeCodeVersion: "2.1.300",
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("rate-limits per missing set to once per hour", () => {
+    const { warn, logger } = makeLogger();
+    let t = 1_000;
+    const call = (models: string[]) =>
+      logClaudeManifestGap({
+        logger,
+        runtimeModels: models.map(row),
+        claudeCodeVersion: "2.1.321",
+        now: () => t,
+      });
+    call(["claude-opus-5-5"]);
+    t += 59 * 60 * 1000;
+    call(["claude-opus-5-5"]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    call(["claude-opus-5-5", "claude-fable-5-2"]); // different missing set
+    expect(warn).toHaveBeenCalledTimes(2);
+    t += 2 * 60 * 1000;
+    call(["claude-opus-5-5"]);
+    expect(warn).toHaveBeenCalledTimes(3);
+  });
+
+  it("logs no secret from the environment through fetchCatalog", async () => {
+    const configDir = await createClaudeConfigDir({});
+    const warn = vi.fn();
+    const logger = { warn, debug: vi.fn(), info: vi.fn(), trace: vi.fn(), error: vi.fn() };
+    (logger as unknown as { child: () => unknown }).child = () => logger;
+    const client = new ClaudeAgentClient({
+      logger: logger as unknown as ReturnType<typeof createTestLogger>,
+      resolveVersion: async () => "2.1.321",
+      runtimeSettings: {
+        env: {
+          CLAUDE_CONFIG_DIR: configDir,
+          FULCRA_ACCOUNT_ID: "acct-7",
+          ANTHROPIC_API_KEY: "sk-ant-SECRET-VALUE",
+          CLAUDE_CODE_OAUTH_TOKEN: "oauth-SECRET-VALUE",
+        },
+      },
+      modelProbe: async () => [row("claude-opus-5-5")],
+    });
+    await client.fetchCatalog({ scope: "workspace", cwd: configDir, force: false });
+    const gapCall = warn.mock.calls.find(([, msg]) => String(msg).includes("omitted manifest"));
+    expect(gapCall).toBeDefined();
+    expect(gapCall![0].accountId).toBe("acct-7");
+    const serialized = JSON.stringify(warn.mock.calls);
+    expect(serialized).not.toContain("SECRET-VALUE");
+  });
 });

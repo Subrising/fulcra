@@ -20,6 +20,58 @@ const CLAUDE_SETTINGS_MODEL_ENV_KEYS = [
   "ANTHROPIC_DEFAULT_HAIKU_MODEL",
 ] as const;
 
+const MANIFEST_GAP_LOG_INTERVAL_MS = 60 * 60 * 1000;
+const manifestGapLoggedAt = new Map<string, number>();
+
+/** Test hook: forget which gaps were already logged. */
+export function resetClaudeManifestGapLogForTests(): void {
+  manifestGapLoggedAt.clear();
+}
+
+/**
+ * Claude Code decides which models exist, so an account can get a list without a model the manifest
+ * knows (FU-777: Fable 5.2 missing on one host). When the probe returned models and a manifest model that
+ * this Claude Code version supports is absent, log one warn line with what the probe really returned.
+ * Only model ids, the Fulcra account id and the version are logged; never tokens or env values.
+ * Rate limit: once per hour per missing set. Models that need discovery (Mythos) are expected to be absent.
+ */
+export function logClaudeManifestGap(input: {
+  logger: Logger;
+  runtimeModels: readonly ClaudeRuntimeModel[] | null | undefined;
+  claudeCodeVersion?: string;
+  accountId?: string | null;
+  now?: () => number;
+}): void {
+  const { runtimeModels } = input;
+  if (!runtimeModels?.length) return;
+  const discovered = new Set(
+    runtimeModels
+      .map((model) => normalizeClaudeRuntimeModelId(model.resolvedModel ?? model.value))
+      .filter((id): id is string => id !== null),
+  );
+  // Passing the discovered ids drops discovery-only models (Mythos) that the probe did not report.
+  const missing = getClaudeManifestModels(input.claudeCodeVersion, discovered)
+    .filter((model) => model.isSelectable !== false)
+    .map((model) => model.id)
+    .filter((id) => !discovered.has(id))
+    .sort();
+  if (missing.length === 0) return;
+  const now = (input.now ?? Date.now)();
+  const key = missing.join(",");
+  const last = manifestGapLoggedAt.get(key);
+  if (last !== undefined && now - last < MANIFEST_GAP_LOG_INTERVAL_MS) return;
+  manifestGapLoggedAt.set(key, now);
+  input.logger.warn(
+    {
+      missingManifestModelIds: missing,
+      probeModelIds: runtimeModels.map((model) => model.resolvedModel ?? model.value),
+      accountId: input.accountId ?? null,
+      claudeCodeVersion: input.claudeCodeVersion ?? null,
+    },
+    "Claude probe omitted manifest models that this Claude Code version supports",
+  );
+}
+
 export function getClaudeModels(claudeCodeVersion?: string): AgentModelDefinition[] {
   return getClaudeManifestModels(claudeCodeVersion);
 }

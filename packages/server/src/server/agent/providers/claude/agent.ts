@@ -55,6 +55,7 @@ import { isClaudeInterruptPlaceholderText } from "./interrupt-placeholder.js";
 import {
   getClaudeContextWindowMaxTokens,
   getClaudeModelsWithSettings,
+  logClaudeManifestGap,
   normalizeClaudeRuntimeModelId,
   resolveConfiguredClaudeModel,
 } from "./models.js";
@@ -1874,6 +1875,12 @@ export class ClaudeAgentClient implements AgentClient {
         context?.signal,
       ),
     );
+    logClaudeManifestGap({
+      logger: this.logger,
+      runtimeModels,
+      claudeCodeVersion,
+      accountId: env.FULCRA_ACCOUNT_ID ?? null,
+    });
     recordClaudeRuntimeModels(runtimeModels?.length ? models : null);
     const modeCatalog = claudeModeCatalog(env);
     return {
