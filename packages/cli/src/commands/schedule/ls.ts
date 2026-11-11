@@ -9,8 +9,16 @@ import {
   type ScheduleRow,
 } from "./shared.js";
 
+/** By default only schedules that start a new agent; `--all` adds heartbeats and every other target. */
+export function listedSchedules<T extends { target: { type: string } }>(
+  schedules: T[],
+  all: boolean,
+): T[] {
+  return all ? schedules : schedules.filter((schedule) => schedule.target.type === "new-agent");
+}
+
 export async function runLsCommand(
-  options: ScheduleCommandOptions,
+  options: ScheduleCommandOptions & { all?: boolean },
   _command: Command,
 ): Promise<ListResult<ScheduleRow>> {
   const { client } = await connectScheduleClient(options.daemonTarget);
@@ -21,9 +29,7 @@ export async function runLsCommand(
     }
     return {
       type: "list",
-      data: payload.schedules
-        .filter((schedule) => schedule.target.type === "new-agent")
-        .map(toScheduleRow),
+      data: listedSchedules(payload.schedules, options.all === true).map(toScheduleRow),
       schema: scheduleSchema,
     };
   } catch (error) {

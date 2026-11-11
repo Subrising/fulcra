@@ -8,9 +8,11 @@ import { commandCentreKeychain } from "./command-centre-keychain.js";
 import { restartManagedDaemon } from "./managed-restart.js";
 import {
   countBusySessions,
+  countDueSoon,
+  countLiveTerminals,
   planBootDaemon,
+  replaceBootDaemonWhenIdle,
   stopBootDaemon,
-  waitForIdleBootDaemon,
   type BootDaemonDeps,
   type NoCredentialProbe,
 } from "./boot-daemon-replace.js";
@@ -22,7 +24,7 @@ import {
   COMMAND_CENTRE_PASSWORD_FILE_NAME,
   readCommandCentrePasswordFile,
 } from "@getpaseo/server/command-centre-password";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import { getElectronDeviceKey } from "../features/device-key-electron.js";
@@ -547,20 +549,40 @@ async function settleExistingDaemon(current: DesktopDaemonStatus): Promise<Deskt
   return stopped;
 }
 
-/** FU-780: an agent list from this daemon with no credential at all (no password, empty scratch home). */
+/**
+ * FU-780: what keeps this daemon busy, read with no credential at all (no password, empty scratch home): turns,
+ * live terminals (workspace scripts run in terminals too) and schedules or heartbeats due soon.
+ */
 async function probeWithoutCredential(listen: string): Promise<NoCredentialProbe> {
   const scratch = await mkdtemp(path.join(os.tmpdir(), "fulcra-boot-probe-"));
-  try {
-    const items = await runExternalCliJsonCommand(["ls", "-a", "-g", "--host", listen, "--json"], {
-      env: { PASEO_PASSWORD: "", PASEO_HOME: scratch },
+  const list = (args: string[]) =>
+    runExternalCliJsonCommand([...args, "--host", listen, "--json"], {
+      env: { PASEO_PASSWORD: "", PASEO_HOME: scratch, PASEO_HOST: undefined },
     });
-    return { answered: true, busy: countBusySessions(items) };
+  try {
+    const [agents, terminals, schedules] = await Promise.all([
+      list(["ls", "-a", "-g"]),
+      list(["terminal", "ls", "--all"]),
+      list(["schedule", "ls", "--all"]),
+    ]);
+    return {
+      answered: true,
+      busy: {
+        turns: countBusySessions(agents),
+        terminals: countLiveTerminals(terminals),
+        dueSoon: countDueSoon(schedules, Date.now()),
+      },
+    };
   } catch (error) {
     return { answered: false, reason: error instanceof Error ? error.message : String(error) };
   } finally {
     await rm(scratch, { recursive: true, force: true }).catch(() => undefined);
   }
 }
+
+export const BOOT_DAEMON_EXIT_WAIT = { totalMs: 60_000, stepMs: 500 };
+export const BOOT_REPLACE_START_RETRY = { tries: 3, baseMs: 1_000 };
+const BOOT_REPLACEMENT_FILE = "boot-replacement-daemon.json";
 
 async function bootDaemonDeps(home: string, instance: DaemonInstance): Promise<BootDaemonDeps> {
   const sameInstance = async () => {
@@ -575,6 +597,19 @@ async function bootDaemonDeps(home: string, instance: DaemonInstance): Promise<B
       existsSync(path.join(home, COMMAND_CENTRE_PASSWORD_FILE_NAME)),
     probeWithoutCredential,
     stillSameInstance: sameInstance,
+    preflight: async () => {
+      const settings = await getDesktopSettingsStore().get();
+      if (!settings.daemon.manageBuiltInDaemon) return "built-in daemon management is off";
+      if (settings.daemon.commandCentreEnabled !== true) return "command centre is off";
+      if (getPaseoHome() !== home) return "the daemon home changed";
+      try {
+        if (!(await desktopCommandCentreCredential(true)))
+          return "the app daemon credential is not available";
+      } catch (error) {
+        return `the app daemon credential is not available: ${error instanceof Error ? error.message : String(error)}`;
+      }
+      return null;
+    },
     stop: async () => {
       await stopCapturedDaemon({
         home,
@@ -584,6 +619,14 @@ async function bootDaemonDeps(home: string, instance: DaemonInstance): Promise<B
       });
       return !(await readDaemonInstance(home));
     },
+    waitForExit: async () => {
+      const deadline = Date.now() + BOOT_DAEMON_EXIT_WAIT.totalMs;
+      while (Date.now() < deadline) {
+        if (!(await sameInstance())) return !(await readDaemonInstance(home));
+        await pause(BOOT_DAEMON_EXIT_WAIT.stepMs);
+      }
+      return false;
+    },
     log: logDesktopDaemonLifecycle,
     logError: (message, details) => log.error("[desktop daemon]", message, details),
     pause: async (ms) => {
@@ -592,11 +635,68 @@ async function bootDaemonDeps(home: string, instance: DaemonInstance): Promise<B
   };
 }
 
+/** Marks the app daemon that replaced a boot daemon, so an app quit keeps it running (as the boot daemon did). */
+function markBootReplacement(home: string): void {
+  if (!ownedLaunch || ownedLaunch.home !== home) return;
+  try {
+    writeFileSync(path.join(home, BOOT_REPLACEMENT_FILE), JSON.stringify(ownedLaunch.instance), {
+      mode: 0o600,
+    });
+  } catch (error) {
+    log.error("[desktop daemon]", "could not mark the boot replacement daemon", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
+ * FU-780: true when the running app daemon replaced a boot daemon. The quit then keeps it running, as if
+ * keepRunningAfterQuit were on, because the boot daemon it replaced also kept running.
+ */
+export function keepsBootReplacementRunningOnQuitSync(): boolean {
+  if (!ownedLaunch || !isDesktopManagedDaemonRunningSync()) return false;
+  try {
+    const marked = JSON.parse(
+      readFileSync(path.join(ownedLaunch.home, BOOT_REPLACEMENT_FILE), "utf8"),
+    );
+    if (!isSameDaemonInstance(marked, ownedLaunch.instance)) return false;
+  } catch {
+    return false;
+  }
+  logDesktopDaemonLifecycle("app quit keeps the daemon that replaced the boot daemon running", {
+    pid: ownedLaunch.instance.pid,
+  });
+  return true;
+}
+
+/** After a successful boot daemon stop: start the app daemon, retried with backoff, then a clear error. */
+async function startAfterBootReplace(home: string): Promise<DesktopDaemonStatus> {
+  let lastError = "";
+  for (let attempt = 1; attempt <= BOOT_REPLACE_START_RETRY.tries; attempt++) {
+    try {
+      const status = await startDaemonUnlocked(false);
+      markBootReplacement(home);
+      return status;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      logDesktopDaemonLifecycle("app daemon start after boot daemon stop failed", {
+        attempt,
+        error: lastError,
+      });
+      if (attempt < BOOT_REPLACE_START_RETRY.tries)
+        await pause(BOOT_REPLACE_START_RETRY.baseMs * 2 ** (attempt - 1));
+    }
+  }
+  const message = `The app stopped the boot daemon but could not start its own daemon after ${BOOT_REPLACE_START_RETRY.tries} tries: ${lastError}. Start the daemon from Settings or restart the app.`;
+  log.error("[desktop daemon]", message);
+  throw new Error(message);
+}
+
 let bootDaemonWaiter: Promise<void> | null = null;
 
 /**
- * FU-780: true when a boot-started daemon without Command Centre was stopped, so the caller launches its own.
- * With running turns it starts one background wait and returns false; the daemon stays adopted until then.
+ * FU-780: "stopped" when a boot-started daemon without Command Centre was stopped, so the caller starts its own.
+ * When it is busy, one background wait starts and the daemon stays adopted until it is idle.
  */
 async function replaceBootDaemonAtStart(
   home: string,
@@ -614,17 +714,23 @@ async function replaceBootDaemonAtStart(
     });
     return false;
   }
-  if (plan.kind === "replace") return stopBootDaemon(current, deps);
-  logDesktopDaemonLifecycle("boot daemon without command centre has running turns; waiting", {
+  if (plan.kind === "replace") {
+    const outcome = await stopBootDaemon(current, deps);
+    if (outcome !== "busy") return outcome === "stopped";
+  }
+  logDesktopDaemonLifecycle("boot daemon without command centre is busy; waiting", {
     pid: current.pid,
-    busy: plan.busy,
+    ...(plan.kind === "wait" ? plan.busy : {}),
   });
   bootDaemonWaiter ??= (async () => {
     try {
-      if ((await waitForIdleBootDaemon(current, deps)) && (await stopBootDaemon(current, deps)))
-        await startDaemon();
+      // The stop and the start run as one start, so no other start runs in between.
+      await exclusiveStart(async () => {
+        if (await replaceBootDaemonWhenIdle(current, deps)) await startAfterBootReplace(home);
+        return null;
+      });
     } catch (error) {
-      log.error("[desktop daemon]", "start after boot daemon replace failed", {
+      log.error("[desktop daemon]", "boot daemon replace failed", {
         error: error instanceof Error ? error.message : String(error),
       });
     } finally {
@@ -634,7 +740,22 @@ async function replaceBootDaemonAtStart(
   return false;
 }
 
-async function startDaemon(): Promise<DesktopDaemonStatus> {
+// FU-780: one daemon start at a time. Callers during a start share its promise.
+let startChain: Promise<unknown> = Promise.resolve();
+let startInFlight: Promise<DesktopDaemonStatus> | null = null;
+function exclusiveStart<T>(task: () => Promise<T>): Promise<T> {
+  const run = startChain.then(task, task);
+  startChain = run.catch(() => undefined);
+  return run;
+}
+function startDaemon(): Promise<DesktopDaemonStatus> {
+  startInFlight ??= exclusiveStart(() => startDaemonUnlocked(true)).finally(() => {
+    startInFlight = null;
+  });
+  return startInFlight;
+}
+
+async function startDaemonUnlocked(replaceBootDaemon: boolean): Promise<DesktopDaemonStatus> {
   assertBuiltInDaemonManagementEnabled(await getDesktopSettingsStore().get());
 
   const home = getPaseoHome();
@@ -659,8 +780,9 @@ async function startDaemon(): Promise<DesktopDaemonStatus> {
     desktopManaged: initial.desktopManaged,
     answering: initial.answering === true,
   });
-  let current = await settleExistingDaemon(initial);
-  if (await replaceBootDaemonAtStart(home, current)) current = { ...current, status: "stopped" };
+  const current = await settleExistingDaemon(initial);
+  if (replaceBootDaemon && (await replaceBootDaemonAtStart(home, current)))
+    return startAfterBootReplace(home);
   if (current.status === "running" || current.status === "starting") {
     if (shouldRestartForVersion(current)) {
       logDesktopDaemonLifecycle("daemon version mismatch, restarting", {

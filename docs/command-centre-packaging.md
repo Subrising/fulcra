@@ -16,7 +16,24 @@ Do not replace an existing user-configured daemon credential. Keychain failures 
 
 ### A boot daemon without Command Centre
 
-When Command Centre is on and the app starts, it replaces a script-started daemon that has no Command Centre, such as a boot task that ran before sign-in. The app treats the daemon as one without Command Centre only when all three are true: the app did not start it, the home stores no daemon password and no `command-centre-password` file, and it answers an agent list with no credential. A Command Centre daemon always requires a credential. When no turn runs, the app stops that daemon and starts its own. When turns run, the app keeps the daemon and checks every 30 s for up to 2 h, then replaces it when no turn runs. If the stop fails, the old daemon stays and the app log gets one error line. In every other case the app adopts the daemon unchanged. See `packages/desktop/src/daemon/boot-daemon-replace.ts`.
+When Command Centre is on and the app starts, it replaces a script-started daemon that has no Command Centre, such as a boot task that ran before sign-in. The app treats the daemon as one without Command Centre only when all three are true: the app did not start it, the home stores no daemon password and no `command-centre-password` file, and it answers `paseo ls`, `paseo terminal ls --all` and `paseo schedule ls --all` with no credential. A Command Centre daemon always requires a credential. A probe that does not answer within 20 s counts as no answer.
+
+The daemon is busy while a turn runs, a terminal or workspace script runs, or a schedule or heartbeat is due within 2 minutes. While it is busy, the app keeps it and checks every 30 s for up to 2 h. Just before the stop, the app checks again that built-in daemon management and Command Centre are still on, that the app daemon credential is ready, and that the daemon is still idle. When a stop does not finish in time, the app waits up to 60 s for the daemon to exit. When it does not exit, the old daemon stays, the app adopts it, and the app log gets one error line. When the start after a stop fails, the app tries 3 times, then shows an error. One daemon start runs at a time. In every other case the app adopts the daemon unchanged. See `packages/desktop/src/daemon/boot-daemon-replace.ts`.
+
+The app daemon that replaced a boot daemon keeps running when the app quits, as if **Keep running after quit** were on, because the boot daemon also kept running. The app records it in `boot-replacement-daemon.json` in the daemon home and writes a log line at quit.
+
+A Windows sign-out still stops that daemon, because it runs in the signed-in session. The boot task therefore also runs every 5 minutes and starts a daemon only when none runs. [`scripts/windows/fulcra-boot-start.cmd`](../scripts/windows/fulcra-boot-start.cmd) is the task script: when a daemon runs, `paseo daemon start` answers `already_running` with exit 0 and the script writes nothing to the log. To change the task, run these in an elevated Command Prompt from the repository folder:
+
+```bat
+copy /y "%USERPROFILE%\fulcra-boot-start.cmd" "%USERPROFILE%\fulcra-boot-start.cmd.bak"
+schtasks /query /tn "Fulcra Daemon At Boot" /xml > "%USERPROFILE%\fulcra-boot-task.bak.xml"
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows\fulcra-boot-task-repeat.ps1 -In "%USERPROFILE%\fulcra-boot-task.bak.xml" -Out "%USERPROFILE%\fulcra-boot-task.xml"
+copy /y scripts\windows\fulcra-boot-start.cmd "%USERPROFILE%\fulcra-boot-start.cmd"
+schtasks /create /tn "Fulcra Daemon At Boot" /xml "%USERPROFILE%\fulcra-boot-task.xml" /f
+schtasks /query /tn "Fulcra Daemon At Boot" /xml
+```
+
+The PowerShell step keeps the S4U principal, the boot trigger and the action, and refuses a task that is not S4U. To roll back, run `schtasks /create /tn "Fulcra Daemon At Boot" /xml "%USERPROFILE%\fulcra-boot-task.bak.xml" /f` and copy the `.bak` script back.
 
 ### Shared password file for script starts
 
