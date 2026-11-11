@@ -923,6 +923,14 @@ describe("owned startup and Settings recovery", () => {
     expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
     expect(mocks.stopDaemonInstance).not.toHaveBeenCalled();
   });
+  async function stopOwnedFixture() {
+    mocks.readInstance.mockResolvedValue(null);
+    mocks.runExternalCliJsonCommand.mockResolvedValue(stopped);
+  }
+  async function stopOwnedThenCredentialFails() {
+    await stopOwnedFixture();
+    mocks.keychainGet.mockRejectedValue(new Error("keychain locked"));
+  }
   async function acquireOwned() {
     await manager.createDaemonCommandHandlers().start_desktop_daemon();
     mocks.readInstance.mockResolvedValue(instance);
@@ -934,17 +942,27 @@ describe("owned startup and Settings recovery", () => {
     });
     mocks.startDaemonInstance.mockClear();
   }
-  it("FU-780 marks an app stop on purpose and removes the mark at the next app start", async () => {
+  it.each(["quit", "manual_ipc"] as const)(
+    "FU-780 marks a %s stop on purpose and removes the mark at the next app start",
+    async (reason) => {
+      await acquireOwned();
+      const marker = path.join(root, "daemon-stopped-on-purpose.json");
+      mocks.stopDaemonInstance.mockImplementation(stopOwnedFixture);
+      await manager.stopDesktopDaemon(reason);
+      expect(JSON.parse(readFileSync(marker, "utf8"))).toMatchObject({ reason });
+      await manager.createDaemonCommandHandlers().start_desktop_daemon();
+      expect(mocks.startDaemonInstance).toHaveBeenCalledTimes(1);
+      expect(existsSync(marker)).toBe(false);
+    },
+  );
+  it("FU-780 a restart whose start fails leaves no marker", async () => {
     await acquireOwned();
     const marker = path.join(root, "daemon-stopped-on-purpose.json");
-    mocks.stopDaemonInstance.mockImplementation(async () => {
-      mocks.readInstance.mockResolvedValue(null);
-      mocks.runExternalCliJsonCommand.mockResolvedValue(stopped);
-    });
-    await manager.stopDesktopDaemon("quit");
-    expect(JSON.parse(readFileSync(marker, "utf8"))).toMatchObject({ reason: "quit" });
-    await manager.createDaemonCommandHandlers().start_desktop_daemon();
-    expect(mocks.startDaemonInstance).toHaveBeenCalledTimes(1);
+    // The start after the stop fails early: the app credential read throws.
+    mocks.stopDaemonInstance.mockImplementation(stopOwnedThenCredentialFails);
+    await expect(manager.createDaemonCommandHandlers().restart_desktop_daemon()).rejects.toThrow();
+    expect(mocks.stopDaemonInstance).toHaveBeenCalledTimes(1);
+    expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
     expect(existsSync(marker)).toBe(false);
   });
   it("owned version mismatch stops its captured lifetime then launches managed once", async () => {
@@ -1238,11 +1256,11 @@ describe("owned startup and Settings recovery", () => {
       expect(mocks.stopDaemonInstance).not.toHaveBeenCalled();
       expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
     });
-    it("marks the replace stop on purpose and removes the mark when its daemon starts", async () => {
-      markedAtStop = false;
+    it("writes no stopped-on-purpose marker for the replace stop", async () => {
+      markedAtStop = true;
       mocks.stopDaemonInstance.mockImplementation(stopBootSeeingMarker);
       await manager.createDaemonCommandHandlers().start_desktop_daemon();
-      expect(markedAtStop).toBe(true);
+      expect(markedAtStop).toBe(false);
       launchedWithCommandCentre();
       expect(existsSync(marker())).toBe(false);
     });

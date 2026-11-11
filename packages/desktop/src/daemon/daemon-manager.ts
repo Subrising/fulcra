@@ -13,7 +13,6 @@ import {
   planBootDaemon,
   replaceBootDaemonWhenIdle,
   stopBootDaemon,
-  type BootDaemonStopOutcome,
   type BootDaemonDeps,
   type NoCredentialProbe,
 } from "./boot-daemon-replace.js";
@@ -590,9 +589,17 @@ async function probeWithoutCredential(
 export const BOOT_DAEMON_EXIT_POLL = { stepMs: 500 };
 export const BOOT_REPLACE_START_RETRY = { tries: 3, baseMs: 1_000 };
 const BOOT_REPLACEMENT_FILE = "boot-replacement-daemon.json";
-// FU-780: the Windows boot task (scripts/windows/fulcra-boot-start.cmd) starts no daemon while this file is newer
-// than the last boot, so it does not undo a stop the app made on purpose (Stop, quit, update, replace).
+// FU-780: the Windows boot task (scripts/windows/fulcra-boot-start.cmd) starts no daemon while this file is fresh
+// (newer than the last boot and under 12 h old), so it does not undo a stop the app made on purpose.
 export const STOPPED_ON_PURPOSE_FILE = "daemon-stopped-on-purpose.json";
+// Only stops with no app start after them. A restart, version mismatch, settings change, host removal or boot
+// daemon replace starts again (or may fail before its start): a marker there could outlive a failed start and
+// keep the boot task from bringing any daemon back.
+const MARKED_STOP_REASONS: ReadonlySet<DesktopDaemonStopReason> = new Set([
+  "manual_ipc",
+  "quit",
+  "app_update",
+]);
 
 function markStoppedOnPurpose(home: string, reason: DesktopDaemonStopReason): void {
   try {
@@ -646,7 +653,6 @@ async function bootDaemonDeps(home: string, instance: DaemonInstance): Promise<B
       return null;
     },
     stop: async () => {
-      markStoppedOnPurpose(home, "replace_boot_daemon");
       try {
         await stopCapturedDaemon({
           home,
@@ -760,7 +766,7 @@ async function replaceBootDaemonAtStart(
     return false;
   }
   if (plan.kind === "replace") {
-    const outcome = await finishBootReplace(home, current, deps);
+    const outcome = await stopBootDaemon(current, deps);
     if (outcome !== "busy") return outcome === "stopped";
   }
   logDesktopDaemonLifecycle("boot daemon without command centre is busy; waiting", {
@@ -773,7 +779,7 @@ async function replaceBootDaemonAtStart(
       // Only the last checks, the stop and the start take the lock.
       const outcome = await replaceBootDaemonWhenIdle(current, deps, () =>
         exclusiveStart(async () => {
-          const stopped = await finishBootReplace(home, current, deps);
+          const stopped = await stopBootDaemon(current, deps);
           if (stopped === "stopped") await startAfterBootReplace(home);
           return stopped;
         }),
@@ -788,18 +794,6 @@ async function replaceBootDaemonAtStart(
     }
   })();
   return false;
-}
-
-/** The last checks and the stop. The caller holds the start lock or runs inside a start. */
-async function finishBootReplace(
-  home: string,
-  current: DesktopDaemonStatus,
-  deps: BootDaemonDeps,
-): Promise<BootDaemonStopOutcome> {
-  const outcome = await stopBootDaemon(current, deps);
-  // The old daemon stays: a marker would stop the boot task from bringing a daemon back after a sign-out.
-  if (outcome === "kept") clearStoppedOnPurpose(home);
-  return outcome;
 }
 
 /** Tells the user, in the app's notice style, that the boot daemon stayed busy and still runs without CC. */
@@ -950,7 +944,8 @@ export async function stopDesktopDaemon(
     owned,
     keepTerminals,
   });
-  markStoppedOnPurpose(home, reason);
+  // The quit stops here only when keep-running is off (quit-lifecycle.ts).
+  if (MARKED_STOP_REASONS.has(reason)) markStoppedOnPurpose(home, reason);
   await stopCapturedDaemon({ home, instance, reason, keepTerminals });
   if (owned) ownedLaunch = null;
   return resolveDesktopDaemonStatus();
