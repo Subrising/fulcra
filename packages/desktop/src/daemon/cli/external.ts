@@ -43,8 +43,13 @@ function createExternalCliInvocation(
 
 function spawnExternalCli(
   invocation: NodeEntrypointInvocation,
+  signal?: AbortSignal,
 ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error("CLI command aborted before it started."));
+      return;
+    }
     const child = spawnProcess(invocation.command, invocation.args, {
       envMode: "internal",
       env: invocation.env,
@@ -61,8 +66,15 @@ function spawnExternalCli(
       stderr += data.toString();
     });
 
+    // An abort ends the child process at once and rejects; its later close is ignored.
+    const onAbort = () => {
+      child.kill();
+      reject(new Error("CLI command aborted."));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
     child.on("error", reject);
     child.on("close", (exitCode) => {
+      signal?.removeEventListener("abort", onAbort);
       resolve({ stdout, stderr, exitCode });
     });
   });
@@ -101,10 +113,10 @@ export async function runExternalCliTextCommand(args: string[]): Promise<string>
 
 export async function runExternalCliJsonCommand(
   args: string[],
-  options?: { env?: NodeJS.ProcessEnv },
+  options?: { env?: NodeJS.ProcessEnv; signal?: AbortSignal },
 ): Promise<unknown> {
   const invocation = createExternalCliInvocation(args, options?.env);
-  const result = await spawnExternalCli(invocation);
+  const result = await spawnExternalCli(invocation, options?.signal);
 
   if (result.exitCode !== 0) {
     const stderr = result.stderr.trim();

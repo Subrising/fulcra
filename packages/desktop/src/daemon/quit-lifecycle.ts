@@ -31,6 +31,8 @@ interface DeferredUpdateQuit {
 export interface StopOnQuitDeps {
   settingsStore: Pick<DesktopSettingsStore, "get">;
   isDesktopManagedDaemonRunning: () => boolean;
+  /** FU-780: the running daemon must outlive the app (it replaced a boot daemon), whatever the setting says. */
+  keepsDaemonRunning?: () => boolean;
   stopDaemon: () => Promise<unknown>;
   showShutdownFeedback: () => void;
 }
@@ -65,6 +67,10 @@ export async function stopDesktopManagedDaemonOnQuitIfNeeded(
   }
 
   if (!deps.isDesktopManagedDaemonRunning()) {
+    return false;
+  }
+
+  if (deps.keepsDaemonRunning?.()) {
     return false;
   }
 

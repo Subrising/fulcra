@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -44,6 +44,8 @@ const mocks = vi.hoisted(() => ({
   hashDaemonPassword: vi.fn((_password: string) => "fake-only-hash"),
   logInfo: vi.fn(),
   logError: vi.fn(),
+  logWarn: vi.fn(),
+  notices: [] as Array<{ title?: string; body?: string }>,
   appLogPath: "",
   getElectronLogFile: vi.fn(),
 }));
@@ -56,12 +58,22 @@ vi.mock("electron", () => ({
   },
   ipcMain: { handle: vi.fn() },
   powerMonitor: { getSystemIdleTime: vi.fn(() => 0) },
+  Notification: class {
+    static isSupported() {
+      return true;
+    }
+    constructor(private readonly options: { title?: string; body?: string }) {}
+    show() {
+      mocks.notices.push(this.options);
+    }
+  },
 }));
 
 vi.mock("electron-log/main", () => ({
   default: {
     info: mocks.logInfo,
     error: mocks.logError,
+    warn: mocks.logWarn,
     transports: {
       file: {
         getFile: mocks.getElectronLogFile,
@@ -728,6 +740,16 @@ describe("L39 local service of this home", () => {
   });
 });
 
+async function untilCalled(mock: { mock: { calls: unknown[] } }): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (mock.mock.calls.length === 0 && Date.now() < deadline) await pause(5);
+}
+function pause(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 describe("owned startup and Settings recovery", () => {
   const stopped = { localDaemon: "stopped", connectedDaemon: "not_probed" };
   const instance = {
@@ -901,6 +923,14 @@ describe("owned startup and Settings recovery", () => {
     expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
     expect(mocks.stopDaemonInstance).not.toHaveBeenCalled();
   });
+  async function stopOwnedFixture() {
+    mocks.readInstance.mockResolvedValue(null);
+    mocks.runExternalCliJsonCommand.mockResolvedValue(stopped);
+  }
+  async function stopOwnedThenCredentialFails() {
+    await stopOwnedFixture();
+    mocks.keychainGet.mockRejectedValue(new Error("keychain locked"));
+  }
   async function acquireOwned() {
     await manager.createDaemonCommandHandlers().start_desktop_daemon();
     mocks.readInstance.mockResolvedValue(instance);
@@ -912,6 +942,51 @@ describe("owned startup and Settings recovery", () => {
     });
     mocks.startDaemonInstance.mockClear();
   }
+  it.each(["quit", "manual_ipc"] as const)(
+    "FU-780 marks a %s stop on purpose and removes the mark at the next app start",
+    async (reason) => {
+      await acquireOwned();
+      const marker = path.join(root, "daemon-stopped-on-purpose.json");
+      mocks.stopDaemonInstance.mockImplementation(stopOwnedFixture);
+      await manager.stopDesktopDaemon(reason);
+      expect(JSON.parse(readFileSync(marker, "utf8"))).toMatchObject({ reason });
+      await manager.createDaemonCommandHandlers().start_desktop_daemon();
+      expect(mocks.startDaemonInstance).toHaveBeenCalledTimes(1);
+      expect(existsSync(marker)).toBe(false);
+    },
+  );
+  it.each(["settings", "host_remove"] as const)(
+    "FU-780 marks a %s stop with built-in management off",
+    async (reason) => {
+      await acquireOwned();
+      const marker = path.join(root, "daemon-stopped-on-purpose.json");
+      mocks.stopDaemonInstance.mockImplementation(stopOwnedFixture);
+      mocks.settings = {
+        ...mocks.settings,
+        daemon: { ...mocks.settings.daemon, manageBuiltInDaemon: false },
+      };
+      await manager.stopDesktopDaemon(reason);
+      expect(JSON.parse(readFileSync(marker, "utf8"))).toMatchObject({ reason });
+    },
+  );
+  it("FU-780 writes no marker for a settings stop with built-in management on", async () => {
+    await acquireOwned();
+    const marker = path.join(root, "daemon-stopped-on-purpose.json");
+    mocks.stopDaemonInstance.mockImplementation(stopOwnedFixture);
+    await manager.stopDesktopDaemon("settings");
+    expect(mocks.stopDaemonInstance).toHaveBeenCalledTimes(1);
+    expect(existsSync(marker)).toBe(false);
+  });
+  it("FU-780 a restart whose start fails leaves no marker", async () => {
+    await acquireOwned();
+    const marker = path.join(root, "daemon-stopped-on-purpose.json");
+    // The start after the stop fails early: the app credential read throws.
+    mocks.stopDaemonInstance.mockImplementation(stopOwnedThenCredentialFails);
+    await expect(manager.createDaemonCommandHandlers().restart_desktop_daemon()).rejects.toThrow();
+    expect(mocks.stopDaemonInstance).toHaveBeenCalledTimes(1);
+    expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
+    expect(existsSync(marker)).toBe(false);
+  });
   it("owned version mismatch stops its captured lifetime then launches managed once", async () => {
     await acquireOwned();
     mocks.stopDaemonInstance.mockImplementation(async () => {
@@ -951,6 +1026,273 @@ describe("owned startup and Settings recovery", () => {
     await manager.createDaemonCommandHandlers().start_desktop_daemon();
     expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
     expect(mocks.stopDaemonInstance).not.toHaveBeenCalled();
+  });
+  describe("FU-780 a boot-started daemon without Command Centre", () => {
+    const bootInstance = { ...instance, startedAt: "boot-fixture", desktopManaged: false };
+    const bootStatus = {
+      localDaemon: "running",
+      connectedDaemon: "reachable",
+      ...bootInstance,
+      daemonVersion: "1.2.3",
+    };
+    let agents: unknown = [];
+    let terminals: unknown = [];
+    let schedules: unknown = [];
+    async function cliAnswer(args: string[]) {
+      if (args[0] === "ls") {
+        if (agents instanceof Error) throw agents;
+        return agents;
+      }
+      if (args[0] === "terminal") return terminals;
+      if (args[0] === "schedule") return schedules;
+      return bootStatus;
+    }
+    async function stopBoot() {
+      mocks.readInstance.mockResolvedValue(null);
+      mocks.runExternalCliJsonCommand.mockResolvedValue(stopped);
+    }
+    function firstArgs(call: unknown[]) {
+      return (call[0] as string[]).slice(0, 3);
+    }
+    function stopBootLater() {
+      void stopBoot();
+    }
+    async function stopTimesOutThenExits() {
+      setTimeout(stopBootLater, 20);
+      throw Object.assign(new Error("Timed out waiting for supervisor"), {
+        code: "STOP_NOT_CONFIRMED",
+      });
+    }
+    const marker = () => path.join(root, "daemon-stopped-on-purpose.json");
+    let markedAtStop = false;
+    async function stopBootSeeingMarker() {
+      markedAtStop = existsSync(marker());
+      await stopBoot();
+    }
+    const live = { ...instance, pid: process.pid, startedAt: "replacement" };
+    async function acquireLive(options: { onAcquired: (value: typeof live) => void }) {
+      options.onAcquired(live);
+      writeFileSync(path.join(root, "paseo.pid"), JSON.stringify(live));
+    }
+    function probeCalls() {
+      return mocks.runExternalCliJsonCommand.mock.calls.filter(([args]) =>
+        ["ls", "terminal", "schedule"].includes(args[0]),
+      );
+    }
+    function logged(message: string) {
+      return mocks.logInfo.mock.calls.some((call) => call[1] === message);
+    }
+    async function untilTrue(check: () => boolean) {
+      const deadline = Date.now() + 2_000;
+      while (!check() && Date.now() < deadline) await pause(5);
+    }
+    function noticeShown() {
+      return mocks.notices.length > 0;
+    }
+    async function untilLogged(message: string) {
+      const deadline = Date.now() + 2_000;
+      while (!logged(message) && Date.now() < deadline) await pause(5);
+    }
+    beforeEach(async () => {
+      const replace = await import("./boot-daemon-replace");
+      replace.BOOT_DAEMON_IDLE_WAIT.totalMs = 500;
+      replace.BOOT_DAEMON_IDLE_WAIT.stepMs = 5;
+      replace.BOOT_DAEMON_EXIT_WAIT.stoppingMs = 200;
+      replace.BOOT_DAEMON_EXIT_WAIT.notSentMs = 20;
+      manager.BOOT_DAEMON_EXIT_POLL.stepMs = 5;
+      mocks.notices.length = 0;
+      manager.BOOT_REPLACE_START_RETRY.baseMs = 1;
+      agents = [{ status: "idle", note: "" }];
+      terminals = [];
+      schedules = [];
+      mocks.readInstance.mockResolvedValue(bootInstance);
+      mocks.runExternalCliJsonCommand.mockImplementation(cliAnswer);
+      mocks.stopDaemonInstance.mockImplementation(stopBoot);
+      mocks.logError.mockReset();
+      mocks.logInfo.mockReset();
+    });
+    function launchedWithCommandCentre(times = 1) {
+      expect(mocks.startDaemonInstance).toHaveBeenCalledTimes(times);
+      const options = mocks.startDaemonInstance.mock.lastCall?.[0];
+      expect(options.desktopManaged).toBe(true);
+      expect(options.env.FULCRA_COMMAND_CENTRE).toBe("1");
+    }
+    it("is replaced at once when nothing is busy", async () => {
+      await manager.createDaemonCommandHandlers().start_desktop_daemon();
+      const probes = probeCalls();
+      expect(probes.map(firstArgs)).toEqual(
+        expect.arrayContaining([
+          ["ls", "-a", "-g"],
+          ["terminal", "ls", "--all"],
+          ["schedule", "ls", "--all"],
+        ]),
+      );
+      for (const [, options] of probes) {
+        expect(options?.env).toMatchObject({ PASEO_PASSWORD: "" });
+        expect(options?.env.PASEO_HOME).not.toBe(root);
+      }
+      expect(mocks.stopDaemonInstance.mock.lastCall?.[1].instance).toEqual(bootInstance);
+      expect(mocks.stopDaemonInstance.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.startDaemonInstance.mock.invocationCallOrder[0],
+      );
+      launchedWithCommandCentre();
+    });
+    it("reads the app credential before the stop", async () => {
+      // The start status read gets the credential; the preflight read before the stop fails.
+      mocks.keychainGet
+        .mockReset()
+        .mockResolvedValueOnce("fake-only-secret")
+        .mockRejectedValue(new Error("keychain locked"));
+      await manager.createDaemonCommandHandlers().start_desktop_daemon();
+      expect(logged("not replacing boot daemon")).toBe(true);
+      expect(mocks.stopDaemonInstance).not.toHaveBeenCalled();
+      expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
+    });
+    it.each([
+      ["a turn runs", () => (agents = [{ status: "running", note: "" }])],
+      ["a terminal or workspace script runs", () => (terminals = [{ id: "t1" }])],
+      [
+        "a heartbeat is due within 2 minutes",
+        () =>
+          (schedules = [
+            { status: "active", nextRunAt: new Date(Date.now() + 60_000).toISOString() },
+          ]),
+      ],
+    ])("is kept while %s, then replaced when it is idle", async (_name, arrange) => {
+      arrange();
+      const status = await manager.createDaemonCommandHandlers().start_desktop_daemon();
+      expect(status).toMatchObject({ status: "running", pid: bootInstance.pid });
+      expect(mocks.stopDaemonInstance).not.toHaveBeenCalled();
+      expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
+      agents = [{ status: "idle", note: "" }];
+      terminals = [];
+      schedules = [];
+      await untilCalled(mocks.startDaemonInstance);
+      expect(mocks.stopDaemonInstance).toHaveBeenCalledTimes(1);
+      launchedWithCommandCentre();
+    });
+    it("is not stopped when Command Centre is turned off during the wait", async () => {
+      agents = [{ status: "running", note: "" }];
+      await manager.createDaemonCommandHandlers().start_desktop_daemon();
+      mocks.settings = {
+        ...mocks.settings,
+        daemon: { ...mocks.settings.daemon, commandCentreEnabled: false },
+      };
+      agents = [{ status: "idle", note: "" }];
+      await untilLogged("not replacing boot daemon");
+      expect(logged("not replacing boot daemon")).toBe(true);
+      expect(mocks.stopDaemonInstance).not.toHaveBeenCalled();
+      expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
+    });
+    it.each([
+      [
+        "the home stores a daemon password",
+        () => (mocks.config = { daemon: { auth: { password: "x" } } }),
+      ],
+      [
+        "the daemon needs a credential",
+        () => (agents = new Error("The daemon requires a password.")),
+      ],
+    ])("is adopted unchanged when %s", async (_name, arrange) => {
+      arrange();
+      const status = await manager.createDaemonCommandHandlers().start_desktop_daemon();
+      expect(status).toMatchObject({ status: "running", pid: bootInstance.pid });
+      expect(mocks.stopDaemonInstance).not.toHaveBeenCalled();
+      expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
+    });
+    it("waits for a stop that timed out, then starts the app daemon when it exits", async () => {
+      mocks.stopDaemonInstance.mockImplementation(stopTimesOutThenExits);
+      await manager.createDaemonCommandHandlers().start_desktop_daemon();
+      expect(logged("boot daemon stop was sent but not confirmed; waiting for it to exit")).toBe(
+        true,
+      );
+      expect(mocks.logError).not.toHaveBeenCalled();
+      launchedWithCommandCentre();
+    });
+    it("stays running with one error line when the stop fails and it never exits", async () => {
+      const replace = await import("./boot-daemon-replace");
+      replace.BOOT_DAEMON_EXIT_WAIT.stoppingMs = 5_000;
+      mocks.stopDaemonInstance.mockRejectedValue(
+        Object.assign(new Error("kill EPERM"), { code: "EPERM" }),
+      );
+      const began = Date.now();
+      const status = await manager.createDaemonCommandHandlers().start_desktop_daemon();
+      // Nothing was sent, so the app does not wait the full exit wait.
+      expect(Date.now() - began).toBeLessThan(2_000);
+      expect(existsSync(marker())).toBe(false);
+      expect(status).toMatchObject({ status: "running", pid: bootInstance.pid });
+      expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
+      expect(mocks.logError).toHaveBeenCalledTimes(1);
+      expect(mocks.logError.mock.lastCall?.[1]).toBe(
+        "boot daemon did not stop; it stays running and the app adopts it",
+      );
+    });
+    it("retries the app daemon start after a successful stop", async () => {
+      mocks.startDaemonInstance.mockRejectedValueOnce(new Error("spawn failed"));
+      await manager.createDaemonCommandHandlers().start_desktop_daemon();
+      expect(mocks.stopDaemonInstance).toHaveBeenCalledTimes(1);
+      launchedWithCommandCentre(2);
+    });
+    it("shows a clear error when every start try fails", async () => {
+      mocks.startDaemonInstance.mockRejectedValue(new Error("spawn failed"));
+      await expect(manager.createDaemonCommandHandlers().start_desktop_daemon()).rejects.toThrow(
+        /stopped the boot daemon but could not start its own daemon after 3 tries: spawn failed/,
+      );
+      expect(mocks.startDaemonInstance).toHaveBeenCalledTimes(3);
+    });
+    it("runs one start at a time; a second caller shares it", async () => {
+      const handlers = manager.createDaemonCommandHandlers();
+      const [first, second] = await Promise.all([
+        handlers.start_desktop_daemon(),
+        handlers.start_desktop_daemon(),
+      ]);
+      expect(second).toBe(first);
+      expect(mocks.stopDaemonInstance).toHaveBeenCalledTimes(1);
+      launchedWithCommandCentre();
+    });
+    it("returns a second start at once while the busy wait runs", async () => {
+      const replace = await import("./boot-daemon-replace");
+      replace.BOOT_DAEMON_IDLE_WAIT.totalMs = 5_000;
+      agents = [{ status: "running", note: "" }];
+      const handlers = manager.createDaemonCommandHandlers();
+      await handlers.start_desktop_daemon();
+      await untilLogged("boot daemon is still busy; waiting");
+      const began = Date.now();
+      const second = await handlers.start_desktop_daemon();
+      expect(Date.now() - began).toBeLessThan(1_000);
+      expect(second).toMatchObject({ status: "running", pid: bootInstance.pid });
+      expect(mocks.stopDaemonInstance).not.toHaveBeenCalled();
+      agents = [{ status: "idle", note: "" }];
+      await untilCalled(mocks.startDaemonInstance);
+      launchedWithCommandCentre();
+    });
+    it("shows a notice when the busy wait runs out", async () => {
+      const replace = await import("./boot-daemon-replace");
+      replace.BOOT_DAEMON_IDLE_WAIT.totalMs = 40;
+      agents = [{ status: "running", note: "" }];
+      await manager.createDaemonCommandHandlers().start_desktop_daemon();
+      await untilTrue(noticeShown);
+      expect(mocks.notices).toEqual([
+        { title: "Fulcra", body: expect.stringContaining("busy for 2 hours") },
+      ]);
+      expect(mocks.stopDaemonInstance).not.toHaveBeenCalled();
+      expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
+    });
+    it("writes no stopped-on-purpose marker for the replace stop", async () => {
+      markedAtStop = true;
+      mocks.stopDaemonInstance.mockImplementation(stopBootSeeingMarker);
+      await manager.createDaemonCommandHandlers().start_desktop_daemon();
+      expect(markedAtStop).toBe(false);
+      launchedWithCommandCentre();
+      expect(existsSync(marker())).toBe(false);
+    });
+    it("keeps the replacement daemon running on app quit", async () => {
+      mocks.startDaemonInstance.mockImplementation(acquireLive);
+      expect(manager.keepsBootReplacementRunningOnQuitSync()).toBe(false);
+      await manager.createDaemonCommandHandlers().start_desktop_daemon();
+      expect(manager.keepsBootReplacementRunningOnQuitSync()).toBe(true);
+      expect(logged("app quit keeps the daemon that replaced the boot daemon running")).toBe(true);
+    });
   });
   describe("a desktop-managed daemon that does not answer", () => {
     const silent = {

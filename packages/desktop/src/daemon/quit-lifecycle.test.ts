@@ -75,6 +75,25 @@ describe("quit-lifecycle", () => {
     expect(events).toEqual([]);
   });
 
+  it("FU-780 keeps a daemon that replaced a boot daemon running with keep-running off", async () => {
+    const events: string[] = [];
+
+    const stopped = await stopDesktopManagedDaemonOnQuitIfNeeded({
+      settingsStore: { get: async () => SETTINGS_STOP_ON_QUIT },
+      isDesktopManagedDaemonRunning: () => true,
+      keepsDaemonRunning: () => true,
+      stopDaemon: async () => {
+        events.push("stop");
+      },
+      showShutdownFeedback: () => {
+        events.push("feedback");
+      },
+    });
+
+    expect(stopped).toBe(false);
+    expect(events).toEqual([]);
+  });
+
   it("does not stop a manually started daemon on quit", async () => {
     const events: string[] = [];
 

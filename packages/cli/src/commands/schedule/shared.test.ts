@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 
 import { selectDaemonTarget } from "../../utils/daemon-target.js";
+import { listedSchedules } from "./ls.js";
 
 import {
   compileEveryPresetToCron,
@@ -321,5 +322,18 @@ describe("compileEveryPresetToCron", () => {
 
   test.each(["15minutes", "junk15m", "1h-nope"])("rejects malformed preset %s", (value) => {
     expect(() => compileEveryPresetToCron(value)).toThrow("Invalid duration format");
+  });
+});
+
+describe("FU-780 schedule ls --all", () => {
+  const schedules = [
+    { id: "a", target: { type: "new-agent" } },
+    { id: "b", target: { type: "agent" } },
+  ];
+  test("lists only new-agent schedules by default", () => {
+    expect(listedSchedules(schedules, false).map((s) => s.id)).toEqual(["a"]);
+  });
+  test("adds heartbeats and other targets with --all", () => {
+    expect(listedSchedules(schedules, true).map((s) => s.id)).toEqual(["a", "b"]);
   });
 });

@@ -14,6 +14,34 @@ Use a generated daemon password stored in a dedicated `ai.fulcra.command-centre.
 
 Do not replace an existing user-configured daemon credential. Keychain failures must leave the setting disabled and show an actionable error. Automated verification uses a fake Keychain or dedicated `ai.fulcra.test.*` items, never a user's real items. Paired-device authentication is a later feature.
 
+### A boot daemon without Command Centre
+
+When Command Centre is on and the app starts, it replaces a script-started daemon that has no Command Centre, such as a boot task that ran before sign-in. The app treats the daemon as one without Command Centre only when all three are true: the app did not start it, the home stores no daemon password and no `command-centre-password` file, and it answers `paseo ls`, `paseo terminal ls --all` and `paseo schedule ls --all` with no credential. A Command Centre daemon always requires a credential. A probe that does not answer within 20 s counts as no answer.
+
+The daemon is busy while a turn runs, a terminal or workspace script runs, or a schedule or heartbeat is due within 2 minutes. While it is busy, the app keeps it and checks every 30 s for up to 2 h. This wait does not hold the app's daemon start, so a window reload, **Start** or a restart answers at once. When the wait runs out, the app shows a notice and the log gets a line. Just before the stop, the app checks again that built-in daemon management and Command Centre are still on, that the app daemon credential is ready, and that the daemon is still idle. When the stop request went out but the exit is not confirmed, the app waits up to 60 s for the daemon to exit. When the request did not reach the daemon (no channel, refused, EPERM), the app checks for only 3 s. When it does not exit, the old daemon stays, the app adopts it, and the app log gets one error line. When the start after a stop fails, the app tries 3 times, then shows an error. One daemon start runs at a time. In every other case the app adopts the daemon unchanged. See `packages/desktop/src/daemon/boot-daemon-replace.ts`.
+
+The app daemon that replaced a boot daemon keeps running when the app quits, as if **Keep running after quit** were on, because the boot daemon also kept running. The app records it in `boot-replacement-daemon.json` in the daemon home and writes a log line at quit.
+
+A Windows sign-out still stops that daemon, because it runs in the signed-in session. The boot task therefore also runs every 5 minutes and starts a daemon only when none runs. [`scripts/windows/fulcra-boot-start.cmd`](../scripts/windows/fulcra-boot-start.cmd) is the task script: when a daemon runs, `paseo daemon start` answers `already_running` with exit 0 and the script writes nothing to the log.
+
+The script starts nothing while one of these is newer than the last boot:
+
+- `%USERPROFILE%\fulcra-update\lock`, the folder that the PC update tool ([`scripts/windows-update`](../scripts/windows-update/README.md)) holds for a whole update. The update replaces the build folder that the daemon runs from.
+- `daemon-stopped-on-purpose.json` in the daemon home. The app writes it only at a stop with no app start after it: **Stop**, a quit with **Keep running after quit** off, an app update, and **Pause and stop** or a local host removal while built-in daemon management is off. A restart, a version mismatch, a settings change or host removal with management on, and a boot daemon replace write none, because a start that fails before it removes the marker would leave the PC with no daemon. The app removes the marker when it starts its daemon again.
+
+A lock or marker is stale when it is older than the last boot or more than 12 hours old, and the script ignores it. So the boot trigger always starts a daemon, and a resume from hibernate (which keeps the last boot time) does not hold the task for long.
+
+```bat
+copy /y "%USERPROFILE%\fulcra-boot-start.cmd" "%USERPROFILE%\fulcra-boot-start.cmd.bak"
+schtasks /query /tn "Fulcra Daemon At Boot" /xml > "%USERPROFILE%\fulcra-boot-task.bak.xml"
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows\fulcra-boot-task-repeat.ps1 -In "%USERPROFILE%\fulcra-boot-task.bak.xml" -Out "%USERPROFILE%\fulcra-boot-task.xml"
+copy /y scripts\windows\fulcra-boot-start.cmd "%USERPROFILE%\fulcra-boot-start.cmd"
+schtasks /create /tn "Fulcra Daemon At Boot" /xml "%USERPROFILE%\fulcra-boot-task.xml" /f
+schtasks /query /tn "Fulcra Daemon At Boot" /xml
+```
+
+The PowerShell step keeps the S4U principal, the boot trigger and the action, and refuses a task that is not S4U. To roll back, run `schtasks /create /tn "Fulcra Daemon At Boot" /xml "%USERPROFILE%\fulcra-boot-task.bak.xml" /f` and copy the `.bak` script back.
+
 ### Shared password file for script starts
 
 A daemon that a script starts (a boot or recovery task) has no Command Centre unless the script turns it on. To give the app, the script and remote controllers one password, put it in a file named `command-centre-password` in the daemon home. When this file exists, the app uses it instead of the generated Keychain or safeStorage credential, and passes only its bcrypt hash to the worker.

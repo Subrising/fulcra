@@ -88,4 +88,24 @@ describe("external CLI", () => {
       localDaemon: "running",
     });
   });
+
+  it("FU-780 ends the CLI process and rejects when the signal aborts", async () => {
+    const kill = vi.fn();
+    mocks.spawnProcess.mockImplementationOnce(() => {
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        kill: () => void;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = kill;
+      return child;
+    });
+    const controller = new AbortController();
+    const run = runExternalCliJsonCommand(["ls", "--json"], { signal: controller.signal });
+    controller.abort();
+    await expect(run).rejects.toThrow(/aborted/);
+    expect(kill).toHaveBeenCalledTimes(1);
+  });
 });
