@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  BOOT_DAEMON_EXIT_WAIT,
   BOOT_DAEMON_IDLE_WAIT,
   BOOT_DAEMON_PROBE_TIMEOUT,
   countBusySessions,
@@ -10,6 +11,8 @@ import {
   stopBootDaemon,
   type BootDaemonBusy,
   type BootDaemonDeps,
+  type BootDaemonStopOutcome,
+  type BootDaemonStopResult,
   type NoCredentialProbe,
 } from "./boot-daemon-replace.js";
 
@@ -27,7 +30,7 @@ function deps(overrides: Partial<BootDaemonDeps> = {}): BootDaemonDeps {
     probeWithoutCredential: async () => answered(),
     stillSameInstance: async () => true,
     preflight: async () => null,
-    stop: async () => true,
+    stop: async () => ({ result: "stopped" }),
     waitForExit: async () => false,
     log: vi.fn(),
     logError: vi.fn(),
@@ -122,24 +125,31 @@ describe("planBootDaemon", () => {
   ] as const)("adopts unchanged when %s", async (_name, current, overrides) => {
     expect((await planBootDaemon(current, deps(overrides))).kind).toBe("adopt");
   });
-  it("adopts when the probe does not answer within the overall timeout", async () => {
+  it("adopts when the probe does not answer within the overall timeout, and aborts the probe", async () => {
     BOOT_DAEMON_PROBE_TIMEOUT.ms = 20;
+    let seen: AbortSignal | undefined;
     const plan = await planBootDaemon(
       boot,
-      deps({ probeWithoutCredential: () => new Promise<NoCredentialProbe>(() => {}) }),
+      deps({
+        probeWithoutCredential: (_listen, signal) => {
+          seen = signal;
+          return new Promise<NoCredentialProbe>(() => {});
+        },
+      }),
     );
     expect(plan).toEqual({ kind: "adopt", reason: expect.stringContaining("timed out") });
+    expect(seen?.aborted).toBe(true);
   });
 });
 
 describe("stopBootDaemon", () => {
   it("stops the same idle instance", async () => {
-    const stop = vi.fn(async () => true);
+    const stop = vi.fn(async (): Promise<BootDaemonStopResult> => ({ result: "stopped" }));
     expect(await stopBootDaemon(boot, deps({ stop }))).toBe("stopped");
     expect(stop).toHaveBeenCalledTimes(1);
   });
   it("probes again just before the stop and does not stop busy work", async () => {
-    const stop = vi.fn(async () => true);
+    const stop = vi.fn(async (): Promise<BootDaemonStopResult> => ({ result: "stopped" }));
     const d = deps({ stop, probeWithoutCredential: probes(answered({ dueSoon: 1 })) });
     expect(await stopBootDaemon(boot, d)).toBe("busy");
     expect(stop).not.toHaveBeenCalled();
@@ -149,53 +159,70 @@ describe("stopBootDaemon", () => {
     ["the preflight refuses", { preflight: async () => "command centre is off" }],
     ["the preflight throws", { preflight: async () => Promise.reject(new Error("keychain")) }],
   ])("does not stop when %s", async (_name, overrides) => {
-    const stop = vi.fn(async () => true);
+    const stop = vi.fn(async (): Promise<BootDaemonStopResult> => ({ result: "stopped" }));
     expect(await stopBootDaemon(boot, deps({ stop, ...overrides }))).toBe("kept");
     expect(stop).not.toHaveBeenCalled();
   });
-  it("waits for a stop that timed out and continues when the daemon exits", async () => {
+  it("waits the full exit wait for a sent stop and continues when the daemon exits", async () => {
+    const waitForExit = vi.fn(async () => true);
     const d = deps({
-      stop: async () => Promise.reject(new Error("stop timed out")),
-      waitForExit: async () => true,
+      stop: async () => ({ result: "stopping", error: "Timed out waiting for supervisor" }),
+      waitForExit,
     });
     expect(await stopBootDaemon(boot, d)).toBe("stopped");
+    expect(waitForExit).toHaveBeenCalledWith(BOOT_DAEMON_EXIT_WAIT.stoppingMs);
     expect(d.log).toHaveBeenCalledWith(
-      "boot daemon stop did not finish; it may still be stopping, waiting for it to exit",
-      expect.objectContaining({ error: "stop timed out" }),
+      "boot daemon stop was sent but not confirmed; waiting for it to exit",
+      expect.objectContaining({ error: "Timed out waiting for supervisor" }),
     );
     expect(d.logError).not.toHaveBeenCalled();
   });
   it.each([
-    ["the stop throws", async () => Promise.reject(new Error("stop timed out"))],
-    ["the daemon is still recorded", async () => false],
-  ])(
-    "writes one error line and keeps the old daemon when %s and it never exits",
-    async (_name, stop) => {
-      const d = deps({ stop });
-      expect(await stopBootDaemon(boot, d)).toBe("kept");
-      expect(d.logError).toHaveBeenCalledTimes(1);
-    },
-  );
+    [
+      "the stop sent nothing",
+      async (): Promise<BootDaemonStopResult> => ({ result: "not_sent", error: "EPERM" }),
+    ],
+    [
+      "the stop throws",
+      async (): Promise<BootDaemonStopResult> => Promise.reject(new Error("refused")),
+    ],
+  ])("checks only briefly when %s", async (_name, stop) => {
+    const waitForExit = vi.fn(async () => false);
+    const d = deps({ stop, waitForExit });
+    expect(await stopBootDaemon(boot, d)).toBe("kept");
+    expect(waitForExit).toHaveBeenCalledWith(BOOT_DAEMON_EXIT_WAIT.notSentMs);
+    expect(BOOT_DAEMON_EXIT_WAIT.notSentMs).toBeLessThan(BOOT_DAEMON_EXIT_WAIT.stoppingMs);
+    expect(d.logError).toHaveBeenCalledTimes(1);
+  });
+  it("writes one error line and keeps the old daemon when a sent stop never exits", async () => {
+    const d = deps({ stop: async () => ({ result: "stopping", error: "still recorded" }) });
+    expect(await stopBootDaemon(boot, d)).toBe("kept");
+    expect(d.logError).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("replaceBootDaemonWhenIdle", () => {
-  it("stops when the busy work ends", async () => {
+  function finishWith(d: BootDaemonDeps) {
+    return vi.fn((): Promise<BootDaemonStopOutcome> => stopBootDaemon(boot, d));
+  }
+  it("waits outside the finish step and calls it only when the busy work ends", async () => {
     BOOT_DAEMON_IDLE_WAIT.stepMs = 1;
     const probe = probes(answered({ turns: 1 }), answered({ terminals: 1 }), answered());
-    const stop = vi.fn(async () => true);
-    expect(
-      await replaceBootDaemonWhenIdle(boot, deps({ probeWithoutCredential: probe, stop })),
-    ).toBe(true);
+    const stop = vi.fn(async (): Promise<BootDaemonStopResult> => ({ result: "stopped" }));
+    const d = deps({ probeWithoutCredential: probe, stop });
+    const finish = finishWith(d);
+    expect(await replaceBootDaemonWhenIdle(boot, d, finish)).toBe("replaced");
+    expect(finish).toHaveBeenCalledTimes(1);
     expect(stop).toHaveBeenCalledTimes(1);
   });
   it("keeps waiting when the last probe before the stop finds busy work", async () => {
     BOOT_DAEMON_IDLE_WAIT.stepMs = 1;
     const probe = probes(answered(), answered({ turns: 1 }), answered(), answered());
-    const stop = vi.fn(async () => true);
-    expect(
-      await replaceBootDaemonWhenIdle(boot, deps({ probeWithoutCredential: probe, stop })),
-    ).toBe(true);
-    expect(probe).toHaveBeenCalledTimes(4);
+    const stop = vi.fn(async (): Promise<BootDaemonStopResult> => ({ result: "stopped" }));
+    const d = deps({ probeWithoutCredential: probe, stop });
+    const finish = finishWith(d);
+    expect(await replaceBootDaemonWhenIdle(boot, d, finish)).toBe("replaced");
+    expect(finish).toHaveBeenCalledTimes(2);
     expect(stop).toHaveBeenCalledTimes(1);
   });
   it("does not stop when the settings turn off during the wait", async () => {
@@ -206,18 +233,18 @@ describe("replaceBootDaemonWhenIdle", () => {
       enabled = false;
       return answered();
     });
-    const stop = vi.fn(async () => true);
+    const stop = vi.fn(async (): Promise<BootDaemonStopResult> => ({ result: "stopped" }));
     const d = deps({
       probeWithoutCredential: probe,
       stop,
       preflight: async () => (enabled ? null : "command centre is off"),
     });
-    expect(await replaceBootDaemonWhenIdle(boot, d)).toBe(false);
+    expect(await replaceBootDaemonWhenIdle(boot, d, finishWith(d))).toBe("kept");
     expect(stop).not.toHaveBeenCalled();
   });
-  it("gives up at the deadline and leaves the daemon", async () => {
+  it("reports ran_out at the deadline and leaves the daemon", async () => {
     let clock = 0;
-    const stop = vi.fn(async () => true);
+    const stop = vi.fn(async (): Promise<BootDaemonStopResult> => ({ result: "stopped" }));
     const d = deps({
       now: () => clock,
       pause: async (ms) => {
@@ -226,17 +253,16 @@ describe("replaceBootDaemonWhenIdle", () => {
       probeWithoutCredential: async () => answered({ turns: 1 }),
       stop,
     });
-    expect(await replaceBootDaemonWhenIdle(boot, d)).toBe(false);
+    expect(await replaceBootDaemonWhenIdle(boot, d, finishWith(d))).toBe("ran_out");
     expect(stop).not.toHaveBeenCalled();
     expect(d.log).toHaveBeenLastCalledWith(
-      "boot daemon wait ran out; leaving it running",
+      "boot daemon wait ran out because it stayed busy; leaving it running",
       expect.anything(),
     );
   });
   it("stops waiting when the daemon changes", async () => {
     BOOT_DAEMON_IDLE_WAIT.stepMs = 1;
-    expect(
-      await replaceBootDaemonWhenIdle(boot, deps({ stillSameInstance: async () => false })),
-    ).toBe(false);
+    const d = deps({ stillSameInstance: async () => false });
+    expect(await replaceBootDaemonWhenIdle(boot, d, finishWith(d))).toBe("abandoned");
   });
 });

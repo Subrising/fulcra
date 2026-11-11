@@ -28,7 +28,8 @@ export interface BootDaemonDeps {
   commandCentreEnabled: boolean;
   /** The home stores a daemon password or a shared Command Centre password file: the daemon can have CC. */
   homeHasCommandCentreAuth: () => boolean;
-  probeWithoutCredential: (listen: string) => Promise<NoCredentialProbe>;
+  /** The signal aborts at the probe timeout: the probe then ends its child processes and removes its files. */
+  probeWithoutCredential: (listen: string, signal: AbortSignal) => Promise<NoCredentialProbe>;
   /** The home still records the same daemon instance as the candidate. */
   stillSameInstance: () => Promise<boolean>;
   /**
@@ -36,10 +37,10 @@ export interface BootDaemonDeps {
    * Returns the reason not to stop, or null.
    */
   preflight: () => Promise<string | null>;
-  /** Stops the candidate cleanly. Resolves true only when the home records no daemon after the stop. */
-  stop: () => Promise<boolean>;
-  /** After a stop that did not finish: true when the daemon exits within the exit wait. */
-  waitForExit: () => Promise<boolean>;
+  /** Stops the candidate cleanly. */
+  stop: () => Promise<BootDaemonStopResult>;
+  /** After a stop that did not finish: true when the daemon exits within `ms`. */
+  waitForExit: (ms: number) => Promise<boolean>;
   log: (message: string, details?: Record<string, unknown>) => void;
   logError: (message: string, details?: Record<string, unknown>) => void;
   pause: (ms: number) => Promise<void>;
@@ -49,6 +50,19 @@ export interface BootDaemonDeps {
 export const BOOT_DAEMON_IDLE_WAIT = { totalMs: 2 * 60 * 60_000, stepMs: 30_000 };
 export const BOOT_DAEMON_PROBE_TIMEOUT = { ms: 20_000 };
 export const BOOT_DAEMON_DUE_WINDOW_MS = 2 * 60_000;
+/** A sent stop can take the supervisor grace; a stop that sent nothing gets only a short check. */
+export const BOOT_DAEMON_EXIT_WAIT = { stoppingMs: 60_000, notSentMs: 3_000 };
+
+/**
+ * "stopped": the home records no daemon. "stopping": the stop request went out but the exit was not confirmed in
+ * time. "not_sent": nothing reached the daemon (no channel, refused RPC, EPERM).
+ */
+export type BootDaemonStopResult =
+  | { result: "stopped" }
+  | { result: "stopping" | "not_sent"; error: string };
+
+/** "replaced": stopped and handed to the caller's start. "kept": the old daemon stays. */
+export type BootDaemonWaitOutcome = "replaced" | "kept" | "ran_out" | "abandoned";
 
 export type BootDaemonPlan =
   | { kind: "adopt"; reason: string }
@@ -93,21 +107,21 @@ export function isBusy(busy: BootDaemonBusy): boolean {
 }
 
 async function probe(listen: string, deps: BootDaemonDeps): Promise<NoCredentialProbe> {
+  const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<NoCredentialProbe>((resolve) => {
-    timer = setTimeout(
-      () =>
-        resolve({
-          answered: false,
-          reason: `probe timed out after ${BOOT_DAEMON_PROBE_TIMEOUT.ms} ms`,
-        }),
-      BOOT_DAEMON_PROBE_TIMEOUT.ms,
-    );
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve({
+        answered: false,
+        reason: `probe timed out after ${BOOT_DAEMON_PROBE_TIMEOUT.ms} ms`,
+      });
+    }, BOOT_DAEMON_PROBE_TIMEOUT.ms);
   });
   try {
     return await Promise.race([
       deps
-        .probeWithoutCredential(listen)
+        .probeWithoutCredential(listen, controller.signal)
         .catch((error: unknown) => ({ answered: false as const, reason: String(error) })),
       timeout,
     ]);
@@ -174,36 +188,46 @@ export async function stopBootDaemon(
     return "kept";
   }
   deps.log("stopping boot daemon without command centre", details);
-  let stopError: string | null = null;
+  let stopped: BootDaemonStopResult;
   try {
-    if (await deps.stop()) {
-      deps.log("boot daemon stopped; starting the app daemon with command centre", details);
-      return "stopped";
-    }
-    stopError = "daemon is still recorded after the stop";
+    stopped = await deps.stop();
   } catch (error) {
-    stopError = error instanceof Error ? error.message : String(error);
+    stopped = { result: "not_sent", error: error instanceof Error ? error.message : String(error) };
   }
-  deps.log("boot daemon stop did not finish; it may still be stopping, waiting for it to exit", {
-    ...details,
-    error: stopError,
-  });
-  if (await deps.waitForExit()) {
+  if (stopped.result === "stopped") {
+    deps.log("boot daemon stopped; starting the app daemon with command centre", details);
+    return "stopped";
+  }
+  const waitMs =
+    stopped.result === "stopping"
+      ? BOOT_DAEMON_EXIT_WAIT.stoppingMs
+      : BOOT_DAEMON_EXIT_WAIT.notSentMs;
+  deps.log(
+    stopped.result === "stopping"
+      ? "boot daemon stop was sent but not confirmed; waiting for it to exit"
+      : "boot daemon stop request did not reach the daemon; checking once that it still runs",
+    { ...details, error: stopped.error, waitMs },
+  );
+  if (await deps.waitForExit(waitMs)) {
     deps.log("boot daemon exited; starting the app daemon with command centre", details);
     return "stopped";
   }
   deps.logError("boot daemon did not stop; it stays running and the app adopts it", {
     ...details,
-    error: stopError,
+    error: stopped.error,
   });
   return "kept";
 }
 
-/** Polls until nothing is busy, then stops. True only when the boot daemon stopped. */
+/**
+ * Polls until nothing is busy, outside any lock. Then `finish` runs the last checks, the stop and the start (the
+ * caller runs it under its start lock). When `finish` finds new busy work, the wait goes on.
+ */
 export async function replaceBootDaemonWhenIdle(
   current: BootDaemonCandidate,
   deps: BootDaemonDeps,
-): Promise<boolean> {
+  finish: () => Promise<BootDaemonStopOutcome>,
+): Promise<BootDaemonWaitOutcome> {
   const wait = BOOT_DAEMON_IDLE_WAIT;
   const now = deps.now ?? Date.now;
   const deadline = now() + wait.totalMs;
@@ -211,7 +235,7 @@ export async function replaceBootDaemonWhenIdle(
     await deps.pause(wait.stepMs);
     if (!(await deps.stillSameInstance())) {
       deps.log("boot daemon changed while waiting; not replacing it", { pid: current.pid });
-      return false;
+      return "abandoned";
     }
     const result = await probe(current.listen ?? "", deps);
     if (!result.answered) {
@@ -219,18 +243,19 @@ export async function replaceBootDaemonWhenIdle(
         pid: current.pid,
         reason: result.reason,
       });
-      return false;
+      return "abandoned";
     }
     if (isBusy(result.busy)) {
       deps.log("boot daemon is still busy; waiting", { pid: current.pid, ...result.busy });
       continue;
     }
-    const outcome = await stopBootDaemon(current, deps);
-    if (outcome !== "busy") return outcome === "stopped";
+    const outcome = await finish();
+    if (outcome === "stopped") return "replaced";
+    if (outcome === "kept") return "kept";
   }
-  deps.log("boot daemon wait ran out; leaving it running", {
+  deps.log("boot daemon wait ran out because it stayed busy; leaving it running", {
     pid: current.pid,
     waitedMs: wait.totalMs,
   });
-  return false;
+  return "ran_out";
 }
