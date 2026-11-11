@@ -27,7 +27,7 @@ A Windows sign-out still stops that daemon, because it runs in the signed-in ses
 The script starts nothing while one of these is newer than the last boot:
 
 - `%USERPROFILE%\fulcra-update\lock`, the folder that the PC update tool ([`scripts/windows-update`](../scripts/windows-update/README.md)) holds for a whole update. The update replaces the build folder that the daemon runs from.
-- `daemon-stopped-on-purpose.json` in the daemon home. The app writes it only at a stop with no app start after it: **Stop**, a quit with **Keep running after quit** off, and an app update. A restart, a version mismatch, a settings change, a host removal and a boot daemon replace write none, because a start that fails before it removes the marker would leave the PC with no daemon. The app removes the marker when it starts its daemon again.
+- `daemon-stopped-on-purpose.json` in the daemon home. The app writes it only at a stop with no app start after it: **Stop**, a quit with **Keep running after quit** off, an app update, and **Pause and stop** or a local host removal while built-in daemon management is off. A restart, a version mismatch, a settings change or host removal with management on, and a boot daemon replace write none, because a start that fails before it removes the marker would leave the PC with no daemon. The app removes the marker when it starts its daemon again.
 
 A lock or marker is stale when it is older than the last boot or more than 12 hours old, and the script ignores it. So the boot trigger always starts a daemon, and a resume from hibernate (which keeps the last boot time) does not hold the task for long.
 

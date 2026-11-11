@@ -592,13 +592,18 @@ const BOOT_REPLACEMENT_FILE = "boot-replacement-daemon.json";
 // FU-780: the Windows boot task (scripts/windows/fulcra-boot-start.cmd) starts no daemon while this file is fresh
 // (newer than the last boot and under 12 h old), so it does not undo a stop the app made on purpose.
 export const STOPPED_ON_PURPOSE_FILE = "daemon-stopped-on-purpose.json";
-// Only stops with no app start after them. A restart, version mismatch, settings change, host removal or boot
-// daemon replace starts again (or may fail before its start): a marker there could outlive a failed start and
+// Only stops with no app start after them ("settings" and "host_remove" only with management off). A restart,
+// version mismatch, settings change or host removal with management on, or a boot daemon replace, starts again
+// (or may fail before its start): a marker there could outlive a failed start and
 // keep the boot task from bringing any daemon back.
 const MARKED_STOP_REASONS: ReadonlySet<DesktopDaemonStopReason> = new Set([
   "manual_ipc",
   "quit",
   "app_update",
+]);
+const MARKED_WHEN_UNMANAGED_STOP_REASONS: ReadonlySet<DesktopDaemonStopReason> = new Set([
+  "settings",
+  "host_remove",
 ]);
 
 function markStoppedOnPurpose(home: string, reason: DesktopDaemonStopReason): void {
@@ -614,6 +619,17 @@ function markStoppedOnPurpose(home: string, reason: DesktopDaemonStopReason): vo
       error: error instanceof Error ? error.message : String(error),
     });
   }
+}
+
+/**
+ * Whether this app stop gets the stopped-on-purpose marker. The quit stops only when keep-running is off
+ * (quit-lifecycle.ts). "Pause and stop" and a local host removal save manageBuiltInDaemon=false first: with
+ * management off no start follows, so they are marked too.
+ */
+async function marksStopOnPurpose(reason: DesktopDaemonStopReason): Promise<boolean> {
+  if (MARKED_STOP_REASONS.has(reason)) return true;
+  if (!MARKED_WHEN_UNMANAGED_STOP_REASONS.has(reason)) return false;
+  return !(await getDesktopSettingsStore().get()).daemon.manageBuiltInDaemon;
 }
 
 function clearStoppedOnPurpose(home: string): void {
@@ -944,8 +960,7 @@ export async function stopDesktopDaemon(
     owned,
     keepTerminals,
   });
-  // The quit stops here only when keep-running is off (quit-lifecycle.ts).
-  if (MARKED_STOP_REASONS.has(reason)) markStoppedOnPurpose(home, reason);
+  if (await marksStopOnPurpose(reason)) markStoppedOnPurpose(home, reason);
   await stopCapturedDaemon({ home, instance, reason, keepTerminals });
   if (owned) ownedLaunch = null;
   return resolveDesktopDaemonStatus();

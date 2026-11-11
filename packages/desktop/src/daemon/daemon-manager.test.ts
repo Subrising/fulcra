@@ -955,6 +955,28 @@ describe("owned startup and Settings recovery", () => {
       expect(existsSync(marker)).toBe(false);
     },
   );
+  it.each(["settings", "host_remove"] as const)(
+    "FU-780 marks a %s stop with built-in management off",
+    async (reason) => {
+      await acquireOwned();
+      const marker = path.join(root, "daemon-stopped-on-purpose.json");
+      mocks.stopDaemonInstance.mockImplementation(stopOwnedFixture);
+      mocks.settings = {
+        ...mocks.settings,
+        daemon: { ...mocks.settings.daemon, manageBuiltInDaemon: false },
+      };
+      await manager.stopDesktopDaemon(reason);
+      expect(JSON.parse(readFileSync(marker, "utf8"))).toMatchObject({ reason });
+    },
+  );
+  it("FU-780 writes no marker for a settings stop with built-in management on", async () => {
+    await acquireOwned();
+    const marker = path.join(root, "daemon-stopped-on-purpose.json");
+    mocks.stopDaemonInstance.mockImplementation(stopOwnedFixture);
+    await manager.stopDesktopDaemon("settings");
+    expect(mocks.stopDaemonInstance).toHaveBeenCalledTimes(1);
+    expect(existsSync(marker)).toBe(false);
+  });
   it("FU-780 a restart whose start fails leaves no marker", async () => {
     await acquireOwned();
     const marker = path.join(root, "daemon-stopped-on-purpose.json");
