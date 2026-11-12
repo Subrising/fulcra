@@ -987,6 +987,36 @@ describe("owned startup and Settings recovery", () => {
     expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
     expect(existsSync(marker)).toBe(false);
   });
+  it("FU-782 marks a local host removal with Command Centre on as stopped on purpose", async () => {
+    await acquireOwned();
+    const marker = path.join(root, "daemon-stopped-on-purpose.json");
+    mocks.stopDaemonInstance.mockImplementation(stopOwnedFixture);
+    // Command Centre on: the settings store keeps manageBuiltInDaemon=true.
+    expect(mocks.settings.daemon).toMatchObject({
+      commandCentreEnabled: true,
+      manageBuiltInDaemon: true,
+    });
+    await manager.stopDesktopDaemon("host_remove");
+    expect(JSON.parse(readFileSync(marker, "utf8"))).toMatchObject({ reason: "host_remove" });
+  });
+  it.each([
+    ["the start succeeds", stopOwnedFixture],
+    ["the start fails", stopOwnedThenCredentialFails],
+  ])("FU-782 an app restart holds the boot task until its start ends (%s)", async (_name, stop) => {
+    await acquireOwned();
+    const restartMarker = path.join(root, "daemon-app-restart.json");
+    let heldAtStop = false;
+    mocks.stopDaemonInstance.mockImplementation(async () => {
+      heldAtStop = existsSync(restartMarker);
+      await stop();
+    });
+    await manager
+      .createDaemonCommandHandlers()
+      .restart_desktop_daemon()
+      .catch(() => undefined);
+    expect(heldAtStop).toBe(true);
+    expect(existsSync(restartMarker)).toBe(false);
+  });
   it("owned version mismatch stops its captured lifetime then launches managed once", async () => {
     await acquireOwned();
     mocks.stopDaemonInstance.mockImplementation(async () => {
@@ -1073,6 +1103,11 @@ describe("owned startup and Settings recovery", () => {
     async function acquireLive(options: { onAcquired: (value: typeof live) => void }) {
       options.onAcquired(live);
       writeFileSync(path.join(root, "paseo.pid"), JSON.stringify(live));
+    }
+    const next = { ...live, startedAt: "replacement-2" };
+    async function acquireNext(options: { onAcquired: (value: typeof next) => void }) {
+      options.onAcquired(next);
+      writeFileSync(path.join(root, "paseo.pid"), JSON.stringify(next));
     }
     function probeCalls() {
       return mocks.runExternalCliJsonCommand.mock.calls.filter(([args]) =>
@@ -1292,6 +1327,47 @@ describe("owned startup and Settings recovery", () => {
       await manager.createDaemonCommandHandlers().start_desktop_daemon();
       expect(manager.keepsBootReplacementRunningOnQuitSync()).toBe(true);
       expect(logged("app quit keeps the daemon that replaced the boot daemon running")).toBe(true);
+    });
+    it("FU-782 is replaced at once while only an idle shell tab is open", async () => {
+      terminals = [{ id: "t1", name: "Terminal 1", workspaceId: "w", cwd: "/w", activity: null }];
+      await manager.createDaemonCommandHandlers().start_desktop_daemon();
+      expect(mocks.stopDaemonInstance).toHaveBeenCalledTimes(1);
+      launchedWithCommandCentre();
+    });
+    it.each(["restart", "settings", "version_mismatch"] as const)(
+      "FU-782 the daemon after an app %s still stays running on app quit",
+      async (kind) => {
+        mocks.startDaemonInstance.mockImplementation(acquireLive);
+        const handlers = manager.createDaemonCommandHandlers();
+        await handlers.start_desktop_daemon();
+        expect(manager.keepsBootReplacementRunningOnQuitSync()).toBe(true);
+        const liveStatus = {
+          localDaemon: "running",
+          connectedDaemon: "reachable",
+          ...live,
+          daemonVersion: kind === "version_mismatch" ? "0.1.0" : "1.2.3",
+        };
+        mocks.readInstance.mockResolvedValue(live);
+        mocks.runExternalCliJsonCommand.mockReset().mockResolvedValue(liveStatus);
+        mocks.stopDaemonInstance.mockReset().mockImplementation(stopBoot);
+        mocks.startDaemonInstance.mockReset().mockImplementation(acquireNext);
+        if (kind === "restart") await handlers.restart_desktop_daemon();
+        else if (kind === "settings")
+          await handlers.patch_desktop_settings({ daemon: { commandCentreEnabled: false } });
+        else await handlers.start_desktop_daemon();
+        expect(mocks.stopDaemonInstance.mock.lastCall?.[1].instance).toEqual(live);
+        expect(mocks.startDaemonInstance).toHaveBeenCalledTimes(1);
+        expect(manager.keepsBootReplacementRunningOnQuitSync()).toBe(true);
+      },
+    );
+    it("FU-782 a Stop ends the boot replacement mark", async () => {
+      mocks.startDaemonInstance.mockImplementation(acquireLive);
+      const handlers = manager.createDaemonCommandHandlers();
+      await handlers.start_desktop_daemon();
+      mocks.readInstance.mockResolvedValue(live);
+      mocks.stopDaemonInstance.mockReset().mockImplementation(stopBoot);
+      await manager.stopDesktopDaemon("manual_ipc");
+      expect(existsSync(path.join(root, "boot-replacement-daemon.json"))).toBe(false);
     });
   });
   describe("a desktop-managed daemon that does not answer", () => {

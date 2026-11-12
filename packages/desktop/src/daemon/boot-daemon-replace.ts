@@ -86,9 +86,34 @@ export function countBusySessions(items: unknown): number {
   }).length;
 }
 
-/** Every listed terminal is live; workspace scripts run in terminals too. */
-export function countLiveTerminals(items: unknown): number {
-  return listItems(items, "Terminal").length;
+/** A terminal whose agent activity changed this recently counts as busy. */
+export const BOOT_DAEMON_TERMINAL_RECENT_MS = 10 * 60_000;
+/** The daemon names a plain shell tab "Terminal N"; workspace scripts and named terminals get another name. */
+const DEFAULT_TERMINAL_NAME = /^Terminal \d+$/;
+
+/**
+ * FU-782: terminals that keep the daemon busy. The daemon reports no foreground process and no output time. It
+ * reports `activity` only for an agent that sends hook reports (state, changedAt). So a terminal is busy when:
+ * its agent is working or waits for input; its activity changed within the recent window; or it reports no
+ * activity and is not a plain shell tab (a workspace script, a named terminal: their process is unknown, so they are
+ * kept). An idle "Terminal N" shell tab does not block the replace.
+ */
+export function countLiveTerminals(items: unknown, nowMs = Date.now()): number {
+  return listItems(items, "Terminal").filter((item) => {
+    if (typeof item !== "object" || item === null) return true;
+    const { name, activity } = item as { name?: unknown; activity?: unknown };
+    if (typeof activity === "object" && activity !== null) {
+      const { state, attentionReason, changedAt } = activity as {
+        state?: unknown;
+        attentionReason?: unknown;
+        changedAt?: unknown;
+      };
+      if (state === "working" || attentionReason === "needs_input") return true;
+      if (typeof changedAt !== "number" || !Number.isFinite(changedAt)) return true;
+      return nowMs - changedAt < BOOT_DAEMON_TERMINAL_RECENT_MS;
+    }
+    return !(typeof name === "string" && DEFAULT_TERMINAL_NAME.test(name));
+  }).length;
 }
 
 /** Active schedules and heartbeats whose next run is due (or overdue) within the window. */

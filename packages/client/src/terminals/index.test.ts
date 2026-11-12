@@ -35,3 +35,38 @@ test("an older host rejects terminal operations before sending requests", async 
   expect(() => terminal.capture()).toThrow("Update the host");
   await expect(terminal.kill()).rejects.toThrow("Update the host");
 });
+
+test("FU-782 a terminal list keeps the agent activity the host reports", async () => {
+  const unexpectedRequest = () => {
+    throw new Error("Unexpected daemon request");
+  };
+  const activity = { state: "working", changedAt: 1_700_000_000_000 };
+  const terminals = createTerminalActions(
+    {
+      ensureConnected: () => {},
+      getLastServerInfoMessage: () => ({
+        status: "server_info",
+        serverId: "host",
+        hostname: null,
+        version: null,
+        features: { workspaceTerminals: true },
+      }),
+      createTerminal: unexpectedRequest,
+      listTerminals: async () => ({
+        requestId: "r1",
+        terminals: [
+          { id: "t1", workspaceId: "w", cwd: "/w", name: "Terminal 1", activity: null },
+          { id: "t2", workspaceId: "w", cwd: "/w", name: "Terminal 2", activity },
+          { id: "t3", workspaceId: "w", cwd: "/w", name: "web" },
+        ],
+      }),
+      sendTerminalInput: unexpectedRequest,
+      captureTerminal: unexpectedRequest,
+      killTerminal: unexpectedRequest,
+    } as unknown as Parameters<typeof createTerminalActions>[0],
+    unexpectedRequest,
+  );
+
+  const { entries } = await terminals.list({ workspaceId: "w" });
+  expect(entries.map((entry) => entry.activity)).toEqual([null, activity, undefined]);
+});

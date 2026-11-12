@@ -10,6 +10,8 @@ rem from hibernate, which keeps the last boot time.
 rem - the update lock folder (fulcra-update\lock): an update replaces the build the daemon runs from;
 rem - daemon-stopped-on-purpose.json in the daemon home: the app stopped its daemon on purpose (Stop, a quit
 rem   with "Keep running after quit" off, an app update). The app removes it when it starts its daemon again.
+rem - daemon-app-restart.json in the daemon home (FU-782): the app stopped its daemon to start it again (Restart,
+rem   version mismatch, settings change, boot daemon replace). The app removes it when that start ends.
 rem FULCRA_BOOT_PASEO, FULCRA_BOOT_LOG, FULCRA_BOOT_HOME and FULCRA_UPDATE_LOCK override paths, and
 rem FULCRA_BOOT_LASTBOOT overrides the last boot time, for a dry run.
 setlocal
@@ -22,12 +24,16 @@ if not defined CLI set "CLI=%USERPROFILE%\fulcra-bin\paseo.cmd"
 set "LOCK=%FULCRA_UPDATE_LOCK%"
 if not defined LOCK set "LOCK=%USERPROFILE%\fulcra-update\lock"
 set "MARKER=%PASEO_HOME%\daemon-stopped-on-purpose.json"
+set "RESTART=%PASEO_HOME%\daemon-app-restart.json"
 set "HOLD="
 set "CHECK=%LOCK%"
 if exist "%LOCK%" call :fresh
 if defined HOLD exit /b 0
 set "CHECK=%MARKER%"
 if exist "%MARKER%" call :fresh
+if defined HOLD exit /b 0
+set "CHECK=%RESTART%"
+if exist "%RESTART%" call :fresh
 if defined HOLD exit /b 0
 set "OUT=%TEMP%\fulcra-boot-start-%RANDOM%.out"
 call "%CLI%" daemon start --json > "%OUT%" 2>&1
