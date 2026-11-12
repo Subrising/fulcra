@@ -30,6 +30,8 @@ try {
     name: "Feature",
     cwd: ctx.workDir,
     workspaceId: second.id,
+    // FU-782: the host reports agent activity; a new terminal has none.
+    activity: null,
   });
   assert.deepEqual(await cli(["terminal", "ls", "--workspace", second.id]), [feature]);
   assert.deepEqual(await cli(["terminal", "ls", "--cwd", ctx.workDir]), [main, feature]);
