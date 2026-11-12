@@ -14,6 +14,7 @@ import {
   replaceBootDaemonWhenIdle,
   stopBootDaemon,
   type BootDaemonDeps,
+  type BootDaemonStopOutcome,
   type NoCredentialProbe,
 } from "./boot-daemon-replace.js";
 import { hashDaemonPassword, isBearerTokenValidAsync } from "@getpaseo/server/auth";
@@ -575,7 +576,7 @@ async function probeWithoutCredential(
       answered: true,
       busy: {
         turns: countBusySessions(agents),
-        terminals: countLiveTerminals(terminals),
+        terminals: countLiveTerminals(terminals, Date.now()),
         dueSoon: countDueSoon(schedules, Date.now()),
       },
     };
@@ -592,10 +593,10 @@ const BOOT_REPLACEMENT_FILE = "boot-replacement-daemon.json";
 // FU-780: the Windows boot task (scripts/windows/fulcra-boot-start.cmd) starts no daemon while this file is fresh
 // (newer than the last boot and under 12 h old), so it does not undo a stop the app made on purpose.
 export const STOPPED_ON_PURPOSE_FILE = "daemon-stopped-on-purpose.json";
-// Only stops with no app start after them ("settings" and "host_remove" only with management off). A restart,
-// version mismatch, settings change or host removal with management on, or a boot daemon replace, starts again
-// (or may fail before its start): a marker there could outlive a failed start and
-// keep the boot task from bringing any daemon back.
+// Only stops with no app start after them ("settings" only with management off, "host_remove" with management off
+// or Command Centre on). A restart, version mismatch, settings change with management on, or a boot daemon replace,
+// starts again (or may fail before its start): a marker there could outlive a failed start and keep the boot task
+// from bringing any daemon back. Those stops get the app restart marker instead (FU-782, below).
 const MARKED_STOP_REASONS: ReadonlySet<DesktopDaemonStopReason> = new Set([
   "manual_ipc",
   "quit",
@@ -629,7 +630,61 @@ function markStoppedOnPurpose(home: string, reason: DesktopDaemonStopReason): vo
 async function marksStopOnPurpose(reason: DesktopDaemonStopReason): Promise<boolean> {
   if (MARKED_STOP_REASONS.has(reason)) return true;
   if (!MARKED_WHEN_UNMANAGED_STOP_REASONS.has(reason)) return false;
-  return !(await getDesktopSettingsStore().get()).daemon.manageBuiltInDaemon;
+  const { daemon } = await getDesktopSettingsStore().get();
+  // FU-782: with Command Centre on, the settings store keeps manageBuiltInDaemon=true (desktop-settings.ts patch),
+  // so a local host removal cannot save it as off. No app start follows a host removal: mark it all the same.
+  if (reason === "host_remove" && daemon.commandCentreEnabled === true) return true;
+  return !daemon.manageBuiltInDaemon;
+}
+
+// FU-782: while the app stops its daemon to start it again (Restart, version mismatch, settings change with
+// management on, boot daemon replace), the Windows boot task starts no daemon (same fresh rules as above). The app
+// removes the file when that start is done or failed, so a failed start does not hold the boot task.
+export const APP_RESTART_FILE = "daemon-app-restart.json";
+const RESTART_STOP_REASONS: ReadonlySet<DesktopDaemonStopReason> = new Set([
+  "restart",
+  "version_mismatch",
+]);
+
+function markAppRestart(home: string, reason: DesktopDaemonStopReason): void {
+  try {
+    writeFileSync(
+      path.join(home, APP_RESTART_FILE),
+      JSON.stringify({ reason, at: new Date().toISOString(), appPid: process.pid }),
+      { mode: 0o600 },
+    );
+  } catch (error) {
+    log.error("[desktop daemon]", "could not write the app restart marker", {
+      reason,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function clearAppRestart(home: string): void {
+  try {
+    rmSync(path.join(home, APP_RESTART_FILE), { force: true });
+  } catch (error) {
+    log.error("[desktop daemon]", "could not remove the app restart marker", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/** Runs a stop-then-start flow; the app restart marker is removed at its end, also when it fails. */
+async function withAppRestart<T>(home: string, task: () => Promise<T>): Promise<T> {
+  try {
+    return await task();
+  } finally {
+    clearAppRestart(home);
+  }
+}
+
+async function restartsAfterStop(reason: DesktopDaemonStopReason): Promise<boolean> {
+  if (RESTART_STOP_REASONS.has(reason)) return true;
+  return (
+    reason === "settings" && (await getDesktopSettingsStore().get()).daemon.manageBuiltInDaemon
+  );
 }
 
 function clearStoppedOnPurpose(home: string): void {
@@ -669,6 +724,8 @@ async function bootDaemonDeps(home: string, instance: DaemonInstance): Promise<B
       return null;
     },
     stop: async () => {
+      // FU-782: the app start follows this stop; the boot task must not start a daemon in between.
+      markAppRestart(home, "replace_boot_daemon");
       try {
         await stopCapturedDaemon({
           home,
@@ -705,8 +762,12 @@ async function bootDaemonDeps(home: string, instance: DaemonInstance): Promise<B
 /** Marks the app daemon that replaced a boot daemon, so an app quit keeps it running (as the boot daemon did). */
 function markBootReplacement(home: string): void {
   if (!ownedLaunch || ownedLaunch.home !== home) return;
+  writeBootReplacement(home, ownedLaunch.instance);
+}
+
+function writeBootReplacement(home: string, content: unknown): void {
   try {
-    writeFileSync(path.join(home, BOOT_REPLACEMENT_FILE), JSON.stringify(ownedLaunch.instance), {
+    writeFileSync(path.join(home, BOOT_REPLACEMENT_FILE), JSON.stringify(content), {
       mode: 0o600,
     });
   } catch (error) {
@@ -714,6 +775,51 @@ function markBootReplacement(home: string): void {
       error: error instanceof Error ? error.message : String(error),
     });
   }
+}
+
+function readBootReplacement(home: string): unknown {
+  try {
+    return JSON.parse(readFileSync(path.join(home, BOOT_REPLACEMENT_FILE), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/** A carried mark binds to the next app daemon only within this time (as the boot task's 12 h rule). */
+export const BOOT_REPLACEMENT_CARRY_MS = 12 * 60 * 60_000;
+
+/**
+ * FU-782: an app stop that a start follows (Restart, version mismatch, update, settings change with management on)
+ * carries the mark of the stopped daemon over to the next app daemon. Any other app stop ends the mark.
+ */
+async function handOverBootReplacement(
+  home: string,
+  instance: DaemonInstance,
+  reason: DesktopDaemonStopReason,
+): Promise<void> {
+  const marked = readBootReplacement(home);
+  if (!marked || !isSameDaemonInstance(marked as DaemonInstance, instance)) return;
+  if (reason === "app_update" || (await restartsAfterStop(reason))) {
+    writeBootReplacement(home, { carry: true, reason, at: new Date().toISOString() });
+    return;
+  }
+  try {
+    rmSync(path.join(home, BOOT_REPLACEMENT_FILE), { force: true });
+  } catch {
+    // A stale mark names an old instance and so never matches again.
+  }
+}
+
+/** After an app daemon start: a fresh carried mark now names the new daemon. */
+function takeOverBootReplacement(home: string, instance: DaemonInstance): void {
+  const marked = readBootReplacement(home) as { carry?: unknown; at?: unknown } | null;
+  if (!marked || marked.carry !== true || typeof marked.at !== "string") return;
+  const age = Date.now() - Date.parse(marked.at);
+  if (!(age >= 0 && age < BOOT_REPLACEMENT_CARRY_MS)) return;
+  writeBootReplacement(home, instance);
+  logDesktopDaemonLifecycle("the new app daemon keeps the boot replacement mark", {
+    pid: instance.pid,
+  });
 }
 
 /**
@@ -794,11 +900,7 @@ async function replaceBootDaemonAtStart(
       // The idle wait (up to 2 h) runs outside the start lock, so a reload, Start or restart is not held by it.
       // Only the last checks, the stop and the start take the lock.
       const outcome = await replaceBootDaemonWhenIdle(current, deps, () =>
-        exclusiveStart(async () => {
-          const stopped = await stopBootDaemon(current, deps);
-          if (stopped === "stopped") await startAfterBootReplace(home);
-          return stopped;
-        }),
+        exclusiveStart(() => finishBootReplace(home, current, deps)),
       );
       if (outcome === "ran_out") showBootDaemonBusyNotice();
     } catch (error) {
@@ -810,6 +912,24 @@ async function replaceBootDaemonAtStart(
     }
   })();
   return false;
+}
+
+/**
+ * Under the start lock: the last checks, the stop of the idle boot daemon and the app daemon start. The app restart
+ * marker the stop wrote is removed at the end.
+ */
+async function finishBootReplace(
+  home: string,
+  current: DesktopDaemonStatus,
+  deps: BootDaemonDeps,
+): Promise<BootDaemonStopOutcome> {
+  try {
+    const stopped = await stopBootDaemon(current, deps);
+    if (stopped === "stopped") await startAfterBootReplace(home);
+    return stopped;
+  } finally {
+    clearAppRestart(home);
+  }
 }
 
 /** Tells the user, in the app's notice style, that the boot daemon stayed busy and still runs without CC. */
@@ -835,7 +955,10 @@ function exclusiveStart<T>(task: () => Promise<T>): Promise<T> {
   return run;
 }
 function startDaemon(): Promise<DesktopDaemonStatus> {
-  startInFlight ??= exclusiveStart(() => startDaemonUnlocked(true)).finally(() => {
+  const home = getPaseoHome();
+  startInFlight ??= exclusiveStart(() =>
+    withAppRestart(home, () => startDaemonUnlocked(true)),
+  ).finally(() => {
     startInFlight = null;
   });
   return startInFlight;
@@ -924,8 +1047,21 @@ async function startDaemonUnlocked(replaceBootDaemon: boolean): Promise<DesktopD
   } finally {
     // Acquisition is ownership evidence even if readiness times out. Never save a foreign result.
     if (commandCentreEnabled && acquired) await saveCommandCentreOwner(home, acquired);
+    if (acquired) takeOverBootReplacement(home, acquired);
   }
   return resolveDesktopDaemonStatus();
+}
+
+/** The marker files an app stop leaves for the boot task and for the next app start. */
+async function writeStopMarkers(
+  home: string,
+  instance: DaemonInstance,
+  reason: DesktopDaemonStopReason,
+  owned: boolean,
+): Promise<void> {
+  if (await marksStopOnPurpose(reason)) markStoppedOnPurpose(home, reason);
+  if (await restartsAfterStop(reason)) markAppRestart(home, reason);
+  if (owned) await handOverBootReplacement(home, instance, reason);
 }
 
 export async function stopDesktopDaemon(
@@ -960,7 +1096,7 @@ export async function stopDesktopDaemon(
     owned,
     keepTerminals,
   });
-  if (await marksStopOnPurpose(reason)) markStoppedOnPurpose(home, reason);
+  await writeStopMarkers(home, instance, reason, owned);
   await stopCapturedDaemon({ home, instance, reason, keepTerminals });
   if (owned) ownedLaunch = null;
   return resolveDesktopDaemonStatus();
@@ -1034,11 +1170,13 @@ export function keepsTerminalsOnStop(
 }
 
 async function restartDaemon(): Promise<DesktopDaemonStatus> {
-  return restartManagedDaemon({
-    status: resolveDesktopDaemonStatus,
-    stopOwned: () => stopDesktopDaemon("restart"),
-    startManaged: startDaemon,
-  });
+  return withAppRestart(getPaseoHome(), () =>
+    restartManagedDaemon({
+      status: resolveDesktopDaemonStatus,
+      stopOwned: () => stopDesktopDaemon("restart"),
+      startManaged: startDaemon,
+    }),
+  );
 }
 
 function getDaemonLogs(): DesktopDaemonLogs {
@@ -1074,30 +1212,33 @@ async function resolveRequestedReleaseChannel(
 // IPC registration
 // ---------------------------------------------------------------------------
 
+/** A daemon settings change: stop the app daemon, then start it again when the app manages it. */
+async function applyDaemonSettings(): Promise<void> {
+  const stopped = await stopDesktopDaemon("settings");
+  if (stopped.error || stopped.status === "errored")
+    throw retryOwnedDaemon("Desktop daemon status unavailable; settings were not applied.");
+  if (stopped.status === "running" || stopped.status === "starting") {
+    // L39: a service this app does not own (e.g. launchd-managed) keeps running with its own configuration, so
+    // there is nothing to restart. The setting is kept: it decides whether this window signs in to that
+    // service as its local owner (localServiceOwnerCredential still checks home, endpoint and password).
+    if (!ownedLaunch) {
+      logDesktopDaemonLifecycle("command centre setting saved beside an unowned service", {
+        pid: stopped.pid,
+      });
+      return;
+    }
+    throw Error(
+      "This background service is managed elsewhere. Command Centre settings were not applied.",
+    );
+  }
+  if ((await getDesktopSettingsStore().get()).daemon.manageBuiltInDaemon) await startDaemon();
+}
+
 export function createDaemonCommandHandlers(): Record<string, DesktopCommandHandler> {
   return {
     ...createDesktopSettingsCommandHandlers({
       settingsStore: getDesktopSettingsStore(),
-      onDaemonSettingsChanged: async () => {
-        const stopped = await stopDesktopDaemon("settings");
-        if (stopped.error || stopped.status === "errored")
-          throw retryOwnedDaemon("Desktop daemon status unavailable; settings were not applied.");
-        if (stopped.status === "running" || stopped.status === "starting") {
-          // L39: a service this app does not own (e.g. launchd-managed) keeps running with its own configuration, so
-          // there is nothing to restart. The setting is kept: it decides whether this window signs in to that
-          // service as its local owner (localServiceOwnerCredential still checks home, endpoint and password).
-          if (!ownedLaunch) {
-            logDesktopDaemonLifecycle("command centre setting saved beside an unowned service", {
-              pid: stopped.pid,
-            });
-            return;
-          }
-          throw Error(
-            "This background service is managed elsewhere. Command Centre settings were not applied.",
-          );
-        }
-        if ((await getDesktopSettingsStore().get()).daemon.manageBuiltInDaemon) await startDaemon();
-      },
+      onDaemonSettingsChanged: () => withAppRestart(getPaseoHome(), applyDaemonSettings),
     }),
     desktop_get_runtime_info: () => ({
       appVersion: resolveDesktopAppVersion(),

@@ -66,9 +66,52 @@ describe("busy counts", () => {
     ).toBe(2);
     expect(countBusySessions([])).toBe(0);
   });
-  it("counts every listed terminal, workspace script terminals included", () => {
-    expect(countLiveTerminals([{ id: "t1" }, { id: "script" }])).toBe(2);
+  it("counts workspace script and named terminals whose process is unknown", () => {
+    expect(countLiveTerminals([{ id: "t1" }, { id: "script", name: "web", activity: null }])).toBe(
+      2,
+    );
     expect(countLiveTerminals([])).toBe(0);
+  });
+  it("FU-782 an idle shell tab does not count; agent activity counts while working or recent", () => {
+    const now = Date.parse("2026-11-12T10:00:00Z");
+    const minutesAgo = (minutes: number) => now - minutes * 60_000;
+    const terminal = (name: string, activity: unknown) => ({ id: name, name, activity });
+    expect(
+      countLiveTerminals(
+        [
+          terminal("Terminal 1", null),
+          terminal("Terminal 2", undefined),
+          terminal("Terminal 3", {
+            state: "idle",
+            attentionReason: "finished",
+            changedAt: minutesAgo(30),
+          }),
+          terminal("Terminal 4", { state: "idle", changedAt: minutesAgo(11) }),
+        ],
+        now,
+      ),
+    ).toBe(0);
+    expect(
+      countLiveTerminals(
+        [
+          terminal("Terminal 1", { state: "working", changedAt: minutesAgo(90) }),
+          terminal("Terminal 2", {
+            state: "idle",
+            attentionReason: "needs_input",
+            changedAt: minutesAgo(90),
+          }),
+          terminal("Terminal 3", {
+            state: "idle",
+            attentionReason: "finished",
+            changedAt: minutesAgo(2),
+          }),
+          terminal("Terminal 4", { state: "idle", changedAt: "not a time" }),
+          terminal("dev server", null),
+          terminal("Terminal 5 (renamed)", null),
+        ],
+        now,
+      ),
+    ).toBe(6);
   });
   it("counts active schedules and heartbeats due or overdue within 2 minutes", () => {
     const now = Date.parse("2026-11-12T10:00:00Z");

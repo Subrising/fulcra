@@ -40,13 +40,20 @@ test("SDK and workspace handles preserve ownership and actual process directorie
     cwd: daemon.staticDir,
     name: "Outside",
   });
-  expect(a.current()).toEqual({ id: a.id, workspaceId: first, cwd, name: "Main" });
-  expect(b.current()).toEqual({ id: b.id, workspaceId: second, cwd: nested, name: "Feature" });
+  expect(a.current()).toEqual({ id: a.id, workspaceId: first, cwd, name: "Main", activity: null });
+  expect(b.current()).toEqual({
+    id: b.id,
+    workspaceId: second,
+    cwd: nested,
+    name: "Feature",
+    activity: null,
+  });
   expect(c.current()).toEqual({
     id: c.id,
     workspaceId: second,
     cwd: daemon.staticDir,
     name: "Outside",
+    activity: null,
   });
   const result = await sdk.workspaces.ref(second).terminals.list({ requestId: "feature-list" });
   expect(result.requestId).toBe("feature-list");
