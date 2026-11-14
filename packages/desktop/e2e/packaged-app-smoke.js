@@ -930,6 +930,7 @@ async function openSmokeWorkspace({ appPath, env, page, daemonHome, listen, dead
     ],
     label: "Create packaged smoke workspace",
   });
+<<<<<<< HEAD
   // The sidebar row's accessible name is a comma-joined composite built by
   // resolveSidebarWorkspaceAccessibilityLabel: project name, title, host badge,
   // change request, service and status bucket. An exact match on the bare title
@@ -948,6 +949,14 @@ async function openSmokeWorkspace({ appPath, env, page, daemonHome, listen, dead
     console.log(await describeRendererState(page));
     throw error;
   }
+=======
+  // The fresh daemon had no projects at launch, so first-run setup is open over the sidebar.
+  await page.evaluate(() =>
+    localStorage.setItem("@paseo:onboarding", JSON.stringify({ completedAt: "1970-01-01" })),
+  );
+  await page.reload();
+  await page.getByRole("button", { name: "Sandbox smoke workspace", exact: true }).click();
+>>>>>>> refs/remotes/upstream/tags/v0.15.2
   await page.waitForURL((url) => url.pathname.endsWith(`/workspace/${workspace.workspaceId}`));
   await page.getByRole("button", { name: "Agent", exact: true }).click();
   await page.getByRole("textbox", { name: "Message agent..." }).click();
