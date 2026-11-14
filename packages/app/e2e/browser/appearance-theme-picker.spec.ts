@@ -9,9 +9,17 @@ test("shows Pure black in the appearance picker", async ({ page }, testInfo) => 
   await expect(page.getByTestId("settings-sidebar")).toBeVisible();
   await openSettingsSection(page, "appearance");
 
+<<<<<<< HEAD
   const themeTrigger = page.getByLabel("Theme: Dark", { exact: true });
   await themeTrigger.click();
   await expect(page.getByText("Pure black", { exact: true })).toBeVisible();
+=======
+  await expect(page.getByRole("radio", { name: "System", exact: true })).toBeChecked();
+  await expect(
+    page.getByRole("radiogroup", { name: "Theme" }).getByRole("radio").first(),
+  ).toHaveAccessibleName("System");
+  await expect(page.getByRole("radio", { name: "Pure black", exact: true })).toBeVisible();
+>>>>>>> refs/remotes/upstream/tags/v0.15.4
   await page.screenshot({
     path: testInfo.outputPath("appearance-theme-picker.png"),
     fullPage: true,
