@@ -588,7 +588,7 @@ test("FU-655: a stuck uncertain switch settles when the pool already holds the a
 
 test("FU-790: a busy refusal says which condition held, never reloads, and shows only known codes", async (t) => {
   const cases = [
-    ["background_work:2", /background work is running \(2\)/],
+    ["async_work:2", /background work is running \(2\)/],
     ["pending_permission", /permission request is open/],
     ["subagent_running", /subagent is running/],
     ["input_delivery", /message is being delivered/],

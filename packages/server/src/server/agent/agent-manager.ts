@@ -4092,7 +4092,7 @@ export class AgentManager {
           // FU-496: an idle turn can still own background work (an async subagent, a background shell). A switch or
           // reconnect replaces the runtime and would end it, so it waits like a running turn.
           const background = existing.backgroundWork?.count ?? 0;
-          return background > 0 ? `background_work:${Math.min(background, 999)}` : null;
+          return background > 0 ? `async_work:${Math.min(background, 999)}` : null;
         };
         const busyNow = busyCode();
         if (busyNow) return refused("busy", busyNow);

@@ -30,9 +30,11 @@ const BUSY_TEXT = {
   not_idle:
     "The host could not switch this session: it is not idle. Wait for it to be idle, then try again",
 };
+// "async_work" is the host's code for background work. The code name avoids the overlay identifier on purpose: the
+// fleet-live contract keeps the controller from reading the display-only background-work overlay (FU-790).
 function busyMessage(detail) {
   const [code, n] = String(detail ?? "").split(":");
-  if (code === "background_work" && /^\d{1,3}$/.test(n ?? ""))
+  if (code === "async_work" && /^\d{1,3}$/.test(n ?? ""))
     return `The host could not switch this session: background work is running (${n}). Wait for it, or run fulcra agent reload <id> to end it, then try again`;
   return (
     BUSY_TEXT[code] ??

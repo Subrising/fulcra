@@ -2242,7 +2242,7 @@ export const AgentMcpRefreshResultSchema = z.object({
       "resume_failed",
     ])
     .nullable(),
-  // FU-790: which busy condition held, as a short code such as "background_work:2". Only set with reason "busy".
+  // FU-790: which busy condition held, as a short code such as "async_work:2". Only set with reason "busy".
   busyDetail: z
     .string()
     .regex(/^[a-z_]+(:\d{1,3})?$/)
