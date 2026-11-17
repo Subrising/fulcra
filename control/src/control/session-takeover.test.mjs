@@ -491,3 +491,92 @@ test("an archived delegated session keeps its account and control record", async
   assert.deepEqual(readAccounts(w.root), pool);
   assert.equal(w.calls(), 0);
 });
+
+test("FU-790: an idle session the host does not hold is loaded then switched, whatever refusal reason the host gives", async (t) => {
+  for (const reason of ["stale", "unsupported", "prepare_failed"]) {
+    const w = await world(t, "claude", { enrolled: false });
+    const recover = w.control.native.recover;
+    let loads = 0,
+      resident = false;
+    w.control.native.recover = async (id) =>
+      resident ? recover(id) : { outcome: "refused", reason };
+    w.control.native.reload = async () => {
+      loads++;
+      resident = true;
+    };
+    const r = await takeOverSession(w.id, w.b.id, { control: w.control });
+    assert.equal(r.ok, true, reason);
+    assert.equal(loads, 1, reason);
+    assert.equal(readAccounts(w.root).assignments[w.id].accountId, w.b.id);
+  }
+  // A load that does not help: the error names the real reason and does not blame an active turn.
+  const w = await world(t, "claude", { enrolled: false });
+  w.control.native.recover = async () => ({
+    outcome: "refused",
+    reason: "stale",
+  });
+  w.control.native.reload = async () => {};
+  const r = await takeOverSession(w.id, w.b.id, { control: w.control });
+  assert.equal(r.ok, false);
+  assert.match(r.message, /reason: stale/);
+  assert.doesNotMatch(r.message, /active turn/);
+  assert.equal(readAccounts(w.root).assignments[w.id].accountId, w.a.id);
+});
+
+test("FU-790: a real active turn keeps the active-turn refusal and never reloads", async (t) => {
+  const w = await world(t, "claude", { enrolled: false });
+  let reloaded = false;
+  w.control.native.recover = async () => ({
+    outcome: "refused",
+    reason: "busy",
+  });
+  w.control.native.reload = async () => {
+    reloaded = true;
+  };
+  const r = await takeOverSession(w.id, w.b.id, { control: w.control });
+  assert.match(r.message, /active turn/);
+  assert.equal(reloaded, false);
+  // A running turn seen before the host call is refused too.
+  const w2 = await world(t, "claude", { enrolled: false });
+  w2.status("running");
+  const r2 = await takeOverSession(w2.id, w2.b.id, { control: w2.control });
+  assert.match(r2.message, /turn is running/);
+});
+
+test("FU-655: a stuck uncertain switch settles when the pool already holds the account, even after a host boot change", async (t) => {
+  const w = await world(t),
+    recover = w.control.native.recover;
+  w.control.native.recover = async () => {
+    throw Error("reply lost");
+  };
+  assert.equal((await takeOverSession(w.id, w.b.id, { control: w.control })).outcome, "uncertain");
+  const switchId = readAccounts(w.root).assignments[w.id].takeover;
+  assert.equal(w.store.delivery(switchId).state, "uncertain");
+  // The host restarted since the marker was written.
+  w.control.native.recover = recover;
+  const inspect = w.control.native.inspect;
+  w.control.native.inspect = async (...a) => ({
+    ...(await inspect(...a)),
+    boot: "boot-2",
+  });
+  const r = await takeOverSession(w.id, w.b.id, {
+    control: w.control,
+    reconcile: true,
+  });
+  assert.equal(r.ok, true, r.message);
+  assert.equal(w.store.delivery(switchId).state, "delivered");
+  assert.equal(readAccounts(w.root).assignments[w.id].takeover, undefined);
+  // Edge: a different account never settles through this path.
+  const w2 = await world(t),
+    rec2 = w2.control.native.recover;
+  w2.control.native.recover = async () => {
+    throw Error("reply lost");
+  };
+  await takeOverSession(w2.id, w2.b.id, { control: w2.control });
+  w2.control.native.recover = rec2;
+  const bad = await takeOverSession(w2.id, w2.a.id, {
+    control: w2.control,
+    reconcile: true,
+  });
+  assert.equal(bad.ok, false);
+});

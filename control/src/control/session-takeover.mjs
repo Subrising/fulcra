@@ -3,6 +3,15 @@
 import { randomUUID } from "node:crypto";
 import { accountStatus, readAccounts, update } from "../../orca-organization/server/accounts.mjs";
 const refused = (message) => ({ ok: false, outcome: "refused", message });
+// Host refusal reasons that are safe to show. Anything else is reported as "unknown", never echoed.
+const HOST_REASONS = new Set([
+  "stale",
+  "unsupported",
+  "invalid_changes",
+  "prepare_failed",
+  "close_failed",
+  "resume_failed",
+]);
 const uuid = (value) =>
   typeof value === "string" && /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
 
@@ -103,14 +112,17 @@ export async function takeOverSession(
         return refused("The account switch no longer matches this session");
       if (reconcile && !unresolved)
         return refused("There is no unresolved account switch to reconcile");
+      // FU-655: the pool already holds this account for this session under the unresolved marker. The host restart below
+      // proves the running account, so a changed boot or new human input cannot block the settle.
+      const settling = Boolean(reconcile && unresolved && previous?.accountId === accountId);
       if (unresolved) {
         const body = JSON.parse(unresolved.body);
         reason = body.reason ?? reason;
         if (
           body.accountId !== accountId ||
           (body.generation ?? null) !== (current?.generation ?? null) ||
-          body.boot !== (observed.boot ?? null) ||
-          body.humanAt !== (observed.humanAt ?? 0)
+          (!settling &&
+            (body.boot !== (observed.boot ?? null) || body.humanAt !== (observed.humanAt ?? 0)))
         )
           return refused("Session identity changed; the earlier switch needs host reconciliation");
       }
@@ -182,9 +194,11 @@ export async function takeOverSession(
         let result = await control.native.recover(sessionId);
         // FU-585: after a host restart the session is not resident, so the host refuses the in-place restart. Load it
         // (the same step as `fulcra agent reload <id>`), then ask again once.
+        // FU-790: an idle session the host does not hold can also come back as "stale", "unsupported" or
+        // "prepare_failed". Every refusal except "busy" gets the same one load and one retry.
         if (
           result?.outcome === "refused" &&
-          result.reason === "not_resident" &&
+          result.reason !== "busy" &&
           typeof control.native.reload === "function" &&
           (await control.native.reload(sessionId).then(
             () => true,
@@ -199,9 +213,11 @@ export async function takeOverSession(
           ) {
             await rollback();
             const reply = refused(
-              result?.reason === "not_resident"
-                ? "The host could not load this session after a restart; run fulcra agent reload <id> and try again"
-                : "The host could not switch this session; finish any active turn and try again",
+              result?.reason === "busy"
+                ? "The host could not switch this session; finish any active turn and try again"
+                : result?.reason === "not_resident"
+                  ? "The host could not load this session after a restart; run fulcra agent reload <id> and try again"
+                  : `The host could not switch this session (reason: ${HOST_REASONS.has(result?.reason) ? result.reason : "unknown"}); it is not busy. Run fulcra agent reload <id> and try again`,
             );
             control.store.finish(eventId, "refused", reply);
             return reply;
@@ -241,7 +257,11 @@ export async function takeOverSession(
           sessionId,
           switchId: eventId,
           reason,
-          account: { id: accountId, name: target.name, provider: target.provider },
+          account: {
+            id: accountId,
+            name: target.name,
+            provider: target.provider,
+          },
           at,
           message: `Switched to account "${target.name}" at ${at}`,
         };
