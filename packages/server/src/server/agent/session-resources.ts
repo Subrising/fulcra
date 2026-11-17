@@ -4,13 +4,27 @@ import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { z } from "zod";
 import type { Logger } from "pino";
-import { readOwnedProcessTable, type OwnedProcessIdentity } from "../../utils/tree-kill.js";
+import {
+  readOwnedProcessTable,
+  type OwnedProcessIdentity,
+} from "../../utils/tree-kill.js";
 import { parseElapsed } from "./background-work/process-tree.js";
 import { writeJsonFileAtomic } from "../atomic-file.js";
 import type { ToolCallTimelineItem } from "./agent-sdk-types.js";
-import { readWindowsResourceProcesses } from "./windows-resource-processes.js";
+import {
+  readWindowsResourceProcessPair,
+  readWindowsResourceProcesses,
+} from "./windows-resource-processes.js";
 
 const exec = promisify(execFile);
+/** FU-792: each Windows read starts a console host, so the Windows timer runs less often. */
+export const SAMPLE_INTERVAL_MS = 5_000;
+export const WINDOWS_SAMPLE_INTERVAL_MS = 15_000;
+export function defaultSampleIntervalMs(
+  platform: NodeJS.Platform = process.platform
+): number {
+  return platform === "win32" ? WINDOWS_SAMPLE_INTERVAL_MS : SAMPLE_INTERVAL_MS;
+}
 export const ORPHAN_INTERVAL_MS = 30 * 60 * 1_000;
 export const TEST_FIXTURE_MIN_AGE_SECONDS = 2 * 60 * 60;
 export function testFixtureDirectory(cwd: string): boolean {
@@ -48,7 +62,8 @@ export function resourceCleanupMode(value?: string): ResourceCleanupMode {
   return value === "dry-run" ? "dry-run" : "off";
 }
 export function bornAfter(child: string, parent: string): boolean {
-  if (/^\d+$/.test(child) && /^\d+$/.test(parent)) return BigInt(child) >= BigInt(parent);
+  if (/^\d+$/.test(child) && /^\d+$/.test(parent))
+    return BigInt(child) >= BigInt(parent);
   const c = Date.parse(`${child} UTC`),
     p = Date.parse(`${parent} UTC`);
   return Number.isFinite(c) && Number.isFinite(p) && c >= p;
@@ -67,7 +82,12 @@ const processSchema = z.object({
   rootPid: z.number().int().positive().optional(),
   rootBirth: z.string().optional(),
   kind: z
-    .enum(["process", "unbounded-log-tail", "powershell-over-2gb", "test-fixture"])
+    .enum([
+      "process",
+      "unbounded-log-tail",
+      "powershell-over-2gb",
+      "test-fixture",
+    ])
     .default("process"),
 });
 const simulatorSchema = z.object({
@@ -83,7 +103,12 @@ const ledgerSchema = z.object({
   version: z.literal(1),
   roots: z
     .array(
-      z.object({ agentId: z.string(), instanceId: z.string(), pid: z.number(), birth: z.string() }),
+      z.object({
+        agentId: z.string(),
+        instanceId: z.string(),
+        pid: z.number(),
+        birth: z.string(),
+      })
     )
     .default([]),
   processes: z.array(processSchema),
@@ -93,20 +118,29 @@ type ProcessRecord = z.infer<typeof processSchema>;
 type SimulatorRecord = z.infer<typeof simulatorSchema>;
 type Ledger = z.infer<typeof ledgerSchema>;
 
-export function resourceKind(row: ResourceProcess, logTail: boolean): ProcessRecord["kind"] {
-  if (!/(?:^|[\\/])(?:powershell|pwsh)(?:\.exe)?$/i.test(row.command)) return "process";
-  if ((row.privateMemoryBytes ?? 0) > 2 * 1024 ** 3) return "powershell-over-2gb";
+export function resourceKind(
+  row: ResourceProcess,
+  logTail: boolean
+): ProcessRecord["kind"] {
+  if (!/(?:^|[\\/])(?:powershell|pwsh)(?:\.exe)?$/i.test(row.command))
+    return "process";
+  if ((row.privateMemoryBytes ?? 0) > 2 * 1024 ** 3)
+    return "powershell-over-2gb";
   return logTail ? "unbounded-log-tail" : "process";
 }
 
 /** True when the ppid chain from a record cannot reach its root or init (a parent exited). */
-function lineageBroken(record: ProcessRecord, byPid: Map<number, ResourceProcess>): boolean {
+function lineageBroken(
+  record: ProcessRecord,
+  byPid: Map<number, ResourceProcess>
+): boolean {
   if (record.kind === "test-fixture") return false;
   const seen = new Set<number>();
   let row = byPid.get(record.pid);
   while (row && !seen.has(row.pid)) {
     seen.add(row.pid);
-    if (row.pid === record.rootPid || row.ppid === 0 || row.ppid === 1) return false;
+    if (row.pid === record.rootPid || row.ppid === 0 || row.ppid === 1)
+      return false;
     const parent = byPid.get(row.ppid);
     if (!parent || !bornAfter(row.birth, parent.birth)) return true;
     row = parent;
@@ -115,7 +149,9 @@ function lineageBroken(record: ProcessRecord, byPid: Map<number, ResourceProcess
 }
 
 export interface SimulatorTable {
-  inspect(udid: string): Promise<{ booted: boolean; pid: number | null; birth: string | null }>;
+  inspect(
+    udid: string
+  ): Promise<{ booted: boolean; pid: number | null; birth: string | null }>;
   shutdown(udid: string): Promise<void>;
   inUse?(udid: string): Promise<boolean>;
 }
@@ -129,6 +165,9 @@ interface Options {
   /** Unknown or unreadable session state must return true. */
   fixtureInUse?: (cwd: string, pid: number, birth: string) => Promise<boolean>;
   readProcesses?: () => Promise<ResourceProcess[]>;
+  /** Two reads for one sample. Default: two calls of readProcesses. */
+  readProcessPair?: () => Promise<[ResourceProcess[], ResourceProcess[]]>;
+  sampleIntervalMs?: number;
   signal?: (pid: number, signal: NodeJS.Signals) => unknown;
   simulators?: SimulatorTable;
   now?: () => number;
@@ -140,7 +179,7 @@ export function protectedSessionProcess(row: ResourceProcess): boolean {
   return (
     Boolean(row.protectionReason) ||
     /^(?:fulcra(?:[ ._-].*)?|chrome|msedge|spotify|discord|explorer|mail|chatgpt|codex|ollama|steam|msiexec|trustedinstaller|tiworker|setup|update|squirrel)(?:\.exe)?$/i.test(
-      row.command,
+      row.command
     ) ||
     row.pid === process.pid ||
     !row.command ||
@@ -148,7 +187,7 @@ export function protectedSessionProcess(row: ResourceProcess): boolean {
     /(?:Fulcra (?:Supervisor|Daemon))/.test(row.command) ||
     /\/orca-service-releases[^/]*\//.test(row.command) ||
     /\/(?:Fulcra|Google Chrome|Spotify|Discord|Finder|Mail|ChatGPT|Codex|Ollama)\.app\//.test(
-      row.command,
+      row.command
     ) ||
     Boolean(row.serviceLabel?.startsWith("dev.fulcra."))
   );
@@ -157,16 +196,23 @@ export function protectedSessionProcess(row: ResourceProcess): boolean {
 /** Read identities and program names only. Never collect arguments or environments. */
 export async function readResourceProcesses(
   windowsPolicyFile?: string,
-  onStaleInstallRoot?: (root: { pid: number; birth: string }) => void,
+  onStaleInstallRoot?: (root: { pid: number; birth: string }) => void
 ): Promise<ResourceProcess[]> {
   if (process.platform === "win32")
     return readWindowsResourceProcesses(windowsPolicyFile, onStaleInstallRoot);
   const identities = await readOwnedProcessTable();
-  const { stdout } = await exec("ps", ["-axo", "pid=,ppid=,etime=,rss=,comm="], {
-    timeout: 5_000,
-    maxBuffer: 16 * 1024 * 1024,
-  });
-  const names = new Map<number, { command: string; rssKiB: number; ageSeconds?: number }>();
+  const { stdout } = await exec(
+    "ps",
+    ["-axo", "pid=,ppid=,etime=,rss=,comm="],
+    {
+      timeout: 5_000,
+      maxBuffer: 16 * 1024 * 1024,
+    }
+  );
+  const names = new Map<
+    number,
+    { command: string; rssKiB: number; ageSeconds?: number }
+  >();
   for (const line of stdout.split("\n")) {
     const match = /^\s*(\d+)\s+\d+\s+(\S+)\s+(\d+)\s+(.+?)\s*$/.exec(line);
     if (match)
@@ -190,7 +236,9 @@ export async function readResourceProcesses(
   }
   const rows = identities.flatMap((identity) => {
     const name = names.get(identity.pid);
-    return name ? [{ ...identity, ...name, serviceLabel: labels.get(identity.pid) }] : [];
+    return name
+      ? [{ ...identity, ...name, serviceLabel: labels.get(identity.pid) }]
+      : [];
   });
   await populateFixtureCwds(rows);
   return rows;
@@ -213,15 +261,22 @@ async function populateFixtureCwds(rows: ResourceProcess[]): Promise<void> {
       row.ppid === 1 &&
       !row.serviceLabel &&
       /(?:^|\/)node$/.test(row.command) &&
-      (row.ageSeconds ?? 0) > TEST_FIXTURE_MIN_AGE_SECONDS,
+      (row.ageSeconds ?? 0) > TEST_FIXTURE_MIN_AGE_SECONDS
   );
   if (candidates.length === 0 || candidates.length > 128) return;
   try {
     if (process.platform === "darwin") {
       const result = await exec(
         "lsof",
-        ["-a", "-p", candidates.map((row) => row.pid).join(","), "-d", "cwd", "-Fpn"],
-        { timeout: 5_000, maxBuffer: 1024 * 1024 },
+        [
+          "-a",
+          "-p",
+          candidates.map((row) => row.pid).join(","),
+          "-d",
+          "cwd",
+          "-Fpn",
+        ],
+        { timeout: 5_000, maxBuffer: 1024 * 1024 }
       );
       applyFixtureCwds(candidates, result.stdout);
     } else if (process.platform === "linux") {
@@ -232,7 +287,7 @@ async function populateFixtureCwds(rows: ResourceProcess[]): Promise<void> {
           } catch {
             /* Missing cwd never admits a fixture. */
           }
-        }),
+        })
       );
     }
   } catch {
@@ -243,34 +298,58 @@ async function populateFixtureCwds(rows: ResourceProcess[]): Promise<void> {
 export function systemSimulators(): SimulatorTable {
   return {
     async inUse() {
-      const { stdout } = await exec("ps", ["-axo", "pid=,ppid=,etime=,rss=,comm="], {
-        timeout: 5_000,
-        maxBuffer: 16 * 1024 * 1024,
-      });
+      const { stdout } = await exec(
+        "ps",
+        ["-axo", "pid=,ppid=,etime=,rss=,comm="],
+        {
+          timeout: 5_000,
+          maxBuffer: 16 * 1024 * 1024,
+        }
+      );
       return stdout
         .split("\n")
-        .some((line) => /\/Simulator\.app\/|(?:^|[/\s])(?:xcodebuild|flutter|dart)$/.test(line));
+        .some((line) =>
+          /\/Simulator\.app\/|(?:^|[/\s])(?:xcodebuild|flutter|dart)$/.test(
+            line
+          )
+        );
     },
     async inspect(udid) {
-      if (process.platform !== "darwin") return { booted: false, pid: null, birth: null };
-      const { stdout } = await exec("xcrun", ["simctl", "list", "devices", "--json"], {
-        timeout: 10_000,
-      });
+      if (process.platform !== "darwin")
+        return { booted: false, pid: null, birth: null };
+      const { stdout } = await exec(
+        "xcrun",
+        ["simctl", "list", "devices", "--json"],
+        {
+          timeout: 10_000,
+        }
+      );
       const devices = JSON.parse(stdout) as {
         devices: Record<string, { udid: string; state: string }[]>;
       };
       const booted = Object.values(devices.devices)
         .flat()
-        .some((d) => d.udid.toLowerCase() === udid.toLowerCase() && d.state === "Booted");
+        .some(
+          (d) =>
+            d.udid.toLowerCase() === udid.toLowerCase() && d.state === "Booted"
+        );
       if (!booted) return { booted: false, pid: null, birth: null };
-      const manager = await exec("xcrun", ["simctl", "spawn", udid, "launchctl", "managerpid"], {
-        timeout: 10_000,
-      });
+      const manager = await exec(
+        "xcrun",
+        ["simctl", "spawn", udid, "launchctl", "managerpid"],
+        {
+          timeout: 10_000,
+        }
+      );
       const pid = Number(manager.stdout.trim());
       const identity = (await readOwnedProcessTable()).find(
-        (row) => row.pid === pid && !row.zombie,
+        (row) => row.pid === pid && !row.zombie
       );
-      return { booted: true, pid: identity?.pid ?? null, birth: identity?.birth ?? null };
+      return {
+        booted: true,
+        pid: identity?.pid ?? null,
+        birth: identity?.birth ?? null,
+      };
     },
     async shutdown(udid) {
       await exec("xcrun", ["simctl", "shutdown", udid], { timeout: 20_000 });
@@ -278,17 +357,21 @@ export function systemSimulators(): SimulatorTable {
   };
 }
 
-function simulatorCommand(item: ToolCallTimelineItem): { action: string; udid: string } | null {
+function simulatorCommand(
+  item: ToolCallTimelineItem
+): { action: string; udid: string } | null {
   if (item.detail.type !== "shell") return null;
   const command = item.detail.command.trim();
   const match =
     /^(?:\/usr\/bin\/)?xcrun\s+simctl\s+(boot|bootstatus|install|launch|spawn|io|ui)\s+["']?([a-fA-F0-9-]{36})["']?(?:\s.*)?$/.exec(
-      command,
+      command
     );
   if (!match || !z.string().uuid().safeParse(match[2]).success) return null;
   if (
     match[1] === "boot" &&
-    !/^(?:\/usr\/bin\/)?xcrun\s+simctl\s+boot\s+["']?[a-fA-F0-9-]{36}["']?\s*$/.test(command)
+    !/^(?:\/usr\/bin\/)?xcrun\s+simctl\s+boot\s+["']?[a-fA-F0-9-]{36}["']?\s*$/.test(
+      command
+    )
   )
     return null;
   return { action: match[1]!, udid: match[2]! };
@@ -297,7 +380,7 @@ function simulatorCommand(item: ToolCallTimelineItem): { action: string; udid: s
 function simulatorUseCommand(shell: string): boolean {
   if (
     /\b(?:xcodebuild|simctl)\b|\bflutter\s+(?:run|test|drive)\b|\bcap(?:acitor)?\s+run\b|\bSimulator\b|[\w.-]*(?:ios|simulator)[\w.-]*\.sh/.test(
-      shell,
+      shell
     )
   )
     return true;
@@ -312,6 +395,9 @@ function simulatorUseCommand(shell: string): boolean {
 export class SessionResources {
   private readonly options: Options;
   private readonly read: () => Promise<ResourceProcess[]>;
+  private readonly readPair: () => Promise<
+    [ResourceProcess[], ResourceProcess[]]
+  >;
   private readonly signal: (pid: number, signal: NodeJS.Signals) => unknown;
   private readonly simulators: SimulatorTable;
   private readonly now: () => number;
@@ -327,14 +413,17 @@ export class SessionResources {
   private mode(): ResourceCleanupMode {
     return typeof this.options.mode === "function"
       ? this.options.mode()
-      : (this.options.mode ?? "on");
+      : this.options.mode ?? "on";
   }
   private attempt(operation: () => Promise<void>): Promise<void> {
     if (this.mode() === "off") return Promise.resolve();
     return this.serial(operation).catch(() => this.warn());
   }
   private readonly logReaders = new Set<string>();
-  private readonly boots = new Map<string, { root: Root; udid: string; shutdown: boolean }>();
+  private readonly boots = new Map<
+    string,
+    { root: Root; udid: string; shutdown: boolean }
+  >();
   private readonly bootUsers = new Map<
     string,
     Map<string, { agentId: string; instanceId: string }>
@@ -343,18 +432,27 @@ export class SessionResources {
   constructor(options: Options) {
     this.options = options;
     const warnedStale = new Set<string>();
+    const onStale = (root: { pid: number; birth: string }) => {
+      const key = `${root.pid}:${root.birth}`;
+      if (warnedStale.has(key)) return;
+      warnedStale.add(key);
+      options.logger.warn(
+        { pid: root.pid },
+        "Ignoring a stale install root in the Windows resource policy"
+      );
+    };
     this.read =
       options.readProcesses ??
-      (() =>
-        readResourceProcesses(options.windowsPolicyFile, (root) => {
-          const key = `${root.pid}:${root.birth}`;
-          if (warnedStale.has(key)) return;
-          warnedStale.add(key);
-          options.logger.warn(
-            { pid: root.pid },
-            "Ignoring a stale install root in the Windows resource policy",
-          );
-        }));
+      (() => readResourceProcesses(options.windowsPolicyFile, onStale));
+    this.readPair =
+      options.readProcessPair ??
+      (!options.readProcesses && process.platform === "win32"
+        ? () =>
+            readWindowsResourceProcessPair(options.windowsPolicyFile, onStale)
+        : async () => {
+            const first = await this.read();
+            return [first, await this.read()];
+          });
     this.signal = options.signal ?? process.kill;
     this.now = options.now ?? Date.now;
     this.simulators = options.simulators ?? systemSimulators();
@@ -369,7 +467,7 @@ export class SessionResources {
         .finally(() => {
           this.sampling = false;
         });
-    }, 5_000);
+    }, this.options.sampleIntervalMs ?? (process.platform === "win32" ? WINDOWS_SAMPLE_INTERVAL_MS : SAMPLE_INTERVAL_MS));
     this.sweepTimer = setInterval(() => {
       void this.sweep().catch(() => this.warn());
     }, ORPHAN_INTERVAL_MS);
@@ -386,7 +484,9 @@ export class SessionResources {
   private warn(): void {
     if (this.now() - this.lastWarningAt < 5 * 60 * 1_000) return;
     this.lastWarningAt = this.now();
-    this.options.logger.warn("Session resource cleanup failed; retained targets for retry");
+    this.options.logger.warn(
+      "Session resource cleanup failed; retained targets for retry"
+    );
   }
   private serial<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.tail.catch(() => undefined).then(operation);
@@ -406,7 +506,10 @@ export class SessionResources {
       return ledgerSchema.parse(JSON.parse(text));
     } catch {
       // Preserve corrupt proof. Do not adopt or stop anything during this operation.
-      await fs.rename(this.options.file, `${this.options.file}.corrupt-${randomUUID()}`);
+      await fs.rename(
+        this.options.file,
+        `${this.options.file}.corrupt-${randomUUID()}`
+      );
       this.warn();
       return null;
     }
@@ -419,7 +522,7 @@ export class SessionResources {
     return this.attempt(async () => {
       const roots = this.options.roots();
       if (!roots.length) return;
-      const rows = await this.read();
+      const [rows, freshRows] = await this.readPair();
       const ledger = await this.load();
       if (!ledger) return;
       const previous = JSON.stringify(ledger);
@@ -430,7 +533,8 @@ export class SessionResources {
         // Windows never reparents: a record whose middle parent exited can never be proven
         // owned, so stop tracking it after the orphan delay. It is never signalled.
         return !(
-          this.now() - record.observedAt > ORPHAN_INTERVAL_MS && lineageBroken(record, byPid)
+          this.now() - record.observedAt > ORPHAN_INTERVAL_MS &&
+          lineageBroken(record, byPid)
         );
       });
       const liveRoots = this.options.roots();
@@ -440,27 +544,37 @@ export class SessionResources {
             (r) =>
               r.agentId === binding.agentId &&
               r.instanceId === binding.instanceId &&
-              r.pid === binding.pid,
+              r.pid === binding.pid
           )
         )
           return true;
         const row = byPid.get(binding.pid);
         return Boolean(row && !row.zombie && row.birth === binding.birth);
       });
-      const fresh = new Map((await this.read()).map((row) => [row.pid, row]));
+      const fresh = new Map(freshRows.map((row) => [row.pid, row]));
       const currentRoots = this.options.roots();
       const rootPids = new Set(currentRoots.map((root) => root.pid));
       for (const root of roots) {
         if (
           !currentRoots.some(
             (r) =>
-              r.agentId === root.agentId && r.instanceId === root.instanceId && r.pid === root.pid,
+              r.agentId === root.agentId &&
+              r.instanceId === root.instanceId &&
+              r.pid === root.pid
           )
         )
           continue;
         const processRoot = this.bindRoot(root, byPid, fresh, ledger);
         if (processRoot)
-          this.captureChildren(root, processRoot, rows, byPid, fresh, rootPids, ledger);
+          this.captureChildren(
+            root,
+            processRoot,
+            rows,
+            byPid,
+            fresh,
+            rootPids,
+            ledger
+          );
       }
       if (JSON.stringify(ledger) !== previous) await this.save(ledger);
     });
@@ -469,12 +583,20 @@ export class SessionResources {
     root: Root,
     rows: Map<number, ResourceProcess>,
     fresh: Map<number, ResourceProcess>,
-    ledger: Ledger,
+    ledger: Ledger
   ): ResourceProcess | null {
     const current = rows.get(root.pid);
-    if (!current || current.zombie || fresh.get(root.pid)?.birth !== current.birth) return null;
+    if (
+      !current ||
+      current.zombie ||
+      fresh.get(root.pid)?.birth !== current.birth
+    )
+      return null;
     const binding = ledger.roots.find(
-      (r) => r.agentId === root.agentId && r.instanceId === root.instanceId && r.pid === root.pid,
+      (r) =>
+        r.agentId === root.agentId &&
+        r.instanceId === root.instanceId &&
+        r.pid === root.pid
     );
     if (binding && binding.birth !== current.birth) return null;
     if (!binding) ledger.roots.push({ ...root, birth: current.birth });
@@ -487,13 +609,18 @@ export class SessionResources {
     byPid: Map<number, ResourceProcess>,
     fresh: Map<number, ResourceProcess>,
     rootPids: Set<number>,
-    ledger: Ledger,
+    ledger: Ledger
   ): void {
     const queue = [root.pid],
       seen = new Set(queue);
-    for (let parent = queue.shift(); parent !== undefined; parent = queue.shift()) {
+    for (
+      let parent = queue.shift();
+      parent !== undefined;
+      parent = queue.shift()
+    ) {
       for (const row of rows) {
-        if (row.ppid !== parent || seen.has(row.pid) || rootPids.has(row.pid)) continue;
+        if (row.ppid !== parent || seen.has(row.pid) || rootPids.has(row.pid))
+          continue;
         if (!this.validChild(row, byPid.get(parent), fresh)) continue;
         seen.add(row.pid);
         queue.push(row.pid);
@@ -504,9 +631,10 @@ export class SessionResources {
   private validChild(
     row: ResourceProcess,
     parent: ResourceProcess | undefined,
-    fresh: Map<number, ResourceProcess>,
+    fresh: Map<number, ResourceProcess>
   ): boolean {
-    if (!parent || row.zombie || row.protectionReason?.startsWith("install")) return false;
+    if (!parent || row.zombie || row.protectionReason?.startsWith("install"))
+      return false;
     return (
       fresh.get(parent.pid)?.birth === parent.birth &&
       fresh.get(row.pid)?.birth === row.birth &&
@@ -519,15 +647,21 @@ export class SessionResources {
     ledger: Ledger,
     root: Root,
     processRoot: ResourceProcess,
-    row: ResourceProcess,
+    row: ResourceProcess
   ): void {
-    const existing = ledger.processes.find((p) => p.pid === row.pid && p.birth === row.birth);
-    if (existing && (existing.agentId !== root.agentId || existing.instanceId !== root.instanceId))
+    const existing = ledger.processes.find(
+      (p) => p.pid === row.pid && p.birth === row.birth
+    );
+    if (
+      existing &&
+      (existing.agentId !== root.agentId ||
+        existing.instanceId !== root.instanceId)
+    )
       return;
     const kind = resourceKind(
       row,
       existing?.kind === "unbounded-log-tail" ||
-        this.logReaders.has(`${root.agentId}:${root.instanceId}`),
+        this.logReaders.has(`${root.agentId}:${root.instanceId}`)
     );
     if (existing) {
       existing.rootPid = root.pid;
@@ -553,7 +687,11 @@ export class SessionResources {
   sweep(): Promise<void> {
     return this.attempt(() => this.clean());
   }
-  closeOwner(agentId: string, instanceId: string, admitted: () => boolean): Promise<void> {
+  closeOwner(
+    agentId: string,
+    instanceId: string,
+    admitted: () => boolean
+  ): Promise<void> {
     return this.attempt(() => this.clean({ agentId, instanceId, admitted }));
   }
   private async clean(close?: {
@@ -565,9 +703,16 @@ export class SessionResources {
     if (!ledger) return;
     if (!close && this.options.fixtureInUse) {
       for (const row of await this.read()) {
-        if (!oldTestFixture(row) || (await this.options.fixtureInUse(row.cwd!, row.pid, row.birth)))
+        if (
+          !oldTestFixture(row) ||
+          (await this.options.fixtureInUse(row.cwd!, row.pid, row.birth))
+        )
           continue;
-        if (ledger.processes.some((record) => record.pid === row.pid && record.birth === row.birth))
+        if (
+          ledger.processes.some(
+            (record) => record.pid === row.pid && record.birth === row.birth
+          )
+        )
           continue;
         ledger.processes.push({
           agentId: "fulcra-test-fixture",
@@ -591,7 +736,9 @@ export class SessionResources {
           close.admitted()
         );
       if ("kind" in record && record.kind === "test-fixture")
-        return this.now() - record.observedAt > TEST_FIXTURE_MIN_AGE_SECONDS * 1_000;
+        return (
+          this.now() - record.observedAt > TEST_FIXTURE_MIN_AGE_SECONDS * 1_000
+        );
       return (
         this.now() - record.observedAt > ORPHAN_INTERVAL_MS &&
         this.options.ownerState(record.agentId) === "inactive"
@@ -603,7 +750,7 @@ export class SessionResources {
   private async signalRecord(
     record: ProcessRecord,
     admitted: (record: ProcessRecord) => boolean,
-    signal: NodeJS.Signals,
+    signal: NodeJS.Signals
   ): Promise<"gone" | "kept" | "signaled"> {
     if (this.mode() === "off" || !admitted(record)) return "kept";
     const rows = await this.read();
@@ -620,10 +767,19 @@ export class SessionResources {
     });
     const freshRows = await this.read();
     const fresh = freshRows.find((r) => r.pid === record.pid);
-    if (!fresh || !(await this.canSignal(record, freshRows)) || !admitted(record)) return "kept";
+    if (
+      !fresh ||
+      !(await this.canSignal(record, freshRows)) ||
+      !admitted(record)
+    )
+      return "kept";
     if (this.mode() !== "on") {
       if (this.mode() === "dry-run")
-        await this.log({ action: "dry-run-stop", ...record, rssKiB: fresh.rssKiB });
+        await this.log({
+          action: "dry-run-stop",
+          ...record,
+          rssKiB: fresh.rssKiB,
+        });
       return "kept";
     }
     try {
@@ -647,7 +803,7 @@ export class SessionResources {
   }
   private async stopProcesses(
     ledger: Ledger,
-    admitted: (record: ProcessRecord) => boolean,
+    admitted: (record: ProcessRecord) => boolean
   ): Promise<void> {
     const signaled: ProcessRecord[] = [];
     if (!ledger.processes.some(admitted)) return;
@@ -661,7 +817,11 @@ export class SessionResources {
     const records = ledger.processes;
     for (let index = records.length - 1; index >= 0; index -= 1) {
       const record = records[index]!;
-      const outcome = await this.signalRecord(record, admitted, "SIGTERM").catch(() => {
+      const outcome = await this.signalRecord(
+        record,
+        admitted,
+        "SIGTERM"
+      ).catch(() => {
         this.warn();
         return "kept" as const;
       });
@@ -671,11 +831,17 @@ export class SessionResources {
       } else if (outcome === "signaled") signaled.push(record);
     }
     if (signaled.length === 0) return;
-    await new Promise((resolve) => setTimeout(resolve, this.options.gracefulTimeoutMs ?? 2_000));
+    await new Promise((resolve) =>
+      setTimeout(resolve, this.options.gracefulTimeoutMs ?? 2_000)
+    );
     for (const record of signaled)
-      await this.signalRecord(record, admitted, "SIGKILL").catch(() => this.warn());
+      await this.signalRecord(record, admitted, "SIGKILL").catch(() =>
+        this.warn()
+      );
     // One bounded grace period, then prove exit before completing a close.
-    await new Promise((resolve) => setTimeout(resolve, this.options.gracefulTimeoutMs ?? 100));
+    await new Promise((resolve) =>
+      setTimeout(resolve, this.options.gracefulTimeoutMs ?? 100)
+    );
     const remaining = new Map((await this.read()).map((row) => [row.pid, row]));
     let pending = false;
     for (const record of signaled) {
@@ -691,7 +857,7 @@ export class SessionResources {
   }
   private async stopSimulators(
     ledger: Ledger,
-    admitted: (record: SimulatorRecord) => boolean,
+    admitted: (record: SimulatorRecord) => boolean
   ): Promise<void> {
     for (const record of ledger.simulators) {
       try {
@@ -703,7 +869,7 @@ export class SessionResources {
   }
   private simulatorAdmitted(
     record: SimulatorRecord,
-    admitted: (record: SimulatorRecord) => boolean,
+    admitted: (record: SimulatorRecord) => boolean
   ): boolean {
     return (
       this.mode() !== "off" &&
@@ -711,21 +877,24 @@ export class SessionResources {
       !this.simulatorInUse(record) &&
       !record.users.some(
         (user) =>
-          (user.agentId !== record.agentId || user.instanceId !== record.instanceId) &&
-          this.options.ownerState(user.agentId) !== "inactive",
+          (user.agentId !== record.agentId ||
+            user.instanceId !== record.instanceId) &&
+          this.options.ownerState(user.agentId) !== "inactive"
       )
     );
   }
   private simulatorMatches(
     record: SimulatorRecord,
-    state: { booted: boolean; pid: number | null; birth: string | null },
+    state: { booted: boolean; pid: number | null; birth: string | null }
   ): boolean {
-    return state.booted && state.pid === record.pid && state.birth === record.birth;
+    return (
+      state.booted && state.pid === record.pid && state.birth === record.birth
+    );
   }
   private async stopSimulator(
     record: SimulatorRecord,
     ledger: Ledger,
-    admitted: (record: SimulatorRecord) => boolean,
+    admitted: (record: SimulatorRecord) => boolean
   ): Promise<void> {
     const allowed = () => this.simulatorAdmitted(record, admitted);
     if (!allowed()) return;
@@ -751,21 +920,39 @@ export class SessionResources {
     await this.save(ledger);
   }
   private simulatorInUse(record: SimulatorRecord): boolean {
-    return [this.simulatorUsers.get(record.udid), this.simulatorUsers.get("*")].some((users) =>
+    return [
+      this.simulatorUsers.get(record.udid),
+      this.simulatorUsers.get("*"),
+    ].some((users) =>
       [...(users?.values() ?? [])].some(
         (user) =>
-          (user.agentId !== record.agentId || user.instanceId !== record.instanceId) &&
-          this.options.ownerState(user.agentId) !== "inactive",
-      ),
+          (user.agentId !== record.agentId ||
+            user.instanceId !== record.instanceId) &&
+          this.options.ownerState(user.agentId) !== "inactive"
+      )
     );
   }
-  private async validFixture(record: ProcessRecord, target: ResourceProcess): Promise<boolean> {
+  private async validFixture(
+    record: ProcessRecord,
+    target: ResourceProcess
+  ): Promise<boolean> {
     if (record.kind !== "test-fixture") return true;
-    if (!oldTestFixture(target) || target.cwd !== record.fixtureCwd || !this.options.fixtureInUse)
+    if (
+      !oldTestFixture(target) ||
+      target.cwd !== record.fixtureCwd ||
+      !this.options.fixtureInUse
+    )
       return false;
-    return !(await this.options.fixtureInUse(target.cwd!, target.pid, target.birth));
+    return !(await this.options.fixtureInUse(
+      target.cwd!,
+      target.pid,
+      target.birth
+    ));
   }
-  private async canSignal(record: ProcessRecord, rows: ResourceProcess[]): Promise<boolean> {
+  private async canSignal(
+    record: ProcessRecord,
+    rows: ResourceProcess[]
+  ): Promise<boolean> {
     const byPid = new Map(rows.map((row) => [row.pid, row]));
     const target = byPid.get(record.pid);
     if (!target || target.birth !== record.birth || target.zombie) return false;
@@ -773,7 +960,9 @@ export class SessionResources {
     const roots = this.options.roots();
     if (
       record.kind !== "test-fixture" &&
-      (!record.rootBirth || !record.rootPid || !bornAfter(record.birth, record.rootBirth))
+      (!record.rootBirth ||
+        !record.rootPid ||
+        !bornAfter(record.birth, record.rootBirth))
     )
       return false;
     const seen = new Set<number>();
@@ -785,7 +974,8 @@ export class SessionResources {
         roots.some(
           (root) =>
             root.pid === row.pid &&
-            (root.agentId !== record.agentId || root.instanceId !== record.instanceId),
+            (root.agentId !== record.agentId ||
+              root.instanceId !== record.instanceId)
         )
       )
         return false;
@@ -800,8 +990,9 @@ export class SessionResources {
   private async log(entry: object): Promise<void> {
     await fs.appendFile(
       `${this.options.file}.stops.jsonl`,
-      JSON.stringify({ at: new Date(this.now()).toISOString(), ...entry }) + "\n",
-      { mode: 0o600 },
+      JSON.stringify({ at: new Date(this.now()).toISOString(), ...entry }) +
+        "\n",
+      { mode: 0o600 }
     );
     this.options.logger.info(entry, "Session resource cleanup");
   }
@@ -811,14 +1002,15 @@ export class SessionResources {
     key: string,
     udid: string,
     owned: SimulatorRecord | undefined,
-    ledger: Ledger,
+    ledger: Ledger
   ): Promise<void> {
     const before = await this.simulators.inspect(udid);
     if (!before.booted && owned) {
       ledger.simulators = ledger.simulators.filter((s) => s !== owned);
       await this.save(ledger);
     }
-    if (!before.booted && !this.bootUsers.has(udid)) this.bootUsers.set(udid, new Map());
+    if (!before.booted && !this.bootUsers.has(udid))
+      this.bootUsers.set(udid, new Map());
     this.boots.set(key, { root, udid, shutdown: !before.booted });
   }
 
@@ -826,7 +1018,7 @@ export class SessionResources {
     root: Root,
     udid: string,
     owned: SimulatorRecord | undefined,
-    ledger: Ledger,
+    ledger: Ledger
   ): Promise<void> {
     const pendingUsers = this.bootUsers.get(udid);
     if (pendingUsers)
@@ -836,7 +1028,9 @@ export class SessionResources {
       });
     if (
       owned &&
-      !owned.users.some((u) => u.agentId === root.agentId && u.instanceId === root.instanceId)
+      !owned.users.some(
+        (u) => u.agentId === root.agentId && u.instanceId === root.instanceId
+      )
     ) {
       owned.users.push({ agentId: root.agentId, instanceId: root.instanceId });
       await this.save(ledger);
@@ -848,7 +1042,7 @@ export class SessionResources {
     udid: string,
     owned: SimulatorRecord | undefined,
     ledger: Ledger,
-    item: ToolCallTimelineItem,
+    item: ToolCallTimelineItem
   ): Promise<void> {
     const pending = this.boots.get(key);
     this.boots.delete(key);
@@ -863,7 +1057,9 @@ export class SessionResources {
     if (
       !this.options
         .roots()
-        .some((r) => r.agentId === root.agentId && r.instanceId === root.instanceId)
+        .some(
+          (r) => r.agentId === root.agentId && r.instanceId === root.instanceId
+        )
     )
       return;
     const after = await this.simulators.inspect(udid);
@@ -898,9 +1094,11 @@ export class SessionResources {
     const command = simulatorCommand(item);
     const simulatorUse = simulatorUseCommand(shell);
     if (!command && !simulatorUse) return Promise.resolve();
-    const ids = [...shell.matchAll(/[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}/g)].map(
-      (m) => m[0].toUpperCase(),
-    );
+    const ids = [
+      ...shell.matchAll(
+        /[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}/g
+      ),
+    ].map((m) => m[0].toUpperCase());
     for (const id of ids.length ? ids : ["*"]) {
       const users = this.simulatorUsers.get(id) ?? new Map();
       users.set(`${root.agentId}:${root.instanceId}`, {

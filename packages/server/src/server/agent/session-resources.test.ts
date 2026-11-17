@@ -7,6 +7,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   SessionResources,
   ORPHAN_INTERVAL_MS,
+  defaultSampleIntervalMs,
   type ResourceProcess,
   type SimulatorTable,
 } from "./session-resources.js";
@@ -32,7 +33,9 @@ const child: ResourceProcess = {
 };
 const directories: string[] = [];
 afterEach(async () => {
-  await Promise.all(directories.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+  await Promise.all(
+    directories.splice(0).map((d) => rm(d, { recursive: true, force: true }))
+  );
 });
 
 async function fixture() {
@@ -45,7 +48,8 @@ async function fixture() {
   const options = {
     file: join(directory, "resources.json"),
     logger: createTestLogger(),
-    roots: () => (live ? [{ agentId: "owner", instanceId: "generation", pid: 100 }] : []),
+    roots: () =>
+      live ? [{ agentId: "owner", instanceId: "generation", pid: 100 }] : [],
     ownerState: () => (live ? ("live" as const) : ("inactive" as const)),
     readProcesses: async () => rows,
     signal: (pid: number) => {
@@ -76,12 +80,22 @@ describe("session resource cleanup", () => {
   test("sweeps only old unused orphan test fixtures", async () => {
     const f = await fixture();
     f.setLive(false);
-    f.setRows([{ ...child, ppid: 1, cwd: "/private/tmp/paseo-omp-agent-test", ageSeconds: 7201 }]);
-    const tracker = new SessionResources({ ...f.options, fixtureInUse: async () => false });
+    f.setRows([
+      {
+        ...child,
+        ppid: 1,
+        cwd: "/private/tmp/paseo-omp-agent-test",
+        ageSeconds: 7201,
+      },
+    ]);
+    const tracker = new SessionResources({
+      ...f.options,
+      fixtureInUse: async () => false,
+    });
     await tracker.sweep();
     expect(f.stopped).toEqual([101]);
     expect(await readFile(`${f.options.file}.stops.jsonl`, "utf8")).toContain(
-      '"kind":"test-fixture"',
+      '"kind":"test-fixture"'
     );
   });
   test.each([
@@ -92,27 +106,46 @@ describe("session resource cleanup", () => {
     { ppid: 200 },
     { serviceLabel: "dev.fulcra.fixture" },
     { zombie: true },
-  ])("keeps a process outside the exact old fixture rule: %j", async (change) => {
-    const f = await fixture();
-    f.setLive(false);
-    f.setRows([
-      { ...child, ppid: 1, cwd: "/tmp/paseo-omp-agent-test", ageSeconds: 7201, ...change },
-    ]);
-    await new SessionResources({ ...f.options, fixtureInUse: async () => false }).sweep();
-    expect(f.stopped).toEqual([]);
-  });
+  ])(
+    "keeps a process outside the exact old fixture rule: %j",
+    async (change) => {
+      const f = await fixture();
+      f.setLive(false);
+      f.setRows([
+        {
+          ...child,
+          ppid: 1,
+          cwd: "/tmp/paseo-omp-agent-test",
+          ageSeconds: 7201,
+          ...change,
+        },
+      ]);
+      await new SessionResources({
+        ...f.options,
+        fixtureInUse: async () => false,
+      }).sweep();
+      expect(f.stopped).toEqual([]);
+    }
+  );
   test("keeps live and unknown fixture owners", async () => {
     const f = await fixture();
     f.setLive(false);
-    f.setRows([{ ...child, ppid: 1, cwd: "/tmp/paseo-omp-agent-test", ageSeconds: 7201 }]);
-    await new SessionResources({ ...f.options, fixtureInUse: async () => true }).sweep();
+    f.setRows([
+      { ...child, ppid: 1, cwd: "/tmp/paseo-omp-agent-test", ageSeconds: 7201 },
+    ]);
+    await new SessionResources({
+      ...f.options,
+      fixtureInUse: async () => true,
+    }).sweep();
     await new SessionResources(f.options).sweep();
     expect(f.stopped).toEqual([]);
   });
   test("checks fixture use again immediately before a stop", async () => {
     const f = await fixture();
     f.setLive(false);
-    f.setRows([{ ...child, ppid: 1, cwd: "/tmp/paseo-omp-agent-test", ageSeconds: 7201 }]);
+    f.setRows([
+      { ...child, ppid: 1, cwd: "/tmp/paseo-omp-agent-test", ageSeconds: 7201 },
+    ]);
     let inspections = 0;
     await new SessionResources({
       ...f.options,
@@ -124,12 +157,19 @@ describe("session resource cleanup", () => {
     for (const changed of [{ cwd: "/tmp/user-app" }, { birth: "new" }]) {
       const f = await fixture();
       f.setLive(false);
-      const row = { ...child, ppid: 1, cwd: "/tmp/paseo-omp-agent-test", ageSeconds: 7201 };
+      const row = {
+        ...child,
+        ppid: 1,
+        cwd: "/tmp/paseo-omp-agent-test",
+        ageSeconds: 7201,
+      };
       let reads = 0;
       await new SessionResources({
         ...f.options,
         fixtureInUse: async () => false,
-        readProcesses: async () => [++reads >= 3 ? { ...row, ...changed } : row],
+        readProcesses: async () => [
+          ++reads >= 3 ? { ...row, ...changed } : row,
+        ],
       }).sweep();
       expect(f.stopped).toEqual([]);
     }
@@ -149,10 +189,13 @@ describe("session resource cleanup", () => {
   });
   test("logs a closed owner's old PowerShell read over 2 GiB, but preserves its live owner", async () => {
     const f = await fixture();
-    f.setRows([root, { ...child, command: "powershell", privateMemoryBytes: 3 * 1024 ** 3 }]);
+    f.setRows([
+      root,
+      { ...child, command: "powershell", privateMemoryBytes: 3 * 1024 ** 3 },
+    ]);
     await f.tracker.observeTool(
       { agentId: "owner", instanceId: "generation", pid: 100 },
-      bootItem("running", "Get-Content -LiteralPath fixture.log -Wait"),
+      bootItem("running", "Get-Content -LiteralPath fixture.log -Wait")
     );
     await f.tracker.sample();
     f.setNow(ORPHAN_INTERVAL_MS + 1);
@@ -178,7 +221,14 @@ describe("session resource cleanup", () => {
     expect(f.stopped).toEqual([101]);
     expect(JSON.parse(await readFile(f.options.file, "utf8"))).toEqual({
       version: 1,
-      roots: [{ agentId: "owner", instanceId: "generation", pid: 100, birth: "10000" }],
+      roots: [
+        {
+          agentId: "owner",
+          instanceId: "generation",
+          pid: 100,
+          birth: "10000",
+        },
+      ],
       processes: [],
       simulators: [],
     });
@@ -204,13 +254,19 @@ describe("session resource cleanup", () => {
     const grandchild = { ...child, pid: 102, ppid: 101, birth: "30000" };
     f.setRows([root, middle, grandchild]);
     await f.tracker.sample();
-    expect(JSON.parse(await readFile(f.options.file, "utf8")).processes).toHaveLength(2);
+    expect(
+      JSON.parse(await readFile(f.options.file, "utf8")).processes
+    ).toHaveLength(2);
     f.setRows([root, grandchild]);
     await f.tracker.sample();
-    expect(JSON.parse(await readFile(f.options.file, "utf8")).processes).toHaveLength(1);
+    expect(
+      JSON.parse(await readFile(f.options.file, "utf8")).processes
+    ).toHaveLength(1);
     f.setNow(ORPHAN_INTERVAL_MS + 1);
     await f.tracker.sample();
-    expect(JSON.parse(await readFile(f.options.file, "utf8")).processes).toEqual([]);
+    expect(
+      JSON.parse(await readFile(f.options.file, "utf8")).processes
+    ).toEqual([]);
     expect(f.stopped).toEqual([]);
   });
   test("keeps live owners, recent work and reused PIDs", async () => {
@@ -275,7 +331,10 @@ describe("session resource cleanup", () => {
     await f.tracker.sample();
     f.setLive(false);
     f.setNow(ORPHAN_INTERVAL_MS + 1);
-    await new SessionResources({ ...f.options, ownerState: () => "unknown" }).sweep();
+    await new SessionResources({
+      ...f.options,
+      ownerState: () => "unknown",
+    }).sweep();
     await f.tracker.closeOwner("owner", "replacement-generation", () => true);
     await f.tracker.closeOwner("owner", "generation", () => false);
     expect(f.stopped).toEqual([]);
@@ -310,6 +369,49 @@ describe("session resource cleanup", () => {
     expect(f.stopped).toEqual([]);
   });
 
+  test("a sample takes its two table reads in one call, and the Windows timer is slower (FU-792)", async () => {
+    const f = await fixture();
+    const pair = vi.fn(
+      async (): Promise<[ResourceProcess[], ResourceProcess[]]> => [
+        [root, child],
+        [root, child],
+      ]
+    );
+    const read = vi.fn(async () => [root, child]);
+    const tracker = new SessionResources({
+      ...f.options,
+      readProcesses: read,
+      readProcessPair: pair,
+    });
+    await tracker.sample();
+    expect(pair).toHaveBeenCalledTimes(1);
+    expect(read).not.toHaveBeenCalled();
+    const ledger = JSON.parse(await readFile(f.options.file, "utf8"));
+    expect(ledger.processes.map((p: { pid: number }) => p.pid)).toEqual([101]);
+    expect(defaultSampleIntervalMs("darwin")).toBe(5_000);
+    expect(defaultSampleIntervalMs("win32")).toBe(15_000);
+  });
+
+  test("the sample timer follows sampleIntervalMs (FU-792)", async () => {
+    const f = await fixture();
+    const tracker = new SessionResources({
+      ...f.options,
+      sampleIntervalMs: 15_000,
+    });
+    const sample = vi.spyOn(tracker, "sample").mockResolvedValue();
+    vi.useFakeTimers();
+    try {
+      tracker.start();
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(sample).toHaveBeenCalledTimes(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sample).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+      await tracker.stop();
+    }
+  });
+
   test("runs the orphan sweep every 30 minutes and stops both timers", async () => {
     const f = await fixture();
     vi.spyOn(f.tracker, "sample").mockResolvedValue();
@@ -333,14 +435,21 @@ describe("session resource cleanup", () => {
 });
 
 const udid = "00000000-0000-4000-8000-000000000001";
-function bootItem(status: "running" | "completed", command = `xcrun simctl boot ${udid}`) {
+function bootItem(
+  status: "running" | "completed",
+  command = `xcrun simctl boot ${udid}`
+) {
   return {
     type: "tool_call" as const,
     callId: "boot",
     name: "Bash",
     status,
     error: null,
-    detail: { type: "shell" as const, command, exitCode: status === "completed" ? 0 : null },
+    detail: {
+      type: "shell" as const,
+      command,
+      exitCode: status === "completed" ? 0 : null,
+    },
   };
 }
 describe("owned simulators", () => {
@@ -350,7 +459,11 @@ describe("owned simulators", () => {
     let birth = "sim-birth";
     const stopped: string[] = [];
     const simulators: SimulatorTable = {
-      inspect: async () => ({ booted, pid: booted ? 500 : null, birth: booted ? birth : null }),
+      inspect: async () => ({
+        booted,
+        pid: booted ? 500 : null,
+        birth: booted ? birth : null,
+      }),
       shutdown: async (id) => {
         stopped.push(id);
         booted = false;
@@ -385,11 +498,14 @@ describe("owned simulators", () => {
     await f.tracker.observeTool(f.owner, bootItem("running"));
     await f.tracker.observeTool(f.owner, bootItem("completed"));
     f.setBooted(false);
-    await f.tracker.observeTool(f.owner, bootItem("running", `xcrun simctl boot ${udid}; echo ok`));
+    await f.tracker.observeTool(
+      f.owner,
+      bootItem("running", `xcrun simctl boot ${udid}; echo ok`)
+    );
     f.setBooted(true);
     await f.tracker.observeTool(
       f.owner,
-      bootItem("completed", `xcrun simctl boot ${udid}; echo ok`),
+      bootItem("completed", `xcrun simctl boot ${udid}; echo ok`)
     );
     await f.tracker.closeOwner("owner", "generation", () => true);
     expect(f.stopped).toEqual([]);
@@ -401,7 +517,7 @@ describe("owned simulators", () => {
     await f.tracker.observeTool(f.owner, bootItem("completed"));
     await f.tracker.observeTool(
       { ...f.owner, agentId: "other" },
-      bootItem("running", `xcrun simctl io ${udid} screenshot shot.png`),
+      bootItem("running", `xcrun simctl io ${udid} screenshot shot.png`)
     );
     await f.tracker.closeOwner("owner", "generation", () => true);
     expect(f.stopped).toEqual([]);
@@ -417,7 +533,7 @@ describe("owned simulators", () => {
     f.setBooted(true);
     await f.tracker.observeTool(
       { ...f.owner, agentId: "other" },
-      bootItem("completed", `xcrun simctl io ${udid} screenshot shot.png`),
+      bootItem("completed", `xcrun simctl io ${udid} screenshot shot.png`)
     );
     await f.tracker.observeTool(f.owner, bootItem("completed"));
     await f.tracker.closeOwner("owner", "generation", () => true);
@@ -442,13 +558,19 @@ test.skipIf(process.platform === "win32")(
   "native persisted cleanup kills the retained job and preserves an unrelated process",
   async () => {
     const helper = `process.on('SIGTERM',()=>{}); process.send('ready'); setInterval(()=>{},1000)`;
-    const script = `const {spawn}=require('node:child_process'); const c=spawn(process.execPath,['-e',${JSON.stringify(helper)}],{detached:true,stdio:['ignore','ignore','ignore','ipc']}); c.once('message',()=>process.send(c.pid));setInterval(()=>{},1000)`;
+    const script = `const {spawn}=require('node:child_process'); const c=spawn(process.execPath,['-e',${JSON.stringify(
+      helper
+    )}],{detached:true,stdio:['ignore','ignore','ignore','ipc']}); c.once('message',()=>process.send(c.pid));setInterval(()=>{},1000)`;
     const owner = spawn(process.execPath, ["-e", script], {
       stdio: ["ignore", "ignore", "ignore", "ipc"],
     });
-    const unrelated = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
-      stdio: "ignore",
-    });
+    const unrelated = spawn(
+      process.execPath,
+      ["-e", "setInterval(()=>{},1000)"],
+      {
+        stdio: "ignore",
+      }
+    );
     const f = await fixture();
     let childPid: number | undefined;
     let live = true;
@@ -459,7 +581,13 @@ test.skipIf(process.platform === "win32")(
         logger: f.options.logger,
         roots: () =>
           live
-            ? [{ agentId: "native-owner", instanceId: "native-generation", pid: owner.pid! }]
+            ? [
+                {
+                  agentId: "native-owner",
+                  instanceId: "native-generation",
+                  pid: owner.pid!,
+                },
+              ]
             : [],
         ownerState: () => (live ? ("live" as const) : ("inactive" as const)),
         now: () => (live ? 0 : ORPHAN_INTERVAL_MS + 1),
@@ -478,7 +606,9 @@ test.skipIf(process.platform === "win32")(
       expect(() => process.kill(unrelated.pid!, 0)).not.toThrow();
       // A second sweep verifies actual exit and removes the old receipt, including a possible zombie.
       await tracker.sweep();
-      expect(JSON.parse(await readFile(options.file, "utf8")).processes).toEqual([]);
+      expect(
+        JSON.parse(await readFile(options.file, "utf8")).processes
+      ).toEqual([]);
     } finally {
       if (childPid) {
         try {
@@ -487,9 +617,15 @@ test.skipIf(process.platform === "win32")(
           /* exited */
         }
       }
-      await terminateWithTreeKill(owner, { gracefulTimeoutMs: 100, forceTimeoutMs: 100 });
-      await terminateWithTreeKill(unrelated, { gracefulTimeoutMs: 100, forceTimeoutMs: 100 });
+      await terminateWithTreeKill(owner, {
+        gracefulTimeoutMs: 100,
+        forceTimeoutMs: 100,
+      });
+      await terminateWithTreeKill(unrelated, {
+        gracefulTimeoutMs: 100,
+        forceTimeoutMs: 100,
+      });
     }
   },
-  20_000,
+  20_000
 );
