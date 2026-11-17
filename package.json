@@ -124,6 +124,7 @@
     "release:patch": "npm run release:check && npm run version:all:patch && npm run release:publish && npm run release:push",
     "release:minor": "npm run release:check && npm run version:all:minor && npm run release:publish && npm run release:push",
     "release:major": "npm run release:check && npm run version:all:major && npm run release:publish && npm run release:push",
+    "test:clean-test-env": "node --test scripts/clean-test-env.test.mjs",
     "test:bundled-plugins": "node --test scripts/assert-bundled-plugins.test.mjs",
     "test:client-reproducibility": "node --test scripts/client-reproducibility.test.mjs"
   },

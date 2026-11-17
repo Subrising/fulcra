@@ -9,7 +9,7 @@
   ],
   "type": "module",
   "scripts": {
-    "test": "node --test src/*.test.mjs",
+    "test": "node --import ../../scripts/clean-test-env-preload.mjs --test src/*.test.mjs",
     "plugin:validate": "openclaw plugins validate --root . --entry ./src/index.mjs"
   },
   "peerDependencies": {

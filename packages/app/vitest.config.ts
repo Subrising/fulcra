@@ -97,7 +97,10 @@ export default defineConfig({
             "vitest-environment.test.ts",
             "plugins/with-fdroid-autolinking.test.ts",
           ],
-          setupFiles: [path.resolve(__dirname, "vitest.setup.ts")],
+          setupFiles: [
+            path.resolve(__dirname, "../../scripts/clean-test-env-preload.mjs"),
+            path.resolve(__dirname, "vitest.setup.ts"),
+          ],
           exclude: [...configDefaults.exclude, "e2e/**", "src/**/*.browser.{test,spec}.{ts,tsx}"],
         },
       },

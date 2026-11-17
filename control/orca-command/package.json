@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test src/*.test.mjs"
+    "test": "node --import ../../scripts/clean-test-env-preload.mjs --test src/*.test.mjs"
   },
   "peerDependencies": {
     "openclaw": ">=2026.9.2"
