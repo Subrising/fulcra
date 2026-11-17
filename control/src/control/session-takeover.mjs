@@ -12,6 +12,33 @@ const HOST_REASONS = new Set([
   "close_failed",
   "resume_failed",
 ]);
+// FU-790: say which busy condition held. The code comes from the host; only known codes are shown.
+const BUSY_TEXT = {
+  active_turn: "The host could not switch this session; finish any active turn and try again",
+  in_flight_run:
+    "The host could not switch this session: a run is in progress. Wait for it, then try again",
+  input_delivery:
+    "The host could not switch this session: a message is being delivered. Wait a moment, then try again",
+  pending_replacement:
+    "The host could not switch this session: a session replacement is pending. Wait for it, then try again",
+  pending_permission:
+    "The host could not switch this session: a permission request is open. Answer it, then try again",
+  foreground_mutation:
+    "The host could not switch this session: another change is in progress. Wait for it, then try again",
+  subagent_running:
+    "The host could not switch this session: a subagent is running. Wait for it, or run fulcra agent reload <id> to end it, then try again",
+  not_idle:
+    "The host could not switch this session: it is not idle. Wait for it to be idle, then try again",
+};
+function busyMessage(detail) {
+  const [code, n] = String(detail ?? "").split(":");
+  if (code === "background_work" && /^\d{1,3}$/.test(n ?? ""))
+    return `The host could not switch this session: background work is running (${n}). Wait for it, or run fulcra agent reload <id> to end it, then try again`;
+  return (
+    BUSY_TEXT[code] ??
+    "The host could not switch this session; it is busy (reason not reported). Wait for it, then try again"
+  );
+}
 const uuid = (value) =>
   typeof value === "string" && /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
 
@@ -214,7 +241,7 @@ export async function takeOverSession(
             await rollback();
             const reply = refused(
               result?.reason === "busy"
-                ? "The host could not switch this session; finish any active turn and try again"
+                ? busyMessage(result.busyDetail)
                 : result?.reason === "not_resident"
                   ? "The host could not load this session after a restart; run fulcra agent reload <id> and try again"
                   : `The host could not switch this session (reason: ${HOST_REASONS.has(result?.reason) ? result.reason : "unknown"}); it is not busy. Run fulcra agent reload <id> and try again`,

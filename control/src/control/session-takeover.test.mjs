@@ -405,7 +405,11 @@ test("FU-585: a session the host does not hold is loaded, then switched; a faile
   // A busy refusal keeps its own message and never reloads.
   const w3 = await world(t, "claude", { enrolled: false });
   let reloaded = false;
-  w3.control.native.recover = async () => ({ outcome: "refused", reason: "busy" });
+  w3.control.native.recover = async () => ({
+    outcome: "refused",
+    reason: "busy",
+    busyDetail: "active_turn",
+  });
   w3.control.native.reload = async () => {
     reloaded = true;
   };
@@ -529,6 +533,7 @@ test("FU-790: a real active turn keeps the active-turn refusal and never reloads
   w.control.native.recover = async () => ({
     outcome: "refused",
     reason: "busy",
+    busyDetail: "active_turn",
   });
   w.control.native.reload = async () => {
     reloaded = true;
@@ -579,4 +584,29 @@ test("FU-655: a stuck uncertain switch settles when the pool already holds the a
     reconcile: true,
   });
   assert.equal(bad.ok, false);
+});
+
+test("FU-790: a busy refusal says which condition held, never reloads, and shows only known codes", async (t) => {
+  const cases = [
+    ["background_work:2", /background work is running \(2\)/],
+    ["pending_permission", /permission request is open/],
+    ["subagent_running", /subagent is running/],
+    ["input_delivery", /message is being delivered/],
+    ["<script>x</script>", /busy \(reason not reported\)/],
+    [undefined, /busy \(reason not reported\)/],
+  ];
+  for (const [busyDetail, pattern] of cases) {
+    const w = await world(t, "claude", { enrolled: false });
+    let reloaded = false;
+    w.control.native.recover = async () => ({ outcome: "refused", reason: "busy", busyDetail });
+    w.control.native.reload = async () => {
+      reloaded = true;
+    };
+    const r = await takeOverSession(w.id, w.b.id, { control: w.control });
+    assert.match(r.message, pattern, String(busyDetail));
+    assert.doesNotMatch(r.message, /active turn/, String(busyDetail));
+    assert.doesNotMatch(r.message, /script/);
+    assert.equal(reloaded, false);
+    assert.equal(readAccounts(w.root).assignments[w.id].accountId, w.a.id);
+  }
 });

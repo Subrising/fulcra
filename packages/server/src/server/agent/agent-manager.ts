@@ -352,7 +352,10 @@ export class AgentManagerShuttingDownError extends Error {
 }
 
 class QuietMcpRefreshRefusal extends Error {
-  constructor(readonly reason: "busy" | "stale") {
+  constructor(
+    readonly reason: "busy" | "stale",
+    readonly busyDetail?: string,
+  ) {
     super(reason);
     this.name = "QuietMcpRefreshRefusal";
   }
@@ -4039,9 +4042,13 @@ export class AgentManager {
       this.runLifecycleMutation(request.agentId, async (): Promise<AgentMcpRefreshResult> => {
         const { agentId, expected, changes } = request;
         let state = await this.readAgentMcpRefreshState(agentId);
-        const refused = (reason: AgentMcpRefreshResult["reason"]): AgentMcpRefreshResult => ({
+        const refused = (
+          reason: AgentMcpRefreshResult["reason"],
+          busyDetail?: string,
+        ): AgentMcpRefreshResult => ({
           outcome: "refused",
           reason,
+          ...(busyDetail ? { busyDetail } : {}),
           state,
         });
         const existing = this.agents.get(agentId);
@@ -4068,21 +4075,27 @@ export class AgentManager {
           request.reconnect === true &&
           existing.lifecycle === "error" &&
           (closeRecovery !== null || !this.failedMcpRefreshCloses.has(existing.session));
-        const busy = () =>
-          (existing.lifecycle !== "idle" && !restartable()) ||
-          this.hasInFlightRun(agentId) ||
+        // FU-790: the first busy condition that holds, as a short safe code (never text from the session).
+        const busyCode = (): string | null => {
+          if (existing.lifecycle !== "idle" && !restartable())
+            return existing.lifecycle === "running" ? "active_turn" : "not_idle";
+          if (this.hasInFlightRun(agentId)) return "in_flight_run";
           // FU-694: an account switch during an input write or receipt read aborts it. Wait until it ends.
-          this.inputBeingDelivered(agentId) ||
-          existing.activeTurnId !== null ||
-          existing.pendingReplacement ||
-          existing.pendingPermissions.size > 0 ||
-          existing.inFlightPermissionResponses.size > 0 ||
-          this.foregroundMutationTails.has(agentId) ||
-          this.providerSubagents.list(agentId).some((child) => child.status === "running") ||
+          if (this.inputBeingDelivered(agentId)) return "input_delivery";
+          if (existing.activeTurnId !== null) return "active_turn";
+          if (existing.pendingReplacement) return "pending_replacement";
+          if (existing.pendingPermissions.size > 0 || existing.inFlightPermissionResponses.size > 0)
+            return "pending_permission";
+          if (this.foregroundMutationTails.has(agentId)) return "foreground_mutation";
+          if (this.providerSubagents.list(agentId).some((child) => child.status === "running"))
+            return "subagent_running";
           // FU-496: an idle turn can still own background work (an async subagent, a background shell). A switch or
           // reconnect replaces the runtime and would end it, so it waits like a running turn.
-          (existing.backgroundWork?.count ?? 0) > 0;
-        if (busy()) return refused("busy");
+          const background = existing.backgroundWork?.count ?? 0;
+          return background > 0 ? `background_work:${Math.min(background, 999)}` : null;
+        };
+        const busyNow = busyCode();
+        if (busyNow) return refused("busy", busyNow);
         const nextConfig = mcpRefreshConfig(existing.config, changes, request.toolPolicy);
         if (!nextConfig) return refused("invalid_changes");
         const { mcpServers } = nextConfig;
@@ -4109,7 +4122,8 @@ export class AgentManager {
               const admission = this.readMcpRefreshAdmission(existing);
               state = this.liveMcpRefreshState(existing, admission);
               if (!admission.allowed || stale()) throw new QuietMcpRefreshRefusal("stale");
-              if (busy()) throw new QuietMcpRefreshRefusal("busy");
+              const busyLate = busyCode();
+              if (busyLate) throw new QuietMcpRefreshRefusal("busy", busyLate);
               reportRelaunch?.beforeClose();
               closeStarted = true;
             };
@@ -4121,7 +4135,8 @@ export class AgentManager {
             state: await this.readAgentMcpRefreshState(agentId),
           };
         } catch (error) {
-          if (error instanceof QuietMcpRefreshRefusal) return refused(error.reason);
+          if (error instanceof QuietMcpRefreshRefusal)
+            return refused(error.reason, error.busyDetail);
           // Do not return provider exception text: it can include MCP environment/header secrets.
           return {
             outcome: "failed",
