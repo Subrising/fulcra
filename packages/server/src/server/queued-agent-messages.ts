@@ -851,18 +851,23 @@ export class QueuedAgentMessages {
     return false;
   }
 
-  private async drain(agentId: string, preparation?: Promise<void>): Promise<void> {
-    await this.load();
-    const { agentManager } = this.deps;
-    await this.reconcileUncertain(agentId, preparation);
-    let expired = false;
+  /** FU-602: apply expireStale to one receiver's records. It saves only when something changed. */
+  private async expireStaleFor(agentId: string): Promise<void> {
+    let changed = false;
     for (const record of this.records) {
       if (record.agentId !== agentId) continue;
       const before = `${record.state}${record.lateMarked ?? ""}`;
       expireStale(record, Date.now());
-      expired ||= before !== `${record.state}${record.lateMarked ?? ""}`;
+      changed ||= before !== `${record.state}${record.lateMarked ?? ""}`;
     }
-    if (expired) await this.save();
+    if (changed) await this.save();
+  }
+
+  private async drain(agentId: string, preparation?: Promise<void>): Promise<void> {
+    await this.load();
+    const { agentManager } = this.deps;
+    await this.reconcileUncertain(agentId, preparation);
+    await this.expireStaleFor(agentId);
     if (this.stopped || (await this.refuseClosedReceiver(agentId))) return;
     if (agentManager.hasInFlightRun(agentId)) return;
     if (await this.holdPausedDelivery(agentId)) return;
