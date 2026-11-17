@@ -497,6 +497,8 @@ try {
   execFileSync(
     process.execPath,
     [
+      "--import",
+      path.join(root, "../../scripts/clean-test-env-preload.mjs"),
       "--test",
       "--test-reporter=tap",
       "runtime/orchestration.test.mjs",
