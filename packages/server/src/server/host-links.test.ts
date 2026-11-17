@@ -1327,8 +1327,11 @@ test.each([false, true, "reconcile", "late-failure"] as const)(
       { replayState: false },
     );
     try {
+      // The runtime uses the real clock, so the shared fixed spawn.issuedAt (15 Oct) expires after 30 days.
+      const issuedAt = Date.now();
       const receipt = await sourceRuntime.service.spawnForAgent(lead.id, "target", {
         ...spawn,
+        issuedAt,
         notifyOnFinish: true,
       });
       await ended;
@@ -1349,7 +1352,7 @@ test.each([false, true, "reconcile", "late-failure"] as const)(
       await expect(
         targetRuntime.service.worker(receipt.token, {
           kind: "prompt",
-          issuedAt: spawn.issuedAt,
+          issuedAt: issuedAt,
           agentId: receipt.agentId,
           messageId: "22222222-2222-4222-8222-222222222222",
           prompt: "Start another task.",
