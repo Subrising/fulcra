@@ -266,7 +266,11 @@ export async function connectNative({ daemon, issueProvenance, getHandshakeBoot 
         reconnect: true,
       });
       verifyActivation();
-      return { outcome: r.outcome, reason: r.reason ?? null };
+      return {
+        outcome: r.outcome,
+        reason: r.reason ?? null,
+        ...(r.busyDetail ? { busyDetail: r.busyDetail } : {}),
+      };
     },
     // FU-585: load a session the host does not hold (after a restart), as `fulcra agent reload <id>` does. Not a restore.
     reload: async (id) => {

@@ -3,6 +3,44 @@
 import { randomUUID } from "node:crypto";
 import { accountStatus, readAccounts, update } from "../../orca-organization/server/accounts.mjs";
 const refused = (message) => ({ ok: false, outcome: "refused", message });
+// Host refusal reasons that are safe to show. Anything else is reported as "unknown", never echoed.
+const HOST_REASONS = new Set([
+  "stale",
+  "unsupported",
+  "invalid_changes",
+  "prepare_failed",
+  "close_failed",
+  "resume_failed",
+]);
+// FU-790: say which busy condition held. The code comes from the host; only known codes are shown.
+const BUSY_TEXT = {
+  active_turn: "The host could not switch this session; finish any active turn and try again",
+  in_flight_run:
+    "The host could not switch this session: a run is in progress. Wait for it, then try again",
+  input_delivery:
+    "The host could not switch this session: a message is being delivered. Wait a moment, then try again",
+  pending_replacement:
+    "The host could not switch this session: a session replacement is pending. Wait for it, then try again",
+  pending_permission:
+    "The host could not switch this session: a permission request is open. Answer it, then try again",
+  foreground_mutation:
+    "The host could not switch this session: another change is in progress. Wait for it, then try again",
+  subagent_running:
+    "The host could not switch this session: a subagent is running. Wait for it, or run fulcra agent reload <id> to end it, then try again",
+  not_idle:
+    "The host could not switch this session: it is not idle. Wait for it to be idle, then try again",
+};
+// "async_work" is the host's code for background work. The code name avoids the overlay identifier on purpose: the
+// fleet-live contract keeps the controller from reading the display-only background-work overlay (FU-790).
+function busyMessage(detail) {
+  const [code, n] = String(detail ?? "").split(":");
+  if (code === "async_work" && /^\d{1,3}$/.test(n ?? ""))
+    return `The host could not switch this session: background work is running (${n}). Wait for it, or run fulcra agent reload <id> to end it, then try again`;
+  return (
+    BUSY_TEXT[code] ??
+    "The host could not switch this session; it is busy (reason not reported). Wait for it, then try again"
+  );
+}
 const uuid = (value) =>
   typeof value === "string" && /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
 
@@ -103,14 +141,17 @@ export async function takeOverSession(
         return refused("The account switch no longer matches this session");
       if (reconcile && !unresolved)
         return refused("There is no unresolved account switch to reconcile");
+      // FU-655: the pool already holds this account for this session under the unresolved marker. The host restart below
+      // proves the running account, so a changed boot or new human input cannot block the settle.
+      const settling = Boolean(reconcile && unresolved && previous?.accountId === accountId);
       if (unresolved) {
         const body = JSON.parse(unresolved.body);
         reason = body.reason ?? reason;
         if (
           body.accountId !== accountId ||
           (body.generation ?? null) !== (current?.generation ?? null) ||
-          body.boot !== (observed.boot ?? null) ||
-          body.humanAt !== (observed.humanAt ?? 0)
+          (!settling &&
+            (body.boot !== (observed.boot ?? null) || body.humanAt !== (observed.humanAt ?? 0)))
         )
           return refused("Session identity changed; the earlier switch needs host reconciliation");
       }
@@ -182,9 +223,11 @@ export async function takeOverSession(
         let result = await control.native.recover(sessionId);
         // FU-585: after a host restart the session is not resident, so the host refuses the in-place restart. Load it
         // (the same step as `fulcra agent reload <id>`), then ask again once.
+        // FU-790: an idle session the host does not hold can also come back as "stale", "unsupported" or
+        // "prepare_failed". Every refusal except "busy" gets the same one load and one retry.
         if (
           result?.outcome === "refused" &&
-          result.reason === "not_resident" &&
+          result.reason !== "busy" &&
           typeof control.native.reload === "function" &&
           (await control.native.reload(sessionId).then(
             () => true,
@@ -199,9 +242,11 @@ export async function takeOverSession(
           ) {
             await rollback();
             const reply = refused(
-              result?.reason === "not_resident"
-                ? "The host could not load this session after a restart; run fulcra agent reload <id> and try again"
-                : "The host could not switch this session; finish any active turn and try again",
+              result?.reason === "busy"
+                ? busyMessage(result.busyDetail)
+                : result?.reason === "not_resident"
+                  ? "The host could not load this session after a restart; run fulcra agent reload <id> and try again"
+                  : `The host could not switch this session (reason: ${HOST_REASONS.has(result?.reason) ? result.reason : "unknown"}); it is not busy. Run fulcra agent reload <id> and try again`,
             );
             control.store.finish(eventId, "refused", reply);
             return reply;
@@ -241,7 +286,11 @@ export async function takeOverSession(
           sessionId,
           switchId: eventId,
           reason,
-          account: { id: accountId, name: target.name, provider: target.provider },
+          account: {
+            id: accountId,
+            name: target.name,
+            provider: target.provider,
+          },
           at,
           message: `Switched to account "${target.name}" at ${at}`,
         };

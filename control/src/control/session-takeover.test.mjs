@@ -405,7 +405,11 @@ test("FU-585: a session the host does not hold is loaded, then switched; a faile
   // A busy refusal keeps its own message and never reloads.
   const w3 = await world(t, "claude", { enrolled: false });
   let reloaded = false;
-  w3.control.native.recover = async () => ({ outcome: "refused", reason: "busy" });
+  w3.control.native.recover = async () => ({
+    outcome: "refused",
+    reason: "busy",
+    busyDetail: "active_turn",
+  });
   w3.control.native.reload = async () => {
     reloaded = true;
   };
@@ -490,4 +494,119 @@ test("an archived delegated session keeps its account and control record", async
   assert.deepEqual(w.store.get(w.id), record);
   assert.deepEqual(readAccounts(w.root), pool);
   assert.equal(w.calls(), 0);
+});
+
+test("FU-790: an idle session the host does not hold is loaded then switched, whatever refusal reason the host gives", async (t) => {
+  for (const reason of ["stale", "unsupported", "prepare_failed"]) {
+    const w = await world(t, "claude", { enrolled: false });
+    const recover = w.control.native.recover;
+    let loads = 0,
+      resident = false;
+    w.control.native.recover = async (id) =>
+      resident ? recover(id) : { outcome: "refused", reason };
+    w.control.native.reload = async () => {
+      loads++;
+      resident = true;
+    };
+    const r = await takeOverSession(w.id, w.b.id, { control: w.control });
+    assert.equal(r.ok, true, reason);
+    assert.equal(loads, 1, reason);
+    assert.equal(readAccounts(w.root).assignments[w.id].accountId, w.b.id);
+  }
+  // A load that does not help: the error names the real reason and does not blame an active turn.
+  const w = await world(t, "claude", { enrolled: false });
+  w.control.native.recover = async () => ({
+    outcome: "refused",
+    reason: "stale",
+  });
+  w.control.native.reload = async () => {};
+  const r = await takeOverSession(w.id, w.b.id, { control: w.control });
+  assert.equal(r.ok, false);
+  assert.match(r.message, /reason: stale/);
+  assert.doesNotMatch(r.message, /active turn/);
+  assert.equal(readAccounts(w.root).assignments[w.id].accountId, w.a.id);
+});
+
+test("FU-790: a real active turn keeps the active-turn refusal and never reloads", async (t) => {
+  const w = await world(t, "claude", { enrolled: false });
+  let reloaded = false;
+  w.control.native.recover = async () => ({
+    outcome: "refused",
+    reason: "busy",
+    busyDetail: "active_turn",
+  });
+  w.control.native.reload = async () => {
+    reloaded = true;
+  };
+  const r = await takeOverSession(w.id, w.b.id, { control: w.control });
+  assert.match(r.message, /active turn/);
+  assert.equal(reloaded, false);
+  // A running turn seen before the host call is refused too.
+  const w2 = await world(t, "claude", { enrolled: false });
+  w2.status("running");
+  const r2 = await takeOverSession(w2.id, w2.b.id, { control: w2.control });
+  assert.match(r2.message, /turn is running/);
+});
+
+test("FU-655: a stuck uncertain switch settles when the pool already holds the account, even after a host boot change", async (t) => {
+  const w = await world(t),
+    recover = w.control.native.recover;
+  w.control.native.recover = async () => {
+    throw Error("reply lost");
+  };
+  assert.equal((await takeOverSession(w.id, w.b.id, { control: w.control })).outcome, "uncertain");
+  const switchId = readAccounts(w.root).assignments[w.id].takeover;
+  assert.equal(w.store.delivery(switchId).state, "uncertain");
+  // The host restarted since the marker was written.
+  w.control.native.recover = recover;
+  const inspect = w.control.native.inspect;
+  w.control.native.inspect = async (...a) => ({
+    ...(await inspect(...a)),
+    boot: "boot-2",
+  });
+  const r = await takeOverSession(w.id, w.b.id, {
+    control: w.control,
+    reconcile: true,
+  });
+  assert.equal(r.ok, true, r.message);
+  assert.equal(w.store.delivery(switchId).state, "delivered");
+  assert.equal(readAccounts(w.root).assignments[w.id].takeover, undefined);
+  // Edge: a different account never settles through this path.
+  const w2 = await world(t),
+    rec2 = w2.control.native.recover;
+  w2.control.native.recover = async () => {
+    throw Error("reply lost");
+  };
+  await takeOverSession(w2.id, w2.b.id, { control: w2.control });
+  w2.control.native.recover = rec2;
+  const bad = await takeOverSession(w2.id, w2.a.id, {
+    control: w2.control,
+    reconcile: true,
+  });
+  assert.equal(bad.ok, false);
+});
+
+test("FU-790: a busy refusal says which condition held, never reloads, and shows only known codes", async (t) => {
+  const cases = [
+    ["async_work:2", /background work is running \(2\)/],
+    ["pending_permission", /permission request is open/],
+    ["subagent_running", /subagent is running/],
+    ["input_delivery", /message is being delivered/],
+    ["<script>x</script>", /busy \(reason not reported\)/],
+    [undefined, /busy \(reason not reported\)/],
+  ];
+  for (const [busyDetail, pattern] of cases) {
+    const w = await world(t, "claude", { enrolled: false });
+    let reloaded = false;
+    w.control.native.recover = async () => ({ outcome: "refused", reason: "busy", busyDetail });
+    w.control.native.reload = async () => {
+      reloaded = true;
+    };
+    const r = await takeOverSession(w.id, w.b.id, { control: w.control });
+    assert.match(r.message, pattern, String(busyDetail));
+    assert.doesNotMatch(r.message, /active turn/, String(busyDetail));
+    assert.doesNotMatch(r.message, /script/);
+    assert.equal(reloaded, false);
+    assert.equal(readAccounts(w.root).assignments[w.id].accountId, w.a.id);
+  }
 });

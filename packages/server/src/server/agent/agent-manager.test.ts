@@ -4372,7 +4372,7 @@ test("FU-496: a reconnect refuses an idle session that still owns background wor
     await vi.waitFor(() => expect(f.manager.getAgent(f.created.id)?.backgroundWork?.count).toBe(1));
     expect(
       await f.manager.refreshAgentMcp({ ...f.input, expected, changes: {}, reconnect: true }),
-    ).toMatchObject({ outcome: "refused", reason: "busy" });
+    ).toMatchObject({ outcome: "refused", reason: "busy", busyDetail: "async_work:1" });
     expect(f.client.sessions[0].closeCount).toBe(0);
     work(0);
     await vi.waitFor(() =>
