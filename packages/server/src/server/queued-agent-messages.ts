@@ -84,6 +84,10 @@ const RecordSchema = z.object({
   /** sha256 of the whole request and of its text, images and attachments, kept when the payload is dropped. */
   requestHash: z.string().optional(),
   contentHash: z.string().optional(),
+  /** FU-602: when the message was queued. An older file has none; load stamps it, so the life starts then. */
+  createdAt: z.number().finite().positive().optional(),
+  /** FU-602: the text already carries its "late" mark. */
+  lateMarked: z.literal(true).optional(),
 });
 type Record = z.infer<typeof RecordSchema>;
 type InputReceipt = "present" | "absent" | "unknown";
@@ -101,6 +105,32 @@ const sha = (value: unknown) => createHash("sha256").update(JSON.stringify(value
 const requestHashOf = (request: z.infer<typeof RequestSchema>) => sha(request);
 const contentHashOf = (request: z.infer<typeof RequestSchema>) =>
   sha([request.text, request.images ?? null, request.attachments ?? null]);
+
+/** FU-602: a notice held in a pause is useful for 2 hours. After that it is dropped, not sent again. */
+export const PAUSE_NOTICE_LIFE_MS = 2 * 60 * 60_000;
+/** FU-602: any other waiting message older than 24 hours is delivered once, with a "late" mark. */
+export const LATE_MESSAGE_MS = 24 * 60 * 60_000;
+
+/**
+ * FU-602: a message that waited past its useful life must not arrive as if it were new. A pause notice is
+ * refused with a reason. Another message keeps its text and gets one "late, from <date>" line.
+ */
+export function expireStale(record: Record, now: number): void {
+  if (!["queued", "uncertain"].includes(record.state)) return;
+  record.createdAt ??= now;
+  const age = now - record.createdAt;
+  const from = new Date(record.createdAt).toISOString();
+  if (record.request.pauseNotice && age > PAUSE_NOTICE_LIFE_MS) {
+    record.state = "refused";
+    record.reason = `Dropped: this notice was held since ${from} and is too old to send.`;
+    record.settledAt = now;
+    return;
+  }
+  if (!record.request.pauseNotice && age > LATE_MESSAGE_MS && !record.lateMarked) {
+    record.request.text = `[Late message, from ${from}]\n${record.request.text}`;
+    record.lateMarked = true;
+  }
+}
 
 /** Drop the payload of a delivered record once the identical-resend window has passed. */
 export function compactDelivered(record: Record, now: number): void {
@@ -257,6 +287,7 @@ export class QueuedAgentMessages {
       record.reason =
         "Delivery is uncertain after a daemon restart. Check the receiver before sending again.";
     }
+    for (const record of this.records) expireStale(record, Date.now());
     // Also drops settled records past their day, and stamps older ones that carry no settle time.
     await this.save();
     this.initialized = true;
@@ -363,6 +394,7 @@ export class QueuedAgentMessages {
         localServerId: localServerId ?? null,
         request: body,
         state: "queued",
+        createdAt: Date.now(),
         ...(resumeAt ? { resumeAt } : {}),
       });
       await this.save();
@@ -823,6 +855,14 @@ export class QueuedAgentMessages {
     await this.load();
     const { agentManager } = this.deps;
     await this.reconcileUncertain(agentId, preparation);
+    let expired = false;
+    for (const record of this.records) {
+      if (record.agentId !== agentId) continue;
+      const before = `${record.state}${record.lateMarked ?? ""}`;
+      expireStale(record, Date.now());
+      expired ||= before !== `${record.state}${record.lateMarked ?? ""}`;
+    }
+    if (expired) await this.save();
     if (this.stopped || (await this.refuseClosedReceiver(agentId))) return;
     if (agentManager.hasInFlightRun(agentId)) return;
     if (await this.holdPausedDelivery(agentId)) return;
