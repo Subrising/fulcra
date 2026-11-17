@@ -8,9 +8,18 @@ import { readOwnedProcessTable, type OwnedProcessIdentity } from "../../utils/tr
 import { parseElapsed } from "./background-work/process-tree.js";
 import { writeJsonFileAtomic } from "../atomic-file.js";
 import type { ToolCallTimelineItem } from "./agent-sdk-types.js";
-import { readWindowsResourceProcesses } from "./windows-resource-processes.js";
+import {
+  readWindowsResourceProcessPair,
+  readWindowsResourceProcesses,
+} from "./windows-resource-processes.js";
 
 const exec = promisify(execFile);
+/** FU-792: each Windows read starts a console host, so the Windows timer runs less often. */
+export const SAMPLE_INTERVAL_MS = 5_000;
+export const WINDOWS_SAMPLE_INTERVAL_MS = 15_000;
+export function defaultSampleIntervalMs(platform: NodeJS.Platform = process.platform): number {
+  return platform === "win32" ? WINDOWS_SAMPLE_INTERVAL_MS : SAMPLE_INTERVAL_MS;
+}
 export const ORPHAN_INTERVAL_MS = 30 * 60 * 1_000;
 export const TEST_FIXTURE_MIN_AGE_SECONDS = 2 * 60 * 60;
 export function testFixtureDirectory(cwd: string): boolean {
@@ -129,6 +138,9 @@ interface Options {
   /** Unknown or unreadable session state must return true. */
   fixtureInUse?: (cwd: string, pid: number, birth: string) => Promise<boolean>;
   readProcesses?: () => Promise<ResourceProcess[]>;
+  /** Two reads for one sample. Default: two calls of readProcesses. */
+  readProcessPair?: () => Promise<[ResourceProcess[], ResourceProcess[]]>;
+  sampleIntervalMs?: number;
   signal?: (pid: number, signal: NodeJS.Signals) => unknown;
   simulators?: SimulatorTable;
   now?: () => number;
@@ -312,6 +324,7 @@ function simulatorUseCommand(shell: string): boolean {
 export class SessionResources {
   private readonly options: Options;
   private readonly read: () => Promise<ResourceProcess[]>;
+  private readonly readPair: () => Promise<[ResourceProcess[], ResourceProcess[]]>;
   private readonly signal: (pid: number, signal: NodeJS.Signals) => unknown;
   private readonly simulators: SimulatorTable;
   private readonly now: () => number;
@@ -343,18 +356,25 @@ export class SessionResources {
   constructor(options: Options) {
     this.options = options;
     const warnedStale = new Set<string>();
+    const onStale = (root: { pid: number; birth: string }) => {
+      const key = `${root.pid}:${root.birth}`;
+      if (warnedStale.has(key)) return;
+      warnedStale.add(key);
+      options.logger.warn(
+        { pid: root.pid },
+        "Ignoring a stale install root in the Windows resource policy",
+      );
+    };
     this.read =
-      options.readProcesses ??
-      (() =>
-        readResourceProcesses(options.windowsPolicyFile, (root) => {
-          const key = `${root.pid}:${root.birth}`;
-          if (warnedStale.has(key)) return;
-          warnedStale.add(key);
-          options.logger.warn(
-            { pid: root.pid },
-            "Ignoring a stale install root in the Windows resource policy",
-          );
-        }));
+      options.readProcesses ?? (() => readResourceProcesses(options.windowsPolicyFile, onStale));
+    this.readPair =
+      options.readProcessPair ??
+      (!options.readProcesses && process.platform === "win32"
+        ? () => readWindowsResourceProcessPair(options.windowsPolicyFile, onStale)
+        : async () => {
+            const first = await this.read();
+            return [first, await this.read()];
+          });
     this.signal = options.signal ?? process.kill;
     this.now = options.now ?? Date.now;
     this.simulators = options.simulators ?? systemSimulators();
@@ -369,7 +389,7 @@ export class SessionResources {
         .finally(() => {
           this.sampling = false;
         });
-    }, 5_000);
+    }, this.options.sampleIntervalMs ?? defaultSampleIntervalMs());
     this.sweepTimer = setInterval(() => {
       void this.sweep().catch(() => this.warn());
     }, ORPHAN_INTERVAL_MS);
@@ -419,7 +439,7 @@ export class SessionResources {
     return this.attempt(async () => {
       const roots = this.options.roots();
       if (!roots.length) return;
-      const rows = await this.read();
+      const [rows, freshRows] = await this.readPair();
       const ledger = await this.load();
       if (!ledger) return;
       const previous = JSON.stringify(ledger);
@@ -447,7 +467,7 @@ export class SessionResources {
         const row = byPid.get(binding.pid);
         return Boolean(row && !row.zombie && row.birth === binding.birth);
       });
-      const fresh = new Map((await this.read()).map((row) => [row.pid, row]));
+      const fresh = new Map(freshRows.map((row) => [row.pid, row]));
       const currentRoots = this.options.roots();
       const rootPids = new Set(currentRoots.map((root) => root.pid));
       for (const root of roots) {

@@ -176,6 +176,73 @@ test("the Windows resource table reader starts PowerShell hidden and not detache
   vi.doUnmock("node:child_process");
 });
 
+function fakeSpawn(text: string) {
+  return vi.fn(() => {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter;
+      stderr: Readable;
+      kill: () => void;
+    };
+    child.stdout = new EventEmitter();
+    child.stderr = new Readable({ read() {} });
+    child.kill = vi.fn();
+    queueMicrotask(() => {
+      child.stdout.emit("data", Buffer.from(text));
+      child.emit("close", 0);
+    });
+    return child;
+  });
+}
+
+test("the pair reader starts one PowerShell for two snapshots (FU-792)", async () => {
+  vi.resetModules();
+  const snapshot = JSON.stringify({
+    queueState: "clear",
+    installRoots: [],
+    processes: [
+      {
+        Id: 5,
+        Name: "node",
+        StartTicks: "10",
+        Parent: 1,
+        WorkingSet64: 2048,
+        PrivateMemorySize64: 4096,
+      },
+    ],
+  });
+  const spawnMock = fakeSpawn(`${snapshot}\r\n${snapshot}\r\n`);
+  vi.doMock("node:child_process", () => ({ spawn: spawnMock }));
+  let mod = await import("./windows-resource-processes.js");
+  const [first, second] = await mod.readWindowsResourceProcessPair();
+  expect(spawnMock).toHaveBeenCalledTimes(1);
+  const args = (spawnMock.mock.calls[0] as unknown as [string, string[]])[1];
+  expect(args.slice(args.indexOf("-Passes"))).toEqual(["-Passes", "2"]);
+  expect(first).toHaveLength(1);
+  expect(second).toEqual(first);
+  // A short output (one snapshot for two passes) is a failure, never a half table.
+  vi.resetModules();
+  const short = fakeSpawn(`${snapshot}\r\n`);
+  vi.doMock("node:child_process", () => ({ spawn: short }));
+  mod = await import("./windows-resource-processes.js");
+  await expect(mod.readWindowsResourceProcessPair()).rejects.toThrow("1 of 2 snapshots");
+  // The single reader still asks for one pass.
+  const single = fakeSpawn(`${snapshot}\n`);
+  vi.doMock("node:child_process", () => ({ spawn: single }));
+  vi.resetModules();
+  mod = await import("./windows-resource-processes.js");
+  await expect(mod.readWindowsResourceProcesses()).resolves.toHaveLength(1);
+  const singleArgs = (single.mock.calls[0] as unknown as [string, string[]])[1];
+  expect(singleArgs.slice(singleArgs.indexOf("-Passes"))).toEqual(["-Passes", "1"]);
+  vi.doUnmock("node:child_process");
+});
+
+test("the script loops at most two passes and still never reads command lines (FU-792)", async () => {
+  const mod = await import("./windows-resource-processes.js");
+  expect(mod.WINDOWS_RESOURCE_SCRIPT).toContain("[int]$Passes = 1");
+  expect(mod.WINDOWS_RESOURCE_SCRIPT).toContain("[Math]::Min([Math]::Max($Passes, 1), 2)");
+  expect(mod.WINDOWS_RESOURCE_SCRIPT).not.toMatch(/CommandLine|ExecutablePath|Environment/i);
+});
+
 test("the Windows resource table reader rejects a failed or oversized PowerShell run", async () => {
   vi.resetModules();
   const spawnMock = vi.fn(() => {

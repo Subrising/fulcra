@@ -7,8 +7,9 @@ import type { ResourceProcess } from "./session-resources.js";
 
 // This private policy supplies the host's queue receipt directory. Missing or unreadable proof keeps processes.
 // Never collect CommandLine, executable paths, script contents, or environment values.
-export const WINDOWS_RESOURCE_SCRIPT = String.raw`param([string]$PolicyPath)
+export const WINDOWS_RESOURCE_SCRIPT = String.raw`param([string]$PolicyPath, [int]$Passes = 1)
 $ErrorActionPreference = 'Stop'
+for ($pass = 0; $pass -lt [Math]::Min([Math]::Max($Passes, 1), 2); $pass++) {
 $queueState = 'unknown'
 $installRoots = $null
 if ($PolicyPath -and (Test-Path -LiteralPath $PolicyPath)) {
@@ -42,6 +43,7 @@ $rows = @(Get-Process | ForEach-Object {
   [pscustomobject]@{ Id=$_.Id; Name=$_.ProcessName; StartTicks=$ticks; Parent=$parents[[int]$_.Id]; WorkingSet64=$_.WorkingSet64; PrivateMemorySize64=$_.PrivateMemorySize64 }
 })
 [pscustomobject]@{ queueState=$queueState; installRoots=$installRoots; processes=$rows } | ConvertTo-Json -Depth 4 -Compress
+}
 `;
 
 const snapshotSchema = z.object({
@@ -105,6 +107,21 @@ export function parseWindowsResourceSnapshot(
   });
 }
 
+/** One PowerShell run can print one snapshot per line (1 or 2 passes). */
+function parseSnapshots(
+  output: string,
+  passes: number,
+  onStaleInstallRoot?: (root: { pid: number; birth: string }) => void,
+): ResourceProcess[][] {
+  const lines = output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length !== passes)
+    throw new Error(`powershell.exe wrote ${lines.length} of ${passes} snapshots`);
+  return lines.map((line) => parseWindowsResourceSnapshot(line, onStaleInstallRoot));
+}
+
 const READ_TIMEOUT_MS = 15_000;
 const READ_MAX_BYTES = 16 * 1024 * 1024;
 
@@ -150,10 +167,11 @@ function runHiddenPowerShell(args: string[]): Promise<string> {
   });
 }
 
-export async function readWindowsResourceProcesses(
+async function readWindowsSnapshots(
+  passes: 1 | 2,
   policyFile?: string,
   onStaleInstallRoot?: (root: { pid: number; birth: string }) => void,
-): Promise<ResourceProcess[]> {
+): Promise<ResourceProcess[][]> {
   const directory = await fs.mkdtemp(path.join(tmpdir(), "session-resource-table-"));
   const script = path.join(directory, "read.ps1");
   try {
@@ -167,11 +185,32 @@ export async function readWindowsResourceProcesses(
       script,
       "-PolicyPath",
       policyFile ?? path.join(directory, "missing-policy.json"),
+      "-Passes",
+      String(passes),
     ]);
-    return parseWindowsResourceSnapshot(stdout, onStaleInstallRoot);
+    return parseSnapshots(stdout, passes, onStaleInstallRoot);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
+}
+
+export async function readWindowsResourceProcesses(
+  policyFile?: string,
+  onStaleInstallRoot?: (root: { pid: number; birth: string }) => void,
+): Promise<ResourceProcess[]> {
+  return (await readWindowsSnapshots(1, policyFile, onStaleInstallRoot))[0]!;
+}
+
+/**
+ * FU-792: two table reads in one PowerShell run (one console host, not two). The second read is
+ * still a separate pass over the process list, so the identity cross-check keeps its meaning.
+ */
+export async function readWindowsResourceProcessPair(
+  policyFile?: string,
+  onStaleInstallRoot?: (root: { pid: number; birth: string }) => void,
+): Promise<[ResourceProcess[], ResourceProcess[]]> {
+  const [first, second] = await readWindowsSnapshots(2, policyFile, onStaleInstallRoot);
+  return [first!, second!];
 }
 
 export function protectedSessionDirectory(cwd: string, title?: string | null): boolean {

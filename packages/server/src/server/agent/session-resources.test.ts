@@ -7,6 +7,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   SessionResources,
   ORPHAN_INTERVAL_MS,
+  defaultSampleIntervalMs,
   type ResourceProcess,
   type SimulatorTable,
 } from "./session-resources.js";
@@ -308,6 +309,49 @@ describe("session resource cleanup", () => {
     await writeFile(f.options.file, "invalid ledger");
     await expect(f.tracker.sweep()).resolves.toBeUndefined();
     expect(f.stopped).toEqual([]);
+  });
+
+  test("a sample takes its two table reads in one call, and the Windows timer is slower (FU-792)", async () => {
+    const f = await fixture();
+    const pair = vi.fn(
+      async (): Promise<[ResourceProcess[], ResourceProcess[]]> => [
+        [root, child],
+        [root, child],
+      ],
+    );
+    const read = vi.fn(async () => [root, child]);
+    const tracker = new SessionResources({
+      ...f.options,
+      readProcesses: read,
+      readProcessPair: pair,
+    });
+    await tracker.sample();
+    expect(pair).toHaveBeenCalledTimes(1);
+    expect(read).not.toHaveBeenCalled();
+    const ledger = JSON.parse(await readFile(f.options.file, "utf8"));
+    expect(ledger.processes.map((p: { pid: number }) => p.pid)).toEqual([101]);
+    expect(defaultSampleIntervalMs("darwin")).toBe(5_000);
+    expect(defaultSampleIntervalMs("win32")).toBe(15_000);
+  });
+
+  test("the sample timer follows sampleIntervalMs (FU-792)", async () => {
+    const f = await fixture();
+    const tracker = new SessionResources({
+      ...f.options,
+      sampleIntervalMs: 15_000,
+    });
+    const sample = vi.spyOn(tracker, "sample").mockResolvedValue();
+    vi.useFakeTimers();
+    try {
+      tracker.start();
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(sample).toHaveBeenCalledTimes(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sample).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+      await tracker.stop();
+    }
   });
 
   test("runs the orphan sweep every 30 minutes and stops both timers", async () => {
