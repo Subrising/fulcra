@@ -49,12 +49,7 @@ $rows = @(Get-Process | ForEach-Object {
 const snapshotSchema = z.object({
   queueState: z.enum(["clear", "open", "unknown"]),
   installRoots: z
-    .array(
-      z.object({
-        pid: z.number().int().positive(),
-        birth: z.string().regex(/^\d+$/),
-      })
-    )
+    .array(z.object({ pid: z.number().int().positive(), birth: z.string().regex(/^\d+$/) }))
     .max(128)
     .nullable()
     .optional(),
@@ -66,34 +61,27 @@ const snapshotSchema = z.object({
       Parent: z.number().int().nonnegative().nullable(),
       WorkingSet64: z.number().nonnegative(),
       PrivateMemorySize64: z.number().nonnegative(),
-    })
+    }),
   ),
 });
 
 export function parseWindowsResourceSnapshot(
   output: string,
-  onStaleInstallRoot?: (root: { pid: number; birth: string }) => void
+  onStaleInstallRoot?: (root: { pid: number; birth: string }) => void,
 ): ResourceProcess[] {
-  const snapshot = snapshotSchema.parse(
-    JSON.parse(output.trim().replace(/^\uFEFF/, ""))
-  );
+  const snapshot = snapshotSchema.parse(JSON.parse(output.trim().replace(/^\uFEFF/, "")));
   const protectedPids = new Set<number>();
   let unknownInstall = !snapshot.installRoots;
   for (const root of snapshot.installRoots ?? []) {
     // A root whose process has exited protects nothing; ignore only that entry.
-    if (
-      !snapshot.processes.some(
-        (row) => row.Id === root.pid && row.StartTicks === root.birth
-      )
-    )
+    if (!snapshot.processes.some((row) => row.Id === root.pid && row.StartTicks === root.birth))
       onStaleInstallRoot?.(root);
     else protectedPids.add(root.pid);
   }
   for (let pass = 0; pass < snapshot.processes.length; pass++) {
     const size = protectedPids.size;
     for (const row of snapshot.processes)
-      if (row.Parent !== null && protectedPids.has(row.Parent))
-        protectedPids.add(row.Id);
+      if (row.Parent !== null && protectedPids.has(row.Parent)) protectedPids.add(row.Id);
     if (size === protectedPids.size) break;
   }
   return snapshot.processes.flatMap((row) => {
@@ -101,8 +89,7 @@ export function parseWindowsResourceSnapshot(
     let protectionReason: string | undefined;
     if (protectedPids.has(row.Id)) protectionReason = "install-tree";
     else if (unknownInstall) protectionReason = "install-unknown";
-    else if (snapshot.queueState !== "clear")
-      protectionReason = `queue-${snapshot.queueState}`;
+    else if (snapshot.queueState !== "clear") protectionReason = `queue-${snapshot.queueState}`;
     return [
       {
         pid: row.Id,
@@ -124,19 +111,15 @@ export function parseWindowsResourceSnapshot(
 function parseSnapshots(
   output: string,
   passes: number,
-  onStaleInstallRoot?: (root: { pid: number; birth: string }) => void
+  onStaleInstallRoot?: (root: { pid: number; birth: string }) => void,
 ): ResourceProcess[][] {
   const lines = output
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
   if (lines.length !== passes)
-    throw new Error(
-      `powershell.exe wrote ${lines.length} of ${passes} snapshots`
-    );
-  return lines.map((line) =>
-    parseWindowsResourceSnapshot(line, onStaleInstallRoot)
-  );
+    throw new Error(`powershell.exe wrote ${lines.length} of ${passes} snapshots`);
+  return lines.map((line) => parseWindowsResourceSnapshot(line, onStaleInstallRoot));
 }
 
 const READ_TIMEOUT_MS = 15_000;
@@ -161,14 +144,12 @@ function runHiddenPowerShell(args: string[]): Promise<string> {
       child.kill();
     };
     const timer = setTimeout(
-      () =>
-        fail(new Error(`powershell.exe timed out after ${READ_TIMEOUT_MS} ms`)),
-      READ_TIMEOUT_MS
+      () => fail(new Error(`powershell.exe timed out after ${READ_TIMEOUT_MS} ms`)),
+      READ_TIMEOUT_MS,
     );
     child.stdout?.on("data", (chunk: Buffer) => {
       bytes += chunk.length;
-      if (bytes > READ_MAX_BYTES)
-        fail(new Error("powershell.exe output exceeded maxBuffer"));
+      if (bytes > READ_MAX_BYTES) fail(new Error("powershell.exe output exceeded maxBuffer"));
       else chunks.push(chunk);
     });
     child.stderr?.resume();
@@ -179,8 +160,7 @@ function runHiddenPowerShell(args: string[]): Promise<string> {
     child.once("close", (code) => {
       clearTimeout(timer);
       if (failure) reject(failure);
-      else if (code !== 0)
-        reject(new Error(`powershell.exe exited with code ${code}`));
+      else if (code !== 0) reject(new Error(`powershell.exe exited with code ${code}`));
       else if (bytes === 0) reject(new Error("powershell.exe wrote no output"));
       else resolve(Buffer.concat(chunks).toString("utf8"));
     });
@@ -190,11 +170,9 @@ function runHiddenPowerShell(args: string[]): Promise<string> {
 async function readWindowsSnapshots(
   passes: 1 | 2,
   policyFile?: string,
-  onStaleInstallRoot?: (root: { pid: number; birth: string }) => void
+  onStaleInstallRoot?: (root: { pid: number; birth: string }) => void,
 ): Promise<ResourceProcess[][]> {
-  const directory = await fs.mkdtemp(
-    path.join(tmpdir(), "session-resource-table-")
-  );
+  const directory = await fs.mkdtemp(path.join(tmpdir(), "session-resource-table-"));
   const script = path.join(directory, "read.ps1");
   try {
     await fs.writeFile(script, WINDOWS_RESOURCE_SCRIPT, { mode: 0o600 });
@@ -218,7 +196,7 @@ async function readWindowsSnapshots(
 
 export async function readWindowsResourceProcesses(
   policyFile?: string,
-  onStaleInstallRoot?: (root: { pid: number; birth: string }) => void
+  onStaleInstallRoot?: (root: { pid: number; birth: string }) => void,
 ): Promise<ResourceProcess[]> {
   return (await readWindowsSnapshots(1, policyFile, onStaleInstallRoot))[0]!;
 }
@@ -229,27 +207,18 @@ export async function readWindowsResourceProcesses(
  */
 export async function readWindowsResourceProcessPair(
   policyFile?: string,
-  onStaleInstallRoot?: (root: { pid: number; birth: string }) => void
+  onStaleInstallRoot?: (root: { pid: number; birth: string }) => void,
 ): Promise<[ResourceProcess[], ResourceProcess[]]> {
-  const [first, second] = await readWindowsSnapshots(
-    2,
-    policyFile,
-    onStaleInstallRoot
-  );
+  const [first, second] = await readWindowsSnapshots(2, policyFile, onStaleInstallRoot);
   return [first!, second!];
 }
 
-export function protectedSessionDirectory(
-  cwd: string,
-  title?: string | null
-): boolean {
+export function protectedSessionDirectory(cwd: string, title?: string | null): boolean {
   return (
     /\b(?:Song|Video) Studio\b/i.test(title ?? "") ||
-    /Fulcra.*(?:install|release|update)|(?:install|release).*Fulcra/i.test(
-      title ?? ""
-    ) ||
+    /Fulcra.*(?:install|release|update)|(?:install|release).*Fulcra/i.test(title ?? "") ||
     /(?:^|[\\/])(?:orca-service-releases[^\\/]*|fulcra-(?:releases?|install(?:er)?|updates?))(?:[\\/]|$)/i.test(
-      cwd
+      cwd,
     ) ||
     /(?:^|[\\/])(?:song-studio|video-studio)(?:[\\/]|$)/i.test(cwd) ||
     /^[A-Za-z]:[\\/](?:Games|Videos|Steam)(?:[\\/]|$)/i.test(cwd)
