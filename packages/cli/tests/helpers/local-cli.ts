@@ -4,7 +4,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const cliHome = mkdtempSync(join(tmpdir(), "paseo-test-cli-os-home-"));
-process.once("exit", () => rmSync(cliHome, { recursive: true, force: true }));
+// A process stopped by the test can still write into this home as the test exits; retry the delete.
+process.once("exit", () =>
+  rmSync(cliHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }),
+);
 
 const CLI_ENTRY = join(import.meta.dirname, "..", "..", "dist", "index.js");
 

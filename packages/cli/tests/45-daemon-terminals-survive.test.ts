@@ -144,19 +144,31 @@ async function expectClosed(pid: number, trigger: string) {
 
 // A zombie: a real process with a birth time that SIGKILL cannot remove while its parent (an
 // exec'd `sleep` that never waits) lives. Cleanup can only report it as still alive.
+// The child exits 2 s after the pid is printed, so the shell has already exec'd into `sleep`
+// and cannot reap it. A child that exits at once can be reaped by the shell before the exec.
+// If the process is gone instead of a zombie, the parent is stopped and the fixture is retried.
 async function startZombie(): Promise<{ zombiePid: number; parentPid: number }> {
-  const parent = spawn("/bin/sh", ["-c", "sleep 0 & echo $!; exec sleep 600"], {
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  const zombiePid = await new Promise<number>((resolve) => {
-    parent.stdout!.once("data", (chunk: Buffer) => resolve(Number(chunk.toString().trim())));
-  });
-  parent.unref();
-  await waitFor(
-    async () => (await psField(zombiePid, "stat")).startsWith("Z"),
-    `process ${zombiePid} never became a zombie`,
-  );
-  return { zombiePid, parentPid: parent.pid! };
+  const attempts = 3;
+  for (let attempt = 1; ; attempt++) {
+    const parent = spawn("/bin/sh", ["-c", "sleep 2 & echo $!; exec sleep 600"], {
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const zombiePid = await new Promise<number>((resolve) => {
+      parent.stdout!.once("data", (chunk: Buffer) => resolve(Number(chunk.toString().trim())));
+    });
+    parent.unref();
+    const state = await waitFor(async () => {
+      const stat = await psField(zombiePid, "stat");
+      return stat.startsWith("Z") || stat === "" ? stat || "gone" : null;
+    }, `process ${zombiePid} never became a zombie`);
+    if (state !== "gone") return { zombiePid, parentPid: parent.pid! };
+    parent.kill("SIGKILL");
+    if (attempt === attempts) {
+      throw new Error(
+        `process ${zombiePid} was gone before it became a zombie (${attempts} tries)`,
+      );
+    }
+  }
 }
 
 async function psField(pid: number, field: "stat" | "lstart"): Promise<string> {
