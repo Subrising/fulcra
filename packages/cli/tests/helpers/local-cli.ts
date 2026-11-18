@@ -21,7 +21,10 @@ export function runLocalPaseo(
     cwd,
     env: {
       ...Object.fromEntries(
-        Object.entries(process.env).filter(([key]) => !key.startsWith("PASEO_")),
+        // FU-682: a Fulcra chat exports FULCRA_* (FULCRA_COMMAND_CENTRE makes the test daemon require auth).
+        Object.entries(process.env).filter(
+          ([key]) => !key.startsWith("PASEO_") && !key.startsWith("FULCRA_"),
+        ),
       ),
       ...env,
       HOME: cliHome,
