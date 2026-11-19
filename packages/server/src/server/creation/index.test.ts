@@ -422,7 +422,29 @@ test("a late agent readiness callback cannot change a timed-out receipt or start
   const service = new CreationService(f.directory, silentLogger, undefined, undefined, {
     timeoutMs: 20,
   });
-  const result = await service.create(f.input);
+  // The deadline is a fake timer: it fires only after the agent stage has started,
+  // never during a slow receipt write on a loaded machine.
+  const started = deferred();
+  const settled = deferred();
+  const createAgent = f.input.createAgent!;
+  f.input.createAgent = async (...args) => {
+    started.resolve();
+    try {
+      return await createAgent(...args);
+    } finally {
+      settled.resolve();
+    }
+  };
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const pending = service.create(f.input);
+  let result: CreationSnapshot;
+  try {
+    await started.promise;
+    await vi.advanceTimersByTimeAsync(40);
+    result = await pending;
+  } finally {
+    vi.useRealTimers();
+  }
   expect(result).toMatchObject({
     phase: "failed",
     failedStage: "agent",
@@ -430,6 +452,7 @@ test("a late agent readiness callback cannot change a timed-out receipt or start
     errorCode: "creation_timeout",
   });
   f.provider.resolve();
+  await settled.promise;
   expect(await service.create(f.input)).toEqual(result);
   expect(f.calls).toEqual(["workspace", "agent"]);
 });
