@@ -108,6 +108,13 @@ function attachLimitObservations(s, remoteRaw, usageRaw) {
       report?.status !== "unavailable" && (report?.fiveHour || report?.weekly)
         ? report.observedAt
         : null;
+    // FU-798: the read shows the account under every limit it reports (status ok, each window under 100%).
+    a.usageUnderLimit =
+      a.usageObservedAt !== null &&
+      report.status === "ok" &&
+      [report.fiveHour, report.weekly].every(
+        (w) => !w || (Number.isFinite(w.usedPct) && w.usedPct < 100),
+      );
   }
   return s;
 }
@@ -175,7 +182,12 @@ async function writeAccounts(root, s) {
   const stored = {
     ...s,
     accounts: s.accounts.map(
-      ({ remoteLimits: _remoteLimits, usageObservedAt: _usageObservedAt, ...a }) => a,
+      ({
+        remoteLimits: _remoteLimits,
+        usageObservedAt: _usageObservedAt,
+        usageUnderLimit: _usageUnderLimit,
+        ...a
+      }) => a,
     ),
   };
   await fsp.writeFile(tmp, JSON.stringify(stored, null, 1) + "\n", { mode: 0o600, flag: "wx" });
@@ -243,11 +255,18 @@ export function accountLimit(a, now = Date.now()) {
     Date.parse(a.limitObservedAt ?? "") || 0,
     Date.parse(a.usageObservedAt ?? "") || 0,
   );
+  // FU-798: a usage read taken after the local mark that shows the account under its limits cancels the mark.
+  const markTime = Date.parse(a.limitObservedAt ?? "");
+  const markCleared =
+    a.usageUnderLimit === true &&
+    Number.isFinite(markTime) &&
+    Date.parse(a.usageObservedAt) > markTime;
   const remote = (a.remoteLimits ?? [])
     .filter((x) => Date.parse(x.resetAt) > now && Date.parse(x.observedAt) > localTime)
     .sort((x, y) => Date.parse(y.resetAt) - Date.parse(x.resetAt))[0];
   if (
     a.limitedUntil &&
+    !markCleared &&
     Date.parse(a.limitedUntil) > now &&
     (!remote || Date.parse(a.limitedUntil) >= Date.parse(remote.resetAt))
   )

@@ -1634,3 +1634,62 @@ test("FU-643: an account with its own weekly cap takes no new session, move or r
     work.id,
   ); // cap removed
 });
+
+// FU-798: a usage read taken after the local limit mark and under every limit cancels the mark.
+async function markedAccount(reportFor) {
+  const root = scratch();
+  const a = await addAccount(root, { provider: "claude", name: "Personal" }, T0);
+  await setAccount(root, a.id, { credentialKind: "subscription" });
+  const reset = new Date(T0 + 4 * 86400000).toISOString();
+  await markAccountLimited(root, a.id, { resetAt: reset, kind: "weekly" }, T0 + 1000);
+  if (reportFor) {
+    const window = (usedPct) => ({ usedPct, resetsAt: reset });
+    fs.writeFileSync(
+      path.join(root, "accounts", "usage-reports.json"),
+      JSON.stringify({
+        v: 1,
+        reports: [{ accountId: a.id, provider: "claude", ...reportFor(window) }],
+      }),
+    );
+  }
+  return accountStatus(readAccounts(root).accounts[0], T0 + 3600000);
+}
+test("a newer usage read at 3% with the same reset clears the local limit mark (FU-798)", async () => {
+  const status = await markedAccount((w) => ({
+    status: "ok",
+    observedAt: new Date(T0 + 2000).toISOString(),
+    fiveHour: w(1),
+    weekly: w(3),
+  }));
+  assert.equal(status.state, "ok");
+});
+test("a newer usage read at 100% keeps the local limit mark (FU-798)", async () => {
+  const status = await markedAccount((w) => ({
+    status: "ok",
+    observedAt: new Date(T0 + 2000).toISOString(),
+    fiveHour: w(10),
+    weekly: w(100),
+  }));
+  assert.deepEqual([status.state, status.source], ["limited", "local"]);
+});
+test("a limited status in a newer read keeps the local limit mark (FU-798)", async () => {
+  const status = await markedAccount((w) => ({
+    status: "limited",
+    observedAt: new Date(T0 + 2000).toISOString(),
+    fiveHour: w(10),
+    weekly: w(50),
+  }));
+  assert.equal(status.state, "limited");
+});
+test("no usage read keeps the local limit mark (FU-798)", async () => {
+  assert.equal((await markedAccount(null)).state, "limited");
+});
+test("a usage read older than the mark keeps the local limit mark (FU-798)", async () => {
+  const status = await markedAccount((w) => ({
+    status: "ok",
+    observedAt: new Date(T0 + 500).toISOString(),
+    fiveHour: w(1),
+    weekly: w(3),
+  }));
+  assert.equal(status.state, "limited");
+});
