@@ -1693,3 +1693,19 @@ test("a usage read older than the mark keeps the local limit mark (FU-798)", asy
   }));
   assert.equal(status.state, "limited");
 });
+test("a newer usage read with no usable window keeps the local limit mark (FU-798)", async () => {
+  const none = await markedAccount(() => ({
+    status: "ok",
+    observedAt: new Date(T0 + 2000).toISOString(),
+    fiveHour: null,
+    weekly: null,
+  }));
+  assert.equal(none.state, "limited");
+  const empty = await markedAccount(() => ({
+    status: "ok",
+    observedAt: new Date(T0 + 2000).toISOString(),
+    fiveHour: {},
+    weekly: null,
+  }));
+  assert.equal(empty.state, "limited");
+});

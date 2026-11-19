@@ -112,9 +112,12 @@ function attachLimitObservations(s, remoteRaw, usageRaw) {
     a.usageUnderLimit =
       a.usageObservedAt !== null &&
       report.status === "ok" &&
-      [report.fiveHour, report.weekly].every(
-        (w) => !w || (Number.isFinite(w.usedPct) && w.usedPct < 100),
-      );
+      (() => {
+        const windows = [report.fiveHour, report.weekly].filter(Boolean);
+        return (
+          windows.length > 0 && windows.every((w) => Number.isFinite(w.usedPct) && w.usedPct < 100)
+        );
+      })();
   }
   return s;
 }
