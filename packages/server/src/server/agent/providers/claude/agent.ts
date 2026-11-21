@@ -2916,6 +2916,7 @@ class ClaudeAgentSession implements AgentSession {
       this.activeForegroundQuery = preparedQuery;
       this.activeForegroundInput = preparedInput;
       this.startQueryPump();
+      this.runtimeSafety.notePromptSent();
       if (queued) {
         // The prepared-object check is synchronous and runs after final authority validation.
         submitNativeQueuedDispatch(

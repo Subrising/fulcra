@@ -6,16 +6,27 @@ export class ClaudeRuntimeSafety {
   private supported = false;
   private liveTasks = new Set<string>();
   private readonly awaitingNotifications = new Set<string>();
+  // Background work starts inside a turn, and init only arrives with a turn. A process that
+  // has neither been sent a prompt nor reported init (a resumed chat that only answered
+  // control requests) owns no background work.
+  private turnSeen = false;
 
   reset(): void {
     this.supported = false;
+    this.turnSeen = false;
     this.liveTasks.clear();
     this.awaitingNotifications.clear();
+  }
+
+  /** Called before a prompt is written to this process. */
+  notePromptSent(): void {
+    this.turnSeen = true;
   }
 
   observe(message: SDKMessage): void {
     if (message.type !== "system") return;
     if (message.subtype === "init") {
+      this.turnSeen = true;
       // 2.1.292 is a known roster-capable release. Older binaries can demonstrate
       // support by sending a roster; a fresh process starts with an empty roster.
       const version = parseClaudeCodeVersion(message.claude_code_version ?? "");
@@ -37,6 +48,7 @@ export class ClaudeRuntimeSafety {
   }
 
   canStopRuntime(): boolean {
+    if (!this.supported && !this.turnSeen) return true;
     return this.supported && this.liveTasks.size === 0 && this.awaitingNotifications.size === 0;
   }
 }
