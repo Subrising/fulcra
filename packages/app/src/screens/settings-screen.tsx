@@ -168,7 +168,8 @@ import {
   useSettingsSidebarScroll,
 } from "@/navigation/settings-presentation";
 import { returnFromSettings, type SettingsView } from "@/navigation/settings-navigation";
-import { isWeb } from "@/constants/platform";
+import { isNative, isWeb } from "@/constants/platform";
+import { useOpenOnboarding } from "@/onboarding";
 
 // ---------------------------------------------------------------------------
 // View model
@@ -452,8 +453,25 @@ function GeneralSection({ settings, handleLanguageChange }: GeneralSectionProps)
             </DropdownMenuContent>
           </DropdownMenu>
         </View>
+        {isNative ? null : <ShowSetupAgainRow />}
       </View>
     </SettingsSection>
+  );
+}
+
+function ShowSetupAgainRow() {
+  const { t } = useTranslation();
+  const openOnboarding = useOpenOnboarding();
+  return (
+    <View style={[settingsStyles.row, settingsStyles.rowBorder]}>
+      <View style={settingsStyles.rowContent}>
+        <Text style={settingsStyles.rowTitle}>{t("settings.general.setup.label")}</Text>
+        <Text style={settingsStyles.rowHint}>{t("settings.general.setup.description")}</Text>
+      </View>
+      <Button variant="secondary" onPress={openOnboarding ?? undefined} disabled={!openOnboarding}>
+        {t("settings.general.setup.action")}
+      </Button>
+    </View>
   );
 }
 
@@ -483,7 +501,7 @@ function DiagnosticsSection({
             <Text style={settingsStyles.rowTitle}>{t("settings.diagnostics.app.rowTitle")}</Text>
             <Text style={settingsStyles.rowHint}>{t("settings.diagnostics.app.rowHint")}</Text>
           </View>
-          <Button variant="secondary" size="sm" onPress={openAppDiagnostic}>
+          <Button variant="secondary" onPress={openAppDiagnostic}>
             {t("settings.diagnostics.app.run")}
           </Button>
         </View>
@@ -496,7 +514,6 @@ function DiagnosticsSection({
           </View>
           <Button
             variant="secondary"
-            size="sm"
             onPress={handlePlayPress}
             disabled={!voiceAudioEngine || isPlaybackTestRunning}
           >
@@ -754,7 +771,6 @@ function DesktopAppUpdateRow() {
           </Text>
         </View>
         <SegmentedControl
-          size="sm"
           value={settings.releaseChannel}
           onValueChange={handleReleaseChannelChange}
           options={releaseChannelOptions}
@@ -776,7 +792,6 @@ function DesktopAppUpdateRow() {
         <View style={styles.aboutUpdateActions}>
           <Button
             variant="outline"
-            size="sm"
             onPress={handleCheckForUpdates}
             disabled={isChecking || isInstalling}
           >
@@ -784,7 +799,6 @@ function DesktopAppUpdateRow() {
           </Button>
           <Button
             variant="default"
-            size="sm"
             onPress={handleInstallUpdate}
             disabled={isChecking || isInstalling || !isUpdateReady}
           >

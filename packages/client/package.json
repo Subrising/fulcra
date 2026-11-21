@@ -1,6 +1,6 @@
 {
   "name": "@getpaseo/client",
-  "version": "0.15.0",
+  "version": "0.15.4",
   "description": "Paseo client SDK package",
   "files": [
     "dist",
@@ -55,10 +55,15 @@
     "test": "vitest run"
   },
   "dependencies": {
+<<<<<<< HEAD
     "@getpaseo/protocol": "0.15.0",
     "@getpaseo/relay": "0.15.0",
     "base64-js": "^1.5.1",
     "tweetnacl": "^1.0.3",
+=======
+    "@getpaseo/protocol": "0.15.4",
+    "@getpaseo/relay": "0.15.4",
+>>>>>>> refs/remotes/upstream/tags/v0.15.4
     "ws": "^8.20.0",
     "zod": "^4.4.3"
   },
