@@ -257,6 +257,7 @@ afterEach(async () => {
 });
 
 describe("PluginRuntime", () => {
+<<<<<<< HEAD
   it("keeps supervised plugin Git calls on the plugin IPC channel", async () => {
     vi.stubEnv("PASEO_SUPERVISED", "1");
     vi.stubEnv("paseo_supervised", "1");
@@ -274,10 +275,37 @@ export default function contribute(server) {
   return {version:result.stdout.trim(),supervised:Object.keys(process.env).some(key=>/^PASEO_SUPERVISED$/i.test(key)),electron:process.env.ELECTRON_RUN_AS_NODE??""};
  });
  return () => {};
+=======
+  it("reports a spent create budget without blaming a manager it did not call", async () => {
+    const first = await createPlugin(
+      "first-manager",
+      `import { existsSync, writeFileSync } from "node:fs";
+import path from "node:path";
+
+export default function contribute(server) {
+  return server.registerWorktreeManager({
+    async create({ path: directory }, { signal }) {
+      writeFileSync(path.join(directory, "started"), "");
+      while (!existsSync(path.join(directory, "decline"))) {
+        signal.throwIfAborted();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    },
+  });
+}`,
+    );
+    const second = await createPlugin(
+      "second-manager",
+      `export default function contribute(server) {
+  return server.registerWorktreeManager({
+    async create() { throw new Error("Second manager was called"); },
+  });
+>>>>>>> refs/remotes/upstream/tags/v0.17.0
 }`,
     );
     const runtime = createTestRuntime();
     try {
+<<<<<<< HEAD
       await runtime.startPlugin("owned-git-channel", directory);
       await expect(runtime.invoke("owned-git-channel", "inspect", null)).resolves.toEqual({
         version: expect.stringMatching(/^git version /),
@@ -287,6 +315,30 @@ export default function contribute(server) {
     } finally {
       await runtime.stopAll();
       vi.unstubAllEnvs();
+=======
+      await runtime.startPlugin("first-manager", first);
+      await runtime.startPlugin("second-manager", second);
+      // Advance the deadline clock while real subprocess IPC and timers keep running.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const creation = runtime.createWorktree({
+        kind: "branch-off",
+        repoRoot: first,
+        sourceCheckout: first,
+        branch: "topic",
+        slug: "topic",
+        path: first,
+        baseRef: "main",
+        untrusted: false,
+      });
+      const failure = creation.catch((error: unknown) => error);
+      await expect.poll(() => readTextIfPresent(path.join(first, "started"))).toBe("");
+      vi.setSystemTime(Date.now() + 120_000);
+      await writeFile(path.join(first, "decline"), "");
+      expect(await failure).toMatchObject({ message: "Worktree creation manager budget expired" });
+    } finally {
+      vi.useRealTimers();
+      await runtime.stopAll();
+>>>>>>> refs/remotes/upstream/tags/v0.17.0
     }
   });
 
@@ -1432,6 +1484,44 @@ export default function contribute(server: { registerProvider(provider: Provider
     }
   });
 
+  it("releases a subscription in the plugin when its subscribe times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const directory = await createPlugin(
+        "slow-subscribe",
+        `export default function contribute(plugin: unknown) { void plugin; return () => undefined; }`,
+      );
+      const child = createReloadChild("slow-subscribe", []);
+      const sent: Array<{ type: string; subscriptionId?: string }> = [];
+      const originalSend = child.send.bind(child);
+      child.send = (message, callback) => {
+        sent.push(message);
+        if (message.type !== "initialize") return originalSend(message, callback);
+        callback?.(null);
+        queueMicrotask(() =>
+          child.emitMessage({ type: "ready", methods: [], subscriptions: ["feed"], providers: [] }),
+        );
+        return true;
+      };
+      const runtime = createTestRuntime({ spawnChild: () => child });
+      await runtime.startPlugin("slow-subscribe", directory);
+
+      const subscription = runtime.startSubscription("slow-subscribe", "feed", {});
+      const rejection = subscription.ready.catch((error: Error) => error);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(rejection).resolves.toMatchObject({
+        message: expect.stringContaining("timed out"),
+      });
+      const subscribe = sent.find((message) => message.type === "subscribe");
+      expect(sent).toContainEqual({
+        type: "unsubscribe",
+        subscriptionId: subscribe?.subscriptionId,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("escalates a plugin that ignores graceful shutdown from TERM to KILL", async () => {
     vi.useFakeTimers();
     try {
@@ -1848,7 +1938,7 @@ export function inspect() { void Surface; return {}; }`,
     await runtime.stopAll();
   });
 
-  it("rejects a handler result that does not match its RPC output schema", async () => {
+  it("forwards a handler result for the client to validate against its RPC output schema", async () => {
     const directory = await createPlugin(
       "invalid-output",
       `import { z } from "zod";
@@ -1867,7 +1957,9 @@ export default function contribute(plugin: any) {
 
     await runtime.startPlugin("invalid-output", directory);
 
-    await expect(runtime.invoke("invalid-output", "broken", {})).rejects.toThrow();
+    await expect(runtime.invoke("invalid-output", "broken", {})).resolves.toEqual({
+      value: "wrong",
+    });
     await runtime.stopAll();
   });
 
@@ -1925,6 +2017,38 @@ export default function contribute(plugin: any) {
     expect(runtime.catalog()).toEqual([]);
     expect(runtime.getLogs("crashing").map((entry) => entry.message)).toContain("before crash");
     await expect(runtime.invoke("crashing", "anything", {})).rejects.toThrow(
+      "Plugin is not available",
+    );
+  });
+
+  it("reports and removes a plugin it terminated for an invalid message", async () => {
+    const directory = await createPlugin(
+      "invalid-message",
+      `export default function contribute(plugin: unknown) {
+  void plugin;
+  setTimeout(() => process.send?.({ type: "not-a-plugin-message" }), 20);
+  return () => undefined;
+}`,
+    );
+    const sessions = createTrackedSessionHost();
+    const runtime = createTestRuntime({ sessionHost: sessions.host });
+    const exited = new Promise<string>((resolve) => {
+      runtime.subscribe((pluginId, error) => {
+        if (pluginId === "invalid-message" && error) resolve(error);
+      });
+    });
+    await runtime.startPlugin("invalid-message", directory);
+
+    // The runtime kills the process; it must then treat it like any other exited plugin.
+    await expect(exited).resolves.toBe("Plugin process exited: invalid-message");
+    expect(sessions.active.size).toBe(0);
+    expect(runtime.catalog()).toEqual([]);
+    expect(
+      pluginMessages(runtime, "invalid-message").some((message) =>
+        message.includes("sent an invalid message"),
+      ),
+    ).toBe(true);
+    await expect(runtime.invoke("invalid-message", "anything", {})).rejects.toThrow(
       "Plugin is not available",
     );
   });
@@ -2418,7 +2542,7 @@ it.each(examples)("builds and loads the %s plugin example", async (example) => {
   const runtime = createTestRuntime(
     { settingsDirectory },
     undefined,
-    resolveDaemonVersion(import.meta.url),
+    example === "sidebar-views" ? "0.16.0" : resolveDaemonVersion(import.meta.url),
   );
   try {
     await runtime.startPlugin(example, path.join(examplesDirectory, example));

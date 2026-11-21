@@ -14,7 +14,7 @@ const ChangeRequestLookupTargetSchema = z.object({
   localBranchName: z.string().min(1).optional(),
 });
 
-// baseRefName is the display name; baseRef is the exact ref the worktree was cut from
+// baseRefName is the display name; baseRef is the checkout's current exact base
 // ("refs/remotes/upstream/main"). baseRef is optional because worktrees written before it
 // existed only have the name — there are no migrations, so readers fall back.
 const PaseoWorktreeMetadataV1Schema = z.object({
@@ -22,6 +22,7 @@ const PaseoWorktreeMetadataV1Schema = z.object({
   baseRefName: z.string().min(1),
   baseRef: z.string().min(1).optional(),
   changeRequestLookupTarget: ChangeRequestLookupTargetSchema.optional(),
+  worktreeManagerPluginId: z.string().min(1).optional(),
 });
 
 const PaseoWorktreeMetadataV2Schema = z.object({
@@ -29,6 +30,7 @@ const PaseoWorktreeMetadataV2Schema = z.object({
   baseRefName: z.string().min(1),
   baseRef: z.string().min(1).optional(),
   changeRequestLookupTarget: ChangeRequestLookupTargetSchema.optional(),
+  worktreeManagerPluginId: z.string().min(1).optional(),
   firstAgentBranchAutoName: z
     .discriminatedUnion("status", [
       z.object({
@@ -227,6 +229,7 @@ export async function writePaseoWorktreeMetadata(
     baseRefName: string;
     baseRef?: string;
     changeRequestLookupTarget?: PaseoWorktreeChangeRequestHint;
+    worktreeManagerPluginId?: string;
   },
 ): Promise<void> {
   return mutateMetadata(worktreeRoot, async (root) => {
@@ -244,8 +247,26 @@ export async function writePaseoWorktreeMetadata(
       ...(options.changeRequestLookupTarget
         ? { changeRequestLookupTarget: options.changeRequestLookupTarget }
         : {}),
+      ...(options.worktreeManagerPluginId
+        ? { worktreeManagerPluginId: options.worktreeManagerPluginId }
+        : {}),
     };
     await writePaseoWorktreeMetadataFile(root, metadata);
+  });
+}
+
+export async function setPaseoWorktreeBaseRef(input: {
+  worktreeRoot: string;
+  baseRef: string;
+}): Promise<void> {
+  return mutateMetadata(input.worktreeRoot, async (root) => {
+    const current = await readMetadataFile(root);
+    if (!current) throw new Error("Cannot change base: missing worktree metadata");
+    await writePaseoWorktreeMetadataFile(root, {
+      ...current,
+      baseRefName: branchNameFromRef(input.baseRef),
+      baseRef: input.baseRef,
+    });
   });
 }
 

@@ -6,7 +6,7 @@ import {
   type ChildProcess,
   type SpawnOptions,
 } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -29,6 +29,8 @@ export interface IsolatedHostDaemon {
 }
 
 export interface IsolatedHostDaemonOptions {
+  /** Written to the daemon's config.json; `mutableRelay` adds `daemon.relay` to it. */
+  config?: { daemon?: Record<string, unknown>; [key: string]: unknown };
   environment?: NodeJS.ProcessEnv;
   mutableRelay?: {
     enabled: boolean;
@@ -61,7 +63,17 @@ export async function getAvailableHostDaemonPort(): Promise<number> {
   return port;
 }
 
-async function waitForServer(port: number, child: ChildProcess): Promise<void> {
+/**
+ * Resolves once this daemon answers on its port. An open TCP port is not
+ * enough: the port is released before the daemon binds it, and whatever takes
+ * it in between also accepts connections while the daemon exits with
+ * EADDRINUSE. Only the daemon's own status reports its server id.
+ */
+async function waitForServer(
+  port: number,
+  child: ChildProcess,
+  identity: { serverId: string; paseoHome: string },
+): Promise<void> {
   const deadline = Date.now() + 90_000;
   let lastError: unknown = null;
 
@@ -72,22 +84,13 @@ async function waitForServer(port: number, child: ChildProcess): Promise<void> {
       );
     }
     try {
-      await new Promise<void>((resolve, reject) => {
-        const socket = net.connect(port, "127.0.0.1", () => {
-          socket.end();
-          resolve();
-        });
-        socket.setTimeout(1_000, () => {
-          socket.destroy();
-          reject(new Error(`Connection timed out to isolated daemon port ${port}`));
-        });
-        socket.on("error", reject);
-      });
-      return;
+      const serverId = await readServerId(port, identity.paseoHome);
+      if (serverId === identity.serverId) return;
+      lastError = new Error(`Port ${port} is served by ${serverId}, not ${identity.serverId}`);
     } catch (error) {
       lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 100));
     }
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
 
   throw new Error(
@@ -95,6 +98,47 @@ async function waitForServer(port: number, child: ChildProcess): Promise<void> {
       lastError instanceof Error ? lastError.message : String(lastError)
     }`,
   );
+}
+
+/**
+ * Reads the server id from the daemon's status route. The route needs a bearer
+ * on a password-protected daemon; the daemon accepts the local credential it
+ * writes into its home before listening, as the CLI does for local status.
+ */
+async function readServerId(port: number, paseoHome: string): Promise<string> {
+  const localCredential = await readFile(path.join(paseoHome, "local-credential"), "utf8").then(
+    (token) => token.trim(),
+    () => null,
+  );
+  const response = await fetch(`http://127.0.0.1:${port}/api/status`, {
+    headers: localCredential ? { authorization: `Bearer ${localCredential}` } : {},
+    signal: AbortSignal.timeout(1_000),
+  });
+  if (!response.ok) throw new Error(`Status request to port ${port} returned ${response.status}`);
+  const status = (await response.json()) as { serverId?: unknown };
+  return String(status.serverId);
+}
+
+function withMutableRelay(
+  config: NonNullable<IsolatedHostDaemonOptions["config"]>,
+  relay: NonNullable<IsolatedHostDaemonOptions["mutableRelay"]>,
+): NonNullable<IsolatedHostDaemonOptions["config"]> {
+  const endpoint =
+    relay.endpoint ??
+    (process.env.E2E_RELAY_PORT ? `127.0.0.1:${process.env.E2E_RELAY_PORT}` : "127.0.0.1:9");
+  return {
+    ...config,
+    daemon: {
+      ...config.daemon,
+      relay: {
+        enabled: relay.enabled,
+        endpoint,
+        publicEndpoint: endpoint,
+        useTls: false,
+        publicUseTls: false,
+      },
+    },
+  };
 }
 
 export async function startIsolatedHostDaemon(
@@ -143,24 +187,13 @@ export async function startIsolatedHostDaemon(
       throw error;
     }
   }
-  if (options.mutableRelay) {
-    const endpoint =
-      options.mutableRelay.endpoint ??
-      (process.env.E2E_RELAY_PORT ? `127.0.0.1:${process.env.E2E_RELAY_PORT}` : "127.0.0.1:9");
+  const config = options.mutableRelay
+    ? withMutableRelay(options.config ?? {}, options.mutableRelay)
+    : options.config;
+  if (config) {
     await writeFile(
       path.join(paseoHome, "config.json"),
-      `${JSON.stringify({
-        version: 1,
-        daemon: {
-          relay: {
-            enabled: options.mutableRelay.enabled,
-            endpoint,
-            publicEndpoint: endpoint,
-            useTls: false,
-            publicUseTls: false,
-          },
-        },
-      })}\n`,
+      `${JSON.stringify({ version: 1, ...config })}\n`,
     );
   }
   const serverDir = publishedPackageRoot
@@ -224,7 +257,7 @@ export async function startIsolatedHostDaemon(
     });
 
     try {
-      await waitForServer(port, spawned);
+      await waitForServer(port, spawned, { serverId, paseoHome });
       return spawned;
     } catch (error) {
       throw new Error(
@@ -234,6 +267,7 @@ export async function startIsolatedHostDaemon(
     }
   };
 
+<<<<<<< HEAD
   // The free port is released before the daemon binds it. Another process can take
   // it in between, so a first start that finds the port in use tries a new one.
   const spawnFirstDaemon = async (): Promise<ChildProcess> => {
@@ -243,13 +277,31 @@ export async function startIsolatedHostDaemon(
       } catch (error) {
         const inUse = error instanceof Error && error.message.includes("EADDRINUSE");
         if (!inUse || attempt >= 3) throw error;
+=======
+  // The reserved port is released before the daemon binds it, so another
+  // process can take it in between. Only the first start picks a new port:
+  // restart() keeps the endpoint the app already knows.
+  const startOnFreePort = async (): Promise<void> => {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await spawnDaemon();
+        return;
+      } catch (error) {
+        const lostPort = error instanceof Error && error.message.includes("EADDRINUSE");
+        if (!lostPort || attempt === 3) throw error;
+        await stopDaemon();
+>>>>>>> refs/remotes/upstream/tags/v0.17.0
         port = await getAvailableHostDaemonPort();
       }
     }
   };
 
   try {
+<<<<<<< HEAD
     await spawnFirstDaemon();
+=======
+    await startOnFreePort();
+>>>>>>> refs/remotes/upstream/tags/v0.17.0
   } catch (error) {
     await stopDaemon();
     if (!options.preserveHome) {

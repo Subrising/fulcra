@@ -3,6 +3,7 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const ko: TranslationResources = {
+<<<<<<< HEAD
   plugins: {
     // Fulcra 0.2.9: English until translated; the old text gave the host-password route.
     commandCentreRelay: en.plugins.commandCentreRelay,
@@ -12,6 +13,12 @@ export const ko: TranslationResources = {
     unknownProject: "프로젝트 알 수 없음",
     reportsTo: "{{leader}}에 보고",
     unknownAccessibility: "소유 프로젝트를 알 수 없음",
+=======
+  pluginCombobox: {
+    searching: "검색 중…",
+    empty: "결과 없음",
+    failed: "검색 실패: {{message}}",
+>>>>>>> refs/remotes/upstream/tags/v0.17.0
   },
   paneFind: {
     connectionFailure: "이 채팅을 검색할 수 없습니다. 호스트 연결을 확인하고 다시 시도하세요.",
@@ -96,14 +103,23 @@ export const ko: TranslationResources = {
       close: "메뉴 닫기",
     },
     commandCenter: {
-      placeholder: "명령, 파일, 워크스페이스 및 에이전트 검색...",
+      placeholder: "워크스페이스, 파일 및 작업 검색...",
+      placeholderWithoutFiles: "워크스페이스 및 작업 검색...",
       filePlaceholder: "파일 검색...",
+      workspacePlaceholder: "워크스페이스 검색...",
+      actionPlaceholder: "작업 검색...",
       searchingFiles: "파일 검색 중...",
       noMatches: "일치 항목 없음",
       actions: "작업",
       files: "파일",
       workspaces: "워크스페이스",
-      agents: "에이전트",
+      recentWorkspaces: "최근 워크스페이스",
+      tabs: {
+        all: "전체",
+        workspaces: "워크스페이스",
+        files: "파일",
+        actions: "작업",
+      },
       newAgent: "새 에이전트",
       open: "{{name}} 열기",
       openInSidePane: "사이드 패널에서 {{name}} 열기",
@@ -112,6 +128,7 @@ export const ko: TranslationResources = {
       home: "홈",
       groupByProject: "프로젝트별 그룹화",
       groupByStatus: "상태별 그룹화",
+      copyBrowserHostName: "브라우저 호스트 이름 복사",
       modelGroupLabel: "모델",
       modelSearchKeywords: "모델 전환 모델 변경 모델 설정 모델 선택",
       thinkingGroupLabel: "추론",
@@ -272,7 +289,7 @@ export const ko: TranslationResources = {
     states: {
       notFound: "에이전트를 찾을 수 없습니다",
       failedToLoad: "에이전트를 불러오지 못했습니다",
-      reconnecting: "호스트에 다시 연결하는 중",
+      reconnecting: "다시 연결하는 중",
       updating: "메시지 업데이트 중",
       timelineSyncFailed: "에이전트 기록을 새로고침할 수 없습니다.",
       timelineSyncRetrying: "재시도 중…",
@@ -381,6 +398,11 @@ export const ko: TranslationResources = {
       details: "세부 정보",
     },
     dictation: {
+      insecureContext: "마이크를 사용하려면 HTTPS 또는 localhost에서 Paseo를 여세요.",
+      unsupported: "이 브라우저에서는 받아쓰기를 사용할 수 없습니다.",
+      noMicrophone: "마이크를 연결한 후 다시 시도하세요.",
+      permissionDenied: "마이크 접근을 허용한 후 다시 시도하세요.",
+      startFailed: "받아쓰기를 시작할 수 없습니다. 다시 시도하세요.",
       paused: "마이크가 중단되었습니다. 재개를 기다리는 중…",
       start: "음성 받아쓰기 시작",
       cancel: "받아쓰기 취소",
@@ -396,6 +418,25 @@ export const ko: TranslationResources = {
       next: "다음",
       answerPlaceholder: "답변을 입력하세요...",
       otherPlaceholder: "기타...",
+    },
+    backgroundWork: {
+      heartbeat: "하트비트",
+      pillOne: "백그라운드 작업 1개",
+      pillMany: "백그라운드 작업 {{count}}개",
+      notRunning: "더 이상 실행 중이 아님",
+      dismiss: "닫기",
+      stop: "중지",
+      stopping: "중지 중…",
+      stopError: "중지를 확인하지 못했습니다.",
+      label: "백그라운드",
+      title: "백그라운드 작업",
+      waiting: "작업 세부 정보를 기다리는 중",
+      error: "백그라운드 작업을 불러오지 못했습니다",
+      retry: "다시 시도",
+      running: "백그라운드 작업 실행 중",
+      shell: "셸",
+      monitor: "모니터",
+      other: "기타 작업",
     },
     todo: {
       title: "작업",
@@ -470,8 +511,7 @@ export const ko: TranslationResources = {
         archivedTitle: "워크스페이스가 보관되었습니다",
         restoreDescription:
           "{{workspaceName}}를 복원하여 에이전트로 돌아갑니다. 워크트리는 {{branch}} 브랜치를 사용합니다.",
-        restoreWithoutBranchDescription:
-          "{{workspaceName}}를 복원하여 에이전트로 돌아갑니다. 저장된 기반 브랜치 또는 저장소 기본 브랜치에서 새 브랜치를 만듭니다.",
+        restoreWithoutBranchDescription: "{{workspaceName}}를 복원하여 에이전트로 돌아갑니다.",
         unarchiveDescription: "{{workspaceName}}가 보관되었습니다. 다시 열려면 보관을 취소하세요.",
         restoreAction: "복원",
         unarchiveAction: "보관 취소",
@@ -954,6 +994,9 @@ export const ko: TranslationResources = {
         },
       },
       diff: {
+        baseBranch: {
+          title: "기준 브랜치",
+        },
         openChangesTab: "변경사항 탭 열기",
         openDiffTab: "Diff 탭 열기",
         closeChangesTab: "변경사항 탭 닫기",
@@ -1175,6 +1218,8 @@ export const ko: TranslationResources = {
     title: "새로운 소식",
     installed: "설치됨",
     showMore: "더 보기",
+    showAllChanges: "모든 변경 사항 보기",
+    hideAllChanges: "모든 변경 사항 숨기기",
     openWebsite: "전체 변경 내역",
     error: {
       title: "변경 내역을 불러오지 못했습니다",
@@ -1401,6 +1446,14 @@ export const ko: TranslationResources = {
     },
   },
   sidebar: {
+    view: {
+      failed: "사이드바 보기를 불러오지 못했습니다.",
+      useDefault: "기본 보기 사용",
+      readFailed: "사이드바 보기 설정을 불러오지 못했습니다.",
+      agentUnavailable: "에이전트를 더 이상 사용할 수 없습니다",
+      terminalUnavailable: "터미널을 더 이상 사용할 수 없습니다",
+      projectUnavailable: "프로젝트를 더 이상 사용할 수 없습니다",
+    },
     statusGroupAccessibility: "{{label}} 그룹",
     statusBucket: {
       needsInput: "입력 필요",
@@ -1476,6 +1529,7 @@ export const ko: TranslationResources = {
       hosts: "호스트",
       settings: "설정",
       closeSidebar: "사이드바 닫기",
+      moreActions: "추가 작업",
     },
     footer: {
       usage: "사용량",
@@ -1582,6 +1636,9 @@ export const ko: TranslationResources = {
         hostDisconnected: "호스트가 연결되어 있지 않습니다",
         hideFailed: "워크스페이스를 숨기지 못했습니다",
         archiveFailed: "워크스페이스를 보관하지 못했습니다.",
+        archived: "워크스페이스를 보관했습니다",
+        undoArchive: "실행 취소",
+        undoArchiveFailed: "보관을 취소하지 못했습니다",
       },
     },
   },
@@ -1589,8 +1646,9 @@ export const ko: TranslationResources = {
     title: "새 워크스페이스",
     create: "생성",
     isolation: {
-      local: "로컬",
+      local: "프로젝트 디렉터리",
       worktree: "새 워크트리",
+      existing: "기존 워크트리",
       label: "격리",
     },
     fields: {
@@ -1605,12 +1663,17 @@ export const ko: TranslationResources = {
       createWorktreeFailed: "워크트리를 생성하지 못했습니다",
       composerStateRequired: "작성기 상태가 필요합니다",
       selectModel: "모델을 선택하세요",
+      branchInProjectDirectory:
+        "{{branch}} 브랜치는 프로젝트 디렉터리에 체크아웃되어 있습니다. 거기서 작업하려면 프로젝트 디렉터리를 선택하거나, 새 브랜치를 만드세요.",
+      branchInWorktree:
+        "{{branch}} 브랜치는 {{path}}에 체크아웃되어 있습니다. 기존 워크트리에서 그 워크트리를 선택하거나, 새 브랜치를 만드세요.",
     },
     tooltips: {
       project: "Choose the project",
       host: "Choose the host",
       isolation: "Choose the isolation level",
       startingRef: "시작 위치를 선택하세요",
+      worktree: "작업할 워크트리를 선택하세요",
       launch: "Choose what to launch",
     },
     refPicker: {
@@ -1618,8 +1681,31 @@ export const ko: TranslationResources = {
       intoBase: "{{baseRef}}(으)로",
       searching: "검색 중...",
       noMatchingRefs: "일치하는 ref가 없습니다.",
-      searchPlaceholder: "브랜치와 PR 검색",
+      searchBranches: "브랜치 검색",
+      searchPullRequests: "풀 리퀘스트 검색",
+      searchPullRequests_mr: "머지 리퀘스트 검색",
+      branches: "브랜치",
+      pullRequests: "풀 리퀘스트",
+      pullRequests_mr: "머지 리퀘스트",
+      pullRequestsShort: "PR",
+      pullRequestsShort_mr: "MR",
+      branchOff: "새 브랜치",
+      checkout: "체크아웃",
+      branchOffHint: "여기서 새 브랜치를 만듭니다",
+      checkoutHint: "바로 작업합니다",
+      base: "기준",
+      from: "기준",
+      branch: "브랜치",
+      pullRequest: "풀 리퀘스트",
+      pullRequest_mr: "머지 리퀘스트",
+      inProjectDirectory: "프로젝트 디렉터리에 있음",
+      inWorktree: "워크트리에 있음",
       title: "시작 위치",
+    },
+    worktreePicker: {
+      title: "워크트리",
+      searchPlaceholder: "워크트리 검색",
+      empty: "일치하는 워크트리가 없습니다.",
     },
     launch: {
       title: "What to launch",
@@ -1787,7 +1873,14 @@ export const ko: TranslationResources = {
     integrations: {
       cli: {
         statusFailed: "CLI 설치 상태를 확인할 수 없습니다.",
+<<<<<<< HEAD
         installFailed: "Fulcra CLI를 설치할 수 없습니다.",
+=======
+        installFailed: "Paseo CLI를 설치할 수 없습니다.",
+        uninstallFailed: "Paseo CLI를 제거할 수 없습니다.",
+        keptForeign:
+          "Paseo가 설치하지 않은 paseo 명령은 그대로 두었습니다. 제거하려면 직접 삭제하세요.",
+>>>>>>> refs/remotes/upstream/tags/v0.17.0
       },
     },
   },
@@ -1839,6 +1932,7 @@ export const ko: TranslationResources = {
     openPath: "경로 열기",
   },
   branchSwitcher: {
+    failedToLoad: "브랜치를 불러오지 못했습니다. 선택기를 다시 열어 재시도하세요.",
     triggerTooltip: "워크스페이스 브랜치 전환",
     currentBranch: "현재 브랜치: {{branchName}}. 브랜치를 전환하려면 누르세요.",
     placeholder: "브랜치 전환...",
@@ -1862,10 +1956,18 @@ export const ko: TranslationResources = {
     loadingCommands: "명령 불러오는 중...",
     noFiles: "파일 또는 디렉터리를 찾을 수 없습니다",
     noCommands: "명령을 찾을 수 없습니다",
+<<<<<<< HEAD
     accountUnavailable:
       "이 컴퓨터에서는 아직 계정 명령을 사용할 수 없습니다. {{host}}에서 Fulcra를 업데이트하세요.",
     thisComputer: "이 컴퓨터",
     failedToLoad: "불러오지 못했습니다",
+=======
+    loadingProviderCommands: "{{provider}} 명령 불러오는 중...",
+    commandsFailed: "명령을 불러오지 못했습니다",
+    providerCommandsFailed: "{{provider}} 명령을 불러오지 못했습니다",
+    filesFailed: "파일을 검색하지 못했습니다",
+    skillTag: "스킬",
+>>>>>>> refs/remotes/upstream/tags/v0.17.0
     chooseProjectForCommands: "명령을 보려면 프로젝트를 선택하세요",
     chooseModelForCommands: "명령을 보려면 모델을 선택하세요",
   },
@@ -1903,7 +2005,65 @@ export const ko: TranslationResources = {
     },
   },
   onboarding: {
+<<<<<<< HEAD
     title: "Fulcra에 오신 것을 환영합니다",
+=======
+    setup: {
+      title: "Paseo",
+      stepCounter: "{{total}}단계 중 {{current}}단계",
+      skip: "설정 건너뛰기",
+      continue: "계속",
+      finish: "완료",
+      steps: {
+        appearance: {
+          label: "모양",
+          title: "Paseo에 오신 것을 환영합니다",
+          description: "먼저 모양을 골라 보세요",
+        },
+        providers: {
+          label: "제공자",
+          title: "제공자",
+          description: "Paseo는 이 컴퓨터에 이미 설치된 에이전트 CLI를 사용합니다",
+        },
+        projects: {
+          label: "프로젝트",
+          title: "프로젝트 추가",
+          description: "에이전트가 어디에서 작업하길 원하나요",
+          addProject: "프로젝트 추가",
+          added: "추가됨",
+          suggestions: {
+            loading: "작업했던 폴더를 찾는 중",
+            empty: "최근 프로젝트를 찾지 못했습니다",
+            lastUsed: "마지막 사용 {{time}}",
+            addSelected_one: "프로젝트 {{count}}개 추가",
+            addSelected_other: "프로젝트 {{count}}개 추가",
+            adding: "추가하는 중…",
+            addFailed: "이 폴더를 추가하지 못했습니다",
+          },
+        },
+        orchestration: {
+          label: "오케스트레이션",
+          title: "에이전트가 Paseo를 사용하도록 허용",
+          description: "에이전트가 워크스페이스를 만들고 다른 에이전트와 대화하게 하세요",
+        },
+        phone: {
+          label: "모바일",
+          title: "어디서나 에이전트와 함께",
+          description:
+            "모든 기능을 갖춘 네이티브 모바일 앱으로 휴대폰에서 어떤 Paseo 컴퓨터든 제어할 수 있습니다",
+          appStore: "App Store",
+          googlePlay: "Google Play",
+          connectTitle: "연결 방법 선택",
+          connectDocs: "문서",
+          openConnectDocs: "연결 문서 열기",
+          recommended: "권장",
+          relay: { title: "릴레이", hint: "엔드투엔드 암호화, QR 코드를 스캔하세요" },
+          tailscale: { title: "Tailscale", hint: "약간의 설정이 필요합니다" },
+        },
+      },
+    },
+    title: "Paseo에 오신 것을 환영합니다",
+>>>>>>> refs/remotes/upstream/tags/v0.17.0
     subtitle: "시작하려면 컴퓨터를 연결하세요",
     actions: {
       settings: "설정",
@@ -2144,7 +2304,13 @@ export const ko: TranslationResources = {
       notNow: "지금은 아님",
       directConnectionHint:
         "릴레이 없이 TCP, Tailscale 또는 다른 VPN을 통해 직접 연결하세요. QR 코드가 생성되지 않습니다.",
+<<<<<<< HEAD
       updateRequired: "Fulcra 데스크톱에서 릴레이를 활성화하려면 호스트를 업데이트하세요.",
+=======
+      tailscaleDocs: "Tailscale 설정",
+      tailscaleDocsAccessibility: "Tailscale로 연결하는 방법 읽기",
+      updateRequired: "Paseo 데스크톱에서 릴레이를 활성화하려면 호스트를 업데이트하세요.",
+>>>>>>> refs/remotes/upstream/tags/v0.17.0
       unavailable: "페어링 정보를 사용할 수 없습니다.",
       hint: "휴대폰의 Fulcra로 이 QR 코드를 스캔하거나 아래 링크를 복사하세요.",
       securityWarning:
@@ -2190,6 +2356,7 @@ export const ko: TranslationResources = {
     hostUnavailable: "다운로드 호스트를 사용할 수 없습니다.",
     cancelled: "다운로드가 취소되었습니다.",
     failed: "파일을 다운로드하지 못했습니다.",
+    httpFailed: "파일을 다운로드하지 못했습니다 (HTTP {{status}}).",
     shareFile: "파일 공유",
     shareFileNamed: "{{fileName}} 공유",
   },
@@ -2642,6 +2809,7 @@ export const ko: TranslationResources = {
     turnOn: "켜기",
 
     options: "설정",
+    host: "호스트",
     refreshFailed: "사용량을 새로 고칠 수 없습니다",
     noHosts: "연결된 호스트가 없습니다",
     agentError: "사용량을 불러올 수 없습니다: {{reason}}",
@@ -2658,6 +2826,8 @@ export const ko: TranslationResources = {
     loginExpired: "로그인이 {{relativeTime}}에 만료되었습니다. {{remedy}}",
     title: "플랜 사용량",
     refresh: "새로 고침",
+    reorderCard: "{{source}} 순서 변경",
+    showCard: "{{source}} 표시",
     refreshAll: "모두 새로 고침",
     refreshing: "새로 고치는 중...",
     loading: "사용량 불러오는 중...",
@@ -2698,6 +2868,9 @@ export const ko: TranslationResources = {
       resetsIn: "{{duration}} 후 재설정",
       resetsAtWeekday: "{{weekday}} {{time}}",
       resetsAtDate: "{{date}} {{time}}",
+      projectedLeftAtReset: "초기화 시 약 {{percentage}} 남을 예정",
+      limitReached: "한도에 도달함",
+      mayHaveRunOut: "한도를 소진했을 수 있음",
       runsOutNow: "지금 한도에 도달",
       runsOutIn: "{{duration}} 후 한도에 도달",
       justNow: "방금",
@@ -2874,6 +3047,11 @@ export const ko: TranslationResources = {
     general: {
       title: "일반",
       sending: "전송",
+      setup: {
+        label: "초기 설정",
+        description: "모양, 제공자, 프로젝트, 휴대폰 페어링을 다시 진행합니다",
+        action: "설정 다시 보기",
+      },
       browserData: {
         title: "브라우저 데이터",
         siteData: "쿠키 및 사이트 데이터",
@@ -3041,6 +3219,13 @@ export const ko: TranslationResources = {
         description: "프롬프트 사이를 이동하기 위한 개요 표시",
       },
       sidebar: {
+        view: {
+          title: "사이드바 보기",
+          label: "보기",
+          default: "기본 보기",
+          unavailable:
+            "선택한 보기를 사용할 수 없거나 비활성화되어 있습니다. 기본 보기를 표시합니다.",
+        },
         header: {
           title: "헤더",
           description: "사이드바 상단에 표시할 항목과 순서를 선택하세요",
@@ -3076,10 +3261,11 @@ export const ko: TranslationResources = {
       layout: {
         title: "레이아웃",
         contentWidth: "콘텐츠 너비",
-        contentWidthHint: "와이드 화면에서 채팅과 Markdown 파일의 최대 너비",
-        contentWidthAccessibility: "콘텐츠 너비(픽셀)",
-        reset: "재설정",
-        resetAccessibility: "콘텐츠 너비를 기본값으로 재설정",
+        contentWidthHint: "채팅, 메시지 입력란, Markdown 미리보기의 너비",
+        contentWidthDefault: "기본",
+        contentWidthWide: "넓게",
+        contentWidthFull: "전체",
+        contentWidthCustom: "사용자 지정 너비 · {{width}} px",
       },
       syntax: {
         title: "구문",
@@ -3149,6 +3335,8 @@ export const ko: TranslationResources = {
         toggleFocusMode: "집중 모드 토글",
         cycleTheme: "테마 순환",
         focusMessageInput: "메시지 입력란에 포커스",
+        toggleModelPicker: "모델 선택기 열기 또는 닫기",
+        cycleEffort: "추론 강도 순환",
         cycleAgentMode: "에이전트 모드 전환",
         toggleVoiceMode: "음성 모드 토글",
         startStopDictation: "받아쓰기 시작/중지",
@@ -3171,11 +3359,7 @@ export const ko: TranslationResources = {
       commandLine: {
         title: "명령줄",
         description: "터미널에서 에이전트를 제어하고 스크립팅합니다",
-      },
-      actions: {
-        install: "설치",
-        installing: "설치 중...",
-        installed: "설치됨",
+        accessibilityLabel: "Paseo CLI 설치",
       },
     },
     permissions: {
@@ -3253,13 +3437,20 @@ export const ko: TranslationResources = {
         ...en.settings.host.skills,
         sectionTitle: "오케스트레이션 스킬",
         title: "오케스트레이션 스킬",
-        description: "CLI를 통해 에이전트가 오케스트레이션하도록 가르칩니다",
+        description: "에이전트에게 Paseo 도구 사용법을 알려 줍니다",
         updateAvailable: "업데이트 사용 가능",
+<<<<<<< HEAD
         updateTitle: "Fulcra 스킬을 업데이트할까요?",
         updateFallback: "번들된 스킬을 내 컴퓨터에 동기화합니다.",
         uninstallTitle: "Fulcra 스킬을 제거할까요?",
         uninstallMessage:
           "~/.agents, ~/.claude, ~/.codex에서 모든 Fulcra 오케스트레이션 스킬을 제거합니다.",
+=======
+        updateTitle: "Paseo 스킬을 업데이트할까요?",
+        uninstallTitle: "Paseo 스킬을 제거할까요?",
+        uninstallMessage:
+          "~/.agents, ~/.claude, ~/.codex, ~/.gemini/config에서 모든 Paseo 오케스트레이션 스킬을 제거합니다.",
+>>>>>>> refs/remotes/upstream/tags/v0.17.0
         choose: "스킬 선택",
         chooseAll: "모든 스킬",
         chooseAllHint: "나중에 추가되는 항목을 포함하여 모든 번들 스킬을 설치된 상태로 유지합니다.",
@@ -3267,16 +3458,13 @@ export const ko: TranslationResources = {
         chooseEmpty: "이 빌드에는 번들 스킬이 없습니다.",
         removeTitle: "선택 해제한 스킬을 제거할까요?",
         removeMessage:
-          "{{skills}}는 ~/.agents, ~/.claude 및 ~/.codex에서 삭제됩니다. 해당 스킬 폴더 안에 추가한 모든 항목도 삭제됩니다.",
+          "{{skills}}는 ~/.agents, ~/.claude, ~/.codex 및 ~/.gemini/config에서 삭제됩니다. 해당 스킬 폴더 안에 추가한 모든 항목도 삭제됩니다.",
         saveFailed: "선택한 스킬을 저장하지 못했습니다.",
         statusFailed: "오케스트레이션 스킬 상태를 확인할 수 없습니다.",
         updateFailed: "오케스트레이션 스킬을 업데이트할 수 없습니다.",
         uninstallFailed: "오케스트레이션 스킬을 제거할 수 없습니다.",
         saveSelectionFailed: "오케스트레이션 스킬 선택을 저장하지 못했습니다.",
         actions: {
-          install: "설치",
-          installing: "설치 중...",
-          installed: "설치됨",
           update: "업데이트",
           working: "작업 중...",
           remove: "제거",
@@ -3297,7 +3485,12 @@ export const ko: TranslationResources = {
         enableTools: {
           title: "Fulcra 도구 활성화",
           hint: "에이전트가 워크트리, 에이전트, 일정을 관리할 수 있습니다",
+<<<<<<< HEAD
           accessibilityLabel: "Fulcra 도구 주입",
+=======
+          accessibilityLabel: "Paseo 도구 주입",
+          updateFailed: "Paseo 도구를 업데이트할 수 없습니다.",
+>>>>>>> refs/remotes/upstream/tags/v0.17.0
         },
         systemPrompt: {
           title: "시스템 프롬프트",
@@ -3470,7 +3663,26 @@ export const ko: TranslationResources = {
     providers: {
       title: "프로바이더",
       addProvider: "프로바이더 추가",
+<<<<<<< HEAD
       refreshModels: "모델 새로고침",
+=======
+      list: {
+        add: "프로바이더",
+        updatingTo: "{{version}}(으)로 업데이트 중...",
+      },
+      detail: {
+        backToProviders: "프로바이더로 돌아가기",
+        notOnHost: "이 호스트에 없는 프로바이더입니다",
+        enabled: "사용",
+        unavailableTitle: "{{name}}을(를) 사용할 수 없습니다",
+        troubleshooting: "문제 해결",
+        status: "프로바이더 상태",
+        checked: "{{time}} 확인됨",
+        diagnosticReport: "진단 보고서",
+        dangerZone: "위험 구역",
+        removeHint: "config.json에서 이 프로바이더를 삭제합니다",
+      },
+>>>>>>> refs/remotes/upstream/tags/v0.17.0
       providerDetails: "{{name}} 프로바이더 세부 정보",
       enableProvider: "{{name}} 활성화",
       unavailable: "프로바이더를 보려면 이 호스트에 연결하세요",
@@ -3513,9 +3725,30 @@ export const ko: TranslationResources = {
         retrying: "다시 시도 중...",
         noSearchMatches: "검색과 일치하는 모델이 없습니다",
         noneDetected: "감지된 모델이 없습니다",
+        noCustom: "사용자 지정 모델 없음",
         discovered: "발견됨",
         custom: "사용자 지정 모델",
         updated: "{{time}} 업데이트됨",
+      },
+      installation: {
+        title: "설치",
+        version: "버전",
+        installed: "설치됨",
+        notInstalled: "설치되지 않음",
+        install: "설치",
+        checking: "확인 중...",
+        failed: "설치를 확인할 수 없습니다",
+        updates: "업데이트",
+        upToDate: "최신 상태",
+        updateAvailable: "업데이트 가능",
+        updateInstructions: "업데이트 안내",
+        update: "업데이트",
+        updating: "업데이트 중...",
+        updated: "업데이트됨",
+        updateFailed: "업데이트 실패",
+        outputTruncated: "이전 출력이 삭제되었습니다.",
+        updatesFailed: "업데이트를 확인할 수 없습니다",
+        installInstructions: "설치 안내",
       },
       diagnostic: {
         title: "진단",

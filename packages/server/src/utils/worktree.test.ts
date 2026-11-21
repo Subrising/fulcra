@@ -3,7 +3,11 @@ import {
   createWorktree as createWorktreePrimitive,
   deriveWorktreeProjectHash,
   deletePaseoWorktree,
+<<<<<<< HEAD
   finishInterruptedWorktreeAdd,
+=======
+  readWorktreeHead,
+>>>>>>> refs/remotes/upstream/tags/v0.17.0
   isPaseoOwnedWorktreeCwd,
   mapWorkspaceCwdToWorktree,
   runWorktreeTeardownCommands,
@@ -194,6 +198,7 @@ describe("paseo worktree manager", () => {
     });
   });
 
+<<<<<<< HEAD
   // FU-372: a slow disk made `git worktree add` outlive its limit. The kill left a locked worktree, an index.lock
   // and a partial file set, and no agent was created.
   it("finishes a worktree checkout that a timeout killed part-way", async () => {
@@ -307,6 +312,30 @@ describe("paseo worktree manager", () => {
         cause,
       }),
     ).rejects.toBe(cause);
+=======
+  it("retains bounded diagnostic text per teardown output stream", async () => {
+    const limit = 1024 * 1024;
+    writeFileSync(
+      join(repoDir, "paseo.json"),
+      JSON.stringify({
+        worktree: {
+          teardown: `node -e "process.stdout.write('x'.repeat(${2 * limit})); process.stderr.write('y'.repeat(${2 * limit}))"`,
+        },
+      }),
+    );
+
+    const [result] = await runWorktreeTeardownCommands({
+      worktreePath: repoDir,
+      repoRootPath: repoDir,
+      branchName: "main",
+    });
+
+    expect({
+      exitCode: result.exitCode,
+      stdoutLength: result.stdout.length,
+      stderrLength: result.stderr.length,
+    }).toEqual({ exitCode: 0, stdoutLength: limit, stderrLength: limit });
+>>>>>>> refs/remotes/upstream/tags/v0.17.0
   });
 
   it("rejects paths that are not under the paseo worktrees root", async () => {
@@ -422,7 +451,34 @@ describe("paseo worktree manager", () => {
     expect(existsSync(created.worktreePath)).toBe(true);
   });
 
+<<<<<<< HEAD
   it("accepts a worktree when Git reports its source through native and long path spellings", async () => {
+=======
+  it("does not read a parent repository's HEAD when the worktree has no .git", async () => {
+    const directory = join(repoDir, "missing-worktree");
+    mkdirSync(directory);
+    await expect(readWorktreeHead(directory)).resolves.toBeNull();
+  });
+
+  it("keeps a worktree when writing its retention ref fails", async () => {
+    const created = await createLegacyWorktreeForTest({
+      branchName: "ref-write-failure",
+      cwd: repoDir,
+      baseBranch: "main",
+      worktreeSlug: "ref-write-failure",
+      paseoHome,
+    });
+    mkdirSync(join(repoDir, ".git", "refs", "paseo"), { recursive: true });
+    writeFileSync(join(repoDir, ".git", "refs", "paseo", "kept-commits"), "blocked\n");
+
+    await expect(
+      deletePaseoWorktree({ cwd: repoDir, worktreePath: created.worktreePath, paseoHome }),
+    ).rejects.toThrow();
+    expect(existsSync(created.worktreePath)).toBe(true);
+  });
+
+  it("deletes a worktree when Git reports its source through native and long path spellings", async () => {
+>>>>>>> refs/remotes/upstream/tags/v0.17.0
     const created = await createLegacyWorktreeForTest({
       branchName: "identity-delete",
       cwd: repoDir,
