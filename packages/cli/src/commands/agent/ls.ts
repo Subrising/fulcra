@@ -15,7 +15,7 @@ export function addLsOptions(cmd: Command): Command {
     .description("List agents. By default excludes archived agents.")
     .option("-a, --all", "Include archived and background agents")
     .option("-g, --global", "List agents across all directories")
-    .option("--background", "Include background workspace agents")
+    .option("--background", "Include background agents and agents in background workspaces")
     .option(
       "--label <key=value>",
       "Filter by label (can be used multiple times)",
@@ -37,6 +37,7 @@ export interface AgentListItem {
   note: string;
   cwd: string;
   created: string;
+  background: boolean;
 }
 
 /** Helper to get relative time string */
@@ -92,6 +93,15 @@ export const agentLsSchema: OutputSchema<AgentListItem> = {
   ],
 };
 
+/** Inclusive listings mark background agents so they read apart from visible ones. */
+const agentLsInclusiveSchema: OutputSchema<AgentListItem> = {
+  ...agentLsSchema,
+  columns: [
+    ...agentLsSchema.columns,
+    { header: "BACKGROUND", field: (item) => (item.background ? "yes" : "-"), width: 10 },
+  ],
+};
+
 /** Transform agent snapshot to AgentListItem */
 export function toListItem(agent: AgentSnapshotPayload): AgentListItem {
   const model = normalizeModelId(agent.runtimeInfo?.model) ?? normalizeModelId(agent.model);
@@ -112,6 +122,7 @@ export function toListItem(agent: AgentSnapshotPayload): AgentListItem {
     note: unloaded ? "not loaded" : "",
     cwd: shortenPath(agent.cwd),
     created: relativeTime(agent.createdAt),
+    background: agent.background === true,
   };
 }
 
@@ -270,7 +281,7 @@ export async function listAgents(
     return {
       type: "list",
       data: items,
-      schema: agentLsSchema,
+      schema: options.all || options.background ? agentLsInclusiveSchema : agentLsSchema,
     };
   } catch (err) {
     await client.close().catch(() => {});

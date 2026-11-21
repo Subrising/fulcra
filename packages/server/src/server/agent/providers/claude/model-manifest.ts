@@ -69,6 +69,17 @@ export const CLAUDE_MODEL_MANIFEST = [
     supportsFastMode: true,
   },
   {
+    id: "claude-mythos-5-2",
+    label: "Mythos 5.2",
+    requiresDiscovery: true,
+    description: "Mythos 5.2 · Requires verified access",
+    minimumClaudeCodeVersion: "2.1.321",
+    defaultThinkingOptionId: "medium",
+    contextWindowMaxTokens: 1_000_000,
+    effortLevels: CLAUDE_EFFORT_LEVELS.xhigh,
+    supportsFastMode: true,
+  },
+  {
     id: "claude-mythos-5-1",
     label: "Mythos 5.1",
     requiresDiscovery: true,

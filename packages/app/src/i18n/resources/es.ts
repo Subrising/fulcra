@@ -3,6 +3,7 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const es: TranslationResources = {
+<<<<<<< HEAD
   plugins: {
     // Fulcra 0.2.9: English until translated; the old text gave the host-password route.
     commandCentreRelay: en.plugins.commandCentreRelay,
@@ -12,6 +13,12 @@ export const es: TranslationResources = {
     unknownProject: "Proyecto desconocido",
     reportsTo: "Depende de {{leader}}",
     unknownAccessibility: "Proyecto propietario desconocido",
+=======
+  pluginCombobox: {
+    searching: "Buscando…",
+    empty: "Sin resultados",
+    failed: "La búsqueda falló: {{message}}",
+>>>>>>> refs/remotes/upstream/tags/v0.16.0
   },
   paneFind: {
     connectionFailure:
@@ -97,14 +104,23 @@ export const es: TranslationResources = {
       close: "Cerrar menú",
     },
     commandCenter: {
-      placeholder: "Buscar comandos, archivos, espacios de trabajo y agentes...",
+      placeholder: "Buscar espacios de trabajo, archivos y acciones...",
+      placeholderWithoutFiles: "Buscar espacios de trabajo y acciones...",
       filePlaceholder: "Buscar archivos...",
+      workspacePlaceholder: "Buscar espacios de trabajo...",
+      actionPlaceholder: "Buscar acciones...",
       searchingFiles: "Buscando archivos...",
       noMatches: "No hay coincidencias",
       actions: "Comportamiento",
       files: "Archivos",
       workspaces: "Espacios de trabajo",
-      agents: "Agentes",
+      recentWorkspaces: "Espacios de trabajo recientes",
+      tabs: {
+        all: "Todo",
+        workspaces: "Espacios de trabajo",
+        files: "Archivos",
+        actions: "Acciones",
+      },
       newAgent: "Nuevo agente",
       open: "Abrir {{name}}",
       openInSidePane: "Abrir {{name}} en el panel lateral",
@@ -275,7 +291,7 @@ export const es: TranslationResources = {
     states: {
       notFound: "Agentno encontrado",
       failedToLoad: "No se pudo cargar el agente",
-      reconnecting: "Reconectando al host",
+      reconnecting: "Reconectando",
       updating: "Actualizando mensajes",
       timelineSyncFailed: "No se pudo actualizar el historial del agente.",
       timelineSyncRetrying: "Reintentando…",
@@ -401,6 +417,24 @@ export const es: TranslationResources = {
       next: "Siguiente",
       answerPlaceholder: "Escribe tu respuesta...",
       otherPlaceholder: "Otro...",
+    },
+    backgroundWork: {
+      pillOne: "1 tarea en segundo plano",
+      pillMany: "{{count}} tareas en segundo plano",
+      notRunning: "Ya no está en ejecución",
+      dismiss: "Cerrar",
+      stop: "Detener",
+      stopping: "Deteniendo…",
+      stopError: "No se pudo confirmar la detención.",
+      label: "Segundo plano",
+      title: "Trabajo en segundo plano",
+      waiting: "Esperando los detalles",
+      error: "No se pudo cargar el trabajo en segundo plano",
+      retry: "Reintentar",
+      running: "Trabajo en segundo plano en curso",
+      shell: "Consola",
+      monitor: "Monitor",
+      other: "Otro trabajo",
     },
     todo: {
       title: "Tareas",
@@ -981,6 +1015,9 @@ export const es: TranslationResources = {
         },
       },
       diff: {
+        baseBranch: {
+          title: "Rama base",
+        },
         openChangesTab: "Abrir la pestaña Cambios",
         openDiffTab: "Abrir la pestaña Diferencia",
         closeChangesTab: "Cerrar la pestaña Cambios",
@@ -1205,6 +1242,8 @@ export const es: TranslationResources = {
     title: "Novedades",
     installed: "Instalada",
     showMore: "Mostrar más",
+    showAllChanges: "Mostrar todos los cambios",
+    hideAllChanges: "Ocultar todos los cambios",
     openWebsite: "Registro de cambios completo",
     error: {
       title: "No se pudo cargar el registro de cambios",
@@ -1435,6 +1474,14 @@ export const es: TranslationResources = {
     },
   },
   sidebar: {
+    view: {
+      failed: "No se pudo cargar la vista de la barra lateral.",
+      useDefault: "Usar vista predeterminada",
+      readFailed: "No se pudo cargar tu preferencia de vista de la barra lateral.",
+      agentUnavailable: "El agente ya no está disponible",
+      terminalUnavailable: "La terminal ya no está disponible",
+      projectUnavailable: "El proyecto ya no está disponible",
+    },
     statusGroupAccessibility: "Grupo {{label}}",
     statusBucket: {
       needsInput: "Necesita datos",
@@ -1510,6 +1557,7 @@ export const es: TranslationResources = {
       hosts: "Hosts",
       settings: "Ajustes",
       closeSidebar: "Cerrar barra lateral",
+      moreActions: "Más acciones",
     },
     footer: {
       usage: "Uso",
@@ -1616,6 +1664,9 @@ export const es: TranslationResources = {
         hostDisconnected: "Hostno está conectado",
         hideFailed: "No se pudo ocultar el espacio de trabajo",
         archiveFailed: "No se pudo archivar el espacio de trabajo",
+        archived: "Espacio de trabajo archivado",
+        undoArchive: "Deshacer",
+        undoArchiveFailed: "No se pudo deshacer el archivado",
       },
     },
   },
@@ -1828,7 +1879,14 @@ export const es: TranslationResources = {
     integrations: {
       cli: {
         statusFailed: "No se puede verificar el estado de instalación deCLI.",
+<<<<<<< HEAD
         installFailed: "No se puede instalar la CLI de Fulcra.",
+=======
+        installFailed: "No se puede instalar elPaseoCLI.",
+        uninstallFailed: "No se pudo desinstalar la CLI de Paseo.",
+        keptForeign:
+          "Se conservó un comando paseo que Paseo no instaló. Elimínalo tú mismo para desinstalarlo.",
+>>>>>>> refs/remotes/upstream/tags/v0.16.0
       },
     },
   },
@@ -1880,6 +1938,7 @@ export const es: TranslationResources = {
     openPath: "Abrir ruta",
   },
   branchSwitcher: {
+    failedToLoad: "No se pudieron cargar las ramas. Vuelve a abrir el selector para reintentarlo.",
     triggerTooltip: "Cambiar rama del espacio de trabajo",
     currentBranch: "Sucursal actual:{{branchName}}. Presione para cambiar de rama.",
     placeholder: "Cambiar de rama...",
@@ -1903,10 +1962,18 @@ export const es: TranslationResources = {
     loadingCommands: "Cargando comandos...",
     noFiles: "No se encontraron archivos ni directorios",
     noCommands: "No se encontraron comandos",
+<<<<<<< HEAD
     accountUnavailable:
       "Los comandos de cuenta aún no están disponibles para este ordenador. Actualiza Fulcra en {{host}}.",
     thisComputer: "este ordenador",
     failedToLoad: "No se pudo cargar",
+=======
+    loadingProviderCommands: "Cargando comandos de {{provider}}...",
+    commandsFailed: "No se pudieron cargar los comandos",
+    providerCommandsFailed: "No se pudieron cargar los comandos de {{provider}}",
+    filesFailed: "No se pudieron buscar archivos",
+    skillTag: "Skill",
+>>>>>>> refs/remotes/upstream/tags/v0.16.0
     chooseProjectForCommands: "Elige un proyecto para ver los comandos",
     chooseModelForCommands: "Selecciona un modelo para ver los comandos",
   },
@@ -1944,7 +2011,65 @@ export const es: TranslationResources = {
     },
   },
   onboarding: {
+<<<<<<< HEAD
     title: "Bienvenido a Fulcra",
+=======
+    setup: {
+      title: "Paseo",
+      stepCounter: "Paso {{current}} de {{total}}",
+      skip: "Omitir configuración",
+      continue: "Continuar",
+      finish: "Finalizar",
+      steps: {
+        appearance: {
+          label: "Apariencia",
+          title: "Te damos la bienvenida a Paseo",
+          description: "Empecemos por elegir una apariencia",
+        },
+        providers: {
+          label: "Proveedores",
+          title: "Tus agentes",
+          description: "Paseo usa las CLI de agentes que ya están en este ordenador",
+        },
+        projects: {
+          label: "Proyectos",
+          title: "Añade tus proyectos",
+          description: "Dónde quieres que trabajen tus agentes",
+          addProject: "Añadir proyecto",
+          added: "Añadido",
+          suggestions: {
+            loading: "Buscando carpetas en las que has trabajado",
+            empty: "No se encontraron proyectos recientes",
+            lastUsed: "Último uso {{time}}",
+            addSelected_one: "Añadir {{count}} proyecto",
+            addSelected_other: "Añadir {{count}} proyectos",
+            adding: "Añadiendo…",
+            addFailed: "No se pudo añadir esta carpeta",
+          },
+        },
+        orchestration: {
+          label: "Orquestación",
+          title: "Deja que los agentes usen Paseo",
+          description: "Deja que tus agentes creen espacios de trabajo y hablen con otros agentes",
+        },
+        phone: {
+          label: "Móvil",
+          title: "Lleva tus agentes contigo",
+          description:
+            "La app móvil nativa completa te permite controlar cualquier ordenador con Paseo desde tu teléfono",
+          appStore: "App Store",
+          googlePlay: "Google Play",
+          connectTitle: "Elige cómo conectarte",
+          connectDocs: "Docs",
+          openConnectDocs: "Abrir la documentación de conectividad",
+          recommended: "Recomendado",
+          relay: { title: "Relé", hint: "Cifrado de extremo a extremo, escanea un código QR" },
+          tailscale: { title: "Tailscale", hint: "Requiere algo de configuración" },
+        },
+      },
+    },
+    title: "Bienvenido aPaseo",
+>>>>>>> refs/remotes/upstream/tags/v0.16.0
     subtitle: "Conecte su computadora para comenzar",
     actions: {
       settings: "Ajustes",
@@ -2185,7 +2310,13 @@ export const es: TranslationResources = {
       notNow: "Ahora no",
       directConnectionHint:
         "Sin relé, conéctese directamente por TCP, Tailscale u otra VPN. No se crea ningún código QR.",
+<<<<<<< HEAD
       updateRequired: "Actualice el host para habilitar el relé desde Fulcra Desktop.",
+=======
+      tailscaleDocs: "Configurar Tailscale",
+      tailscaleDocsAccessibility: "Leer cómo conectarse con Tailscale",
+      updateRequired: "Actualice el host para habilitar el relé desde Paseo Desktop.",
+>>>>>>> refs/remotes/upstream/tags/v0.16.0
       unavailable: "Oferta de maridaje no disponible.",
       hint: "Escanee este código QR con Fulcra en su teléfono o copie el enlace a continuación.",
       securityWarning:
@@ -2690,6 +2821,7 @@ export const es: TranslationResources = {
     turnOn: "Activar",
 
     options: "Configuración",
+    host: "Host",
     refreshFailed: "No se pudo actualizar el uso",
     noHosts: "No hay hosts conectados",
     agentError: "No se pudo cargar el uso: {{reason}}",
@@ -2706,6 +2838,8 @@ export const es: TranslationResources = {
     loginExpired: "La sesión caducó {{relativeTime}}. {{remedy}}",
     title: "Uso del plan",
     refresh: "Actualizar",
+    reorderCard: "Reordenar {{source}}",
+    showCard: "Mostrar {{source}}",
     refreshAll: "Actualizar todo",
     refreshing: "Actualizando...",
     loading: "Cargando uso...",
@@ -2922,6 +3056,12 @@ export const es: TranslationResources = {
     general: {
       title: "General",
       sending: "Envío",
+      setup: {
+        label: "Configuración inicial",
+        description:
+          "Vuelve a recorrer apariencia, proveedores, proyectos y emparejamiento del teléfono",
+        action: "Mostrar configuración de nuevo",
+      },
       browserData: {
         title: "Datos del navegador",
         siteData: "Cookies y datos de sitios",
@@ -3092,6 +3232,13 @@ export const es: TranslationResources = {
         description: "Muestra un esquema para saltar entre instrucciones",
       },
       sidebar: {
+        view: {
+          title: "Vista de la barra lateral",
+          label: "Vista",
+          default: "Vista predeterminada",
+          unavailable:
+            "La vista seleccionada no está disponible o está desactivada. Se muestra la vista predeterminada.",
+        },
         header: {
           title: "Encabezado",
           description:
@@ -3225,11 +3372,7 @@ export const es: TranslationResources = {
       commandLine: {
         title: "línea de comando",
         description: "Agentes de control y script desde tu terminal",
-      },
-      actions: {
-        install: "Instalar",
-        installing: "Instalando...",
-        installed: "Instalado",
+        accessibilityLabel: "Instalar la CLI de Paseo",
       },
     },
     permissions: {
@@ -3307,11 +3450,16 @@ export const es: TranslationResources = {
         ...en.settings.host.skills,
         sectionTitle: "Habilidades de orquestación",
         title: "Habilidades de orquestación",
-        description: "Enseñe a sus agentes a orquestar a través delCLI",
+        description: "Enseña a tus agentes a usar las herramientas de Paseo",
         updateAvailable: "Actualización disponible",
+<<<<<<< HEAD
         updateTitle: "¿Actualizar las habilidades de Fulcra?",
         updateFallback: "Sincronice las habilidades incluidas con su máquina.",
         uninstallTitle: "¿Desinstalar las habilidades de Fulcra?",
+=======
+        updateTitle: "¿Actualizar las habilidades dePaseo?",
+        uninstallTitle: "¿Desinstalar las habilidadesPaseo?",
+>>>>>>> refs/remotes/upstream/tags/v0.16.0
         uninstallMessage:
           "Elimina todas las habilidades de orquestación de Fulcra de ~/.agents, ~/.claude, ~/.codex.",
         choose: "Elegir habilidades",
@@ -3329,9 +3477,6 @@ export const es: TranslationResources = {
         uninstallFailed: "No se pueden desinstalar las habilidades de orquestación.",
         saveSelectionFailed: "No se puede guardar la selección de habilidades de orquestación.",
         actions: {
-          install: "Instalar",
-          installing: "Instalando...",
-          installed: "Instalado",
           update: "Actualizar",
           working: "Laboral...",
           remove: "Eliminar",
@@ -3352,7 +3497,12 @@ export const es: TranslationResources = {
         enableTools: {
           title: "Habilitar herramientas de Fulcra",
           hint: "Los agentes podrán gestionar árboles de trabajo, agentes y horarios.",
+<<<<<<< HEAD
           accessibilityLabel: "Inyectar herramientas de Fulcra",
+=======
+          accessibilityLabel: "Inyectar herramientasPaseo",
+          updateFailed: "No se pudieron actualizar las herramientas de Paseo.",
+>>>>>>> refs/remotes/upstream/tags/v0.16.0
         },
         systemPrompt: {
           title: "Aviso del sistema",

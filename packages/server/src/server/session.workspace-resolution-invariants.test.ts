@@ -119,8 +119,15 @@ function createHarness(input: {
       }),
     ),
     agentStorage: createStub<SessionOptions["agentStorage"]>({
+<<<<<<< HEAD
       list: async () => [],
       listByWorkspace: async () => [],
+=======
+      listAll: async () => [],
+      listActive: async () => [],
+      listByWorkspaces: async () => [],
+      lastUserMessageAtByWorkspace: async () => new Map<string, string>(),
+>>>>>>> refs/remotes/upstream/tags/v0.16.0
       get: async () => null,
     }),
     projectRegistry: createStub<SessionOptions["projectRegistry"]>({
@@ -160,7 +167,9 @@ function createHarness(input: {
       subscribeToMutations: () => () => {},
       initialize: async () => {},
       existsOnDisk: async () => true,
-      list: async () => Array.from(workspaces.values()),
+      listAll: async () => Array.from(workspaces.values()),
+      listActive: async () =>
+        Array.from(workspaces.values()).filter((record) => !record.archivedAt),
       get: async (id: string) => workspaces.get(id) ?? null,
       upsert: async (record: PersistedWorkspaceRecord) => {
         workspaces.set(record.workspaceId, record);
