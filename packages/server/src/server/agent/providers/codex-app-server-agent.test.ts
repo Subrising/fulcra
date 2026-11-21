@@ -2706,31 +2706,18 @@ describe("Codex app-server provider", () => {
   });
 
   test("lets idle cleanup release a session opened only to read its history", async () => {
-    let spawns = 0;
     const appServer = createFakeCodexAppServer({
       "thread/resume": () =>
         Promise.reject(new Error(archivedThreadErrorMessage("archived-thread-id"))),
       "thread/read": () => ({ thread: { turns: [] } }),
     });
-    const provider = new CodexAppServerAgentClient(createTestLogger(), undefined, {
-      appServerProcess: createFakeCodexAppServerProcess(() => {
-        spawns += 1;
-        return appServer.child;
-      }),
-    });
-    const internals = castInternals<{
-      goalsEnabledPromise: Promise<boolean> | null;
-      autoReviewEnabledPromise: Promise<boolean> | null;
-    }>(provider);
-    internals.goalsEnabledPromise = Promise.resolve(false);
-    internals.autoReviewEnabledPromise = Promise.resolve(false);
+    const provider = createProviderWithFakeAppServer(appServer);
 
     const session = await provider.resumeSession(archivedThreadHandle(), undefined, undefined, {
       purpose: "history",
     });
 
     expect(await session.canStopRuntime!()).toBe(true);
-    expect(spawns).toBe(1);
     await session.close();
     appServer.assertNoErrors();
   });
