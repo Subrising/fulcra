@@ -8437,17 +8437,22 @@ export class AgentManager {
   private getLastAssistantMessageSegmentFromTimeline(
     timeline: readonly AgentTimelineItem[],
   ): { text: string; startsAtBeginning: boolean } | null {
-    // Collect the last contiguous assistant messages (Claude streams chunks)
+    // Collect the chunks of the last assistant message (Claude streams chunks). A turn the
+    // provider starts on its own has no user message before its reply, so a different message id
+    // also ends the reply. FULCRA(FU-810): live items carry no turn id; the message id decides.
     const chunks: string[] = [];
     let startsAtBeginning = false;
     for (let i = timeline.length - 1; i >= 0; i--) {
       const item = timeline[i];
-      if (item.type !== "assistant_message") {
-        if (chunks.length) {
-          break;
-        }
-        continue;
+      if (chunks.length > 0) {
+        const next = timeline[i + 1];
+        const continues =
+          item.type === "assistant_message" &&
+          next?.type === "assistant_message" &&
+          (next.messageId === undefined || next.messageId === item.messageId);
+        if (!continues) break;
       }
+      if (item.type !== "assistant_message") continue;
       chunks.push(item.text);
       startsAtBeginning = i === 0;
     }

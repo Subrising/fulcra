@@ -18454,6 +18454,78 @@ test.each(["live", "history", "accepted"] as const)(
   },
 );
 
+test("the last assistant message is the newest turn's reply, not joined to the previous turn's", async () => {
+  const session = new TestAgentSession({ provider: "codex", cwd: process.cwd() });
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-last-reply-"));
+  const client = new (class extends TestAgentClient {
+    override async createSession(): Promise<AgentSession> {
+      return session;
+    }
+  })();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  const reply = (turnId: string, messageId: string, text: string) =>
+    session.pushEvent({
+      type: "timeline",
+      provider: "codex",
+      turnId,
+      item: { type: "assistant_message", messageId, text },
+    });
+  try {
+    session.pushEvent({ type: "turn_started", provider: "codex", turnId: "turn-1" });
+    reply("turn-1", "message-1", "Earlier status, ");
+    reply("turn-1", "message-1", "streamed in two chunks.");
+    session.pushEvent({ type: "turn_completed", provider: "codex", turnId: "turn-1" });
+    await vi.waitFor(async () =>
+      expect(await manager.getLastAssistantMessage(agent.id)).toBe(
+        "Earlier status, streamed in two chunks.",
+      ),
+    );
+
+    // A turn the provider starts on its own, such as a background task waking the agent,
+    // has no user message between its reply and the previous turn's.
+    session.pushEvent({ type: "turn_started", provider: "codex", turnId: "turn-2" });
+    reply("turn-2", "message-2", "New status.");
+    session.pushEvent({ type: "turn_completed", provider: "codex", turnId: "turn-2" });
+    await vi.waitFor(() =>
+      expect(manager.getTimeline(agent.id).at(-1)).toMatchObject({ messageId: "message-2" }),
+    );
+    expect(await manager.getLastAssistantMessage(agent.id)).toBe("New status.");
+  } finally {
+    await manager.closeAgent(agent.id);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("the last assistant message read from rebuilt history is the newest reply, not joined to the one before it", async () => {
+  // Rows replayed from provider history have no turn id. A reply the agent starts on its own,
+  // such as Claude waking after a background subagent, follows the previous reply with no user
+  // message between them; only their message ids tell them apart.
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-history-last-reply-"));
+  const codex = fakeCodexEmitting({
+    historyItems: [
+      { type: "user_message", text: "Start a background task.", messageId: "user-1" },
+      { type: "assistant_message", text: "Started it, ", messageId: "message-1" },
+      { type: "assistant_message", text: "I will report back.", messageId: "message-1" },
+      { type: "assistant_message", text: "The task finished.", messageId: "message-2" },
+    ],
+  });
+  const manager = new AgentManager({ clients: { codex }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    await manager.hydrateTimelineFromProvider(agent.id, { force: true });
+
+    expect(await manager.getLastAssistantMessage(agent.id)).toBe("The task finished.");
+  } finally {
+    await manager.closeAgent(agent.id);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("reads the last durable assistant response without loading a stored-only child", async () => {
   const store = new RecordingTimelineStore();
   await store.appendCommitted("stored-child", {
