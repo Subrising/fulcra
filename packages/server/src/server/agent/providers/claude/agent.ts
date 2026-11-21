@@ -61,6 +61,7 @@ import {
   resolveConfiguredClaudeModel,
 } from "./models.js";
 import {
+  killExitingClaudeModelDiscoveries,
   probeClaudeModels,
   recordClaudeRuntimeModels,
   type ClaudeModelProbe,
@@ -1888,6 +1889,10 @@ export class ClaudeAgentClient implements AgentClient {
       models,
       ...modeCatalog,
     };
+  }
+
+  async shutdown(): Promise<void> {
+    await killExitingClaudeModelDiscoveries();
   }
 
   async resolveDefaultModeId({ env: launchEnv }: ResolveAgentDefaultModeInput): Promise<string> {

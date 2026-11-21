@@ -1,12 +1,13 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createTestLogger } from "../../../../test-utils/test-logger.js";
 import { ClaudeAgentClient } from "./agent.js";
 import { claudeModelSupportsFastMode } from "./feature-definitions.js";
 import {
+  killExitingClaudeModelDiscoveries,
   mergeClaudeRuntimeCatalog,
   probeClaudeModels,
   recordClaudeRuntimeModels,
@@ -319,6 +320,69 @@ describe("X6: the probe is catalog-only and bounded", () => {
         signal: controller.signal,
       }),
     ).rejects.toBe(failure);
+    expect(calls.closed).toBe(1);
+  });
+});
+
+describe("FU-810: an answered probe lets the CLI finish a token refresh", () => {
+  // The fake query starts a real child the way the SDK does, so the probe sees a live process.
+  function spawningQuery(script: string) {
+    const calls = {
+      closed: 0,
+      child: undefined as import("node:child_process").ChildProcess | undefined,
+    };
+    const factory = ((input: ClaudeQueryInput) => {
+      const spawn = input.options?.spawnClaudeCodeProcess;
+      if (!spawn) throw new Error("Expected the probe to own process spawning");
+      calls.child = spawn({
+        command: "node",
+        args: ["-e", script],
+        cwd: os.tmpdir(),
+        env: { ...process.env },
+        signal: new AbortController().signal,
+      }) as unknown as import("node:child_process").ChildProcess;
+      return {
+        supportedModels: async () => MEASURED_ROWS,
+        close: () => {
+          calls.closed += 1;
+        },
+        async *[Symbol.asyncIterator]() {},
+      };
+    }) as unknown as ClaudeQueryFactory;
+    return { factory, calls };
+  }
+
+  function exited(child: import("node:child_process").ChildProcess): Promise<void> {
+    if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+    return new Promise((resolve) => child.once("exit", () => resolve()));
+  }
+
+  it("does not kill a CLI that is still running after it answered", async () => {
+    // Stands in for a CLI that saves a refreshed token, then exits on its own.
+    const { factory, calls } = spawningQuery("setTimeout(() => process.exit(0), 300)");
+
+    const rows = await probeClaudeModels({ claudeBinary: "/test/claude", queryFactory: factory });
+
+    expect(rows).toEqual(MEASURED_ROWS);
+    const child = calls.child!;
+    expect(child.exitCode).toBeNull();
+    expect(child.killed).toBe(false);
+    expect(calls.closed).toBe(0);
+    await exited(child);
+    expect(child.exitCode).toBe(0);
+    await vi.waitFor(() => expect(calls.closed).toBe(1));
+  });
+
+  it("kills a CLI that is still exiting when the daemon shuts down", async () => {
+    const { factory, calls } = spawningQuery("setInterval(() => {}, 1000)");
+
+    await probeClaudeModels({ claudeBinary: "/test/claude", queryFactory: factory });
+    const child = calls.child!;
+    expect(child.exitCode).toBeNull();
+
+    await killExitingClaudeModelDiscoveries();
+
+    await exited(child);
     expect(calls.closed).toBe(1);
   });
 });
