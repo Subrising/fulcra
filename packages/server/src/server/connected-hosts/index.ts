@@ -358,7 +358,7 @@ export class ConnectedHosts {
     originSessionId: string;
     permissions: readonly DaemonPermission[];
     signal: AbortSignal;
-    frame(data: string | Uint8Array): void;
+    frame(data: string | Uint8Array): void | Promise<void>;
     ended(code: string, message: string): void;
   }): Promise<{ send(data: string | Uint8Array): void; close(): void }> {
     await this.ready;
@@ -473,7 +473,7 @@ export class ConnectedHosts {
           return;
         }
       }
-      input.frame(binary ? (data as Uint8Array) : String(data));
+      return input.frame(binary ? (data as Uint8Array) : String(data));
     });
     await ready;
     if (closed) throw new HostError("host_offline", "Host closed during connection");

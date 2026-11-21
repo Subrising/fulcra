@@ -478,6 +478,7 @@ function bufferFromWsData(data: Buffer | ArrayBuffer | Buffer[] | string): Buffe
 
 export interface WebSocketLike {
   maxFrameBytes?: number;
+  supportsConcurrentWrites?: boolean;
   readyState: number;
   bufferedAmount?: number;
   send: (
@@ -1664,6 +1665,7 @@ export class VoiceAssistantWebSocketServer {
     if (!transport) {
       transport = new ChunkedTransport({
         frameBytes: ws.maxFrameBytes ?? 32 * 1024 * 1024,
+        supportsConcurrentWrites: ws.supportsConcurrentWrites,
         onFailure: (err) =>
           this.closePhysicalSocket({
             ws,
