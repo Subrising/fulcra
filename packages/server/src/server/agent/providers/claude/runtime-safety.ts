@@ -1,5 +1,7 @@
-import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { SDKMessage, SessionCronSummary } from "@anthropic-ai/claude-agent-sdk";
 import { parseClaudeCodeVersion } from "./model-manifest.js";
+
+const SESSION_CRON_TOOLS = new Set(["CronCreate", "CronDelete", "ScheduleWakeup"]);
 
 /** Process-local background ownership. Completion delivery can follow an empty roster. */
 export class ClaudeRuntimeSafety {
@@ -10,8 +12,15 @@ export class ClaudeRuntimeSafety {
   // has neither been sent a prompt nor reported init (a resumed chat that only answered
   // control requests) owns no background work.
   private turnSeen = false;
+  // Session-only crons and wakeups live in the process and die with it. Only the Stop hook
+  // lists them, and Claude runs it only for turns that complete. A cron tool call makes the
+  // count unknown until the next Stop, so an interrupted or failed turn keeps the runtime.
+  private sessionCrons = 0;
+  private sessionCronsUnknown = false;
 
   reset(): void {
+    this.sessionCrons = 0;
+    this.sessionCronsUnknown = false;
     this.supported = false;
     this.turnSeen = false;
     this.liveTasks.clear();
@@ -23,7 +32,20 @@ export class ClaudeRuntimeSafety {
     this.turnSeen = true;
   }
 
+  /** Called with the session crons of each main-thread Stop hook. Older CLIs omit them. */
+  observeStop(sessionCrons: readonly SessionCronSummary[] | undefined): void {
+    this.sessionCronsUnknown = false;
+    if (sessionCrons) this.sessionCrons = sessionCrons.length;
+  }
+
   observe(message: SDKMessage): void {
+    if (message.type === "assistant") {
+      for (const block of message.message.content) {
+        if (block.type === "tool_use" && SESSION_CRON_TOOLS.has(block.name))
+          this.sessionCronsUnknown = true;
+      }
+      return;
+    }
     if (message.type !== "system") return;
     if (message.subtype === "init") {
       this.turnSeen = true;
@@ -49,6 +71,12 @@ export class ClaudeRuntimeSafety {
 
   canStopRuntime(): boolean {
     if (!this.supported && !this.turnSeen) return true;
-    return this.supported && this.liveTasks.size === 0 && this.awaitingNotifications.size === 0;
+    return (
+      this.supported &&
+      this.sessionCrons === 0 &&
+      !this.sessionCronsUnknown &&
+      this.liveTasks.size === 0 &&
+      this.awaitingNotifications.size === 0
+    );
   }
 }
