@@ -123,6 +123,7 @@ function outcome(status: "idle" | "running" | "closed" | "error" = "closed"): Wa
         lastStatus: status,
       },
       ["codex"],
+      (_provider, own) => own ?? {},
     ),
     // FULCRA(FU-657): a result line, so the FU-483 filter lets the finished notice through.
     lastMessage: "Partial work saved\nDONE: child saved",

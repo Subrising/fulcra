@@ -67,7 +67,11 @@ interface TestPaseoDaemonOptions {
   /** FULCRA(FU-657 row 4): the upstream restart pass runs only with revive-on-restart off. */
   reviveOnRestart?: boolean;
   pluginsEnabled?: PaseoDaemonConfig["pluginsEnabled"];
+<<<<<<< HEAD
   bundledPluginsDirectory?: string;
+=======
+  pluginRegistryUrl?: PaseoDaemonConfig["pluginRegistryUrl"];
+>>>>>>> refs/remotes/upstream/tags/v0.16.2
   builtinPlugins?: BuiltinPluginLoader;
   plugins?: PaseoDaemonConfig["plugins"];
   timelineStoreStep?: PaseoDaemonDependencies["timelineStoreStep"];
@@ -255,6 +259,7 @@ async function prepareTestDaemonConfig(
     pluginsEnabled: options.pluginsEnabled,
     bundledPluginsDirectory: options.bundledPluginsDirectory,
     plugins: options.plugins,
+    pluginRegistryUrl: options.pluginRegistryUrl,
   };
   return { config, paseoHomeRoot, paseoHome, staticDir, createdDirs };
 }
