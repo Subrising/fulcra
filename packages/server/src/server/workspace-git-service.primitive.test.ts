@@ -2240,6 +2240,7 @@ describe("WorkspaceGitServiceImpl D2 read methods", () => {
       expect(subscribe).toHaveBeenCalledTimes(1);
       expect(subscribe).toHaveBeenCalledWith(repoDir, expect.any(Function), {
         ignore: [join(repoDir, ".git"), ignoredRoot],
+        signal: expect.any(AbortSignal),
       });
 
       subscription.unsubscribe();

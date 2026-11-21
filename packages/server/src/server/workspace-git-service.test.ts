@@ -1480,6 +1480,7 @@ describe("WorkspaceGitServiceImpl", () => {
     expect(subscribe).toHaveBeenCalledTimes(1);
     expect(subscribe).toHaveBeenCalledWith(REPO_CWD, expect.any(Function), {
       ignore: [join(REPO_CWD, ".git")],
+      signal: expect.any(AbortSignal),
     });
 
     subscription.unsubscribe();
@@ -1545,6 +1546,7 @@ describe("WorkspaceGitServiceImpl", () => {
     expect(subscription.repoRoot).toBeNull();
     expect(subscribe).toHaveBeenCalledWith(plainCwd, expect.any(Function), {
       ignore: [join(plainCwd, ".git")],
+      signal: expect.any(AbortSignal),
     });
     expect(vi.getTimerCount()).toBe(1);
 
