@@ -28,7 +28,8 @@ test("message retries survive reconstruction without submitting twice", async ()
     agentId: "agent",
     messageId: "arrival",
     request: { text: "hello" },
-    send: async () => {
+    send: async (beforeDispatch: () => Promise<void>) => {
+      await beforeDispatch();
       deliveries++;
     },
   };
@@ -83,7 +84,8 @@ test("ambiguous provider delivery is never blindly replayed after restart", asyn
     agentId: "agent",
     messageId: "arrival",
     request: {},
-    send: async () => {
+    send: async (beforeDispatch: () => Promise<void>) => {
+      await beforeDispatch();
       deliveries++;
       throw new Error("connection lost");
     },
@@ -95,7 +97,7 @@ test("ambiguous provider delivery is never blindly replayed after restart", asyn
   expect(deliveries).toBe(1);
 });
 
-test("failed local message preparation does not leave an ambiguous receipt", async () => {
+test("a send that fails before beforeDispatch can be retried with the same message", async () => {
   const { requests, directory } = await fixture();
   let available = false;
   let sends = 0;
@@ -103,14 +105,13 @@ test("failed local message preparation does not leave an ambiguous receipt", asy
     agentId: "agent",
     messageId: "message",
     request: {},
-    prepare: async () => {
-      if (!available) throw new Error("load failed");
-    },
-    send: async () => {
+    send: async (beforeDispatch: () => Promise<void>) => {
+      if (!available) throw new Error("mode change failed");
+      await beforeDispatch();
       sends++;
     },
   };
-  await expect(requests.send(input)).rejects.toThrow("load failed");
+  await expect(requests.send(input)).rejects.toThrow("mode change failed");
   available = true;
   await new MessageReceipts(directory).send(input);
   available = false;

@@ -314,6 +314,8 @@ export {
 } from "./agent-messages/index.js";
 
 export interface SendPromptToAgentParams {
+  /** Awaited after the agent is loaded and its mode is set, before the prompt is handed to a run. */
+  beforeDispatch?: () => Promise<void>;
   onDispatch?: StartAgentRunOptions["onDispatch"];
   agentManager: AgentManager;
   agentStorage: AgentStorage;
@@ -547,6 +549,22 @@ export async function sendPromptToAgentAndWaitForStart(
   } finally {
     stop();
   }
+<<<<<<< HEAD
+=======
+
+  if (params.sessionMode) {
+    await params.agentManager.setAgentMode(params.agentId, params.sessionMode);
+  }
+
+  await params.beforeDispatch?.();
+  return await startAgentRun(params.agentManager, params.agentId, params.prompt, params.logger, {
+    replaceRunning: true,
+    onDispatch: params.onDispatch,
+    activeTurnBehavior: params.activeTurnBehavior,
+    clearPendingPermissions: params.clearPendingPermissions,
+    runOptions: params.runOptions,
+  });
+>>>>>>> refs/remotes/upstream/tags/v0.16.1
 }
 
 export async function startCreatedAgentInitialPrompt(

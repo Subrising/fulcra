@@ -3,9 +3,14 @@ import type {
   FetchAgentHistoryOptions,
   FetchAgentHistoryPageInfo,
 } from "@getpaseo/client/internal/daemon-client";
+<<<<<<< HEAD
 import { useInfiniteQuery } from "@tanstack/react-query";
+=======
+import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
+>>>>>>> refs/remotes/upstream/tags/v0.16.1
 import { useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
+import { useShallow } from "zustand/shallow";
 import type { AggregatedAgent } from "@/hooks/use-aggregated-agents";
 import {
   getHostRuntimeStore,
@@ -34,6 +39,8 @@ export interface AgentHistoryResult {
   isSearchSupported: boolean;
   /** More sessions matched than the ranked page holds. Narrow the query. */
   isSearchTruncated: boolean;
+  /** The agents answer the previous query; the current one is loading (`keepPreviousResults`). */
+  isPreviousResults: boolean;
   /** Hosts that failed while others succeeded. The list still renders. */
   hostErrors: AgentHistoryHostError[];
   refreshAll: () => Promise<void>;
@@ -218,6 +225,7 @@ export async function fetchAgentHistoryBatch(input: {
   };
 }
 
+<<<<<<< HEAD
 /**
  * A host the user asked about splits two ways: one this fetch can reach, and
  * one whose sessions will be missing from the answer. Both come out of here,
@@ -239,6 +247,46 @@ export function useAgentHistoryHosts(serverId: string | null): {
   // (use-agent-history-hosts.compiler.test.tsx).
   const connectionStatuses = useHostRuntimeConnectionStatuses(serverIds);
   return useMemo(() => {
+=======
+export function useAgentHistory(options: {
+  serverId?: string | null;
+  enabled?: boolean;
+  search?: string;
+  /**
+   * Leave out hosts that predate search, instead of searching no host. For a surface that adds
+   * history matches to other results, where a missing host is not a claim of "no matches".
+   */
+  searchableHostsOnly?: boolean;
+  /** Keep the previous query's results until the next query's arrive. */
+  keepPreviousResults?: boolean;
+}): AgentHistoryResult {
+  const { t } = useTranslation();
+  const daemons = useHosts();
+  const runtime = getHostRuntimeStore();
+  const serverId = useMemo(() => {
+    const value = options.serverId;
+    return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  }, [options.serverId]);
+  const enabled = options.enabled ?? true;
+  const requestedServerIds = useMemo(
+    () => (serverId ? [serverId] : daemons.map((daemon) => daemon.serverId)),
+    [daemons, serverId],
+  );
+  const searchableServerIds = useSessionStore(
+    useShallow((state) =>
+      requestedServerIds.filter(
+        (id) => state.sessions[id]?.serverInfo?.features?.agentHistorySearch === true,
+      ),
+    ),
+  );
+  const serverIds = options.searchableHostsOnly ? searchableServerIds : requestedServerIds;
+  const connectionStatuses = useHostRuntimeConnectionStatuses(serverIds);
+  // A host the user asked about splits two ways: one this fetch can reach, and
+  // one whose sessions will be missing from the answer. Both come out of here,
+  // because dropping the unreachable ones silently is what lets the list — and
+  // worse, "No sessions match" — overstate what was actually searched.
+  const { targetHosts, unreachableHosts } = useMemo(() => {
+>>>>>>> refs/remotes/upstream/tags/v0.16.1
     const serverLabelById = new Map(daemons.map((daemon) => [daemon.serverId, daemon.label]));
     const hosts: AgentHistoryHost[] = [];
     const unreachable: AgentHistoryHostError[] = [];
@@ -254,6 +302,7 @@ export function useAgentHistoryHosts(serverId: string | null): {
     }
 
     return { targetHosts: hosts, unreachableHosts: unreachable };
+<<<<<<< HEAD
   }, [connectionStatuses, daemons, runtime, serverIds]);
 }
 
@@ -270,6 +319,9 @@ export function useAgentHistory(options: {
   }, [options.serverId]);
   const enabled = options.enabled ?? true;
   const { targetHosts, unreachableHosts } = useAgentHistoryHosts(serverId);
+=======
+  }, [daemons, runtime, connectionStatuses, serverIds]);
+>>>>>>> refs/remotes/upstream/tags/v0.16.1
   const targetServerIds = useMemo(() => targetHosts.map((host) => host.serverId), [targetHosts]);
   // One gate, checked before the field is offered: a fleet where any host
   // predates search has no search, rather than a list that silently omits that
@@ -300,6 +352,7 @@ export function useAgentHistory(options: {
     [daemons],
   );
 
+  const queryEnabled = Boolean(enabled && targetHosts.length > 0);
   const historyQuery = useInfiniteQuery<
     AgentHistoryBatchPage,
     Error,
@@ -308,8 +361,11 @@ export function useAgentHistory(options: {
     AgentHistoryCursorByServerId | null
   >({
     queryKey,
-    enabled: Boolean(enabled && targetHosts.length > 0),
+    enabled: queryEnabled,
     staleTime: 30_000,
+    // Previous results stand in only until the next query's arrive. With no host to search,
+    // nothing will arrive, so they would stand in, and read as still loading, indefinitely.
+    ...(options.keepPreviousResults && queryEnabled ? { placeholderData: keepPreviousData } : {}),
     initialPageParam: null,
     getNextPageParam: getNextAgentHistoryPageParam,
     queryFn: async ({ pageParam }) => {
@@ -331,6 +387,7 @@ export function useAgentHistory(options: {
     isFetching,
     isFetchingNextPage,
     isLoading,
+    isPlaceholderData,
     refetch,
   } = historyQuery;
 
@@ -376,6 +433,7 @@ export function useAgentHistory(options: {
     isLoadingMore: isFetchingNextPage,
     isSearchSupported,
     isSearchTruncated,
+    isPreviousResults: isPlaceholderData,
     hostErrors,
     refreshAll,
     loadMore,

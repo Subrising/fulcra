@@ -8,6 +8,7 @@ import type { ProviderSnapshotEntry } from "@getpaseo/protocol/agent-types";
 import type { MutableDaemonConfig } from "@getpaseo/protocol/messages";
 import { ToastApiProvider } from "@/contexts/toast-api-context";
 
+<<<<<<< HEAD
 const {
   theme,
   snapshotState,
@@ -49,9 +50,25 @@ const {
   openProviderSettingsMock: vi.fn(),
   refreshMock: vi.fn(async () => {}),
 }));
+=======
+const { snapshotState, configState, patchConfigMock, openProviderSettingsMock } = vi.hoisted(
+  () => ({
+    snapshotState: {
+      entries: undefined as ProviderSnapshotEntry[] | undefined,
+      isLoading: false,
+      isRefreshing: false,
+    },
+    configState: {
+      config: null as MutableDaemonConfig | null,
+    },
+    patchConfigMock: vi.fn(async () => undefined),
+    openProviderSettingsMock: vi.fn(),
+  }),
+);
+>>>>>>> refs/remotes/upstream/tags/v0.16.1
 
-vi.mock("react-native", () => ({
-  Platform: { OS: "web" },
+vi.mock("react-native", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("react-native")>()),
   View: ({ children, testID }: { children?: React.ReactNode; testID?: string }) =>
     React.createElement("div", { "data-testid": testID }, children),
   Text: ({ children }: { children?: React.ReactNode }) =>
@@ -93,6 +110,7 @@ vi.mock("react-native", () => ({
   ActivityIndicator: () => React.createElement("span", { "data-testid": "activity-indicator" }),
 }));
 
+<<<<<<< HEAD
 vi.mock("react-native-unistyles", () => ({
   StyleSheet: {
     create: (factory: unknown) =>
@@ -101,6 +119,8 @@ vi.mock("react-native-unistyles", () => ({
   useUnistyles: () => ({ theme, rt: { breakpoint: "md", screen: { width: 1440, height: 900 } } }),
 }));
 
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.16.1
 vi.mock("lucide-react-native", () => {
   const icon = (name: string) => () => React.createElement("span", { "data-icon": name });
   return {
@@ -175,6 +195,11 @@ vi.mock("@/components/ui/loading-spinner", () => ({
 
 vi.mock("@/components/settings/headings/settings-info-tip", () => ({
   SettingsInfoTip: () => null,
+}));
+
+vi.mock("@/components/ui/external-link", () => ({
+  ExternalLink: () => null,
+  ExternalLinkLabel: () => null,
 }));
 
 vi.mock("@/components/ui/dropdown-menu", () => ({
