@@ -3842,7 +3842,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     const repoTarget = target.repoGitRoot ? this.repoTargets.get(target.repoGitRoot) : undefined;
     return Boolean(
       target.latestSnapshot &&
-      !target.folderMissing &&
+      this.deps.workspaceFolderExists(target.cwd) &&
       target.workingTreeWatchTarget?.subscription &&
       repoTarget?.subscription,
     );
