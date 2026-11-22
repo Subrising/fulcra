@@ -710,6 +710,40 @@ describe("ClaudeAgentSession features", () => {
     });
     return { queryFactory, queryMock, launches };
   }
+  function createStreamingQueryMock() {
+    const mock = createQueryMock();
+    const messages: SDKMessage[] = [];
+    let pending: ((result: IteratorResult<SDKMessage, void>) => void) | null = null;
+    let ended = false;
+    const finish = () => {
+      ended = true;
+      pending?.({ done: true, value: undefined });
+      pending = null;
+    };
+    mock.queryMock.close.mockImplementation(finish);
+    mock.queryMock.return.mockImplementation(async () => finish());
+    mock.queryMock[Symbol.asyncIterator] = () => ({
+      next: async () => {
+        const message = messages.shift();
+        if (message) return { done: false, value: message };
+        if (ended) return { done: true, value: undefined };
+        return new Promise<IteratorResult<SDKMessage, void>>((resolve) => {
+          pending = resolve;
+        });
+      },
+    });
+    return {
+      ...mock,
+      push(message: SDKMessage) {
+        if (pending) {
+          pending({ done: false, value: message });
+          pending = null;
+        } else {
+          messages.push(message);
+        }
+      },
+    };
+  }
 
   test("private limit-resume commitment occurs once at the injected SDK handoff", async () => {
     const { queryFactory } = createQueryMock();
@@ -1656,6 +1690,60 @@ describe("ClaudeAgentSession features", () => {
       await Promise.resolve();
       await Promise.resolve();
       expect(rewindReachedLiveInput).toBe(false);
+    } finally {
+      unsubscribe();
+      await session.close();
+    }
+  });
+
+  test("accepts a steer while Claude compacts, so the compaction is not interrupted", async () => {
+    const { queryFactory, push } = createStreamingQueryMock();
+    const client = new ClaudeAgentClient({
+      logger,
+      queryFactory,
+      resolveBinary: async () => "/test/claude/bin",
+    });
+    const session = await client.createSession({ provider: "claude", cwd: process.cwd() });
+    const events: AgentStreamEvent[] = [];
+    const unsubscribe = session.subscribe((event) => events.push(event));
+    try {
+      const { turnId } = await session.startTurn("/compact");
+      const input = queryFactory.mock.calls[0]?.[0].prompt as AsyncIterable<SDKUserMessage>;
+      const iterator = input[Symbol.asyncIterator]();
+      await expect(iterator.next()).resolves.toMatchObject({ value: { type: "user" } });
+      await vi.waitFor(() =>
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: "timeline",
+            item: expect.objectContaining({ type: "user_message" }),
+          }),
+        ),
+      );
+      push({
+        type: "system",
+        subtype: "status",
+        status: "compacting",
+        session_id: "session-1",
+      } as unknown as SDKMessage);
+      await vi.waitFor(() =>
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: "timeline",
+            item: { type: "compaction", status: "loading" },
+          }),
+        ),
+      );
+
+      const admission = await session.steerActiveTurn?.("message during compaction", {
+        expectedTurnId: turnId,
+      });
+
+      // Claude Code holds a `next` message until the compaction finishes. Refusing it makes the
+      // manager replace the turn, and the interrupt cancels the compaction.
+      expect(admission).toEqual({ status: "accepted", providerMessageId: expect.any(String) });
+      await expect(iterator.next()).resolves.toMatchObject({
+        value: { type: "user", priority: "next" },
+      });
     } finally {
       unsubscribe();
       await session.close();

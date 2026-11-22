@@ -311,7 +311,7 @@ describe("catalog-only probe cleanup", () => {
   });
 
   test.each(["timeout", "abort"])(
-    "%s closes fake query and waits for captured child exit without escalation",
+    "%s leaves the captured child to exit on its own, then closes the fake query",
     async (kind) => {
       vi.useFakeTimers();
       const controller = new AbortController();
@@ -362,14 +362,17 @@ describe("catalog-only probe cleanup", () => {
       );
       if (kind === "abort") controller.abort(new Error("fixture abort"));
       await vi.advanceTimersByTimeAsync(50);
-      expect(close).toHaveBeenCalledTimes(1);
-      expect(child.kill).toHaveBeenCalledTimes(1);
-      expect(child.kill.mock.calls[0]).toEqual([]);
+      // FU-810 (upstream #9855): the CLI may be saving a refreshed OAuth token. It is left
+      // to exit on its own; killing it would sign the account out.
+      expect(close).not.toHaveBeenCalled();
+      expect(child.kill).not.toHaveBeenCalled();
       expect(settled).toBe(false);
-      child.signalCode = "SIGTERM";
-      child.emit("exit", null, "SIGTERM");
+      child.exitCode = 0;
+      child.emit("exit", 0, null);
       expect(await handled).toBeInstanceOf(Error);
       expect(settled).toBe(true);
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(child.kill).not.toHaveBeenCalled();
     },
   );
 });

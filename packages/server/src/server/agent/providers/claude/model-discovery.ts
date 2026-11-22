@@ -12,11 +12,17 @@ import {
   type ClaudeEffortLevel,
   normalizeClaudeRuntimeModelId,
 } from "./model-manifest.js";
+import { terminateWithTreeKill } from "../../../../utils/tree-kill.js";
 import { claudeQuery, type ClaudeQueryFactory } from "./query.js";
 
 export type ClaudeRuntimeModel = ModelInfo;
 
 export const CLAUDE_MODEL_PROBE_TIMEOUT_MS = 20_000;
+// Long enough for the CLI to finish an OAuth token refresh it started before the probe ended.
+const PROBE_EXIT_GRACE_MS = 60_000;
+
+// Probe processes left to exit on their own after the probe ended (FU-810, upstream #9855).
+const exitingProbes = new Map<ChildProcess, () => Promise<void>>();
 
 export interface ClaudeModelProbeInput {
   claudeBinary: string;
@@ -119,21 +125,56 @@ export async function probeClaudeModels(
   } finally {
     if (timer) clearTimeout(timer);
     if (onAbort) input.signal?.removeEventListener("abort", onAbort);
+    // Ending the prompt stream lets the CLI exit on its own.
     releasePrompt();
-    try {
-      query.close();
-    } catch {
-      // Already closed.
-    }
     if (child && child.exitCode === null && child.signalCode === null) {
-      // A signal submission is not an exit. Keep the catalog flight occupied until
-      // this exact probe child exits; the outer refresh deadline bounds its caller.
-      if (!child.killed) child.kill();
-      // Standalone callers retain their existing probe bound. A refresh has an
-      // outer caller deadline and must keep its cleanup flight until observed exit.
+      // The CLI may be refreshing an expired OAuth token, even after it has answered.
+      // Claude Code rotates the refresh token before saving the new pair, so killing it now
+      // leaves a revoked token on disk and signs the account out (upstream #9314). With its
+      // input ended it exits once that work is done; the grace period and daemon shutdown
+      // bound the wait.
+      letProbeExit(query, child);
+      // Keep the catalog flight occupied until this exact probe child exits; the outer
+      // refresh deadline bounds its caller. Standalone callers do not wait.
       if (input.signal) await childExit;
+    } else {
+      closeProbeQuery(query);
     }
   }
+}
+
+/** Kills probe processes still exiting after their probe ended. Called on daemon shutdown. */
+export async function killExitingClaudeModelDiscoveries(): Promise<void> {
+  await Promise.all(Array.from(exitingProbes.values(), (kill) => kill()));
+}
+
+function closeProbeQuery(query: { close(): void }): void {
+  try {
+    query.close();
+  } catch {
+    // Already closed.
+  }
+}
+
+function letProbeExit(query: { close(): void }, child: ChildProcess): void {
+  function forget(): void {
+    clearTimeout(graceTimer);
+    child.off("exit", onExit);
+    exitingProbes.delete(child);
+  }
+  function onExit(): void {
+    forget();
+    closeProbeQuery(query);
+  }
+  async function kill(): Promise<void> {
+    forget();
+    closeProbeQuery(query);
+    await terminateWithTreeKill(child, { gracefulTimeoutMs: 200, forceTimeoutMs: 200 });
+  }
+  const graceTimer = setTimeout(() => void kill(), PROBE_EXIT_GRACE_MS);
+  graceTimer.unref();
+  child.once("exit", onExit);
+  exitingProbes.set(child, kill);
 }
 
 interface RuntimeModelGroup {

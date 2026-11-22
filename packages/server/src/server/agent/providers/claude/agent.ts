@@ -27,6 +27,7 @@ import { createImportDescriptorScheduler } from "./import-descriptor-scheduler.j
 import {
   type AgentDefinition,
   type CanUseTool,
+  type HookCallback,
   type McpServerConfig as ClaudeSdkMcpServerConfig,
   type PermissionMode,
   type PermissionResult,
@@ -60,6 +61,7 @@ import {
   resolveConfiguredClaudeModel,
 } from "./models.js";
 import {
+  killExitingClaudeModelDiscoveries,
   probeClaudeModels,
   recordClaudeRuntimeModels,
   type ClaudeModelProbe,
@@ -1889,6 +1891,10 @@ export class ClaudeAgentClient implements AgentClient {
     };
   }
 
+  async shutdown(): Promise<void> {
+    await killExitingClaudeModelDiscoveries();
+  }
+
   async resolveDefaultModeId({ env: launchEnv }: ResolveAgentDefaultModeInput): Promise<string> {
     return claudeModeCatalog(this.buildProviderEnv(launchEnv)).defaultModeId;
   }
@@ -2916,6 +2922,7 @@ class ClaudeAgentSession implements AgentSession {
       this.activeForegroundQuery = preparedQuery;
       this.activeForegroundInput = preparedInput;
       this.startQueryPump();
+      this.runtimeSafety.notePromptSent();
       if (queued) {
         // The prepared-object check is synchronous and runs after final authority validation.
         submitNativeQueuedDispatch(
@@ -2965,7 +2972,10 @@ class ClaudeAgentSession implements AgentSession {
       return { status: "unavailable" };
     }
     const activeTurnId = this.activeForegroundTurnId ?? this.autonomousTurn?.id;
-    if (this.compacting || activeTurnId !== options.expectedTurnId) {
+    // A compacting turn still takes a steer: Claude Code holds a `next` message until the
+    // compaction finishes. Refusing it makes the manager replace the turn, and that interrupt
+    // cancels the compaction.
+    if (activeTurnId !== options.expectedTurnId) {
       return { status: "unavailable" };
     }
 
@@ -4324,7 +4334,7 @@ class ClaudeAgentSession implements AgentSession {
       // subagents keep running. Without this declaration an interrupt kills every one of them.
       // Claude stops a helper itself with its TaskStop tool.
       perTaskStopAffordance: true,
-      hooks: this.buildSubagentEffortHooks(),
+      hooks: { ...this.buildSubagentEffortHooks(), Stop: [{ hooks: [this.observeStopHook] }] },
       ...(this.persistSession === undefined ? {} : { persistSession: this.persistSession }),
       env: sdkEnv,
     };
@@ -5892,6 +5902,13 @@ class ClaudeAgentSession implements AgentSession {
         message: `${toolName} is not on the allow list for this session, so it was refused without asking.`,
       };
     }
+    // Decide before publishing anything: bypassed tools never enter the permission UI.
+    // Claude also routes questions and plan review through this callback.
+    const needsUserAnswer = toolName === "AskUserQuestion" || toolName === "ExitPlanMode";
+    if (this.currentMode === "bypassPermissions" && !needsUserAnswer) {
+      return { behavior: "allow", updatedInput: input, toolUseID: options.toolUseID };
+    }
+
     const requestId = `permission-${randomUUID()}`;
     const kind = resolvePermissionKind(toolName, input);
     const requestInput = normalizeClaudeAskUserQuestionRequestInput(toolName, input);
@@ -6065,6 +6082,12 @@ class ClaudeAgentSession implements AgentSession {
       SubagentStop: [{ hooks: [observe] }],
     };
   }
+
+  // Observation-only, like the effort hooks: it never alters turn control.
+  private readonly observeStopHook: HookCallback = async (input) => {
+    if (input.hook_event_name === "Stop") this.runtimeSafety.observeStop(input.session_crons);
+    return {};
+  };
 
   private notifySubscribers(event: AgentStreamEvent): void {
     const turnId =

@@ -1,6 +1,7 @@
 import { createWorkspaceRuntimeStore } from "./workspace-runtime-store/index.js";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import os from "node:os";
+import { setTimeout as delay } from "node:timers/promises";
 import path, { join } from "node:path";
 import type pino from "pino";
 import type { ForgeService } from "../services/forge-service.js";
@@ -332,6 +333,34 @@ function createService(
   });
 }
 
+async function settle(assertion: () => void): Promise<void> {
+  // Observation setup resolves real filesystem paths even while the polling clock is frozen.
+  // Give that I/O wall-clock time without advancing the service's polling deadlines.
+  const deadline = performance.now() + 5_000;
+  while (true) {
+    try {
+      assertion();
+      return;
+    } catch (failure) {
+      if (performance.now() >= deadline) throw failure;
+    }
+    await delay(1);
+    await vi.advanceTimersByTimeAsync(0);
+  }
+}
+
+async function waitForObservationToSettle(
+  service: WorkspaceGitServiceImpl,
+  repositoryWorkspaceLinkCount: number,
+): Promise<void> {
+  await settle(() => {
+    const metrics = service.getMetrics();
+    expect(metrics.repositoryWorkspaceLinkCount).toBe(repositoryWorkspaceLinkCount);
+    expect(metrics.workspaceObservationSetupInFlightCount).toBe(0);
+    expect(metrics.workspaceRefreshInFlightCount).toBe(0);
+  });
+}
+
 describe("WorkspaceGitServiceImpl", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -392,6 +421,30 @@ describe("WorkspaceGitServiceImpl", () => {
     await service.dispose();
   });
 
+  test("a client reconnecting within the release grace reuses the warm target", async () => {
+    const getCheckoutStatus = vi.fn(buildDefaultTestServiceDeps().getCheckoutStatus);
+    // FULCRA(FU-810): the warm-target rule checks the folder on disk; the fixture path is not real.
+    const service = createService({ getCheckoutStatus, workspaceFolderExists: () => true });
+    try {
+      const first = service.registerWorkspace({ cwd: REPO_CWD }, () => {});
+      const snapshot = await service.getSnapshot(REPO_CWD);
+      await waitForObservationToSettle(service, 1);
+      first.unsubscribe();
+      expect(service.getMetrics().workspaceTargetCount).toBe(1);
+      const reads = getCheckoutStatus.mock.calls.length;
+
+      const second = service.registerWorkspace({ cwd: REPO_CWD }, () => {});
+      await expect(service.getSnapshot(REPO_CWD)).resolves.toEqual(snapshot);
+      expect(getCheckoutStatus).toHaveBeenCalledTimes(reads);
+      second.unsubscribe();
+
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(service.getMetrics().workspaceTargetCount).toBe(0);
+    } finally {
+      await service.dispose();
+    }
+  });
+
   test("onSnapshotUpdated delivers without workspace subscribers and can unsubscribe", async () => {
     const service = createService();
     const snapshots: WorkspaceGitRuntimeSnapshot[] = [];
@@ -428,6 +481,7 @@ describe("WorkspaceGitServiceImpl", () => {
     const service = new WorkspaceGitServiceImpl({
       logger: createLogger() as unknown as pino.Logger,
       paseoHome: "/tmp/paseo-test",
+      releaseGraceMs: 0,
       deps: {
         ...buildDefaultTestServiceDeps(),
         getPullRequestStatus: async () => {
@@ -1480,6 +1534,7 @@ describe("WorkspaceGitServiceImpl", () => {
     expect(subscribe).toHaveBeenCalledTimes(1);
     expect(subscribe).toHaveBeenCalledWith(REPO_CWD, expect.any(Function), {
       ignore: [join(REPO_CWD, ".git")],
+      signal: expect.any(AbortSignal),
     });
 
     subscription.unsubscribe();
@@ -1545,6 +1600,7 @@ describe("WorkspaceGitServiceImpl", () => {
     expect(subscription.repoRoot).toBeNull();
     expect(subscribe).toHaveBeenCalledWith(plainCwd, expect.any(Function), {
       ignore: [join(plainCwd, ".git")],
+      signal: expect.any(AbortSignal),
     });
     expect(vi.getTimerCount()).toBe(1);
 

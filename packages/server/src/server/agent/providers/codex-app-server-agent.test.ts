@@ -2705,6 +2705,23 @@ describe("Codex app-server provider", () => {
     appServer.assertNoErrors();
   });
 
+  test("lets idle cleanup release a session opened only to read its history", async () => {
+    const appServer = createFakeCodexAppServer({
+      "thread/resume": () =>
+        Promise.reject(new Error(archivedThreadErrorMessage("archived-thread-id"))),
+      "thread/read": () => ({ thread: { turns: [] } }),
+    });
+    const provider = createProviderWithFakeAppServer(appServer);
+
+    const session = await provider.resumeSession(archivedThreadHandle(), undefined, undefined, {
+      purpose: "history",
+    });
+
+    expect(await session.canStopRuntime!()).toBe(true);
+    await session.close();
+    appServer.assertNoErrors();
+  });
+
   test("unarchives Codex when an active Paseo agent resumes an archived thread", async () => {
     const threadRequests: string[] = [];
     let resumeAttempts = 0;
