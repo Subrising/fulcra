@@ -423,7 +423,8 @@ describe("WorkspaceGitServiceImpl", () => {
 
   test("a client reconnecting within the release grace reuses the warm target", async () => {
     const getCheckoutStatus = vi.fn(buildDefaultTestServiceDeps().getCheckoutStatus);
-    const service = createService({ getCheckoutStatus });
+    // FULCRA(FU-810): the warm-target rule checks the folder on disk; the fixture path is not real.
+    const service = createService({ getCheckoutStatus, workspaceFolderExists: () => true });
     try {
       const first = service.registerWorkspace({ cwd: REPO_CWD }, () => {});
       const snapshot = await service.getSnapshot(REPO_CWD);
