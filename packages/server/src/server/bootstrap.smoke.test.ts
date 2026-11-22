@@ -1248,6 +1248,9 @@ test.each(["reject", "stall"] as const)(
     const claude = new ClaudeAgentClient({
       logger: pino({ level: "silent" }),
       resolveBinary: async () => process.execPath,
+      // The model probe lets its process exit on its own (upstream #9855), so a probe through
+      // this factory would start a second fixture process. Keep the factory for the turn only.
+      modelProbe: async () => [],
       queryFactory: ({ options }) => {
         child = options.spawnClaudeCodeProcess!({
           command: process.execPath,
