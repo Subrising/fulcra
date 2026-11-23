@@ -38,7 +38,6 @@ import {
   useSidebarWorkspaceTrailing,
   type SidebarWorkspaceTrailing,
 } from "@/components/sidebar/workspace-trailing";
-import { SidebarSelectedBar } from "@/components/fulcra-brand"; // FULCRA(branding)
 import { sidebarTouchStyles, useSidebarTouchRows } from "@/components/sidebar/sidebar-touch";
 import { useTouchTargets } from "@/hooks/use-touch-targets";
 
@@ -293,8 +292,6 @@ function WorkspaceRowBody({
             style={styles.workspaceRowContainer}
             {...hoverHandlers}
           >
-            {/* FULCRA(branding): 3px accent bar on the selected row (FU-401 D3) */}
-            {selected ? <SidebarSelectedBar /> : null}
             <SidebarWorkspaceContextMenu
               contextMenuOpen={contextMenuOpen}
               onContextMenuOpenChange={onContextMenuOpenChange}
