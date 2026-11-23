@@ -45,6 +45,8 @@ export function BrandGlow({ height = GLOW_MAX_HEIGHT }: { height?: number }) {
             <Stop offset="0.7" stopColor={FULCRA_BRAND.coral} stopOpacity={0} />
           </RadialGradient>
           <LinearGradient id="fulcra-glow-fade" x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0" stopColor="#ffffff" stopOpacity={0.7} />
+            <Stop offset="0.22" stopColor="#ffffff" stopOpacity={1} />
             <Stop offset="0.7" stopColor="#ffffff" stopOpacity={1} />
             <Stop offset="1" stopColor="#ffffff" stopOpacity={0} />
           </LinearGradient>
