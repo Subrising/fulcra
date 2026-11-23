@@ -983,6 +983,8 @@ features	D	0	66	packages/app/src/components/community-links.tsx
 features	M	52	1	packages/app/src/components/compact-explorer-sidebar.tsx
 features	M	9	5	packages/app/src/components/context-window-meter.tsx
 features	M	22	2	packages/app/src/components/file-explorer-pane.tsx
+features	A	31	0	packages/app/src/components/fulcra-brand.test.ts
+features	A	238	0	packages/app/src/components/fulcra-brand.tsx
 features	M	5	2	packages/app/src/components/headers/back-header.tsx
 features	M	5	2	packages/app/src/components/headers/header-toggle-button.tsx
 features	M	11	0	packages/app/src/components/headers/menu-header.tsx
@@ -1151,7 +1153,9 @@ features	M	135	1	packages/app/src/screens/new-workspace/project-picker.test.tsx
 features	M	54	5	packages/app/src/screens/new-workspace/project-picker.ts
 features	M	2	19	packages/app/src/screens/open-project-screen.tsx
 features	M	0	28	packages/app/src/screens/project-settings-screen.tsx
+features	M	2	1	packages/app/src/screens/projects-screen.tsx
 features	M	0	2	packages/app/src/screens/schedules-screen.tsx
+features	M	97	16	packages/app/src/screens/sessions-screen.tsx
 features	A	222	0	packages/app/src/screens/settings/auto-resume-on-limit-card.test.tsx
 features	A	98	0	packages/app/src/screens/settings/auto-resume-on-limit-card.tsx
 features	M	2	0	packages/app/src/screens/settings/browser-tools-config.test.ts
@@ -1200,6 +1204,9 @@ features	M	39	0	packages/app/src/stores/sidebar-collapsed-sections-store/state.t
 features	M	27	1	packages/app/src/stores/sidebar-collapsed-sections-store/state.ts
 features	A	35	0	packages/app/src/stores/workspace-layout-storage.test.ts
 features	M	2	0	packages/app/src/stores/workspace-layout-storage.ts
+features	A	95	0	packages/app/src/styles/fulcra-theme.test.ts
+features	A	126	0	packages/app/src/styles/fulcra-theme.ts
+features	M	32	8	packages/app/src/styles/theme.ts
 features	M	16	4	packages/app/src/terminal/runtime/terminal-find.browser.test.ts
 features	A	18	0	packages/app/src/types/host-connection-endpoint.test.ts
 features	M	13	4	packages/app/src/utils/__tests__/split-markdown-blocks.test.ts
