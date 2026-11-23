@@ -53,6 +53,19 @@ describe("Fulcra theme seam", () => {
     ).toBeGreaterThanOrEqual(7);
   });
 
+  it("keeps the 3px selected bar and active label at 3:1 or more in both modes", () => {
+    for (const name of ["dark", "light"] as const) {
+      const c = REGISTERED_THEMES[name].colors;
+      expect(ratio(c.accent, c.surfaceSidebar), `${name} bar on sidebar`).toBeGreaterThanOrEqual(3);
+      expect(
+        ratio(c.accent, c.surfaceSidebarSelected),
+        `${name} bar on selected`,
+      ).toBeGreaterThanOrEqual(3);
+      expect(c.surfaceSidebarSelected).toBe(c.surface3);
+      expect(c.surfaceSidebarHover).toBe(c.surface3);
+    }
+  });
+
   it("uses the 1.75 icon stroke", () => {
     expect(ICON_STROKE_WIDTH).toBe(1.75);
   });

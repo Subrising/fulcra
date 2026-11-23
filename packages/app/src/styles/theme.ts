@@ -282,6 +282,7 @@ export function buildLightSemanticColors(tint: LightThemeConfig) {
     // FULCRA(branding): chat user bubble token; Fulcra themes override it with burgundy.
     userBubble: tint.surface3,
     userBubbleForeground: tint.foreground,
+    glowVeil: "transparent",
 
     foreground: tint.foreground,
     foregroundMuted: tint.foregroundMuted,
@@ -416,6 +417,7 @@ export function buildDarkSemanticColors(tint: DarkThemeConfig) {
     // FULCRA(branding): chat user bubble token; Fulcra themes override it with burgundy.
     userBubble: tint.surface3,
     userBubbleForeground: foreground,
+    glowVeil: "transparent",
 
     foreground,
     foregroundMuted: tint.foregroundMuted,

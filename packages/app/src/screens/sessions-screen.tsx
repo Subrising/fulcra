@@ -1,9 +1,10 @@
+import { BrandEmptyState } from "@/components/fulcra-brand"; // FULCRA(branding)
 import { useMemo, useState, useCallback, useEffect, type ReactElement } from "react";
 import { View, Text } from "react-native";
 import { useIsFocused } from "expo-router/react-navigation";
 import { router } from "expo-router";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
-import { ChevronLeft, History, Import } from "lucide-react-native";
+import { ChevronLeft, Import } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { MenuHeader } from "@/components/headers/menu-header";
@@ -88,11 +89,7 @@ function SessionsEmptyState({
     return (
       <View style={styles.emptyContainer} testID="sessions-empty">
         <View style={styles.compactEmptyState}>
-          <History size={styles.emptyIcon.width} color={styles.emptyIcon.color} />
-          <View style={styles.emptyTextStack}>
-            <Text style={styles.emptyTitle}>{text}</Text>
-            <Text style={styles.emptyText}>{t("sessions.emptyHint")}</Text>
-          </View>
+          <BrandEmptyState eyebrow="Sessions" line={text} />
           <Button variant="outline" leftIcon={Import} onPress={onImport}>
             {t("importSession.title")}
           </Button>
@@ -102,7 +99,7 @@ function SessionsEmptyState({
   }
   return (
     <View style={styles.emptyContainer} testID="sessions-empty">
-      <Text style={styles.emptyText}>{text}</Text>
+      <BrandEmptyState eyebrow="Sessions" line={text} />
       {isSearching ? (
         <Button variant="ghost" onPress={onClearSearch}>
           {t("sessions.actions.clearSearch")}

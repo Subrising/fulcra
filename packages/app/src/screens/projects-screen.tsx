@@ -1,3 +1,4 @@
+import { BrandEmptyState } from "@/components/fulcra-brand"; // FULCRA(branding)
 import { useCallback, useMemo } from "react";
 import { Pressable, Text, View, type PressableStateCallbackType } from "react-native";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
@@ -60,7 +61,7 @@ export default function ProjectsScreen({ serverId }: ProjectsScreenProps) {
   if (hostProjects.length === 0) {
     return (
       <View style={styles.centered} testID="projects-list">
-        <Text style={styles.emptyText}>{t("sidebar.project.empty.title")}</Text>
+        <BrandEmptyState eyebrow="Projects" line={t("sidebar.project.empty.title")} />
       </View>
     );
   }

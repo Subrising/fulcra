@@ -51,7 +51,7 @@ export const FULCRA_DARK_OVERRIDES = {
   destructiveForeground: "#121112",
   statusDanger: "#f0505a",
   // Selected row: warm neutral surface3 (plus the accent bar), hover one step quieter.
-  surfaceSidebarHover: "#1d1b1c",
+  surfaceSidebarHover: "#2a2726",
   surfaceSidebarSelected: "#2a2726",
   // User chat bubble: burgundy, a brand moment that echoes the website hero (D3).
   userBubble: FULCRA_BRAND.burgundyDeep,
@@ -96,6 +96,8 @@ export const FULCRA_LIGHT_OVERRIDES = {
   surfaceSidebarSelected: "#e6d9c3",
   userBubble: FULCRA_BRAND.burgundy,
   userBubbleForeground: FULCRA_BRAND.paper,
+  // Veil over the brand glow: light shows it at 0.22 strength (0.78 paper over it).
+  glowVeil: "rgba(251, 247, 239, 0.78)",
   interactionHighlight: "rgba(67, 21, 33, 0.06)",
 } as const;
 

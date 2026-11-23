@@ -23,7 +23,7 @@ import { FULCRA_BRAND } from "@/styles/fulcra-theme";
 const GLOW_MAX_HEIGHT = 420;
 
 // Port of website site.css:146-154 (.glow). Burgundy and coral radial light from the top edge,
-// masked to fade out by the bottom. Fixed brand hues; the container opacity adapts to the theme.
+// masked to fade out by the bottom. Fixed brand hues; the glowVeil token softens it in light.
 export function BrandGlow({ height = GLOW_MAX_HEIGHT }: { height?: number }) {
   const h = Math.min(height, GLOW_MAX_HEIGHT);
   return (
@@ -64,6 +64,7 @@ export function BrandGlow({ height = GLOW_MAX_HEIGHT }: { height?: number }) {
           <Ellipse cx="50" cy="0" rx="52" ry="70" fill="url(#fulcra-glow-coral)" />
         </G>
       </Svg>
+      <View style={styles.glowVeil} />
     </View>
   );
 }
@@ -145,6 +146,22 @@ export function BrandHeadline({
   );
 }
 
+// Empty state: 28px mark tile + eyebrow + one line. No glow (D5).
+export function BrandEmptyState({ eyebrow, line }: { eyebrow: string; line: string }) {
+  return (
+    <View style={styles.emptyState} testID="brand-empty-state">
+      <BrandMarkTile size={28} />
+      <BrandEyebrow>{eyebrow}</BrandEyebrow>
+      <Text style={styles.emptyLine}>{line}</Text>
+    </View>
+  );
+}
+
+// 3px accent bar at the left edge of the selected or active sidebar row (D3).
+export function SidebarSelectedBar() {
+  return <View pointerEvents="none" style={styles.selectedBar} testID="sidebar-selected-bar" />;
+}
+
 // Sidebar head: small mark tile + eyebrow wordmark. One per sidebar, never in nav rows.
 export function SidebarBrandRow() {
   return (
@@ -161,13 +178,39 @@ const styles = StyleSheet.create((theme) => ({
     top: 0,
     left: 0,
     right: 0,
-    opacity: theme.colorScheme === "dark" ? 1 : 0.22,
+  },
+  glowVeil: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: theme.colors.glowVeil,
   },
   markTile: {
     backgroundColor: FULCRA_BRAND.burgundy,
     overflow: "hidden",
     alignItems: "center",
     justifyContent: "center",
+  },
+  emptyState: {
+    alignItems: "center",
+    gap: theme.spacing[2],
+  },
+  emptyLine: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.base,
+    textAlign: "center",
+  },
+  selectedBar: {
+    position: "absolute",
+    left: 0,
+    top: 6,
+    bottom: 6,
+    width: 3,
+    borderRadius: 2,
+    backgroundColor: theme.colors.accent,
+    zIndex: 1,
   },
   sidebarBrandRow: {
     flexDirection: "row",
