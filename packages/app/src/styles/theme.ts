@@ -1,5 +1,13 @@
 import { Platform } from "react-native";
 import { darkHighlightColors, lightHighlightColors } from "@getpaseo/highlight";
+// FULCRA(branding): FU-401 brand themes.
+import {
+  FULCRA_DARK_TINT,
+  FULCRA_ICON_STROKE_WIDTH,
+  FULCRA_LIGHT_TINT,
+  withFulcraDark,
+  withFulcraLight,
+} from "./fulcra-theme";
 
 export const baseColors = {
   // Base colors
@@ -271,6 +279,9 @@ export function buildLightSemanticColors(tint: LightThemeConfig) {
     surfaceSidebarSelected: tint.surface4,
     surfaceWorkspace: tint.surface0,
     interactionHighlight: "rgba(0, 0, 0, 0.06)",
+    // FULCRA(branding): chat user bubble token; Fulcra themes override it with burgundy.
+    userBubble: tint.surface3,
+    userBubbleForeground: tint.foreground,
 
     foreground: tint.foreground,
     foregroundMuted: tint.foregroundMuted,
@@ -402,6 +413,9 @@ export function buildDarkSemanticColors(tint: DarkThemeConfig) {
     surfaceSidebarSelected: tint.surface2,
     surfaceWorkspace: tint.surface1,
     interactionHighlight: "rgba(255, 255, 255, 0.08)",
+    // FULCRA(branding): chat user bubble token; Fulcra themes override it with burgundy.
+    userBubble: tint.surface3,
+    userBubbleForeground: foreground,
 
     foreground,
     foregroundMuted: tint.foregroundMuted,
@@ -597,7 +611,8 @@ export const ICON_SIZE = {
   lg: 20,
 } as const;
 
-export const ICON_STROKE_WIDTH = 1.5;
+// FULCRA(branding): 1.75 stroke (FU-401).
+export const ICON_STROKE_WIDTH = FULCRA_ICON_STROKE_WIDTH;
 
 export const FONT_WEIGHT = {
   normal: "normal" as const,
@@ -778,20 +793,27 @@ export const lightTheme = buildLightTheme(lightSemanticColors);
 // Keep compatibility with existing code
 export const theme = darkTheme;
 
+// FULCRA(branding): FU-401 brand themes. "dark" and "light" (and so "auto" and the default)
+// resolve to the Fulcra look. Paseo green stays only in the pureBlack variant.
+const fulcraDarkTheme = buildDarkTheme(withFulcraDark(buildDarkSemanticColors(FULCRA_DARK_TINT)));
+const fulcraLightTheme = buildLightTheme(
+  withFulcraLight(buildLightSemanticColors(FULCRA_LIGHT_TINT)),
+);
+
 export const THEME_OPTIONS = [
   {
     name: "light",
     group: "primary",
     unistylesName: "light",
-    theme: lightTheme,
-    swatch: "#ffffff",
+    theme: fulcraLightTheme,
+    swatch: "#fbf7ef",
   },
   {
     name: "dark",
     group: "primary",
     unistylesName: "dark",
-    theme: darkTheme,
-    swatch: "#2D8B62",
+    theme: fulcraDarkTheme,
+    swatch: "#ff8a5b",
   },
   { name: "auto", group: "primary" },
   {

@@ -1,4 +1,5 @@
 import { SidebarTopContentProvider } from "@/components/sidebar/sidebar-top-content";
+import { SidebarBrandRow } from "@/components/fulcra-brand"; // FULCRA(branding)
 import { router } from "expo-router";
 import {
   CircleGauge,
@@ -776,6 +777,7 @@ function DesktopSidebar({
           ) : (
             <TitlebarDragRegion />
           )}
+          <SidebarBrandRow />
         </View>
 
         {isInitialLoad && !hasActiveHostFilter ? (

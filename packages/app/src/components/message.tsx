@@ -313,7 +313,8 @@ const userMessageStylesheet = StyleSheet.create((theme) => ({
     marginBottom: theme.spacing[4],
   },
   bubble: {
-    backgroundColor: theme.colors.surface3,
+    // FULCRA(branding): burgundy user bubble token on the Fulcra themes (FU-401).
+    backgroundColor: theme.colors.userBubble,
     borderRadius: theme.borderRadius["2xl"],
     borderTopRightRadius: theme.borderRadius.sm,
     paddingHorizontal: theme.spacing[4],
@@ -322,7 +323,7 @@ const userMessageStylesheet = StyleSheet.create((theme) => ({
     flexShrink: 1,
   },
   text: {
-    color: theme.colors.foreground,
+    color: theme.colors.userBubbleForeground,
     fontSize: theme.fontSize.content,
     ...(isWeb
       ? {

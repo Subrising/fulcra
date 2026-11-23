@@ -17,6 +17,7 @@ import { buildHostRootRoute } from "@/utils/host-routes";
 import { isFdroidBuild } from "@/constants/build-profile";
 import { isWeb } from "@/constants/platform";
 import { isElectronRuntime } from "@/desktop/host";
+import { BrandEyebrow, BrandGlow, BrandHeadline, BrandMarkTile } from "./fulcra-brand";
 
 interface WelcomeAction {
   key: "scan-qr" | "direct-connection" | "remote-ssh" | "paste-pairing-link";
@@ -34,6 +35,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   scrollView: {
     flex: 1,
+    backgroundColor: "transparent",
   },
   container: {
     flexGrow: 1,
@@ -61,7 +63,13 @@ const styles = StyleSheet.create((theme) => ({
   copyBlock: {
     alignItems: "center",
     gap: theme.spacing[2],
-    marginBottom: theme.spacing[12],
+    marginTop: theme.spacing[4],
+    marginBottom: theme.spacing[8],
+    maxWidth: 440,
+  },
+  eyebrowGap: {
+    marginTop: theme.spacing[6],
+    marginBottom: theme.spacing[3],
   },
   actions: {
     width: "100%",
@@ -82,6 +90,7 @@ const styles = StyleSheet.create((theme) => ({
   actionButtonPrimary: {
     backgroundColor: theme.colors.accent,
     borderColor: theme.colors.accent,
+    borderRadius: theme.borderRadius.full,
   },
   actionText: {
     color: theme.colors.foreground,
@@ -262,6 +271,7 @@ export function WelcomeScreen({ onHostAdded }: WelcomeScreenProps) {
 
   return (
     <View style={styles.root}>
+      <BrandGlow />
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={scrollContentContainerStyle}
@@ -269,9 +279,14 @@ export function WelcomeScreen({ onHostAdded }: WelcomeScreenProps) {
         testID="welcome-screen"
       >
         <View style={styles.content}>
-          <Text style={[styles.title, { fontSize: 48 }]}>Fulcra</Text>
+          <BrandMarkTile size={64} />
+          <View style={styles.eyebrowGap}>
+            <BrandEyebrow>Fulcra</BrandEyebrow>
+          </View>
+          <BrandHeadline fontSize={44} accentLine="Your direction.">
+            Your team.
+          </BrandHeadline>
           <View style={styles.copyBlock}>
-            <Text style={styles.title}>Your team. Your direction.</Text>
             <Text style={styles.subtitle}>
               Connect your controller to follow goals, review outcomes and direct your saved AI
               conversations.
