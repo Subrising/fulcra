@@ -4,6 +4,7 @@ import * as Clipboard from "expo-clipboard";
 import { useTranslation } from "react-i18next";
 import { Copy, RotateCw } from "lucide-react-native";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
+import { BrandGlow } from "@/components/fulcra-brand"; // FULCRA(branding)
 import { OrcaLogo } from "@/components/icons/orca-logo";
 import { Button } from "@/components/ui/button";
 import { getDesktopDaemonLogs, type DesktopDaemonLogs } from "@/desktop/daemon/desktop-daemon";
@@ -199,6 +200,7 @@ export function StartupSplashScreen({ bootstrapState }: StartupSplashScreenProps
   if (!isError) {
     return (
       <View testID="startup-splash" style={styles.container}>
+        <BrandGlow />
         <TitlebarDragRegion />
         <OrcaLogo size={LOGO_SIZE} />
         <ActivityIndicator

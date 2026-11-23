@@ -4,7 +4,11 @@ import { describe, expect, it } from "vitest";
 
 // BrandGlow may only sit behind welcome, splash and open-project (FU-401 FINAL-BRIEF section 4).
 // Never behind chat, diff or terminal text.
-const ALLOWED_GLOW_IMPORTERS = ["components/welcome-screen.tsx"];
+const ALLOWED_GLOW_IMPORTERS = [
+  "components/welcome-screen.tsx",
+  "screens/open-project-screen.tsx",
+  "screens/startup-splash-screen.tsx",
+];
 
 describe("BrandGlow importers", () => {
   it("lists only the allowed screens", () => {
