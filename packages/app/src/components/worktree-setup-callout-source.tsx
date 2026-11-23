@@ -62,7 +62,7 @@ export function WorktreeSetupCalloutSource() {
       title: calloutPolicy.title,
       description: calloutPolicy.description,
       actions: [
-        { label: calloutPolicy.actionLabel, onPress: openProjectSettings, variant: "primary" },
+        { label: calloutPolicy.actionLabel, onPress: openProjectSettings, variant: "secondary" },
       ],
       testID: calloutPolicy.testID,
     });

@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
-import { Pressable, Text, View, ScrollView } from "react-native";
+import { Pressable, Text, View, ScrollView, useWindowDimensions } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { QrCode, Link2, ClipboardPaste, Settings, Terminal } from "lucide-react-native";
@@ -159,6 +159,8 @@ export function WelcomeScreen({ onHostAdded }: WelcomeScreenProps) {
   const { theme } = useUnistyles();
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
+  // FULCRA(branding): short landscape screens get a smaller mark and headline so both actions stay in view.
+  const isShort = useWindowDimensions().height < 520;
   const router = useRouter();
   const appVersion = resolveAppVersion();
   const appVersionText = formatVersionWithPrefix(appVersion);
@@ -279,11 +281,11 @@ export function WelcomeScreen({ onHostAdded }: WelcomeScreenProps) {
         testID="welcome-screen"
       >
         <View style={styles.content}>
-          <BrandMarkTile size={64} />
+          <BrandMarkTile size={isShort ? 36 : 64} />
           <View style={styles.eyebrowGap}>
             <BrandEyebrow>Fulcra</BrandEyebrow>
           </View>
-          <BrandHeadline fontSize={44} accentLine="Your direction.">
+          <BrandHeadline fontSize={isShort ? 30 : 44} accentLine="Your direction.">
             Your team.
           </BrandHeadline>
           <View style={styles.copyBlock}>
