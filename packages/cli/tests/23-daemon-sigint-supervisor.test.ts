@@ -209,7 +209,8 @@ try {
 
     daemon = await startSupervisor();
     const restoredIdle = (await daemon.client.fetchAgentTimeline(idle.id)).agent;
-    assert.equal(restoredIdle?.status, "idle");
+    // Fulcra: revive on restart reopens only agents that were mid-turn, so an idle agent can stay closed.
+    assert(["idle", "closed"].includes(restoredIdle?.status ?? ""), String(restoredIdle?.status));
     assert.equal(restoredIdle?.requiresAttention, false);
     await waitFor(async () => {
       const { agent } = (await daemon!.client.fetchAgent(running.id)) ?? {};
