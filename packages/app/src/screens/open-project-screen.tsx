@@ -5,6 +5,7 @@ import { View, Text, Pressable, ScrollView } from "react-native";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { useRouter } from "expo-router";
 import { FolderOpen, Inbox, Plug, Smartphone } from "lucide-react-native";
+import { BrandGlow } from "@/components/fulcra-brand"; // FULCRA(branding)
 import { OrcaLogo } from "@/components/icons/orca-logo";
 import { MenuHeader } from "@/components/headers/menu-header";
 import { useOpenAddProject } from "@/hooks/use-open-add-project";
@@ -55,6 +56,7 @@ export function OpenProjectScreen() {
 
   return (
     <View style={styles.container}>
+      <BrandGlow />
       <MenuHeader borderless />
       <ScrollView
         style={styles.scroll}

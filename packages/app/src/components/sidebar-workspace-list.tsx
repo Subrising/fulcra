@@ -1,4 +1,5 @@
 import { SidebarTopContent } from "@/components/sidebar/sidebar-top-content";
+import { SidebarSelectedBar } from "@/components/fulcra-brand"; // FULCRA(branding)
 import { WorkspaceOrganizationSidebar } from "@/plugins/workspace-organization-sidebar";
 import { SidebarSessions } from "./sidebar/sidebar-sessions";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
@@ -1168,6 +1169,8 @@ function WorkspaceRowInner({
             style={styles.workspaceRowContainer}
             {...hoverHandlers}
           >
+            {/* FULCRA(branding): 3px accent bar on the selected row (FU-401 D3) */}
+            {selected ? <SidebarSelectedBar /> : null}
             <SidebarWorkspaceContextMenu
               contextMenuOpen={contextMenuOpen}
               onContextMenuOpenChange={onContextMenuOpenChange}

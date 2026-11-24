@@ -1,3 +1,4 @@
+import { SidebarSelectedBar } from "@/components/fulcra-brand"; // FULCRA(branding)
 import { CommandCentreSection } from "@/desktop/components/desktop-updates-section";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
@@ -352,6 +353,16 @@ function renderHostSettingsContent(
 // ---------------------------------------------------------------------------
 // Trigger + sidebar style helpers
 // ---------------------------------------------------------------------------
+
+// FULCRA(branding): active icon takes the accent on the desktop settings sidebar.
+function rowIconColor(
+  isSelected: boolean,
+  isCompact: boolean,
+  colors: { accent: string; foreground: string; foregroundMuted: string },
+) {
+  if (isSelected) return isCompact ? colors.foreground : colors.accent;
+  return colors.foregroundMuted;
+}
 
 function sidebarItemStyle({
   hovered,
@@ -830,8 +841,13 @@ function MenuRow({
   const { theme, rt } = useUnistyles();
   const accessibilityState = useMemo(() => ({ selected: isSelected }), [isSelected]);
   const labelStyle = useMemo(
-    () => [sidebarStyles.label, (isSelected || isCompact) && { color: theme.colors.foreground }],
-    [isCompact, isSelected, theme.colors.foreground],
+    () => [
+      sidebarStyles.label,
+      (isSelected || isCompact) && { color: theme.colors.foreground },
+      // FULCRA(branding): the active settings row takes the accent (FU-401 D3).
+      isSelected && !isCompact && { color: theme.colors.accent },
+    ],
+    [isCompact, isSelected, theme.colors.foreground, theme.colors.accent],
   );
   const rowStyle = useCallback(
     (state: PressableStateCallbackType & { hovered?: boolean }) => [
@@ -850,9 +866,11 @@ function MenuRow({
       testID={testID}
       style={rowStyle}
     >
+      {/* FULCRA(branding): 3px accent bar on the active settings row (FU-401 D3) */}
+      {isSelected && !isCompact ? <SidebarSelectedBar /> : null}
       <IconComponent
         size={densityIconSize(rt, "md")}
-        color={isSelected ? theme.colors.foreground : theme.colors.foregroundMuted}
+        color={rowIconColor(isSelected, isCompact, theme.colors)}
       />
       <View style={sidebarStyles.labelColumn}>
         <Text style={labelStyle} numberOfLines={1}>

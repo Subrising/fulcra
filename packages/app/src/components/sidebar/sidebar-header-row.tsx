@@ -3,6 +3,7 @@ import { useCallback, useState, type ComponentType, type ReactNode, type Ref } f
 import { Pressable, Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { HEADER_INNER_HEIGHT, HEADER_INNER_HEIGHT_MOBILE } from "@/constants/layout";
+import { SidebarSelectedBar } from "@/components/fulcra-brand"; // FULCRA(branding)
 import { DensityIcon } from "@/components/ui/density-icon";
 import { Shortcut } from "@/components/ui/shortcut";
 import { density, densityIconBox } from "@/styles/density";
@@ -85,6 +86,8 @@ export function SidebarHeaderRow({
         onPointerEnter={handlePointerEnter}
         onPointerLeave={handlePointerLeave}
       >
+        {/* FULCRA(branding): 3px accent bar on the active row (FU-401 D3) */}
+        {isActive ? <SidebarSelectedBar /> : null}
         <Pressable
           onPress={onPress}
           onPressIn={handlePressIn}
@@ -102,12 +105,20 @@ export function SidebarHeaderRow({
             <DensityIcon
               icon={icon}
               size={iconSize}
-              color={isHighlighted ? "foreground" : "foregroundMuted"}
+              color={rowIconColor(isActive, isHighlighted)}
             />
           ) : (
             <View style={variant === "header" ? styles.iconSpacer : styles.iconSpacerCompact} />
           )}
-          <Text style={[styles.label, isHighlighted && styles.labelHighlighted]}>{label}</Text>
+          <Text
+            style={[
+              styles.label,
+              isHighlighted && styles.labelHighlighted,
+              isActive && styles.labelActive,
+            ]}
+          >
+            {label}
+          </Text>
         </Pressable>
         {right === null ? null : (
           <Pressable
@@ -124,6 +135,12 @@ export function SidebarHeaderRow({
       </View>
     </View>
   );
+}
+
+// FULCRA(branding): the active item's icon takes the accent.
+function rowIconColor(isActive: boolean, isHighlighted: boolean) {
+  if (isActive) return "accent";
+  return isHighlighted ? "foreground" : "foregroundMuted";
 }
 
 const SELECTED_STATE = { selected: true } as const;
@@ -187,6 +204,10 @@ const styles = StyleSheet.create((theme) => ({
   },
   labelHighlighted: {
     color: theme.colors.foreground,
+  },
+  // FULCRA(branding): the active item takes the accent (coral dark, deep coral light).
+  labelActive: {
+    color: theme.colors.accent,
   },
   trailing: {
     flexDirection: "row",
