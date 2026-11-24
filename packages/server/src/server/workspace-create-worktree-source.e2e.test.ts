@@ -215,6 +215,17 @@ test("existing branch changes remain visible after archive and restore", async (
   commitFile(repoDir, "feature.txt", "feature change\n");
   runGit(repoDir, "switch", "main");
   await client.connect();
+  const events = client.observeEvents(["checkout_status_update"]);
+  const updates: { cwd: string; isGit: boolean; baseRef: string | null }[] = [];
+  events.subscribe({
+    snapshot: () => {},
+    update: (message) => {
+      if (message.type === "checkout_status_update") {
+        updates.push(message.payload);
+      }
+    },
+  });
+  await events.ready;
   const created = await client.createWorkspace({
     source: {
       kind: "worktree",
@@ -231,10 +242,13 @@ test("existing branch changes remain visible after archive and restore", async (
   expect(before.error).toBeNull();
   expect(before.files.map((file) => file.path)).toEqual(["feature.txt"]);
   expect((await client.getCheckoutStatus(cwd)).baseRef).toBe("main");
+  const gitStatus = { cwd, isGit: true, baseRef: "main" };
   const keeps = watchCleanupKeeps();
   expect((await client.archiveWorkspace(workspace.id)).error).toBeNull();
   expectKeptByCleanupGuard(keeps, cwd);
+  updates.length = 0;
   await client.restoreWorkspace(workspace.id);
+  expect(updates).toContainEqual(expect.objectContaining(gitStatus));
   expect(runGit(cwd, "rev-parse", "HEAD")).toBe(head);
   expect((await client.getCheckoutStatus(cwd)).baseRef).toBe("main");
   const after = await client.getCheckoutDiff(cwd, { mode: "base" });

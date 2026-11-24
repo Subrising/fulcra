@@ -267,8 +267,11 @@ export interface HostRuntimeStartOptions {
 const PROBE_TICK_MS = 2_000;
 const PROBE_STEADY_MS = 10_000;
 const PROBE_MAX_BACKOFF_MS = 30_000;
-const PROBE_INACTIVE_WHILE_ONLINE_MS = 120_000;
+const PROBE_INACTIVE_WHILE_ONLINE_INITIAL_MS = 120_000;
+const PROBE_INACTIVE_WHILE_ONLINE_MAX_MS = 30 * 60_000;
+const ACTIVE_RTT_WINDOW_MS = 60_000;
 const ADAPTIVE_SWITCH_THRESHOLD_MS = 40;
+const ADAPTIVE_SWITCH_MIN_IMPROVEMENT_RATIO = 0.35;
 const ADAPTIVE_SWITCH_CONSECUTIVE_PROBES = 3;
 const CONFIGURED_OVERRIDE_BOOTSTRAP_RETRY_MS = 1_000;
 
@@ -576,13 +579,14 @@ function probeIntervalForConnection(
   firstSeenAt: number,
   isActiveOnline: boolean,
   hasActiveOnlineConnection: boolean,
+  inactiveOnlineIntervalMs: number,
   now: number,
 ): number {
   if (isActiveOnline) {
     return PROBE_STEADY_MS;
   }
   if (hasActiveOnlineConnection) {
-    return PROBE_INACTIVE_WHILE_ONLINE_MS;
+    return inactiveOnlineIntervalMs;
   }
   const age = now - firstSeenAt;
   if (age < 10_000) return 2_000;
@@ -775,6 +779,8 @@ export class HostRuntimeController {
   private connectionLastProbedAt = new Map<string, number>();
   private switchCandidateConnectionId: string | null = null;
   private switchCandidateHitCount = 0;
+  private inactiveOnlineProbeBackoffStep = 0;
+  private activeRttSamples: Array<{ at: number; rttMs: number }> = [];
   private clientIdPromise: Promise<string> | null = null;
   private clientIdHash: string | null = null;
   private switchRequestVersion = 0;
@@ -908,6 +914,9 @@ export class HostRuntimeController {
     const prev = this.activeClient;
     this.activeClient = null;
     prev?.setReconnectEnabled(false);
+    this.resetSwitchCandidate();
+    this.clearActiveRttSamples();
+    this.resetInactiveOnlineProbeBackoff();
     this.applyConnectionEvent({ type: "stopped" });
     this.updateSnapshot({
       ...toSnapshotConnectionPatch(this.connectionMachineState, this.connectionEpoch),
@@ -918,11 +927,13 @@ export class HostRuntimeController {
 
   async updateHost(host: HostProfile): Promise<void> {
     const passwordChanged = this.host.password !== host.password;
+    const connectionsChanged = !equal(this.host.connections, host.connections);
     if (passwordChanged) {
       this.probeRequestVersion += 1;
       this.authRejectedConnectionIds.clear();
       this.updateSnapshot({ authFailureReason: null });
     }
+    this.resetInactiveOnlineProbeBackoffIf(passwordChanged, connectionsChanged);
     const activeConnectionId = this.snapshot.activeConnectionId;
     const previousActiveConnection = findConnectionById(this.host, activeConnectionId);
     const relayChanged = !equal(
@@ -979,6 +990,9 @@ export class HostRuntimeController {
 
   ensureConnected(options?: { verify?: boolean }): void {
     if (this.isPairingRequired()) return;
+    if (options?.verify) {
+      this.resetInactiveOnlineProbeBackoff();
+    }
     this.activeClient?.ensureConnected(options);
   }
 
@@ -1065,6 +1079,7 @@ export class HostRuntimeController {
     const activeConnectionId = this.snapshot.activeConnectionId;
     const hasActiveOnlineConnection = isOnline && activeConnectionId !== null;
 
+    const inactiveOnlineIntervalMs = this.inactiveOnlineProbeIntervalMs();
     const connectionsToProbe = this.host.connections.filter((connection) => {
       if (this.authRejectedConnectionIds.has(connection.id)) return false;
       const lastProbed = this.connectionLastProbedAt.get(connection.id);
@@ -1077,6 +1092,7 @@ export class HostRuntimeController {
         firstSeen,
         isActiveOnline,
         hasActiveOnlineConnection,
+        inactiveOnlineIntervalMs,
         now,
       );
       return now - lastProbed >= interval;
@@ -1180,38 +1196,65 @@ export class HostRuntimeController {
         return;
       }
 
-      if (!activeProbe || activeProbe.status !== "available") {
+      // Adaptive switching counts fresh comparisons only. The probe map keeps the last known
+      // sample per connection for display and failover; a streak hit needs a candidate measured
+      // in this cycle and a baseline RTT from the socket that is active right now. Using the
+      // rolling minimum of recent active heartbeats filters out single busy/stalled ticks so a
+      // loaded working socket does not lose to an idle probe, and a proportional threshold avoids
+      // flapping on normal jitter on high-RTT links.
+      // L46: never switch to a connection of a lower kind, such as a faster relay while direct is up.
+      const activeRank = rankOfConnection(this.host, currentActiveConnectionId);
+      const sampledCandidates = connectionsToProbe.filter(
+        (connection) =>
+          connection.id !== currentActiveConnectionId &&
+          rankOfConnection(this.host, connection.id) <= activeRank,
+      );
+      if (sampledCandidates.length === 0) {
+        // An active-only tick carries no evidence about any candidate.
+        return;
+      }
+      const fastest =
+        sampledCandidates
+          .flatMap((connection) => {
+            const probe = probeByConnectionId.get(connection.id);
+            return probe?.status === "available"
+              ? [
+                  {
+                    connectionId: connection.id,
+                    latencyMs: probe.latencyMs,
+                    rank: rankOfConnection(this.host, connection.id),
+                  },
+                ]
+              : [];
+          })
+          // L46: a direct connection outranks the relay; latency orders connections of the same kind.
+          .sort((left, right) => left.rank - right.rank || left.latencyMs - right.latencyMs)[0] ??
+        null;
+      if (!fastest) {
+        // Every candidate sampled this cycle failed: that breaks the streak and backs off.
+        this.resetSwitchCandidate();
+        this.advanceInactiveOnlineProbeBackoff();
         return;
       }
 
-      const available = Array.from(probeByConnectionId.entries())
-        .filter(
-          (entry): entry is [string, Extract<ConnectionProbeState, { status: "available" }>] =>
-            entry[1].status === "available",
-        )
-        .map(([connectionId, probe]) => ({
-          connectionId,
-          latencyMs: probe.latencyMs,
-          rank: rankOfConnection(this.host, connectionId),
-        }))
-        // L46: a direct connection outranks the relay; latency orders connections of the same kind.
-        .sort((left, right) => left.rank - right.rank || left.latencyMs - right.latencyMs);
-
-      const fastest = available[0] ?? null;
-      if (!fastest || fastest.connectionId === currentActiveConnectionId) {
-        this.switchCandidateConnectionId = null;
-        this.switchCandidateHitCount = 0;
+      const activeRttMs = this.currentActiveSocketBaselineRttMs(performance.now());
+      if (activeRttMs === null) {
         return;
       }
 
+      const requiredImprovementMs = Math.max(
+        ADAPTIVE_SWITCH_THRESHOLD_MS,
+        activeRttMs * ADAPTIVE_SWITCH_MIN_IMPROVEMENT_RATIO,
+      );
+      const improvement = activeRttMs - fastest.latencyMs;
       const upgradesKind = fastest.rank < rankOfConnection(this.host, currentActiveConnectionId);
-      const improvement = activeProbe.latencyMs - fastest.latencyMs;
-      if (!upgradesKind && improvement < ADAPTIVE_SWITCH_THRESHOLD_MS) {
-        this.switchCandidateConnectionId = null;
-        this.switchCandidateHitCount = 0;
+      if (!upgradesKind && improvement < requiredImprovementMs) {
+        this.resetSwitchCandidate();
+        this.advanceInactiveOnlineProbeBackoff();
         return;
       }
 
+      this.resetInactiveOnlineProbeBackoff();
       if (this.switchCandidateConnectionId === fastest.connectionId) {
         this.switchCandidateHitCount += 1;
       } else {
@@ -1225,6 +1268,7 @@ export class HostRuntimeController {
         await this.switchToConnection({
           connectionId: fastest.connectionId,
           expectedProbeVersion: requestVersion,
+          keepActiveUntilConnected: true,
         });
       }
     };
@@ -1289,6 +1333,7 @@ export class HostRuntimeController {
                 return;
               }
               if (rttMs !== null) {
+                this.recordActiveRttSample(rttMs, performance.now());
                 probeByConnectionId.set(connection.id, {
                   status: "available",
                   latencyMs: rttMs,
@@ -1336,6 +1381,83 @@ export class HostRuntimeController {
         })();
       }
     });
+  }
+
+  // The client clears its heartbeat RTT when a socket connects, so a connected client's RTT
+  // describes the socket in use right now; a reconnecting client still carries the old one.
+  private currentActiveSocketRttMs(): number | null {
+    const client = this.snapshot.client;
+    if (!client || client.getConnectionState().status !== "connected") return null;
+    return client.getLastLivenessRttMs();
+  }
+
+  private recordActiveRttSample(rttMs: number, now: number): void {
+    this.activeRttSamples = this.activeRttSamples.filter(
+      (sample) => now - sample.at <= ACTIVE_RTT_WINDOW_MS,
+    );
+    this.activeRttSamples.push({ at: now, rttMs });
+  }
+
+  private clearActiveRttSamples(): void {
+    this.activeRttSamples = [];
+  }
+
+  private currentActiveSocketBaselineRttMs(now: number): number | null {
+    const currentRttMs = this.currentActiveSocketRttMs();
+    if (currentRttMs === null) return null;
+    this.recordActiveRttSample(currentRttMs, now);
+    let baseline = this.activeRttSamples[0]!.rttMs;
+    for (const sample of this.activeRttSamples) {
+      if (sample.rttMs < baseline) baseline = sample.rttMs;
+    }
+    return baseline;
+  }
+
+  private inactiveOnlineProbeIntervalMs(): number {
+    return Math.min(
+      PROBE_INACTIVE_WHILE_ONLINE_INITIAL_MS * 2 ** this.inactiveOnlineProbeBackoffStep,
+      PROBE_INACTIVE_WHILE_ONLINE_MAX_MS,
+    );
+  }
+
+  private advanceInactiveOnlineProbeBackoff(): void {
+    if (this.inactiveOnlineProbeIntervalMs() < PROBE_INACTIVE_WHILE_ONLINE_MAX_MS) {
+      this.inactiveOnlineProbeBackoffStep += 1;
+    }
+  }
+
+  private resetInactiveOnlineProbeBackoffIf(...changes: boolean[]): void {
+    if (changes.some(Boolean)) this.resetInactiveOnlineProbeBackoff();
+  }
+
+  private resetInactiveOnlineProbeBackoff(): void {
+    this.inactiveOnlineProbeBackoffStep = 0;
+  }
+
+  private resetSwitchCandidate(): void {
+    this.switchCandidateConnectionId = null;
+    this.switchCandidateHitCount = 0;
+  }
+
+  // The active connection is probed through its own client, which may still be
+  // reconnecting when the probe starts. A verdict taken then is stale if the client
+  // has since connected, so the decision uses the client's current state.
+  private reconcileActiveProbeWithClient(
+    connectionId: string,
+    probeByConnectionId: Map<string, ConnectionProbeState>,
+  ): void {
+    if (probeByConnectionId.get(connectionId)?.status !== "unavailable") return;
+    if (this.authRejectedConnectionIds.has(connectionId)) return;
+    const client = this.snapshot.client;
+    if (!client || client.getConnectionState().status !== "connected") return;
+    const rttMs = client.getLastLivenessRttMs();
+    probeByConnectionId.set(
+      connectionId,
+      rttMs === null
+        ? { status: "pending", latencyMs: null }
+        : { status: "available", latencyMs: rttMs },
+    );
+    this.updateSnapshot({ probeByConnectionId: new Map(probeByConnectionId) });
   }
 
   private isConnectionUnavailable(
@@ -1501,6 +1623,7 @@ export class HostRuntimeController {
     connectionId: string;
     expectedProbeVersion?: number;
     existingClient?: DaemonClient;
+    keepActiveUntilConnected?: boolean;
   }): Promise<void> {
     const { connectionId, expectedProbeVersion, existingClient } = input;
     if (this.isPairingRequired()) {
@@ -1526,6 +1649,24 @@ export class HostRuntimeController {
       return;
     }
 
+    const makeBeforeBreak =
+      Boolean(input.keepActiveUntilConnected) &&
+      !existingClient &&
+      this.activeClient !== null &&
+      this.connectionMachineState.tag === "online";
+
+    const nextGeneration = this.snapshot.clientGeneration + 1;
+    if (makeBeforeBreak) {
+      await this.switchToConnectionMakeBeforeBreak({
+        connection,
+        clientId,
+        nextGeneration,
+        requestVersion,
+        expectedProbeVersion,
+      });
+      return;
+    }
+
     await this.disposePreviousActiveClient();
 
     if (!this.isSwitchStillValid(requestVersion, expectedProbeVersion)) {
@@ -1533,7 +1674,6 @@ export class HostRuntimeController {
       return;
     }
 
-    const nextGeneration = this.snapshot.clientGeneration + 1;
     const client =
       existingClient ??
       this.deps.createClient({
@@ -1550,6 +1690,8 @@ export class HostRuntimeController {
     }
 
     this.activeClient = client;
+    this.clearActiveRttSamples();
+    this.resetInactiveOnlineProbeBackoff();
     this.applyConnectionEvent({
       type: "select_connection",
       connectionId: connection.id,
@@ -1561,75 +1703,158 @@ export class HostRuntimeController {
       client: null,
     });
 
-    const failConnection = async (error: unknown) => {
-      if (!this.isCurrentSwitchRequest(requestVersion) || this.activeClient !== client) return;
-      if (client.pairingRequired || error instanceof PairingRequiredError) {
-        this.requirePairing(
-          client.pairingRequired ?? (error as PairingRequiredError).pairingRequired,
-        );
-        return;
-      }
-      const authFailure = getConnectionAuthFailureReason(error);
-      if (authFailure) this.authRejectedConnectionIds.add(connection.id);
-      this.unsubscribeClientStatus?.();
-      this.unsubscribeClientStatus = null;
-      this.unsubscribeClientHandlers?.();
-      this.unsubscribeClientHandlers = null;
-      client.setReconnectEnabled(false);
-      this.applyConnectionEvent({ type: "connect_failed", message: toErrorMessage(error) });
-      this.updateSnapshot({
-        ...toSnapshotConnectionPatch(this.connectionMachineState, this.connectionEpoch),
-        client: null,
-        authFailureReason: authFailure,
-      });
-      if (authFailure) {
-        const probes = new Map(this.snapshot.probeByConnectionId);
-        probes.set(connection.id, { status: "unavailable", latencyMs: null });
-        this.updateSnapshot({ probeByConnectionId: probes });
-        for (const candidate of this.host.connections) {
-          if (!this.authRejectedConnectionIds.has(candidate.id)) {
-            this.connectionLastProbedAt.delete(candidate.id);
-          }
-        }
-      }
-      try {
-        await client.close();
-      } catch {
-        /* Preserve the compatibility/connection error. */
-      }
-      if (
-        authFailure &&
-        this.host.connections.some((candidate) => !this.authRejectedConnectionIds.has(candidate.id))
-      ) {
-        void this.runProbeCycleNow();
-      }
-    };
     try {
       if (!existingClient) await client.connect();
       if (!this.isCurrentSwitchRequest(requestVersion) || this.activeClient !== client) return;
-      this.unsubscribeClientHandlers =
-        this.deps.mountClientHandlers?.({ client, host: this.host, connection }) ?? null;
-      this.unsubscribeClientStatus = client.subscribeConnectionStatus((state) => {
-        if (!this.isCurrentSwitchRequest(requestVersion) || this.activeClient !== client) return;
-        if (client.pairingRequired) {
-          this.requirePairing(client.pairingRequired);
-          return;
-        }
-        if (client.authFailureReason) {
-          void failConnection(new DaemonAuthenticationError(client.authFailureReason));
-          return;
-        }
-        if (state.status === "connected") this.learnRelaySecurity(client, connection.id);
-        this.applyConnectionEvent({ type: "client_state", state, lastError: client.lastError });
-        this.updateSnapshot({
-          ...toSnapshotConnectionPatch(this.connectionMachineState, this.connectionEpoch),
-          ...this.buildAgentDirectoryStatusPatch(),
-          client,
-          authFailureReason: null,
-        });
-      });
+      this.attachActiveClient({ client, connection });
     } catch (error) {
-      await failConnection(error);
+      await this.failActiveConnection({ client, connection, error });
+    }
+  }
+
+  private async switchToConnectionMakeBeforeBreak(input: {
+    connection: HostConnection;
+    clientId: string;
+    nextGeneration: number;
+    requestVersion: number;
+    expectedProbeVersion?: number;
+  }): Promise<void> {
+    const { connection, clientId, nextGeneration, requestVersion, expectedProbeVersion } = input;
+    const replacement = this.deps.createClient({
+      host: this.host,
+      connection,
+      clientId,
+      runtimeGeneration: nextGeneration,
+    });
+    replacement.setReconnectEnabled(false);
+    try {
+      await replacement.connect();
+    } catch (error) {
+      const authFailure = getConnectionAuthFailureReason(error);
+      if (authFailure) {
+        this.authRejectedConnectionIds.add(connection.id);
+        const probes = new Map(this.snapshot.probeByConnectionId);
+        probes.set(connection.id, { status: "unavailable", latencyMs: null });
+        this.updateSnapshot({ probeByConnectionId: probes });
+      }
+      await replacement.close().catch(() => undefined);
+      return;
+    }
+
+    const resolveValidTarget = (): HostConnection | null => {
+      if (!this.isSwitchStillValid(requestVersion, expectedProbeVersion)) return null;
+      const saved = findConnectionById(this.host, connection.id);
+      if (!saved || connectionNeedsNewClient(connection, saved, replacement)) return null;
+      return saved;
+    };
+
+    if (!resolveValidTarget()) {
+      await replacement.close().catch(() => undefined);
+      return;
+    }
+
+    replacement.setReconnectEnabled(true);
+    await this.disposePreviousActiveClient();
+
+    const target = resolveValidTarget();
+    if (!target) {
+      await replacement.close().catch(() => undefined);
+      return;
+    }
+
+    this.activeClient = replacement;
+    this.clearActiveRttSamples();
+    this.resetInactiveOnlineProbeBackoff();
+    this.applyConnectionEvent({
+      type: "select_connection",
+      connectionId: target.id,
+      connection: toActiveConnection(target),
+    });
+    this.snapshot = { ...this.snapshot, clientGeneration: nextGeneration };
+    this.attachActiveClient({ client: replacement, connection: target });
+  }
+
+  private attachActiveClient(input: { client: DaemonClient; connection: HostConnection }): void {
+    const { client, connection } = input;
+    this.unsubscribeClientHandlers =
+      this.deps.mountClientHandlers?.({ client, host: this.host, connection }) ?? null;
+    this.unsubscribeClientStatus = client.subscribeConnectionStatus((state) => {
+      if (this.activeClient !== client) return;
+      if (client.pairingRequired) {
+        this.requirePairing(client.pairingRequired);
+        return;
+      }
+      if (client.authFailureReason) {
+        void this.failActiveConnection({
+          client,
+          connection,
+          error: new DaemonAuthenticationError(client.authFailureReason),
+        });
+        return;
+      }
+      if (state.status === "connected") this.learnRelaySecurity(client, connection.id);
+      // Switch evidence belongs to the socket it was measured against.
+      if (state.status !== "connected") {
+        this.resetSwitchCandidate();
+        this.clearActiveRttSamples();
+        this.resetInactiveOnlineProbeBackoff();
+      }
+      this.applyConnectionEvent({ type: "client_state", state, lastError: client.lastError });
+      this.updateSnapshot({
+        ...toSnapshotConnectionPatch(this.connectionMachineState, this.connectionEpoch),
+        ...this.buildAgentDirectoryStatusPatch(),
+        client,
+        authFailureReason: null,
+      });
+    });
+  }
+
+  private async failActiveConnection(input: {
+    client: DaemonClient;
+    connection: HostConnection;
+    error: unknown;
+  }): Promise<void> {
+    const { client, connection, error } = input;
+    if (this.activeClient !== client) return;
+    if (client.pairingRequired || error instanceof PairingRequiredError) {
+      this.requirePairing(
+        client.pairingRequired ?? (error as PairingRequiredError).pairingRequired,
+      );
+      return;
+    }
+    const authFailure = getConnectionAuthFailureReason(error);
+    if (authFailure) this.authRejectedConnectionIds.add(connection.id);
+    this.unsubscribeClientStatus?.();
+    this.unsubscribeClientStatus = null;
+    this.unsubscribeClientHandlers?.();
+    this.unsubscribeClientHandlers = null;
+    client.setReconnectEnabled(false);
+    this.applyConnectionEvent({ type: "connect_failed", message: toErrorMessage(error) });
+    this.updateSnapshot({
+      ...toSnapshotConnectionPatch(this.connectionMachineState, this.connectionEpoch),
+      client: null,
+      authFailureReason: authFailure,
+    });
+    if (authFailure) {
+      const probes = new Map(this.snapshot.probeByConnectionId);
+      probes.set(connection.id, { status: "unavailable", latencyMs: null });
+      this.updateSnapshot({ probeByConnectionId: probes });
+      for (const candidate of this.host.connections) {
+        if (!this.authRejectedConnectionIds.has(candidate.id)) {
+          this.connectionLastProbedAt.delete(candidate.id);
+        }
+      }
+    }
+    try {
+      await client.close();
+    } catch {
+      /* Preserve the compatibility/connection error. */
+    }
+    if (
+      authFailure &&
+      this.host.connections.some((candidate) => !this.authRejectedConnectionIds.has(candidate.id))
+    ) {
+      void this.runProbeCycleNow();
     }
   }
 
@@ -1768,6 +1993,7 @@ export class HostRuntimeStore {
   private hostRegistryStatus: HostRegistryStatus = "loading";
   private deps: HostRuntimeControllerDeps;
   private lastConnectionStatusByServer = new Map<string, HostRuntimeConnectionStatus>();
+  private lastOnlineEpochByServer = new Map<string, number>();
   private connectionStatusStartedAtByServer = new Map<string, number>();
   private queuedAgentDrainInFlight = new Set<string>();
   private directorySyncByServer = new Map<string, DirectorySync>();
@@ -2061,6 +2287,7 @@ export class HostRuntimeStore {
 
     rekeyMap(this.controllers, oldServerId, newServerId);
     rekeyMap(this.lastConnectionStatusByServer, oldServerId, newServerId);
+    rekeyMap(this.lastOnlineEpochByServer, oldServerId, newServerId);
     rekeyMap(this.connectionStatusStartedAtByServer, oldServerId, newServerId);
     this.replicaCache.reconcileServerId(oldServerId, newServerId);
     projectIconCache.reconcileServerId(oldServerId, newServerId);
@@ -2696,6 +2923,7 @@ export class HostRuntimeStore {
       this.fleetDirectoryDemand.delete(serverId);
       this.controllers.delete(serverId);
       this.lastConnectionStatusByServer.delete(serverId);
+      this.lastOnlineEpochByServer.delete(serverId);
       this.connectionStatusStartedAtByServer.delete(serverId);
       this.directorySyncByServer.get(serverId)?.dispose();
       this.directorySyncByServer.delete(serverId);
@@ -2755,6 +2983,9 @@ export class HostRuntimeStore {
       );
       const initialSnapshot = controller.getSnapshot();
       this.lastConnectionStatusByServer.set(host.serverId, initialSnapshot.connectionStatus);
+      if (initialSnapshot.connectionStatus === "online") {
+        this.lastOnlineEpochByServer.set(host.serverId, initialSnapshot.connectionEpoch);
+      }
       this.connectionStatusStartedAtByServer.set(host.serverId, Date.now());
       controller.subscribe(() => {
         const snapshot = controller.getSnapshot();
@@ -2884,6 +3115,7 @@ export class HostRuntimeStore {
     const controller = this.controllers.get(serverId);
     if (!controller) {
       this.lastConnectionStatusByServer.delete(serverId);
+      this.lastOnlineEpochByServer.delete(serverId);
       this.connectionStatusStartedAtByServer.delete(serverId);
       return;
     }
@@ -2898,6 +3130,7 @@ export class HostRuntimeStore {
       },
     });
     const previousStatus = this.lastConnectionStatusByServer.get(serverId);
+    const previousOnlineEpoch = this.lastOnlineEpochByServer.get(serverId);
     const statusChanged = previousStatus !== snapshot.connectionStatus;
     const isUnavailable =
       snapshot.connectionStatus !== "online" && snapshot.connectionStatus !== "idle";
@@ -2908,7 +3141,11 @@ export class HostRuntimeStore {
     }
     this.lastConnectionStatusByServer.set(serverId, snapshot.connectionStatus);
     const didTransitionOnline =
-      snapshot.connectionStatus === "online" && previousStatus !== "online";
+      snapshot.connectionStatus === "online" &&
+      (previousStatus !== "online" || previousOnlineEpoch !== snapshot.connectionEpoch);
+    if (snapshot.connectionStatus === "online") {
+      this.lastOnlineEpochByServer.set(serverId, snapshot.connectionEpoch);
+    }
     if (didTransitionOnline) {
       useSessionStore.getState().bumpHistorySyncGeneration(serverId);
       // Checkout git data is push-driven; pushes emitted while disconnected are gone for
