@@ -1216,6 +1216,11 @@ jobs:
         env:
           PASEO_SKIP_PROTOCOL_BUILD: "1"
 
+      # The dependency watchers write build outputs, so run them after the parallel CLI tests.
+      - name: Run dev watch shutdown regression
+        if: ${{ env.PASEO_CLI_TEST_SHARD == '3' }}
+        run: node --import tsx packages/cli/tests/23-daemon-sigint-supervisor.test.ts --dev-watch
+
   cli-tests-2:
     name: cli-tests (shard 2/3)
     needs: [changes, browser-prepare]
