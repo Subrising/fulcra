@@ -159,7 +159,12 @@ try {
         resumeOnStartup: true,
         resumePrompt,
         providers: {
-          antigravity: { command: [process.execPath, provider, eventsPath] },
+          // Fulcra: a generic ACP provider, because the antigravity plugin is not available here.
+          "supervisor-acp": {
+            extends: "acp",
+            label: "Supervisor ACP",
+            command: [process.execPath, provider, eventsPath],
+          },
         },
       },
     }),
@@ -169,9 +174,9 @@ try {
   if (process.platform === "win32") {
     await interruptForeground(daemon);
   } else {
-    const idle = await daemon.client.createAgent({ provider: "antigravity", cwd });
-    const running = await daemon.client.createAgent({ provider: "antigravity", cwd });
-    const crashing = await daemon.client.createAgent({ provider: "antigravity", cwd });
+    const idle = await daemon.client.createAgent({ provider: "supervisor-acp", cwd });
+    const running = await daemon.client.createAgent({ provider: "supervisor-acp", cwd });
+    const crashing = await daemon.client.createAgent({ provider: "supervisor-acp", cwd });
     const opened = (await readEvents()).filter((event) => event.type === "session");
     const sessions = [idle, running, crashing].map((agent) => {
       const handle = agent.persistence?.sessionId;
