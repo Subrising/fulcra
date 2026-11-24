@@ -212,7 +212,7 @@ try {
     // prompt after a settle time. The shutdown must still have captured the running turn.
     await waitFor(async () => {
       const log = await readFile(join(paseoHome, "daemon.log"), "utf8");
-      return /Revive on restart: d+ reopened, 1 cut-off turn/.test(log) ? log : undefined;
+      return /Revive on restart: \d+ reopened, 1 cut-off turn/.test(log) ? log : undefined;
     }, "the restart did not capture the interrupted ACP turn");
     console.log("The restart captured the interrupted ACP turn.");
     await interruptForeground(daemon);
