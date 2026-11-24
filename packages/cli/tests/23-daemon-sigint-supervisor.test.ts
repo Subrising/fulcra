@@ -211,8 +211,10 @@ try {
     // Fulcra: recovery is Fulcra revive-on-restart, which continues a cut-off turn with its own
     // prompt after a settle time. The shutdown must still have captured the running turn.
     await waitFor(async () => {
-      const log = await readFile(join(paseoHome, "daemon.log"), "utf8");
-      return /Revive on restart: \d+ reopened, 1 cut-off turn/.test(log) ? log : undefined;
+      const restartLog = await readFile(join(paseoHome, "daemon.log"), "utf8");
+      return /Revive on restart: \d+ reopened, 1 cut-off turn/.test(restartLog)
+        ? restartLog
+        : undefined;
     }, "the restart did not capture the interrupted ACP turn");
     console.log("The restart captured the interrupted ACP turn.");
     await interruptForeground(daemon);
