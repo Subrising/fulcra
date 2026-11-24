@@ -4384,7 +4384,11 @@ export class CodexAppServerAgentSession implements AgentSession {
     const preparedClient = this.client;
     const preparedThread = this.currentThreadId;
     // Paseo reads history only when it replays it; the resume response needs no turns.
-    const params: Record<string, unknown> = { threadId: preparedThread, excludeTurns: true };
+    const params: Record<string, unknown> = {
+      threadId: preparedThread,
+      cwd: this.config.cwd ?? null,
+      excludeTurns: true,
+    };
     if (this.deps.customCodexConfig) {
       // Resume otherwise prefers the provider stored on the thread, including
       // the unnamespaced key emitted by earlier Paseo versions.
