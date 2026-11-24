@@ -13338,6 +13338,37 @@ test("authoritative timeline records a daemon-handled submitted prompt before it
   }
 });
 
+test("tryRunOutOfBand declines an archived agent so normal dispatch can restore it (#10611)", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-archived-out-of-band-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const seenPrompts: AgentPromptInput[] = [];
+
+  class ProbeSession extends TestAgentSession {
+    override tryHandleOutOfBand(prompt: AgentPromptInput) {
+      seenPrompts.push(prompt);
+      return { run: async () => {} };
+    }
+  }
+  const client = new (class extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig) {
+      return new ProbeSession(config);
+    }
+  })();
+  const manager = new AgentManager({ clients: { codex: client }, registry: storage, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+
+  try {
+    await manager.archiveAgent(agent.id);
+    expect(await manager.tryRunOutOfBand(agent.id, "/handled")).toBe(false);
+    expect(seenPrompts).toEqual([]);
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("tryRunOutOfBand gives providers the command another agent sent, not its envelope", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-agent-out-of-band-"));
   const seenPrompts: AgentPromptInput[] = [];

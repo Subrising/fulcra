@@ -6710,6 +6710,12 @@ export class AgentManager {
             [TRUSTED_OPERATION]: handle,
           });
         }
+        // #10611: an archived or unloaded recipient is not probed. Declining lets normal dispatch
+        // restore the agent and deliver the prompt.
+        const loaded = this.agents.get(agentId);
+        if (!loaded?.session || loaded.archivedAt) {
+          return false;
+        }
         const agent = this.requireSessionAgent(agentId);
         // Providers parse slash commands from the raw text, so a command another agent sent
         // must reach them without its sender envelope.
