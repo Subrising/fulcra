@@ -28,7 +28,7 @@ test.use({
 
 // Rendered Fulcra theme colors: palette yellow 400 for Fast and Ultrafast, muted foreground for Normal.
 const ACTIVE_SPEED_COLOR = "rgb(251, 191, 36)";
-const NORMAL_SPEED_COLOR = "rgb(161, 165, 164)";
+const NORMAL_SPEED_COLOR = "rgb(185, 176, 166)";
 
 async function openSpeedSelector(page: Page): Promise<void> {
   const speed = page.getByRole("button", { name: /^(Select speed|Speed: .+)$/ });
