@@ -524,7 +524,7 @@ test.describe("CodeMirror workspace file editing", () => {
     await content.press("ControlOrMeta+a");
     const selection = editorHost.locator(".cm-selectionBackground").first();
     await expect(selection).toBeVisible();
-    await expect(selection).toHaveCSS("background-color", "rgba(255, 255, 255, 0.2)");
+    await expect(selection).toHaveCSS("background-color", "rgba(255, 138, 91, 0.28)");
   });
 
   test("applies the interface font to portaled tooltips", async ({ page, withWorkspace }) => {
