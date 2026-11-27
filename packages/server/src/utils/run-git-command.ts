@@ -19,6 +19,7 @@ import {
   withGitFetchPolicy,
 } from "@getpaseo/plugin/server/git";
 import { createExternalCommandProcessEnv } from "../server/paseo-env.js";
+import { GitMetadataReadCache, gitReadCacheEnabled } from "./git-metadata-read-cache.js";
 import {
   GitProcessScheduler,
   type GitProcessPriority,
@@ -286,7 +287,24 @@ function getEnvOverlayKeys(envOverlay: ProcessEnvRecord | undefined): string[] {
   return Object.keys(envOverlay ?? {}).sort();
 }
 
+// FU-835: repeated repository metadata reads come from memory while the metadata files are unchanged
+// (Windows default; FULCRA_GIT_READ_CACHE=0 turns it off). See git-metadata-read-cache.ts.
+const gitMetadataReadCache = gitReadCacheEnabled() ? new GitMetadataReadCache() : null;
+
 function runGitCommandWithProvenance(
+  args: string[],
+  options: GitCommandOptions,
+  provenance?: string,
+): Promise<GitCommandResult> {
+  if (gitMetadataReadCache) {
+    return gitMetadataReadCache.run(args, options, (a, o) =>
+      runGitCommandUncached(a, o, provenance),
+    );
+  }
+  return runGitCommandUncached(args, options, provenance);
+}
+
+function runGitCommandUncached(
   args: string[],
   options: GitCommandOptions,
   provenance?: string,
