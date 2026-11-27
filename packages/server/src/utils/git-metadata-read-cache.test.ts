@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   GitMetadataReadCache,
   gitMetadataFingerprint,
+  gitReadCacheKey,
   gitReadCacheEnabled,
   isCacheableGitRead,
 } from "./git-metadata-read-cache.js";
@@ -97,7 +98,6 @@ describe("isCacheableGitRead", () => {
   it("refuses calls with input, env or hooks", () => {
     const a = ["rev-parse", "HEAD"];
     expect(isCacheableGitRead(a, { cwd: "/x", input: "y" })).toBe(false);
-    expect(isCacheableGitRead(a, { cwd: "/x", envOverlay: { A: "1" } })).toBe(false);
     expect(isCacheableGitRead(a, { cwd: "/x", env: {} })).toBe(false);
     expect(isCacheableGitRead(a, { cwd: "/x", beforeSpawn: () => undefined })).toBe(false);
   });
@@ -110,6 +110,36 @@ describe("GitMetadataReadCache", () => {
     const b = await cache.run(["rev-parse", "--show-toplevel"], { cwd: repo }, runGit);
     expect(b.stdout).toBe(a.stdout);
     expect(calls).toHaveLength(1);
+  });
+
+  it("caches the real call-site shape (envOverlay READ_ONLY_GIT_ENV) and keys by the overlay", async () => {
+    // checkout-git.ts and workspace refreshes pass envOverlay: { GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" }.
+    const readOnly = { GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" };
+    expect(
+      isCacheableGitRead(["rev-parse", "--absolute-git-dir"], { cwd: repo, envOverlay: readOnly }),
+    ).toBe(true);
+    const cache = new GitMetadataReadCache();
+    await cache.run(
+      ["rev-parse", "--absolute-git-dir"],
+      { cwd: repo, envOverlay: readOnly },
+      runGit,
+    );
+    await cache.run(
+      ["rev-parse", "--absolute-git-dir"],
+      { cwd: repo, envOverlay: { LC_ALL: "C", GIT_OPTIONAL_LOCKS: "0" } },
+      runGit,
+    );
+    expect(calls).toHaveLength(1);
+    await cache.run(
+      ["rev-parse", "--absolute-git-dir"],
+      { cwd: repo, envOverlay: { ...readOnly, GIT_INDEX_FILE: "x" } },
+      runGit,
+    );
+    await cache.run(["rev-parse", "--absolute-git-dir"], { cwd: repo }, runGit);
+    expect(calls).toHaveLength(3);
+    expect(gitReadCacheKey(["a"], { cwd: repo, envOverlay: { B: "1", A: "2" } })).toBe(
+      gitReadCacheKey(["a"], { cwd: repo, envOverlay: { A: "2", B: "1" } }),
+    );
   });
 
   it("never caches status", async () => {

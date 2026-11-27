@@ -68,12 +68,9 @@ const REV_PARSE_FLAGS = new Set([
 ]);
 
 function hasUncacheableOptions(options: GitCommandOptions): boolean {
+  // envOverlay is allowed (callers pass READ_ONLY_GIT_ENV); it is part of the cache key. A full env is not.
   return Boolean(
-    options.input !== undefined ||
-    options.env ||
-    options.envOverlay ||
-    options.retryFetch ||
-    options.beforeSpawn,
+    options.input !== undefined || options.env || options.retryFetch || options.beforeSpawn,
   );
 }
 
@@ -114,8 +111,21 @@ const REF_READS: Record<string, (rest: readonly string[]) => boolean> = {
 export function isCacheableGitRead(args: readonly string[], options: GitCommandOptions): boolean {
   if (hasUncacheableOptions(options)) return false;
   const [command, ...rest] = args;
-  const check = command === undefined ? undefined : REF_READS[command];
-  return check !== undefined && Object.hasOwn(REF_READS, command as string) && check(rest);
+  if (command === undefined || !Object.hasOwn(REF_READS, command)) return false;
+  const check = REF_READS[command];
+  return check !== undefined && check(rest);
+}
+
+/** Cache key: folder, arguments and every option that can change git's answer. */
+export function gitReadCacheKey(args: readonly string[], options: GitCommandOptions): string {
+  const overlay = Object.entries(options.envOverlay ?? {}).sort(([a], [b]) => a.localeCompare(b));
+  return JSON.stringify([
+    path.resolve(options.cwd),
+    args,
+    overlay,
+    options.acceptExitCodes ?? null,
+    options.maxOutputBytes ?? null,
+  ]);
 }
 
 async function stamp(fs: GitMetadataFs, p: string): Promise<string> {
@@ -261,12 +271,7 @@ export class GitMetadataReadCache {
     if (!isCacheableGitRead(args, options)) return runGit(args, options);
     const fingerprint = await gitMetadataFingerprint(options.cwd, this.fs).catch(() => null);
     if (fingerprint === null) return runGit(args, options);
-    const key = JSON.stringify([
-      path.resolve(options.cwd),
-      args,
-      options.acceptExitCodes ?? null,
-      options.maxOutputBytes ?? null,
-    ]);
+    const key = gitReadCacheKey(args, options);
     const hit = this.entries.get(key);
     if (hit && hit.fingerprint === fingerprint && this.now() - hit.at < this.ttlMs) {
       this.hits += 1;
