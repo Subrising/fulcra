@@ -21,6 +21,7 @@ import {
   accountOf,
   setAccount,
   setRotateOnLimit,
+  markAccountLimited,
   update,
   publicView,
 } from "../../orca-organization/server/accounts.mjs";
@@ -174,6 +175,148 @@ test("Claude: a stop at the limit moves the session to the next account now, rel
   assert.equal(readAccounts(w.root).rotations.length, 1);
   assert.equal(readAccounts(w.root).rotations[0].reason, "limit");
   assert.equal((await assign(w.root, randomUUID(), "claude", w.clock.now)).account.id, b.id); // a new session avoids Work
+});
+// FU-834: the CLI's first-turn "monthly spend limit" line must move the session like any session limit.
+const SPEND =
+  "You've hit your monthly spend limit · raise it at claude.ai/settings/usage · your 5-hour limit resets 3am (Australia/Brisbane)";
+const spendTail = (text = SPEND) => {
+  const t = tail();
+  t.entries[1].item.text = text;
+  return t;
+};
+test("FU-834: a monthly-spend first-turn stop marks the account limited until the stated reset and moves the session", async (t) => {
+  const w = world(t);
+  const a = await addAccount(w.root, { provider: "claude", name: "Work" }, w.clock.now),
+    b = await addAccount(w.root, { provider: "claude", name: "Personal" }, w.clock.now + 1);
+  await setRotateOnLimit(w.root, true);
+  const id = await w.enrol();
+  w.tails.set(id, spendTail());
+  await assign(w.root, id, "claude", w.clock.now - 60_000);
+  const stop = await w.control.usageLimits.onAgent({
+    id,
+    provider: "claude",
+    status: "idle",
+    updatedAt: "u1",
+  });
+  assert.equal(stop.state, "waiting", "not finished as completed");
+  assert.match(stop.outcome, /moving to account "Personal"/);
+  assert.deepEqual(w.rotated, [{ session: id, from: "Work", to: "Personal" }]); // one report to the owner
+  assert.equal(accountOf(readAccounts(w.root), id).id, b.id);
+  assert.equal(
+    readAccounts(w.root).accounts.find((x) => x.id === a.id).limitedUntil,
+    "2026-09-24T17:00:00.000Z",
+  );
+  w.clock.now += 60000;
+  await w.control.usageLimits.tick();
+  assert.deepEqual(w.recovers, [id]);
+  assert.equal(w.sent.length, 1);
+});
+test("FU-834: no other account allowed -> the run is held until the reset and the report says nobody was ready", async (t) => {
+  const w = world(t);
+  await addAccount(w.root, { provider: "claude", name: "Only" }, w.clock.now);
+  await setRotateOnLimit(w.root, true);
+  const id = await w.enrol();
+  w.tails.set(id, spendTail());
+  await assign(w.root, id, "claude", w.clock.now - 60_000);
+  const stop = await w.control.usageLimits.onAgent({
+    id,
+    provider: "claude",
+    status: "idle",
+    updatedAt: "u1",
+  });
+  assert.ok(Date.parse(stop.nextAt) >= at("2026-09-24T17:00:00Z"), "held until the reset");
+  assert.deepEqual(w.rotated, [{ session: id, from: "Only", to: null }]);
+  assert.equal(w.recovers.length, 0);
+});
+test("FU-834: the fallback account is also limited -> held, and the limited fallback is not chosen", async (t) => {
+  const w = world(t);
+  await addAccount(w.root, { provider: "claude", name: "Work" }, w.clock.now);
+  const b = await addAccount(w.root, { provider: "claude", name: "Personal" }, w.clock.now + 1);
+  await markAccountLimited(
+    w.root,
+    b.id,
+    { resetAt: "2026-09-24T20:00:00.000Z", kind: "session" },
+    w.clock.now,
+  );
+  await setRotateOnLimit(w.root, true);
+  const id = await w.enrol();
+  w.tails.set(id, spendTail());
+  await assign(w.root, id, "claude", w.clock.now - 60_000);
+  await w.control.usageLimits.onAgent({ id, provider: "claude", status: "idle", updatedAt: "u1" });
+  assert.deepEqual(w.rotated, [{ session: id, from: "Work", to: null }]);
+  assert.equal(accountOf(readAccounts(w.root), id).name, "Work");
+});
+test("FU-834: the fallback account at its own weekly launch cap is skipped (FU-643 rule) -> held", async (t) => {
+  const w = world(t);
+  await addAccount(w.root, { provider: "claude", name: "Work" }, w.clock.now);
+  const b = await addAccount(w.root, { provider: "claude", name: "Personal" }, w.clock.now + 1);
+  await setAccount(w.root, b.id, { weeklyLaunchCapPct: 50 });
+  fs.mkdirSync(path.join(w.root, "accounts"), { recursive: true });
+  fs.writeFileSync(
+    path.join(w.root, "accounts", "usage.json"),
+    JSON.stringify({
+      accounts: { [b.id]: { weeklyUsedPct: 60, weeklyResetsAt: "2026-09-30T00:00:00Z" } },
+    }),
+  );
+  await setRotateOnLimit(w.root, true);
+  const id = await w.enrol();
+  w.tails.set(id, spendTail());
+  await assign(w.root, id, "claude", w.clock.now - 60_000);
+  await w.control.usageLimits.onAgent({ id, provider: "claude", status: "idle", updatedAt: "u1" });
+  assert.deepEqual(w.rotated, [{ session: id, from: "Work", to: null }]);
+});
+test("FU-834: with rotate-on-limit OFF the account is still marked and the session moves to a free subscription account at its next turn (FU-430 rule)", async (t) => {
+  const w = world(t);
+  const a = await addAccount(w.root, { provider: "claude", name: "Work" }, w.clock.now);
+  const b = await addAccount(w.root, { provider: "claude", name: "Personal" }, w.clock.now + 1);
+  for (const x of [a, b]) await setAccount(w.root, x.id, { credentialKind: "subscription" }); // unknown kind is not a free subscription
+  const id = await w.enrol();
+  w.tails.set(id, spendTail());
+  await assign(w.root, id, "claude", w.clock.now - 60_000);
+  await w.control.usageLimits.onAgent({ id, provider: "claude", status: "idle", updatedAt: "u1" });
+  assert.equal(
+    readAccounts(w.root).accounts.find((x) => x.id === a.id).limitedUntil,
+    "2026-09-24T17:00:00.000Z",
+  );
+  assert.equal(accountOf(readAccounts(w.root), id).id, a.id, "not moved at the stop");
+  assert.equal(
+    (await assign(w.root, id, "claude", w.clock.now)).account.id,
+    b.id,
+    "moved at the next turn",
+  );
+});
+test("FU-834: an API-key account is never marked limited by the line (billing is its own path)", async (t) => {
+  const w = world(t);
+  const api = await addAccount(
+    w.root,
+    { provider: "claude", name: "personal-workspace-api" },
+    w.clock.now,
+  );
+  await setRotateOnLimit(w.root, true);
+  const id = await w.enrol();
+  w.tails.set(id, spendTail());
+  await assign(w.root, id, "claude", w.clock.now - 60_000);
+  await w.control.usageLimits.onAgent({ id, provider: "claude", status: "idle", updatedAt: "u1" });
+  assert.equal(readAccounts(w.root).accounts.find((x) => x.id === api.id).limitedUntil, null);
+  assert.deepEqual(w.rotated, []);
+});
+test("FU-834: a normal error line does not mark any account or move the session", async (t) => {
+  const w = world(t);
+  const a = await addAccount(w.root, { provider: "claude", name: "Work" }, w.clock.now);
+  await addAccount(w.root, { provider: "claude", name: "Personal" }, w.clock.now + 1);
+  await setRotateOnLimit(w.root, true);
+  const id = await w.enrol();
+  w.tails.set(id, spendTail("API Error: 500 internal server error"));
+  await assign(w.root, id, "claude", w.clock.now - 60_000);
+  const stop = await w.control.usageLimits.onAgent({
+    id,
+    provider: "claude",
+    status: "idle",
+    updatedAt: "u1",
+  });
+  assert.equal(stop, null);
+  assert.deepEqual(w.rotated, []);
+  assert.equal(readAccounts(w.root).accounts.find((x) => x.id === a.id).limitedUntil, null);
 });
 test("FU-490: with rotateOnLimit off a limited session is continued once after the reset on the SAME account", async (t) => {
   const w = world(t);

@@ -811,6 +811,8 @@ export async function rotate(
   now = Date.now(),
 ) {
   const snapshot = await readAccountsAsync(root);
+  // FU-834: the move at a limit obeys the same weeklyLaunchCapPct rule as a launch (FU-643).
+  const usage = await readUsageAsync(root, now);
   const binding = stopId && snapshot.limitChecks?.[stopId];
   if (binding && accountId && accountId !== binding.accountId) return null;
   accountId = binding?.accountId ?? accountId;
@@ -891,7 +893,7 @@ export async function rotate(
     // FU-430: a limit alone never moves a session (the owner's rule, 21 Oct 2026: no bulk moves). The account is marked;
     // the session moves to a free subscription account at the start of its own next turn (assign).
     const move = reassign && cur?.accountId === from.id && (revoked || s.rotateOnLimit === true);
-    const to = move ? choose(s, provider, now, [from.id]) : null;
+    const to = move ? choose(s, provider, now, [from.id], usage) : null;
     if (to) {
       s.assignments[sessionId] = { accountId: to.id, provider, at: iso(now), ended: false };
       to.lastUsedAt = iso(now);

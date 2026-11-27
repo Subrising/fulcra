@@ -5,9 +5,16 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 // The CLI's limit line, whole. "You've hit your session limit · resets 12:50am (Australia/Brisbane)" and its weekly
 // form with a date: the CLI writes "resets Sep 29 at 8am (...)" (H7: the real weekly line of 26 Sep, which the H6 grammar
 // missed) and "resets Oct 3, 5pm (...)" is accepted too; the legacy "Claude AI usage limit reached|<epoch seconds>".
+// FU-834: the CLI also ends a first turn with "You've hit your monthly spend limit · raise it at claude.ai/settings/usage ·
+// your 5-hour limit resets 3am (Australia/Brisbane)" and with the plain "You've hit your limit · resets 3pm (...)". The kind
+// word, the "raise it at" part and the "your N-hour limit" part are each optional; the reset time stays required.
 const LINE =
-  /^You(?:'|’)ve hit your ([A-Za-z][A-Za-z0-9 -]{0,23}) limit · resets ((?:[A-Z][a-z]{2} \d{1,2}(?:,| at) )?\d{1,2}(?::\d{2})?(?:am|pm))(?: \(([A-Za-z]+(?:\/[A-Za-z0-9_+-]+){0,2})\))?$/;
+  /^You(?:'|’)ve hit your (?:([A-Za-z][A-Za-z0-9 -]{0,23}) )?limit(?: · raise it at [^\s·]{1,80})?(?: · (?:your [A-Za-z0-9 -]{1,24} limit )?resets ((?:[A-Z][a-z]{2} \d{1,2}(?:,| at) )?\d{1,2}(?::\d{2})?(?:am|pm))(?: \(([A-Za-z]+(?:\/[A-Za-z0-9_+-]+){0,2})\))?)?$/;
 const LEGACY = /^Claude AI usage limit reached\|(\d{10})$/;
+// The "monthly spend" line carries the 5-hour window's reset ("your 5-hour limit resets 3am"), so it is a "session" stop.
+// Downstream (rotate's live confirmation, the host-link schema) accepts only "session" and "weekly" kinds.
+const limitKindOf = (kind) =>
+  /\bspend\b/i.test(kind ?? "") ? "session" : (kind ?? "usage").toLowerCase();
 const WHEN = /^(?:([A-Z][a-z]{2}) (\d{1,2})(?:,| at) )?(\d{1,2})(?::(\d{2}))?(am|pm)$/;
 
 function zoneOffset(zone, instant) {
@@ -85,9 +92,9 @@ export function parseLimitLine(
   if (!m) return null;
   const [, kind, reset, named] = m,
     zone = named ?? fallbackZone,
-    w = WHEN.exec(reset);
-  const out = { kind: kind.toLowerCase(), reset, zone: named ?? null, resetAt: null };
-  if (!w || !validZone(zone)) return out;
+    w = reset ? WHEN.exec(reset) : null;
+  const out = { kind: limitKindOf(kind), reset: reset ?? null, zone: named ?? null, resetAt: null };
+  if (!reset || !w || !validZone(zone)) return out;
   const [, mon, day, hh, mm = "0", ap] = w,
     h = Number(hh),
     mi = Number(mm);

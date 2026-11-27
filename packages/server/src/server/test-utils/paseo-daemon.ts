@@ -66,6 +66,8 @@ interface TestPaseoDaemonOptions {
   resumePrompt?: string;
   /** FULCRA(FU-657 row 4): the upstream restart pass runs only with revive-on-restart off. */
   reviveOnRestart?: boolean;
+  /** FU-834: a worker's turn end reaches its lead (report-up). Off unless a test asks for it. */
+  reportUpOnTurnEnd?: boolean;
   pluginsEnabled?: PaseoDaemonConfig["pluginsEnabled"];
   bundledPluginsDirectory?: string;
   builtinPlugins?: BuiltinPluginLoader;
@@ -252,6 +254,9 @@ async function prepareTestDaemonConfig(
     resumeOnStartup: options.resumeOnStartup,
     resumePrompt: options.resumePrompt,
     ...(options.reviveOnRestart === undefined ? {} : { reviveOnRestart: options.reviveOnRestart }),
+    ...(options.reportUpOnTurnEnd === undefined
+      ? {}
+      : { reportUpOnTurnEnd: options.reportUpOnTurnEnd }),
     pluginsEnabled: options.pluginsEnabled,
     bundledPluginsDirectory: options.bundledPluginsDirectory,
     plugins: options.plugins,

@@ -863,6 +863,18 @@ describe("report-up and usage limits", () => {
     expect(f.delivered[0]!.prompt).not.toContain("finished a turn");
   });
 
+  test("FU-834: the monthly spend line ends a first turn as a limit, never as finished (the 27 Nov deaths)", async () => {
+    const chat = worker();
+    chat.lastMessage =
+      "You've hit your monthly spend limit · raise it at claude.ai/settings/usage · your 5-hour limit resets 3pm (Australia/Brisbane)";
+    const f = fixture([lead, chat], { now: NOW });
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.prompt).toContain("monthly spend limit until");
+    expect(f.delivered[0]!.prompt).not.toContain("finished a turn");
+  });
+
   test("a failed turn with a weekly limit text is the same: one notice, kind weekly", async () => {
     const f = fixture([lead, worker()], { now: NOW });
     f.failedTurn(WORKER, WEEKLY);
