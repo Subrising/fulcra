@@ -246,6 +246,114 @@ test("FU-834: the fallback account is also limited -> held, and the limited fall
   assert.deepEqual(w.rotated, [{ session: id, from: "Work", to: null }]);
   assert.equal(accountOf(readAccounts(w.root), id).name, "Work");
 });
+// FU-834 narrow rule (lead, 27 Nov): a FIRST-turn stop (one user message, then the limit line) is a failed launch and moves
+// at once even with rotateOnLimit OFF; a stop after work keeps the FU-430 rule.
+const firstTurnTail = (text = SPEND) => {
+  const t = tail();
+  t.maxSeq = 2;
+  t.entries = [
+    entry(1, { type: "user_message", text: "Start the task", messageId: "m-user" }),
+    entry(2, { type: "assistant_message", text, messageId: "m-limit" }),
+  ];
+  return t;
+};
+test("FU-834: a first-turn death moves NOW to the next account with rotateOnLimit OFF, restarts it in place and tells the parent once", async (t) => {
+  const w = world(t);
+  const a = await addAccount(w.root, { provider: "claude", name: "Work" }, w.clock.now),
+    b = await addAccount(w.root, { provider: "claude", name: "Personal" }, w.clock.now + 1);
+  const id = await w.enrol();
+  w.tails.set(id, firstTurnTail());
+  await assign(w.root, id, "claude", w.clock.now - 60_000);
+  assert.equal(readAccounts(w.root).rotateOnLimit, false);
+  const stop = await w.control.usageLimits.onAgent({
+    id,
+    provider: "claude",
+    status: "idle",
+    updatedAt: "u1",
+  });
+  assert.match(stop.outcome, /moving to account "Personal"/);
+  assert.deepEqual(w.rotated, [{ session: id, from: "Work", to: "Personal" }]);
+  assert.equal(accountOf(readAccounts(w.root), id).id, b.id);
+  assert.equal(
+    readAccounts(w.root).accounts.find((x) => x.id === a.id).limitedUntil,
+    "2026-09-24T17:00:00.000Z",
+  );
+  w.clock.now += 60000;
+  await w.control.usageLimits.tick();
+  assert.deepEqual(w.recovers, [id]);
+  assert.equal(w.sent.length, 1);
+  assert.match(w.sent[0].text, /first turn did not run/);
+  assert.equal(w.rotated.length, 1, "one report to the parent");
+});
+test("FU-834: a death AFTER work does not move with rotateOnLimit OFF (FU-430): it waits for the reset on the same account", async (t) => {
+  const w = world(t);
+  await addAccount(w.root, { provider: "claude", name: "Work" }, w.clock.now);
+  await addAccount(w.root, { provider: "claude", name: "Personal" }, w.clock.now + 1);
+  const id = await w.enrol();
+  w.tails.set(id, spendTail()); // a tool call came before the limit line
+  await assign(w.root, id, "claude", w.clock.now - 60_000);
+  const stop = await w.control.usageLimits.onAgent({
+    id,
+    provider: "claude",
+    status: "idle",
+    updatedAt: "u1",
+  });
+  assert.ok(Date.parse(stop.nextAt) >= at("2026-09-24T17:00:00Z"));
+  assert.equal(accountOf(readAccounts(w.root), id).name, "Work");
+  w.clock.now += 60000;
+  await w.control.usageLimits.tick();
+  assert.deepEqual(w.recovers, []);
+});
+test("FU-834: a full 4-entry window cannot prove a first turn, so it counts as work done", async (t) => {
+  const w = world(t);
+  await addAccount(w.root, { provider: "claude", name: "Work" }, w.clock.now);
+  await addAccount(w.root, { provider: "claude", name: "Personal" }, w.clock.now + 1);
+  const id = await w.enrol();
+  const full = firstTurnTail();
+  full.entries.unshift(
+    entry(0, { type: "user_message", text: "x" }),
+    entry(0, { type: "user_message", text: "y" }),
+  );
+  w.tails.set(id, full);
+  await assign(w.root, id, "claude", w.clock.now - 60_000);
+  await w.control.usageLimits.onAgent({ id, provider: "claude", status: "idle", updatedAt: "u1" });
+  assert.equal(accountOf(readAccounts(w.root), id).name, "Work");
+});
+test("FU-834: a first-turn death with no account allowed holds the run until the reset and reports", async (t) => {
+  const w = world(t);
+  await addAccount(w.root, { provider: "claude", name: "Work" }, w.clock.now);
+  const b = await addAccount(w.root, { provider: "claude", name: "Personal" }, w.clock.now + 1);
+  await markAccountLimited(
+    w.root,
+    b.id,
+    { resetAt: "2026-09-24T20:00:00.000Z", kind: "session" },
+    w.clock.now,
+  );
+  const id = await w.enrol();
+  w.tails.set(id, firstTurnTail());
+  await assign(w.root, id, "claude", w.clock.now - 60_000);
+  const stop = await w.control.usageLimits.onAgent({
+    id,
+    provider: "claude",
+    status: "idle",
+    updatedAt: "u1",
+  });
+  assert.ok(Date.parse(stop.nextAt) >= at("2026-09-24T17:00:00Z"), "held until the reset");
+  assert.deepEqual(w.rotated, [{ session: id, from: "Work", to: null }]);
+  assert.equal(w.recovers.length, 0);
+});
+test("FU-834: a first-turn death of a human-held session is never moved", async (t) => {
+  const w = world(t);
+  await addAccount(w.root, { provider: "claude", name: "Work" }, w.clock.now);
+  await addAccount(w.root, { provider: "claude", name: "Personal" }, w.clock.now + 1);
+  const id = randomUUID();
+  w.store.created(id, T(1), path.join(w.dir, id)); // enrolled, never delegated
+  w.tails.set(id, firstTurnTail());
+  await assign(w.root, id, "claude", w.clock.now - 60_000);
+  await w.control.usageLimits.onAgent({ id, provider: "claude", status: "idle", updatedAt: "u1" });
+  assert.equal(accountOf(readAccounts(w.root), id).name, "Work");
+  assert.deepEqual(w.rotated, []);
+});
 test("FU-834: the fallback account at its own weekly launch cap is skipped (FU-643 rule) -> held", async (t) => {
   const w = world(t);
   await addAccount(w.root, { provider: "claude", name: "Work" }, w.clock.now);
