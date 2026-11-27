@@ -17,13 +17,14 @@ export function isTransientNetworkError(text) {
 }
 const FAILED_TURN_LIMIT =
   /usage limit|rate.?limit|hit your [^.]{1,30} limit|limit reached|too many requests|\b429\b|quota (?:exceeded|exhausted)/i;
+// FU-834: also "monthly spend limit · raise it at <host>/<path> · your 5-hour limit resets 3am (zone)" and "hit your limit".
 const CLAUDE_LINE =
-  /^You(?:'|’)ve hit your [A-Za-z][A-Za-z0-9 -]{0,23} limit · resets (?:[A-Z][a-z]{2} \d{1,2}(?:,| at) )?\d{1,2}(?::\d{2})?(?:am|pm)(?: \([A-Za-z]+(?:\/[A-Za-z0-9_+-]+){0,2}\))?$/;
+  /^You(?:'|’)ve hit your (?:[A-Za-z][A-Za-z0-9 -]{0,23} )?limit(?: · raise it at [^\s·]{1,80})?(?: · (?:your [A-Za-z0-9 -]{1,24} limit )?resets (?:[A-Z][a-z]{2} \d{1,2}(?:,| at) )?\d{1,2}(?::\d{2})?(?:am|pm)(?: \([A-Za-z]+(?:\/[A-Za-z0-9_+-]+){0,2}\))?)?$/;
 const CLAUDE_LEGACY = /^Claude AI usage limit reached\|\d{10}$/;
 const CODEX_LINE = /^(?:You(?:'|’)ve hit your usage limit|Usage limit reached)[^\n]{0,180}$/;
 function providerOf(text) {
   if (/Try again at/.test(text) || CODEX_LINE.test(text)) return "codex";
-  if (/hit your .* limit|Claude AI usage limit/.test(text)) return "claude";
+  if (/hit your (?:.* )?limit|Claude AI usage limit/.test(text)) return "claude";
   return "other";
 }
 export function classifyFailedTurn(text, now) {

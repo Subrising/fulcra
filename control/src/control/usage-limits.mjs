@@ -43,6 +43,18 @@ export const RESUME_DELAY_MS = 120000,
   AGAIN_WINDOW_MS = 3600000; // a stop this soon after a resume is the continued turn stopping again
 const COLUMNS =
   "id,session,generation,mode,provider,turnId,seq,messageId,line,stoppedAt,resetAt,lastUserMessageAt,lastInstruction,state,attempts,nextAt,continuation,outcome,at";
+// FU-834: a stop on the session's FIRST turn: nothing yet but one user message, then the limit line (no tool call, no
+// other output). Proven only when the whole timeline is in the tail: the native read takes the newest 4 entries, so a
+// full window proves nothing and counts as "work done" (the FU-430 rule then applies).
+export const TAIL_LIMIT = 4;
+function isFirstTurnStop(tail, last) {
+  const before = tail.entries.filter((e) => e !== last);
+  return (
+    tail.entries.length < TAIL_LIMIT &&
+    before.length === 1 &&
+    before[0].item?.type === "user_message"
+  );
+}
 // Pure. A timeline tail -> the stop it ends with, or null.
 export function detectStop(tail) {
   if (
@@ -64,6 +76,7 @@ export function detectStop(tail) {
   const parsed = parseLimitLine(last.item.text, stoppedAt) ?? parseRevokedLine(last.item.text);
   if (!parsed) return null;
   return {
+    firstTurn: isFirstTurnStop(tail, last),
     turnId: last.turnId ?? null,
     seq: last.seqEnd,
     messageId: String(last.item.messageId ?? ""),
@@ -73,6 +86,12 @@ export function detectStop(tail) {
   };
 }
 export function continuationText(stop, rotation = null) {
+  if (stop.firstTurn === true && rotation?.to)
+    return (
+      `[Orca controller: your first turn did not run: your account stopped at the usage limit ("${stop.line}", recorded ${stop.stoppedAt}). ` +
+      `${rotationNote(rotation)}]\n` +
+      "Start the task from your first message now. Nothing ran yet, so there is nothing to undo or check."
+    );
   if (parseRevokedLine(stop.line))
     return (
       `[Orca controller: your previous turn stopped because the token of your account was revoked or invalid ("${String(stop.line).slice(0, 200)}", recorded ${stop.stoppedAt}). ` +
@@ -219,6 +238,7 @@ export class UsageLimits {
       now: this.now(),
       delegated: s.mode === "delegated",
       kind: stop.kind,
+      firstTurn: stop.firstTurn === true, // FU-834: a failed launch moves at once, whatever rotateOnLimit says
     });
     if (rotation?.to && s.mode === "delegated") {
       this.db
@@ -364,7 +384,7 @@ export class UsageLimits {
           {
             sessionId: r.session,
             messageId: continuation,
-            text: continuationText(r, rotation),
+            text: continuationText({ ...r, firstTurn: stop.firstTurn }, rotation),
           },
           undefined,
           r.generation,

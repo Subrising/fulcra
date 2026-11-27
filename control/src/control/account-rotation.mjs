@@ -34,6 +34,7 @@ export async function rotateOnLimit(
     now = Date.now(),
     delegated = true,
     kind = null,
+    firstTurn = false,
   },
   root = control?.poolRoot ?? poolRoot(),
 ) {
@@ -50,6 +51,7 @@ export async function rotateOnLimit(
         stopId,
         reassign: delegated,
         kind,
+        firstTurn,
         accountId,
         stoppedAt,
         ...(control.confirmAccountLimit ? { confirmLimit: control.confirmAccountLimit } : {}),

@@ -34,6 +34,49 @@ describe("classifyEndingAssistantMessage", () => {
   });
 });
 
+describe("FU-834 monthly spend limit line", () => {
+  const SPEND =
+    "You've hit your monthly spend limit · raise it at claude.ai/settings/usage · your 5-hour limit resets";
+  it("is a Claude limit stop with a reset time, in every form", () => {
+    for (const text of [
+      `${SPEND} 3pm (Australia/Brisbane)`,
+      `${SPEND} 12pm (Australia/Brisbane)`,
+      `${SPEND} 3am (UTC)`,
+      "You've hit your limit · resets 3pm (Australia/Brisbane)",
+    ]) {
+      const stop = classifyEndingAssistantMessage(text, NOW);
+      expect(stop?.provider, text).toBe("claude");
+      expect(stop?.resetAt, text).not.toBeNull();
+    }
+    expect(
+      classifyEndingAssistantMessage(`${SPEND} 3pm (Australia/Brisbane)`, NOW)?.limitKind,
+    ).toBe("monthly spend");
+  });
+  it("is a stop with no reset time when the line gives none", () => {
+    const stop = classifyEndingAssistantMessage(
+      "You've hit your monthly spend limit · raise it at claude.ai/settings/usage",
+      NOW,
+    );
+    expect(stop?.resetAt).toBeNull();
+  });
+  it("also classifies as a failed turn", () => {
+    expect(classifyFailedTurn(`${SPEND} 3pm (Australia/Brisbane)`, NOW)?.provider).toBe("claude");
+  });
+  it("keeps an API 5xx as a network retry, never as a limit stop", () => {
+    expect(classifyEndingAssistantMessage("API Error: 500 internal server error", NOW)?.kind).toBe(
+      "network",
+    );
+  });
+  it("does not match prose, other errors or multi-line text", () => {
+    for (const text of [
+      "API Error: 400 invalid request",
+      "I handled the 'You've hit your monthly spend limit' line.",
+      `Done.\n${SPEND} 3pm`,
+    ])
+      expect(classifyEndingAssistantMessage(text, NOW), text).toBeNull();
+  });
+});
+
 describe("classifyFailedTurn", () => {
   it("matches limit wording and ignores other failures", () => {
     expect(classifyFailedTurn("429 Too Many Requests", NOW)).not.toBeNull();
