@@ -29,7 +29,11 @@ export interface AutoArchiveArchiveOptions {
   findWorkspaceIdForCwd: (cwd: string) => Promise<string | null>;
   listActiveWorkspaces: () => Promise<ActiveWorkspaceRef[]>;
   getAutoArchivedChangeRequestUrl: (workspaceId: string) => Promise<string | null>;
-  archiveWorkspaceRecord: (workspaceId: string, context?: WorkspaceArchiveContext) => Promise<void>;
+  archiveWorkspaceRecord: (
+    workspaceId: string,
+    context?: WorkspaceArchiveContext,
+    archivedAt?: string,
+  ) => Promise<void>;
   markWorkspaceArchiving: (workspaceIds: Iterable<string>, archivingAt: string) => void;
   clearWorkspaceArchiving: (workspaceIds: Iterable<string>) => void;
   emitWorkspaceUpdatesForWorkspaceIds: (workspaceIds: Iterable<string>) => Promise<void>;
@@ -59,13 +63,21 @@ export async function archiveIfSafe(input: {
   const cwd = snapshot.cwd;
   const pullRequest = snapshot.forge.pullRequest;
 
-  if (!pullRequest?.isMerged) {
+  if (
+    !pullRequest?.isMerged ||
+    !snapshot.git.headSha ||
+    snapshot.git.headSha !== pullRequest.headSha ||
+    snapshot.forge.error
+  ) {
     return;
   }
-  if (snapshot.git.isDirty === true) {
+  if (snapshot.git.isDirty !== false) {
     return;
   }
-  if (typeof snapshot.git.aheadOfOrigin === "number" && snapshot.git.aheadOfOrigin > 0) {
+  if (
+    (snapshot.git.aheadOfOrigin !== null && snapshot.git.aheadOfOrigin !== 0) ||
+    (snapshot.git.behindOfOrigin !== null && snapshot.git.behindOfOrigin !== 0)
+  ) {
     return;
   }
 
@@ -83,6 +95,7 @@ export async function archiveIfSafe(input: {
       return;
     }
 
+<<<<<<< HEAD
     await options.agentManager.trustedPlugins.daemon(() =>
       deps.archiveByScope(
         {
@@ -116,6 +129,43 @@ export async function archiveIfSafe(input: {
           requestId: "auto-archive-on-merge",
         },
       ),
+=======
+    await deps.archiveByScope(
+      {
+        paseoHome: options.paseoHome,
+        paseoWorktreesBaseRoot: options.paseoWorktreesBaseRoot,
+        github: options.github,
+        workspaceGitService: options.workspaceGitService,
+        agentManager: options.agentManager,
+        agentStorage: options.agentStorage,
+        findWorkspaceIdForCwd: options.findWorkspaceIdForCwd,
+        listActiveWorkspaces: options.listActiveWorkspaces,
+        archiveWorkspaceRecord: (workspaceIdToArchive, archivedAt) =>
+          options.archiveWorkspaceRecord(
+            workspaceIdToArchive,
+            {
+              autoArchivedChangeRequestUrl: pullRequest.url,
+            },
+            archivedAt,
+          ),
+        emitWorkspaceUpdatesForWorkspaceIds: options.emitWorkspaceUpdatesForWorkspaceIds,
+        markWorkspaceArchiving: options.markWorkspaceArchiving,
+        clearWorkspaceArchiving: options.clearWorkspaceArchiving,
+        killTerminalsForWorkspace: (workspaceIdToKill) =>
+          deps.killTerminalsForWorkspace(
+            {
+              terminalManager: options.terminalManager,
+              sessionLogger: log,
+            },
+            workspaceIdToKill,
+          ),
+        sessionLogger: log,
+      },
+      {
+        scope: { kind: "workspace", workspaceId },
+        requestId: "auto-archive-on-merge",
+      },
+>>>>>>> refs/remotes/upstream/tags/v0.16.1
     );
     log.info(
       { workspaceId, cwd, branch: pullRequest.headRefName, pullRequestUrl: pullRequest.url },

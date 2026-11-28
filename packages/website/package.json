@@ -1,6 +1,10 @@
 {
   "name": "@getpaseo/website",
+<<<<<<< HEAD
   "version": "0.15.0",
+=======
+  "version": "0.16.1",
+>>>>>>> refs/remotes/upstream/tags/v0.16.1
   "private": true,
   "type": "module",
   "scripts": {

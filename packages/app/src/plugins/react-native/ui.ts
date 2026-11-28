@@ -11,7 +11,11 @@ export {
 export { ExternalLink } from "@/components/ui/external-link";
 
 export { SidebarRow, SidebarSeparator } from "@/plugins/sidebar-items/kit";
+<<<<<<< HEAD
 export { AgentQuestions } from "@/plugins/agent-questions";
+=======
+export { WorkspaceRowBadge } from "@/plugins/workspace-row-badge-items/kit";
+>>>>>>> refs/remotes/upstream/tags/v0.16.1
 
 export { DocumentFrame } from "@/file-panels/document-frame";
 
@@ -21,6 +25,7 @@ export { FilePanelLoading as Loading } from "@/file-panels/loading";
 export { SettingsGroup } from "@/components/settings";
 
 export { Icon } from "../icons";
+export { Action, Combobox, Select, Toggle } from "./composer-controls";
 export { Modal } from "./modal";
 export { ScrollView, FlatList } from "./scroll-view";
 export { TextInput } from "./text-input";
