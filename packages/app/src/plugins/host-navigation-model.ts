@@ -1,25 +1,39 @@
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import type { NavigateToWorkspaceInput } from "@/stores/navigation-active-workspace-store";
+<<<<<<< HEAD
 import {
   changeViewRequestKey,
   parseArchitectureChangeSelection,
   useChangeViewRequests,
 } from "@/architecture-map/change-view-request";
+=======
+import { parseServerIdFromPathname } from "@/utils/host-routes";
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
 import { isHttpUrl } from "@/utils/http-url";
 
 interface HostNavigationOwner {
   browserAvailable: boolean;
-  openAgent(input: { serverId: string; agentId: string }): void;
-  openWorkspace(input: NavigateToWorkspaceInput): void;
+  isHostRegistered(serverId: string): boolean;
+  openAgent(input: { serverId: string; agentId: string }): string;
+  openWorkspace(input: NavigateToWorkspaceInput): string;
   resolveWorkspace(input: { serverId: string; workspaceId: string }): string | null;
   createBrowser(input: { initialUrl: string }): { browserId: string };
+  focusHost(serverId: string): void;
 }
 
 export function createPluginHostNavigation(
   serverId: string,
   owner: HostNavigationOwner,
 ): NonNullable<PluginSurfaceProps["navigation"]> {
+  const focusRouteHost = (route: string) => {
+    const destinationServerId = parseServerIdFromPathname(route);
+    if (destinationServerId && owner.isHostRegistered(destinationServerId)) {
+      owner.focusHost(destinationServerId);
+    }
+  };
+
   return {
+<<<<<<< HEAD
     openAgent: ({ agentId, serverId: targetServerId }) =>
       owner.openAgent({ serverId: targetServerId ?? serverId, agentId }),
     openWorkspace: ({ workspaceId, serverId: targetServerId }) =>
@@ -63,6 +77,16 @@ export function createPluginHostNavigation(
           .consume(changeViewRequestKey(destinationServerId, workspaceId));
         throw error;
       }
+=======
+    supportsFocusHost: true,
+    openAgent: ({ agentId, serverId: targetServerId, focusHost }) => {
+      const route = owner.openAgent({ serverId: targetServerId ?? serverId, agentId });
+      if (focusHost) focusRouteHost(route);
+    },
+    openWorkspace: ({ workspaceId, serverId: targetServerId, focusHost }) => {
+      const route = owner.openWorkspace({ serverId: targetServerId ?? serverId, workspaceId });
+      if (focusHost) focusRouteHost(route);
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
     },
     openBrowser: owner.browserAvailable
       ? ({ url, workspaceId, serverId: targetServerId }) => {

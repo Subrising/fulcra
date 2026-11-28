@@ -89,6 +89,7 @@ describe("external CLI", () => {
     });
   });
 
+<<<<<<< HEAD
   it("FU-780 ends the CLI process and rejects when the signal aborts", async () => {
     const kill = vi.fn();
     mocks.spawnProcess.mockImplementationOnce(() => {
@@ -96,10 +97,21 @@ describe("external CLI", () => {
         stdout: EventEmitter;
         stderr: EventEmitter;
         kill: () => void;
+=======
+  it("terminates and rejects when an external CLI subprocess hangs past the timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const kill = vi.fn();
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        kill: typeof kill;
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
       };
       child.stdout = new EventEmitter();
       child.stderr = new EventEmitter();
       child.kill = kill;
+<<<<<<< HEAD
       return child;
     });
     const controller = new AbortController();
@@ -107,5 +119,23 @@ describe("external CLI", () => {
     controller.abort();
     await expect(run).rejects.toThrow(/aborted/);
     expect(kill).toHaveBeenCalledTimes(1);
+=======
+      mocks.spawnProcess.mockReturnValueOnce(child);
+
+      const pending = runExternalCliJsonCommand(["daemon", "status", "--json"]);
+      const assertion = expect(pending).rejects.toThrow(
+        "CLI command timed out after 15000ms: daemon status --json",
+      );
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      await assertion;
+      expect(kill).toHaveBeenCalledWith("SIGTERM");
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(kill).toHaveBeenCalledWith("SIGKILL");
+    } finally {
+      vi.useRealTimers();
+    }
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
   });
 });

@@ -1,13 +1,17 @@
+<<<<<<< HEAD
 import type { PluginHookEvents, PluginLifecycleEvents } from "@getpaseo/plugin/server";
 import type { TrustedPlugins } from "./trusted.js";
 import type { ManagementInvocation } from "./management.js";
 import type { PluginAgentToolsRuntime } from "./agent-tools.js";
+=======
+import type { PluginSessionsRuntime } from "./agent-tools.js";
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
 import type { PluginLifecycle } from "./lifecycle/index.js";
 import type { PluginHostCall } from "./plugin-host-calls.js";
 import path from "node:path";
 import { stat, rm } from "node:fs/promises";
 import type pino from "pino";
-import type { ProviderRegistration } from "@getpaseo/plugin/server/provider";
+import type { ProviderInstallation, ProviderRegistration } from "@getpaseo/plugin/server/provider";
 import {
   PluginIdSchema,
   type PluginLogEntry,
@@ -28,9 +32,13 @@ import { type ManagedPluginCandidate, ManagedPluginSources } from "./managed-sou
 import { readPluginManifest } from "./manifest.js";
 import { expandTilde } from "../../utils/path.js";
 import { runPluginBuild } from "./preparation.js";
-import { PluginRuntime } from "./runtime.js";
+import { PluginRuntime, type PluginWorktreeManagerRuntime } from "./runtime.js";
+import type { PluginRuntimeSubscription } from "./runtime-subscription.js";
 import { BuiltinPluginLoader, type BuiltinPlugin } from "./builtin/index.js";
-import type { PluginProviderMetadata } from "./plugin-process-protocol.js";
+import type {
+  PluginProviderInstallationMetadata,
+  PluginProviderMetadata,
+} from "./plugin-process-protocol.js";
 import { readPluginProviderIcon } from "./provider-icon.js";
 import {
   type AgentUsageLookup,
@@ -42,16 +50,24 @@ import type { PluginUsageSourceMetadata } from "./plugin-process-protocol.js";
 const BUILTIN_PROVIDER_ID_SET: ReadonlySet<string> = new Set(BUILTIN_PROVIDER_IDS);
 
 interface PluginRuntimePort {
+<<<<<<< HEAD
   managementTarget?: PluginRuntime["managementTarget"];
   subscribeSessionOpenChanges?: PluginRuntime["subscribeSessionOpenChanges"];
+=======
+  sessionAttachments?: PluginRuntime["sessionAttachments"];
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
   isToolPluginAvailable?: PluginRuntime["isToolPluginAvailable"];
   callTool?: PluginRuntime["callTool"];
-  detachTools?: PluginRuntime["detachTools"];
   emit?: PluginLifecycle["emit"];
   drainEvents?: PluginRuntime["drainEvents"];
   before?: PluginLifecycle["before"];
   wait?: PluginLifecycle["wait"];
+  hasWorktreeManager?: PluginWorktreeManagerRuntime["hasWorktreeManager"];
+  createWorktree?: PluginWorktreeManagerRuntime["createWorktree"];
+  removeWorktree?: PluginWorktreeManagerRuntime["removeWorktree"];
+  restoreWorktree?: PluginWorktreeManagerRuntime["restoreWorktree"];
   catalog: PluginRuntime["catalog"];
+<<<<<<< HEAD
   readonly catalogPaging?: PluginRuntime["catalogPaging"];
   invoke(
     pluginId: string,
@@ -60,6 +76,10 @@ interface PluginRuntimePort {
     management?: ManagementInvocation,
     options?: { readOnlyCaller?: boolean },
   ): Promise<unknown>;
+=======
+  invoke(pluginId: string, method: string, input: unknown): Promise<unknown>;
+  startSubscription: PluginRuntime["startSubscription"];
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
   getLogs(pluginId: string): PluginLogEntry[];
   clearLogs(pluginId: string): void;
   getProviderRegistrations?(pluginId: string): readonly PluginProviderMetadata[];
@@ -69,6 +89,9 @@ interface PluginRuntimePort {
   connectProvider: PluginRuntime["connectProvider"];
   getProviderCatalogCacheKey?: PluginRuntime["getProviderCatalogCacheKey"];
   getProviderStatus?: PluginRuntime["getProviderStatus"];
+  inspectProviderInstallation?: PluginRuntime["inspectProviderInstallation"];
+  checkProviderUpdates?: PluginRuntime["checkProviderUpdates"];
+  updateProvider?: PluginRuntime["updateProvider"];
   validatePlugin?(path: string): Promise<void>;
   startPlugin(pluginId: string, path: string, canPublish: () => boolean): Promise<void>;
   startBuiltinPlugin?(plugin: BuiltinPlugin): Promise<void>;
@@ -119,6 +142,11 @@ export class PluginService {
   private readonly builtinPlugins: BuiltinPluginLoader;
   private readonly logger: pino.Logger;
   private readonly errors = new Map<string, string>();
+  /**
+   * Restarts in progress. A restart stops the plugin before its replacement starts; a session refresh waits for it,
+   * so the gap never reads as the plugin's removal. A restart that fails to start reads as one.
+   */
+  private readonly restarts = new Set<Promise<void>>();
   private readonly listeners = new Set<(pluginId: string) => void>();
   private readonly providers = new Map<string, ProviderRegistration>();
   private readonly usageSources: UsageSourceRegistry;
@@ -208,22 +236,33 @@ export class PluginService {
     this.runtime.emit?.(name, event);
   };
 
-  subscribeSessionOpenChanges(listener: () => void): () => void {
-    return this.runtime.subscribeSessionOpenChanges?.(listener) ?? (() => {});
-  }
-
-  readonly isToolPluginAvailable: PluginAgentToolsRuntime["isToolPluginAvailable"] = (
-    pluginId,
-    pluginInstanceId,
-  ) => {
-    return this.runtime.isToolPluginAvailable?.(pluginId, pluginInstanceId) ?? false;
+  readonly openSession: PluginSessionsRuntime["openSession"] = async (request) => {
+    if (this.runtime.sessionAttachments) return this.runtime.sessionAttachments.open(request);
+    return { ...request, tools: [], mcpServers: {}, mcpServerOwners: {} };
   };
 
-  readonly detachTools: PluginAgentToolsRuntime["detachTools"] = (agentId) => {
-    this.runtime.detachTools?.(agentId);
+  readonly sessionLaunched: PluginSessionsRuntime["sessionLaunched"] = (agentId) => {
+    this.runtime.sessionAttachments?.launched(agentId);
   };
 
-  readonly callTool: PluginAgentToolsRuntime["callTool"] = async (
+  readonly sessionLaunchFailed: PluginSessionsRuntime["sessionLaunchFailed"] = (agentId) => {
+    this.runtime.sessionAttachments?.launchFailed(agentId);
+  };
+
+  readonly refreshSession: PluginSessionsRuntime["refreshSession"] = async (agentId, options) => {
+    while (this.restarts.size > 0) await Promise.all(this.restarts);
+    return (await this.runtime.sessionAttachments?.refresh(agentId, options)) ?? { stale: false };
+  };
+
+  readonly sessionTools: PluginSessionsRuntime["sessionTools"] = (agentId) => {
+    return this.runtime.sessionAttachments?.tools(agentId) ?? [];
+  };
+
+  readonly closeSession: PluginSessionsRuntime["closeSession"] = (agentId) => {
+    this.runtime.sessionAttachments?.close(agentId);
+  };
+
+  readonly callTool: PluginSessionsRuntime["callTool"] = async (
     pluginId,
     pluginInstanceId,
     agent,
@@ -231,7 +270,7 @@ export class PluginService {
     input,
     signal,
   ) => {
-    if (!this.isToolPluginAvailable(pluginId, pluginInstanceId) || !this.runtime.callTool)
+    if (!this.runtime.isToolPluginAvailable?.(pluginId, pluginInstanceId) || !this.runtime.callTool)
       return { isError: true, text: `Plugin is not available: ${pluginId}` };
     return this.runtime.callTool(pluginId, pluginInstanceId, agent, name, input, signal);
   };
@@ -249,6 +288,31 @@ export class PluginService {
       return this.runtime.before(name, request);
     }
     return request;
+  };
+
+  readonly hasWorktreeManager: PluginWorktreeManagerRuntime["hasWorktreeManager"] = (options) => {
+    return this.runtime.hasWorktreeManager?.(options) ?? false;
+  };
+
+  readonly createWorktree: PluginWorktreeManagerRuntime["createWorktree"] = async (
+    request,
+    options,
+  ) => {
+    return (await this.runtime.createWorktree?.(request, options)) ?? null;
+  };
+
+  readonly removeWorktree: PluginWorktreeManagerRuntime["removeWorktree"] = async (
+    request,
+    options,
+  ) => {
+    return (await this.runtime.removeWorktree?.(request, options)) ?? null;
+  };
+
+  readonly restoreWorktree: PluginWorktreeManagerRuntime["restoreWorktree"] = async (
+    request,
+    options,
+  ) => {
+    return (await this.runtime.restoreWorktree?.(request, options)) ?? null;
   };
 
   subscribeSettings(listener: (pluginId: string, settingsId: string) => void): () => void {
@@ -297,11 +361,18 @@ export class PluginService {
       }
     });
     if (config.pluginsEnabled === true) {
-      for (const [pluginId, source] of Object.entries(config.plugins ?? {})) {
-        if (source.enabled === false) continue;
-        await this.startConfigured(pluginId);
-        this.notify(pluginId);
-      }
+      let earlierPublished: Promise<unknown> = Promise.resolve();
+      await Promise.all(
+        Object.entries(config.plugins ?? {})
+          .filter(([, source]) => source.enabled !== false)
+          .map(async ([pluginId]) => {
+            const publishTurn = earlierPublished;
+            const starting = this.startConfigured(pluginId, publishTurn);
+            earlierPublished = Promise.all([publishTurn, starting]);
+            await starting;
+            this.notify(pluginId);
+          }),
+      );
     }
     this.configStore.onFieldChange("pluginsEnabled", (value) => {
       this.handleGlobalSwitch(value === true);
@@ -462,6 +533,15 @@ export class PluginService {
     });
   }
 
+  /** Reads the default registry's directory. Not queued: it touches no local state. */
+  listRegistry() {
+    return this.requireManagedSources().listRegistry();
+  }
+
+  getRegistryPlugin(id: string) {
+    return this.requireManagedSources().getRegistryPlugin(id);
+  }
+
   async statusSources(pluginId?: string): Promise<PluginSourceStatusItem[]> {
     return this.enqueue(async () => {
       const sources = this.configStore.get().plugins ?? {};
@@ -535,8 +615,10 @@ export class PluginService {
         throw new Error("Plugins are globally disabled");
       }
       this.errors.delete(pluginId);
-      await this.stopPlugin(pluginId);
-      await this.startExplicit(pluginId, source.path);
+      await this.restart(async () => {
+        await this.stopPlugin(pluginId);
+        await this.startExplicit(pluginId, source.path);
+      });
       this.notify(pluginId);
       return this.requireItem(pluginId);
     });
@@ -638,6 +720,10 @@ export class PluginService {
     return this.runtime.invoke(pluginId, method, input, management, options);
   }
 
+  subscribePluginRpc(pluginId: string, method: string, input: unknown): PluginRuntimeSubscription {
+    return this.runtime.startSubscription(pluginId, method, input);
+  }
+
   async stopAllPlugins(): Promise<void> {
     this.distributionStarts.clear();
     this.globalStartsBlocked = true;
@@ -667,12 +753,12 @@ export class PluginService {
     }).catch((error) => this.logger.error({ err: error }, "Failed to enable plugins"));
   }
 
-  private async startConfigured(pluginId: string): Promise<void> {
+  private async startConfigured(pluginId: string, publishTurn?: Promise<unknown>): Promise<void> {
     const source = this.configStore.get().plugins?.[pluginId];
     if (!source || source.enabled === false || !this.canPublish(pluginId)) return;
     this.errors.delete(pluginId);
     try {
-      await this.startPlugin(pluginId, source.path);
+      await this.startPlugin(pluginId, source.path, publishTurn);
     } catch (error) {
       if (this.canPublish(pluginId)) this.recordFailure(pluginId, error);
     }
@@ -702,8 +788,13 @@ export class PluginService {
     );
   }
 
-  private async startPlugin(pluginId: string, sourcePath: string): Promise<void> {
+  private async startPlugin(
+    pluginId: string,
+    sourcePath: string,
+    publishTurn?: Promise<unknown>,
+  ): Promise<void> {
     await this.runtime.startPlugin(pluginId, sourcePath, () => this.canPublish(pluginId));
+    await publishTurn;
     try {
       await this.publishProviderRegistrations(pluginId, sourcePath);
       this.publishUsageSources(pluginId);
@@ -744,12 +835,40 @@ export class PluginService {
     const registered: string[] = [];
     try {
       for (const source of metadata) {
+        if (
+          source.provider &&
+          !this.runtime
+            .getProviderRegistrations?.(pluginId)
+            .some((provider) => provider.id === source.provider)
+        ) {
+          throw new Error(
+            `Usage source ${source.id} references a provider outside plugin ${pluginId}`,
+          );
+        }
         this.usageSources.register({
           id: source.id,
           label: source.label,
           icon: source.icon,
+          providers: source.providers ?? (source.provider ? [source.provider] : undefined),
           discover: async (scope) => {
-            const result = await this.runtime.discoverUsage(pluginId, source.id, scope);
+            const launch =
+              scope.kind === "global" && source.provider
+                ? await this.dependencies.usageAgents?.resolveLaunch?.(source.provider)
+                : undefined;
+            const scoped =
+              scope.kind === "session" && source.provider !== scope.provider
+                ? {
+                    kind: "session" as const,
+                    provider: scope.provider,
+                    model: scope.model,
+                    env: scope.env,
+                  }
+                : scope;
+            const result = await this.runtime.discoverUsage(
+              pluginId,
+              source.id,
+              scoped.kind === "global" && launch ? { ...scoped, launch } : scoped,
+            );
             if (!Array.isArray(result))
               throw new Error(`Invalid usage discovery from ${source.id}`);
             return result;
@@ -792,7 +911,9 @@ export class PluginService {
           id: provider.id,
           label: provider.label,
           description: provider.description,
+          docsUrl: provider.docsUrl,
           command: provider.command,
+          launchWrap: provider.launchWrap,
           requiresConfiguration: provider.requiresConfiguration,
           status: provider.hasStatus
             ? (request) => {
@@ -807,6 +928,9 @@ export class PluginService {
                   throw new Error("Plugin runtime cannot resolve catalogue keys");
                 return this.runtime.getProviderCatalogCacheKey(pluginId, provider.id, options);
               }
+            : undefined,
+          installation: provider.installation
+            ? this.providerInstallation(pluginId, provider.id, provider.installation)
             : undefined,
           icon: provider.iconPath
             ? await readPluginProviderIcon(pluginDirectory, provider.iconPath)
@@ -827,6 +951,38 @@ export class PluginService {
     }
   }
 
+  private providerInstallation(
+    pluginId: string,
+    providerId: string,
+    metadata: PluginProviderInstallationMetadata,
+  ): ProviderInstallation {
+    return {
+      installUrl: metadata.installUrl,
+      updateUrl: metadata.updateUrl,
+      inspect: metadata.hasInspect
+        ? (context) => {
+            if (!this.runtime.inspectProviderInstallation)
+              throw new Error("Plugin runtime cannot inspect provider installations");
+            return this.runtime.inspectProviderInstallation(pluginId, providerId, context);
+          }
+        : undefined,
+      checkForUpdates: metadata.hasCheckForUpdates
+        ? (context) => {
+            if (!this.runtime.checkProviderUpdates)
+              throw new Error("Plugin runtime cannot check provider updates");
+            return this.runtime.checkProviderUpdates(pluginId, providerId, context);
+          }
+        : undefined,
+      update: metadata.hasUpdate
+        ? (context) => {
+            if (!this.runtime.updateProvider)
+              throw new Error("Plugin runtime cannot update providers");
+            return this.runtime.updateProvider(pluginId, providerId, context);
+          }
+        : undefined,
+    };
+  }
+
   private removeProviderRegistrations(pluginId: string): void {
     const ids = this.providerIdsByPlugin.get(pluginId);
     if (!ids) return;
@@ -837,6 +993,17 @@ export class PluginService {
 
   private notifyProviderRegistrations(): void {
     for (const listener of this.providerListeners) listener();
+  }
+
+  private async restart(run: () => Promise<void>): Promise<void> {
+    const restart = run();
+    const settled = restart.catch(() => {});
+    this.restarts.add(settled);
+    try {
+      await restart;
+    } finally {
+      this.restarts.delete(settled);
+    }
   }
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -879,28 +1046,30 @@ export class PluginService {
     const shouldActivate =
       current.enabled !== false && this.configStore.get().pluginsEnabled === true;
     if (shouldActivate) {
-      if (isRunning) await this.stopPlugin(pluginId);
-      try {
-        await this.startExplicit(pluginId, candidate.directory);
-      } catch (error) {
-        let recoveryError: unknown;
+      await this.restart(async () => {
+        if (isRunning) await this.stopPlugin(pluginId);
         try {
-          this.errors.delete(pluginId);
-          if (isRunning && this.canPublish(pluginId))
-            await this.startExplicit(pluginId, source.path);
-        } catch (restoreError) {
-          recoveryError = restoreError;
-        } finally {
-          await managedSources.discard(candidate);
-          this.notify(pluginId);
+          await this.startExplicit(pluginId, candidate.directory);
+        } catch (error) {
+          let recoveryError: unknown;
+          try {
+            this.errors.delete(pluginId);
+            if (isRunning && this.canPublish(pluginId))
+              await this.startExplicit(pluginId, source.path);
+          } catch (restoreError) {
+            recoveryError = restoreError;
+          } finally {
+            await managedSources.discard(candidate);
+            this.notify(pluginId);
+          }
+          if (recoveryError)
+            throw new Error(
+              `Update failed: ${error instanceof Error ? error.message : String(error)}; restoring previous plugin also failed: ${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`,
+              { cause: error },
+            );
+          throw error;
         }
-        if (recoveryError)
-          throw new Error(
-            `Update failed: ${error instanceof Error ? error.message : String(error)}; restoring previous plugin also failed: ${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`,
-            { cause: error },
-          );
-        throw error;
-      }
+      });
     }
     const activatedSource = this.configStore.get().plugins?.[pluginId];
     if (!activatedSource) {

@@ -15,6 +15,11 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { describe, expect, test, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import {
+  Client as StandardMcpClient,
+  StreamableHTTPClientTransport as StandardMcpHttpTransport,
+  type VersionNegotiationMode,
+} from "@modelcontextprotocol/client";
 import pino from "pino";
 
 import { createMemoryCredentialBackend } from "../integrations/credential-backend.js";
@@ -107,12 +112,12 @@ async function createMcpClient(url: string, authToken?: string): Promise<McpClie
   };
 }
 
-interface OfflineMcpDaemon {
-  client: McpClient;
+interface OfflineDaemon {
+  mcpUrl: string;
   stop: () => Promise<void>;
 }
 
-async function startOfflineMcpDaemon(): Promise<OfflineMcpDaemon> {
+async function startOfflineDaemon(logger = pino({ level: "silent" })): Promise<OfflineDaemon> {
   const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-home-"));
   const staticDir = await mkdtemp(path.join(os.tmpdir(), "paseo-static-"));
   const removeDirectories = async () => {
@@ -132,26 +137,89 @@ async function startOfflineMcpDaemon(): Promise<OfflineMcpDaemon> {
       agentClients: createTestAgentClients(),
       agentStoragePath: path.join(paseoHome, "agents"),
     },
-    pino({ level: "silent" }),
+    logger,
   ).catch(async (error: unknown) => {
     await removeDirectories();
     throw error;
   });
+  const stop = async () => {
+    await daemon.stop();
+    await removeDirectories();
+  };
   try {
     await daemon.start();
-    const client = await createMcpClient(`http://127.0.0.1:${port}/mcp/agents`);
+  } catch (error) {
+    await stop();
+    throw error;
+  }
+  return { mcpUrl: `http://127.0.0.1:${port}/mcp/agents`, stop };
+}
+
+interface OfflineMcpDaemon {
+  client: McpClient;
+  stop: () => Promise<void>;
+}
+
+async function startOfflineMcpDaemon(): Promise<OfflineMcpDaemon> {
+  const daemon = await startOfflineDaemon();
+  try {
+    const client = await createMcpClient(daemon.mcpUrl);
     return {
       client,
       stop: async () => {
         await client.close();
         await daemon.stop();
-        await removeDirectories();
       },
     };
   } catch (error) {
     await daemon.stop();
-    await removeDirectories();
     throw error;
+  }
+}
+
+interface CapturedLog {
+  level: number;
+  msg?: string;
+}
+
+function createCapturingLogger(): { logger: pino.Logger; logs: CapturedLog[] } {
+  const logs: CapturedLog[] = [];
+  const logger = pino(
+    { level: "warn" },
+    {
+      write: (line: string) => {
+        logs.push(JSON.parse(line) as CapturedLog);
+      },
+    },
+  );
+  return { logger, logs };
+}
+
+interface StandardMcpSession {
+  negotiatedProtocolVersion: string | undefined;
+  toolNames: string[];
+  listWorkspacesResult: unknown;
+}
+
+async function runStandardMcpSession(
+  mcpUrl: string,
+  mode: VersionNegotiationMode,
+): Promise<StandardMcpSession> {
+  const client = new StandardMcpClient(
+    { name: "agent-mcp-e2e", version: "0.0.0" },
+    { versionNegotiation: { mode } },
+  );
+  await client.connect(new StandardMcpHttpTransport(new URL(mcpUrl)));
+  try {
+    const tools = await client.listTools();
+    const workspaces = await client.callTool({ name: "list_workspaces", arguments: {} });
+    return {
+      negotiatedProtocolVersion: client.getNegotiatedProtocolVersion(),
+      toolNames: tools.tools.map((tool) => tool.name),
+      listWorkspacesResult: workspaces.structuredContent,
+    };
+  } finally {
+    await client.close();
   }
 }
 
@@ -1564,6 +1632,7 @@ describe("agent MCP end-to-end (offline)", () => {
   }, 60_000);
 });
 
+<<<<<<< HEAD
 test("computer-use job label works through the scratch MCP endpoint with one lead notice per unlisted app", async () => {
   const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-cua-home-"));
   const staticDir = await mkdtemp(path.join(os.tmpdir(), "paseo-cua-static-"));
@@ -1877,3 +1946,43 @@ test.each(["codex", "opencode", "pi", "omp", "copilot"])(
     }
   },
 );
+=======
+describe("agent MCP protocol negotiation", () => {
+  test("a client pinned to 2026-07-28 lists and calls tools", async () => {
+    const daemon = await startOfflineDaemon();
+    try {
+      const session = await runStandardMcpSession(daemon.mcpUrl, { pin: "2026-07-28" });
+      expect(session.negotiatedProtocolVersion).toBe("2026-07-28");
+      expect(session.toolNames).toEqual(expect.arrayContaining(["create_agent", "update_agent"]));
+      expect(session.listWorkspacesResult).toMatchObject({ workspaces: [] });
+    } finally {
+      await daemon.stop();
+    }
+  }, 30_000);
+
+  test("an auto-negotiating client settles on 2026-07-28 without transport errors", async () => {
+    const { logger, logs } = createCapturingLogger();
+    const daemon = await startOfflineDaemon(logger);
+    try {
+      const session = await runStandardMcpSession(daemon.mcpUrl, "auto");
+      expect(session.negotiatedProtocolVersion).toBe("2026-07-28");
+      expect(session.listWorkspacesResult).toMatchObject({ workspaces: [] });
+      expect(logs.filter((log) => log.msg === "Agent MCP transport error")).toEqual([]);
+    } finally {
+      await daemon.stop();
+    }
+  }, 30_000);
+
+  test("a legacy client still initializes over a 2025 protocol version", async () => {
+    const daemon = await startOfflineDaemon();
+    try {
+      const session = await runStandardMcpSession(daemon.mcpUrl, "legacy");
+      expect(session.negotiatedProtocolVersion).toMatch(/^2025-/);
+      expect(session.toolNames).toEqual(expect.arrayContaining(["create_agent", "update_agent"]));
+      expect(session.listWorkspacesResult).toMatchObject({ workspaces: [] });
+    } finally {
+      await daemon.stop();
+    }
+  }, 30_000);
+});
+>>>>>>> refs/remotes/upstream/tags/v0.17.6

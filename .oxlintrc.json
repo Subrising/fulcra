@@ -3,6 +3,7 @@
   "options": {
     "typeAware": false
   },
+<<<<<<< HEAD
   // The live controller hashes admission-guard.mjs and compares it with the deployed release, and
   // the bbc624cf9 fixture is a frozen copy of an earlier release. Neither may be rewritten by tools.
   "ignorePatterns": [
@@ -10,6 +11,9 @@
     "control/src/control/admission-guard.mjs",
     "control/src/control/admission-guard-bbc624cf9.fixture.mjs"
   ],
+=======
+  "ignorePatterns": [".dev/**", "packages/react-native-enriched-markdown/**"],
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
   "plugins": ["react", "react-perf", "unicorn", "typescript", "oxc", "import", "promise"],
   "jsPlugins": ["./scripts/oxlint/paseo-plugin.mjs"],
   "categories": {
@@ -596,10 +600,7 @@
     {
       "files": [
         "packages/app/src/app/_layout.tsx",
-        "packages/app/src/app/pair-scan.tsx",
         "packages/app/src/components/adaptive-modal-sheet.tsx",
-        "packages/app/src/components/add-host-method-modal.tsx",
-        "packages/app/src/components/add-host-modal.tsx",
         "packages/app/src/components/agent-list.tsx",
         "packages/app/src/components/agent-status-dot.tsx",
         "packages/app/src/components/attachment-lightbox.tsx",
@@ -615,10 +616,8 @@
         "packages/app/src/components/headers/back-header.tsx",
         "packages/app/src/components/headers/screen-header.tsx",
         "packages/app/src/components/host-status-dot.tsx",
-        "packages/app/src/components/hosts/host-picker.tsx",
         "packages/app/src/components/icons/paseo-logo.tsx",
         "packages/app/src/components/left-sidebar.tsx",
-        "packages/app/src/components/pair-link-modal.tsx",
         "packages/app/src/components/plan-card.tsx",
         "packages/app/src/components/provider-diagnostic-sheet.tsx",
         "packages/app/src/components/question-form-card.tsx",
@@ -724,7 +723,7 @@
       }
     },
     // Press feedback is owned by the primitives in components/ui. Raw pressable burn-down:
-    // 94 files. They may only leave this list.
+    // 85 files. They may only leave this list.
     {
       "files": [
         "packages/app/src/components/ui/**/*.{ts,tsx}",
@@ -733,16 +732,9 @@
         "packages/app/src/agent-skills/selection-sheet.tsx",
         "packages/app/src/agent-stream/chat-outline/rail.web.tsx",
         "packages/app/src/agent-stream/view.tsx",
-        "packages/app/src/app/pair-scan.tsx",
-        "packages/app/src/changelog/internal/changelog-sheet.tsx",
         "packages/app/src/command-center/command-center.tsx",
-        "packages/app/src/components/adaptive-modal-sheet.tsx",
-        "packages/app/src/components/add-host-method-modal.tsx",
-        "packages/app/src/components/add-host-modal.tsx",
         "packages/app/src/components/add-project-flow.tsx",
-        "packages/app/src/components/add-remote-ssh-host-modal.tsx",
         "packages/app/src/components/agent-list.tsx",
-        "packages/app/src/components/app-diagnostic-sheet.tsx",
         "packages/app/src/components/attachment-lightbox.tsx",
         "packages/app/src/components/attachment-pill.tsx",
         "packages/app/src/components/combined-model-selector.tsx",
@@ -753,9 +745,7 @@
         "packages/app/src/components/download-toast.tsx",
         "packages/app/src/components/file-explorer-pane.tsx",
         "packages/app/src/components/headers/back-header.tsx",
-        "packages/app/src/components/highlighted-code-block.tsx",
         "packages/app/src/components/hosts/host-filter.tsx",
-        "packages/app/src/components/hosts/host-picker.tsx",
         "packages/app/src/components/import-session-sheet.tsx",
         "packages/app/src/components/left-sidebar.tsx",
         "packages/app/src/components/markdown/fence/mermaid/host.native.tsx",
@@ -781,7 +771,6 @@
         "packages/app/src/components/terminal-emulator-native-grid.native.tsx",
         "packages/app/src/components/terminal-pane.tsx",
         "packages/app/src/components/toast-host.tsx",
-        "packages/app/src/components/tool-call-sheet.tsx",
         "packages/app/src/components/welcome-screen.tsx",
         "packages/app/src/components/workspace-hover-card.tsx",
         "packages/app/src/components/zoomable-viewport/toolbar.tsx",
@@ -817,7 +806,6 @@
         "packages/app/src/screens/workspace/scripts/workspace-scripts-button.tsx",
         "packages/app/src/screens/workspace/workspace-desktop-tabs-row.tsx",
         "packages/app/src/screens/workspace/workspace-tab-presentation.tsx",
-        "packages/app/src/tool-calls/detail-level/overview/sheet.tsx",
         "packages/app/src/usage/sidebar-item.tsx",
         "packages/app/src/usage/window-bar.tsx",
         "packages/app/src/workspace-labels/manager-modal.tsx",

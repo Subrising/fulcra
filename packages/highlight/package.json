@@ -1,10 +1,16 @@
 {
   "name": "@getpaseo/highlight",
+<<<<<<< HEAD
   "version": "0.15.0",
+=======
+  "version": "0.17.6",
+  "license": "Apache-2.0",
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
   "files": [
     "dist",
     "!dist/**/*.map",
-    "src/astro/LICENSE"
+    "src/astro/LICENSE",
+    "src/hcl/LICENSE"
   ],
   "type": "module",
   "main": "./dist/index.js",

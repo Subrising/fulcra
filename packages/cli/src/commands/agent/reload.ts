@@ -1,6 +1,10 @@
 import { Command } from "commander";
 import { connectToDaemon } from "../../utils/client.js";
+<<<<<<< HEAD
 import { findAgentToArchive } from "./archive.js";
+=======
+import { resolveAgentEntry, type AgentLookupClient } from "../../utils/agent-directory.js";
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
 import type {
   CommandOptions,
   SingleResult,
@@ -35,10 +39,25 @@ export interface AgentReloadOptions extends CommandOptions {
 
 export type AgentReloadCommandResult = SingleResult<AgentReloadResult>;
 
+export interface AgentReloadClient extends AgentLookupClient {
+  refreshAgent(agentId: string): Promise<{ agentId: string; timelineSize?: number }>;
+  close(): Promise<void>;
+}
+
 export async function runReloadCommand(
   agentIdArg: string,
   options: AgentReloadOptions,
   _command: Command,
+): Promise<AgentReloadCommandResult> {
+  return reloadAgent(agentIdArg, options);
+}
+
+export async function reloadAgent(
+  agentIdArg: string,
+  options: AgentReloadOptions,
+  connect: (
+    options: Parameters<typeof connectToDaemon>[0],
+  ) => Promise<AgentReloadClient> = connectToDaemon,
 ): Promise<AgentReloadCommandResult> {
   if (!agentIdArg || agentIdArg.trim().length === 0) {
     const error: CommandError = {
@@ -49,12 +68,17 @@ export async function runReloadCommand(
     throw error;
   }
 
-  const client = await connectToDaemon({ target: options.daemonTarget });
+  const client = await connect({ target: options.daemonTarget });
 
   try {
+<<<<<<< HEAD
     const agent = await findAgentToArchive(client, agentIdArg);
     const agentId = agent?.id;
     if (!agentId) {
+=======
+    const agent = await resolveAgentEntry(client, agentIdArg);
+    if (!agent) {
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
       const error: CommandError = {
         code: "AGENT_NOT_FOUND",
         message: `Agent not found: ${agentIdArg}`,
@@ -63,9 +87,13 @@ export async function runReloadCommand(
       throw error;
     }
 
+<<<<<<< HEAD
     // CLI reload is an explicit worker restore action.
     // Account switching and recovery use maintenance requests without this intent.
     const result = await client.refreshAgent(agentId, undefined, { restore: true });
+=======
+    const result = await client.refreshAgent(agent.id);
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
 
     await client.close();
 

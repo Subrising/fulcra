@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import { usagePanelCopy } from "../usage-panel-copy";
 export const en = {
   plugins: {
@@ -17,6 +18,15 @@ export const en = {
     unknownProject: "Project unknown",
     reportsTo: "Reports to {{leader}}",
     unknownAccessibility: "Owning project unknown",
+=======
+import { pluginGallery } from "./plugin-gallery";
+
+export const en = {
+  pluginCombobox: {
+    searching: "Searching…",
+    empty: "No results",
+    failed: "Search failed: {{message}}",
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
   },
   paneFind: {
     connectionFailure: "Could not search this chat. Check the host connection and retry.",
@@ -100,14 +110,23 @@ export const en = {
       close: "Close menu",
     },
     commandCenter: {
-      placeholder: "Search commands, files, workspaces, and agents...",
+      placeholder: "Search workspaces, files, and actions...",
+      placeholderWithoutFiles: "Search workspaces and actions...",
       filePlaceholder: "Search files...",
+      workspacePlaceholder: "Search workspaces...",
+      actionPlaceholder: "Search actions...",
       searchingFiles: "Searching files...",
       noMatches: "No matches",
       actions: "Actions",
       files: "Files",
       workspaces: "Workspaces",
-      agents: "Agents",
+      recentWorkspaces: "Recent workspaces",
+      tabs: {
+        all: "All",
+        workspaces: "Workspaces",
+        files: "Files",
+        actions: "Actions",
+      },
       newAgent: "New agent",
       open: "Open {{name}}",
       openInSidePane: "Open {{name}} in side pane",
@@ -116,6 +135,9 @@ export const en = {
       home: "Home",
       groupByProject: "Group by project",
       groupByStatus: "Group by status",
+      copyBrowserHostName: "Copy browser host name",
+      profileGroupLabel: "Profile",
+      profileSearchKeywords: "profile apply profile agent profile preset",
       modelGroupLabel: "Model",
       modelSearchKeywords: "switch model change model set model select model",
       thinkingGroupLabel: "Thinking",
@@ -275,7 +297,7 @@ export const en = {
     states: {
       notFound: "Agent not found",
       failedToLoad: "Failed to load agent",
-      reconnecting: "Reconnecting to host",
+      reconnecting: "Reconnecting",
       updating: "Updating messages",
       timelineSyncFailed: "Couldn't refresh agent history.",
       timelineSyncRetrying: "Retrying…",
@@ -297,6 +319,7 @@ export const en = {
     archived: {
       callout: "This agent is archived",
       unarchive: "Unarchive",
+      unarchiving: "Unarchiving...",
     },
   },
   sessions: {
@@ -351,10 +374,12 @@ export const en = {
       viewDiagram: "View diagram",
     },
     actions: {
+      copyQuote: "Copy quote",
       copyCode: "Copy code",
       copyTurn: "Copy turn",
       copyMessage: "Copy message",
       forkMenu: "Fork chat from here",
+      turnStats: "Turn stats",
       forkInNewTab: "Fork in a new tab",
       forkInNewWorkspace: "Fork in a new workspace",
       forkUnavailable: "Update the host to use this.",
@@ -384,6 +409,11 @@ export const en = {
       details: "Details",
     },
     dictation: {
+      insecureContext: "Open Paseo over HTTPS or localhost to use the microphone.",
+      unsupported: "Dictation is unavailable in this browser.",
+      noMicrophone: "Connect a microphone and try again.",
+      permissionDenied: "Allow microphone access and try again.",
+      startFailed: "Could not start dictation. Try again.",
       paused: "Microphone interrupted. Waiting to resume…",
       start: "Start voice dictation",
       cancel: "Cancel dictation",
@@ -399,6 +429,25 @@ export const en = {
       next: "Next",
       answerPlaceholder: "Type your answer...",
       otherPlaceholder: "Other...",
+    },
+    backgroundWork: {
+      heartbeat: "Heartbeat",
+      pillOne: "1 background task",
+      pillMany: "{{count}} background tasks",
+      notRunning: "No longer running",
+      dismiss: "Dismiss",
+      stop: "Stop",
+      stopping: "Stopping…",
+      stopError: "Could not confirm stop.",
+      label: "Background",
+      title: "Background work",
+      waiting: "Waiting for background work details",
+      error: "Could not load background work",
+      retry: "Retry",
+      running: "Background work running",
+      shell: "Shell",
+      monitor: "Monitor",
+      other: "Other work",
     },
     todo: {
       title: "Tasks",
@@ -473,8 +522,7 @@ export const en = {
         archivedTitle: "Workspace archived",
         restoreDescription:
           "Restore {{workspaceName}} to return to its agents. Its worktree will use branch {{branch}}.",
-        restoreWithoutBranchDescription:
-          "Restore {{workspaceName}} to return to its agents. A new branch will start from the saved base or the repository default.",
+        restoreWithoutBranchDescription: "Restore {{workspaceName}} to return to its agents.",
         unarchiveDescription: "{{workspaceName}} is archived. Unarchive it to open it again.",
         restoreAction: "Restore",
         unarchiveAction: "Unarchive",
@@ -896,6 +944,8 @@ export const en = {
             "Push isn't available here because this branch is not connected to a remote yet",
           pushBehind: "Push isn't available yet because there are newer changes to bring in first",
           pushNothing: "Push isn't available because there is nothing new to send",
+          pushUpstreamGone:
+            "Push isn't available because the branch this one tracks no longer exists",
           pullAndPushNoRemote:
             "Pull and push isn't available here because this branch is not connected to a remote yet",
           pullAndPushDirty:
@@ -949,6 +999,8 @@ export const en = {
         },
         archiveWarning: {
           title: 'Archive "{{workspaceName}}"?',
+          bulkTitle: "Archive {{count}} workspaces?",
+          bulkWorkspaceReason: "{{workspaceName}}: {{reason}}",
           confirm: "Archive",
           cancel: "Cancel",
           uncommittedChanges: "Uncommitted changes",
@@ -962,6 +1014,9 @@ export const en = {
         },
       },
       diff: {
+        baseBranch: {
+          title: "Change base",
+        },
         openChangesTab: "Open Changes tab",
         openDiffTab: "Open Diff tab",
         closeChangesTab: "Close Changes tab",
@@ -1183,6 +1238,8 @@ export const en = {
     title: "What's new",
     installed: "Installed",
     showMore: "Show more",
+    showAllChanges: "Show all changes",
+    hideAllChanges: "Hide all changes",
     openWebsite: "Full changelog",
     error: {
       title: "Unable to load the changelog",
@@ -1411,6 +1468,14 @@ export const en = {
     },
   },
   sidebar: {
+    view: {
+      failed: "Sidebar view failed to load.",
+      useDefault: "Use default view",
+      readFailed: "Could not load your sidebar view preference.",
+      agentUnavailable: "Agent is no longer available",
+      terminalUnavailable: "Terminal is no longer available",
+      projectUnavailable: "Project is no longer available",
+    },
     statusGroupAccessibility: "{{label}} group",
     statusBucket: {
       needsInput: "Needs input",
@@ -1486,6 +1551,7 @@ export const en = {
       hosts: "Hosts",
       settings: "Settings",
       closeSidebar: "Close sidebar",
+      moreActions: "More actions",
     },
     footer: {
       usage: "Usage",
@@ -1567,6 +1633,7 @@ export const en = {
         rename: "Rename workspace",
         pin: "Pin to top",
         unpin: "Unpin",
+        select: "Select",
         archive: "Archive",
         archiveWorkspace: "Archive workspace",
         hideFromSidebar: "Hide from sidebar",
@@ -1585,6 +1652,10 @@ export const en = {
         submit: "Rename",
         invalidBranchName: "Invalid branch name",
       },
+      selection: {
+        count: "{{count}} selected",
+        exit: "Exit selection",
+      },
       toasts: {
         workspacePathUnavailable: "Workspace path not available",
         pathCopied: "Path copied",
@@ -1592,6 +1663,11 @@ export const en = {
         hostDisconnected: "Host is not connected",
         hideFailed: "Failed to hide workspace",
         archiveFailed: "Failed to archive workspace",
+        archiveMultipleFailed: "Failed to archive {{count}} workspaces",
+        archived: "Workspace archived",
+        archivedCount: "{{count}} workspaces archived",
+        undoArchive: "Undo",
+        undoArchiveFailed: "Couldn't undo the archive",
       },
     },
   },
@@ -1599,8 +1675,9 @@ export const en = {
     title: "New workspace",
     create: "Create",
     isolation: {
-      local: "Local",
+      local: "Project directory",
       worktree: "New worktree",
+      existing: "Existing worktree",
       label: "Isolation",
     },
     fields: {
@@ -1615,12 +1692,17 @@ export const en = {
       createWorktreeFailed: "Failed to create worktree",
       composerStateRequired: "Composer state is required",
       selectModel: "Select a model",
+      branchInProjectDirectory:
+        "{{branch}} is checked out in the project directory. Choose Project directory to work on it, or branch off it.",
+      branchInWorktree:
+        "{{branch}} is checked out in {{path}}. Choose that worktree under Existing worktree, or branch off it.",
     },
     tooltips: {
       project: "Choose the project",
       host: "Choose the host",
       isolation: "Choose the isolation level",
       startingRef: "Choose where to start from",
+      worktree: "Choose the worktree to work in",
       launch: "Choose what to launch",
     },
     refPicker: {
@@ -1628,8 +1710,31 @@ export const en = {
       intoBase: "into {{baseRef}}",
       searching: "Searching...",
       noMatchingRefs: "No matching refs.",
-      searchPlaceholder: "Search branches and PRs",
+      searchBranches: "Search branches",
+      searchPullRequests: "Search pull requests",
+      searchPullRequests_mr: "Search merge requests",
+      branches: "Branches",
+      pullRequests: "Pull requests",
+      pullRequests_mr: "Merge requests",
+      pullRequestsShort: "PRs",
+      pullRequestsShort_mr: "MRs",
+      branchOff: "Branch off",
+      checkout: "Check out",
+      branchOffHint: "Start a new branch from it",
+      checkoutHint: "Work on it directly",
+      base: "Base",
+      from: "from",
+      branch: "Branch",
+      pullRequest: "Pull request",
+      pullRequest_mr: "Merge request",
+      inProjectDirectory: "In project directory",
+      inWorktree: "In a worktree",
       title: "Start from",
+    },
+    worktreePicker: {
+      title: "Worktree",
+      searchPlaceholder: "Search worktrees",
+      empty: "No matching worktrees.",
     },
     launch: {
       title: "What to launch",
@@ -1723,6 +1828,8 @@ export const en = {
       status: {
         checking: "Checking for app updates...",
         installing: "Installing app update...",
+        downloadingVersionProgress: "Downloading {{version}}... {{percent}}%",
+        downloadingProgress: "Downloading app update... {{percent}}%",
         upToDate: "App is up to date.",
         upToDateWithLastChecked: "Up to date. Last checked at {{time}}.",
         pending: "We'll let you know when the update is ready.",
@@ -1731,6 +1838,14 @@ export const en = {
         pendingWithVersion: "Update found: {{version}}. Downloading...",
         pendingWithVersionAndLastChecked:
           "Update found: {{version}}. Downloading... Last checked at {{time}}.",
+        pendingWithVersionProgress: "Update found: {{version}}. Downloading... {{percent}}%",
+        pendingWithVersionProgressAndLastChecked:
+          "Update found: {{version}}. Downloading... {{percent}}% Last checked at {{time}}.",
+        downloadAvailableWithVersion: "Update available: {{version}}",
+        downloadAvailableWithVersionAndLastChecked:
+          "Update available: {{version}}. Last checked at {{time}}.",
+        downloadAvailable: "An app update is available.",
+        downloadAvailableWithLastChecked: "An app update is available. Last checked at {{time}}.",
         availableWithVersion: "Update ready: {{version}}",
         availableWithVersionAndLastChecked: "Update ready: {{version}}. Last checked at {{time}}.",
         available: "An app update is ready to install.",
@@ -1741,14 +1856,21 @@ export const en = {
       },
       installError: "Unable to install the desktop app update.",
       callout: {
+        downloadingTitle: "Downloading update",
         installingTitle: "Installing update",
         failedTitle: "Update failed",
         availableTitle: "Update available",
         genericError: "Something went wrong.",
         whatsNew: "What's new",
+        downloadingAction: "Downloading...",
         installingAction: "Installing...",
+        downloadAndRestart: "Download",
         installAndRestart: "Install & restart",
+        downloadingVersionDescription: "Downloading {{version}}... {{percent}}%",
+        downloadingDescription: "Downloading update... {{percent}}%",
         installingDescription: "Installing and restarting...",
+        versionAvailable: "{{version}} is available to download.",
+        newVersionAvailable: "A new version is available to download.",
         versionReady: "{{version}} is ready to install.",
         newVersionReady: "A new version is ready to install.",
         restartWarning: "Upgrading the app will stop running agents and close terminal sessions.",
@@ -1811,7 +1933,14 @@ export const en = {
     integrations: {
       cli: {
         statusFailed: "Unable to check CLI install status.",
+<<<<<<< HEAD
         installFailed: "Unable to install the Fulcra CLI.",
+=======
+        installFailed: "Unable to install the Paseo CLI.",
+        uninstallFailed: "Unable to uninstall the Paseo CLI.",
+        keptForeign:
+          "Kept a paseo command that Paseo didn't install. Remove it yourself to uninstall it.",
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
       },
     },
   },
@@ -1868,6 +1997,7 @@ export const en = {
     placeholder: "Switch branch...",
     searchPlaceholder: "Filter branches...",
     empty: "No branches found.",
+    failedToLoad: "Could not load branches. Reopen the picker to try again.",
     title: "Switch branch",
     uncommittedTitle: "Uncommitted changes",
     uncommittedMessage: "You have uncommitted changes. Stash them before switching branches?",
@@ -1886,10 +2016,18 @@ export const en = {
     loadingCommands: "Loading commands...",
     noFiles: "No files or directories found",
     noCommands: "No commands found",
+<<<<<<< HEAD
     accountUnavailable:
       "Account commands aren't available for this computer yet. Update Fulcra on {{host}}.",
     thisComputer: "this computer",
     failedToLoad: "Failed to load",
+=======
+    loadingProviderCommands: "Loading {{provider}} commands...",
+    commandsFailed: "Couldn't load commands",
+    providerCommandsFailed: "Couldn't load {{provider}} commands",
+    filesFailed: "Couldn't search files",
+    skillTag: "Skill",
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
     chooseProjectForCommands: "Choose a project to see commands",
     chooseModelForCommands: "Select a model to see commands",
   },
@@ -1927,7 +2065,59 @@ export const en = {
     },
   },
   onboarding: {
+<<<<<<< HEAD
     title: "Welcome to Fulcra",
+=======
+    setup: {
+      title: "Paseo",
+      stepCounter: "Step {{current}} of {{total}}",
+      skip: "Skip setup",
+      continue: "Continue",
+      finish: "Finish",
+      steps: {
+        appearance: {
+          label: "Appearance",
+          title: "Welcome to Paseo",
+          description: "Let's start by picking a look",
+        },
+        providers: {
+          label: "Providers",
+          title: "Your providers",
+          description: "Paseo runs the agent CLIs already on this computer",
+        },
+        projects: {
+          label: "Projects",
+          title: "Add your projects",
+          description: "Where do you want your agents to work on",
+          addProject: "Add project",
+          added: "Added",
+          suggestions: {
+            loading: "Looking for folders you've worked in",
+            empty: "No recent projects found",
+            lastUsed: "Last used {{time}}",
+            addSelected_one: "Add {{count}} project",
+            addSelected_other: "Add {{count}} projects",
+            adding: "Adding…",
+            addFailed: "Couldn't add this folder",
+          },
+        },
+        orchestration: {
+          label: "Orchestration",
+          title: "Let agents use Paseo",
+          description: "Let your agents create workspaces and talk to other agents",
+        },
+        phone: {
+          label: "Mobile",
+          title: "Take your agents with you",
+          description:
+            "The fully featured native mobile app allows you to control any Paseo computer from your phone",
+          appStore: "App Store",
+          googlePlay: "Google Play",
+        },
+      },
+    },
+    title: "Welcome to Paseo",
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
     subtitle: "Connect your computer to get started",
     actions: {
       settings: "Settings",
@@ -1946,11 +2136,15 @@ export const en = {
     defaultModel: "Default",
     profiles: "Profiles",
     providers: "Providers",
+    models: "Models",
     model: "Model",
     editProfiles: "Edit",
     editProfilesLabel: "Edit agent profiles",
     createProfile: "Create profile",
     createProfileFromModel: "Create profile from this model",
+    profileSaved: 'Saved "{{name}}"',
+    undo: "Undo",
+    undoProfileSave: "Undo saving profile",
     editProfileLabel: "Edit {{name}}",
     editProfilesCount: "Edit profiles ({{count}})",
     modelCount: "{{count}} model",
@@ -1999,6 +2193,34 @@ export const en = {
       noModelAvailable: "No model is available for the selected provider",
       workspaceDirectoryNotFound: "Workspace directory not found",
       hostDisconnected: "Host is not connected",
+    },
+  },
+  devices: {
+    title: "Devices",
+    waysToConnect: "Ways to connect",
+    docs: "Docs",
+    docsAccessibility: "Open connectivity documentation",
+    relay: { title: "Relay", hint: "No setup, end-to-end encrypted, scan a QR code" },
+    tailscale: {
+      hint: "Direct over your tailnet, enter an address",
+      unavailable: "Tailscale is not running on this host",
+      install: "Get Tailscale",
+      refresh: "Refresh",
+      refreshing: "Refreshing...",
+      waiting: "Waiting for Tailscale to start on this host",
+      alwaysOn: "Always on, because this host already accepts Tailscale connections",
+      socket: "Off, because this host listens on a local socket",
+      launch: "Controlled by the command that starts this host",
+      update: "Update this host to use Tailscale",
+      updateDocs: "How to update",
+      address: "On a phone with Tailscale, add a host at this address",
+      statusError: "Could not check Tailscale",
+      turnOnError: "Could not turn on Tailscale",
+      turnOffError: "Could not turn off Tailscale",
+      confirmTitle: "Turn off Tailscale?",
+      confirmMessage:
+        "This device is connected through Tailscale and will lose its connection to the host.",
+      confirmAction: "Turn off",
     },
   },
   pairing: {
@@ -2201,7 +2423,13 @@ export const en = {
       notNow: "Not now",
       directConnectionHint:
         "Without relay, connect directly over TCP, Tailscale, or another VPN. No QR code is created.",
+<<<<<<< HEAD
       updateRequired: "Update the host to enable relay from Fulcra Desktop.",
+=======
+      tailscaleDocs: "Set up Tailscale",
+      tailscaleDocsAccessibility: "Read how to connect over Tailscale",
+      updateRequired: "Update the host to enable relay from Paseo Desktop.",
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
       unavailable: "Pairing offer unavailable.",
       hint: "Scan this QR code with Fulcra on your phone, or copy the link below.",
       securityWarning:
@@ -2247,6 +2475,7 @@ export const en = {
     hostUnavailable: "Download host is unavailable.",
     cancelled: "Download was cancelled.",
     failed: "Failed to download file.",
+    httpFailed: "Failed to download file (HTTP {{status}}).",
     shareFile: "Share file",
     shareFileNamed: "Share {{fileName}}",
   },
@@ -2750,6 +2979,7 @@ export const en = {
     turnOn: "Turn on",
 
     options: "Settings",
+    host: "Host",
     refreshFailed: "Unable to refresh usage",
     noHosts: "No connected hosts",
     agentError: "Unable to load usage: {{reason}}",
@@ -2766,6 +2996,12 @@ export const en = {
     loginExpired: "Login expired {{relativeTime}}. {{remedy}}",
     title: "Plan usage",
     refresh: "Refresh",
+    reorderCard: "Reorder {{source}}",
+    sources: "Sources",
+    sourcesCount: "{{shown}} of {{total}}",
+    providerInactive: "Provider inactive",
+    allSourcesHidden: "No usage sources shown",
+    chooseSources: "Choose sources",
     refreshAll: "Refresh all",
     refreshing: "Refreshing...",
     loading: "Loading usage...",
@@ -2806,8 +3042,9 @@ export const en = {
       resetsIn: "resets in {{duration}}",
       resetsAtWeekday: "{{weekday}} {{time}}",
       resetsAtDate: "{{date}}, {{time}}",
-      runsOutNow: "runs out now",
-      runsOutIn: "runs out in {{duration}}",
+      limitReached: "Limit reached",
+      mayHaveRunOut: "May have run out",
+      runsOutAt: "runs out {{time}}",
       justNow: "just now",
       daysAgo: "{{value}}d ago",
       hoursAgo: "{{value}}h ago",
@@ -2819,7 +3056,7 @@ export const en = {
     title: "Settings",
     loading: "Loading settings...",
     groups: {
-      app: "App",
+      app: "This device",
       host: "Host",
     },
     menu: {
@@ -2902,7 +3139,9 @@ export const en = {
     groupInfo: "About {{title}}",
     sections: {
       general: "General",
+      hosts: "Hosts",
       chat: "Chat",
+      chatAndPanes: "Chat & panes",
       appearance: "Appearance",
       sidebar: "Sidebar",
       editor: "Editor",
@@ -2916,6 +3155,16 @@ export const en = {
       diagnostics: "Diagnostics",
       about: "About",
       licenses: "Licenses",
+    },
+    clientHosts: {
+      title: "Saved hosts",
+      info: "Hosts this device connects to. Names, icons, badges, and routes here only affect this device.",
+      backToHosts: "Back to hosts",
+      routesTitle: "How this device connects",
+      routesInfo:
+        "Saved routes this device uses to reach this host. Paseo picks the fastest available route.",
+      addRoute: "Add route",
+      activeRoute: "Active",
     },
     layout: {
       openInSidePane: {
@@ -2993,6 +3242,8 @@ export const en = {
       projects: "Projects",
       connections: "Connections",
       agents: "Agents",
+      tools: "Tools & prompts",
+      agentProfiles: "Agent profiles",
       metadata: "Metadata",
       voice: "Voice",
       workspaces: "Workspaces",
@@ -3001,8 +3252,10 @@ export const en = {
       terminals: "Terminals",
       plugins: "Plugins",
       host: "Overview",
+      daemon: "Daemon",
     },
     plugins: {
+      gallery: pluginGallery.en,
       title: "Plugins",
       screens: {
         open: "Open",
@@ -3023,7 +3276,7 @@ export const en = {
       installing: "Installing…",
       logs: {
         action: "Logs",
-        title: "Logs: {{id}}",
+        title: "Logs: {{name}}",
         loading: "Loading logs…",
         refresh: "Refresh",
         refreshing: "Refreshing…",
@@ -3032,28 +3285,30 @@ export const en = {
       },
       status: { running: "running", disabled: "disabled", failed: "failed" },
       actions: {
-        menu: "Actions for {{id}}",
+        menu: "Actions for {{name}}",
+        settings: "Settings",
         reload: "Reload",
         reloading: "Reloading…",
         enable: "Enable",
         enabling: "Enabling…",
         disable: "Disable",
         disabling: "Disabling…",
-        remove: "Remove",
-        removing: "Removing…",
+        remove: "Uninstall",
+        removing: "Uninstalling…",
       },
       feedback: {
-        installed: "Installed {{id}}",
-        reload: "Reloaded {{id}}",
-        enable: "Enabled {{id}}",
-        disable: "Disabled {{id}}",
-        remove: "Removed {{id}}",
-        kept: "Kept {{id}}",
+        installed: "Installed {{name}}",
+        reload: "Reloaded {{name}}",
+        enable: "Enabled {{name}}",
+        disable: "Disabled {{name}}",
+        remove: "Uninstalled {{name}}",
+        kept: "Kept {{name}}",
         globalEnabled: "Plugins enabled",
         globalDisabled: "Plugins disabled",
       },
-      removeConfirmTitle: "Remove {{id}}?",
-      removeConfirmMessage: "This removes the configuration. The source directory is not deleted.",
+      removeConfirmTitle: "Uninstall {{name}}?",
+      removeConfirmMessage: "Its download and settings on this host are deleted.",
+      removeConfirmLocalMessage: "Its settings are deleted. Its folder stays on disk.",
       states: {
         offlineTitle: "Plugin host is offline",
         offlineDescription: "Reconnect to this host to manage its plugins.",
@@ -3146,6 +3401,11 @@ export const en = {
     general: {
       title: "General",
       sending: "Sending",
+      setup: {
+        label: "First-run setup",
+        description: "Walk through appearance, providers, projects and phone pairing again",
+        action: "Show setup again",
+      },
       browserData: {
         title: "Browser data",
         siteData: "Cookies and site data",
@@ -3272,9 +3532,28 @@ export const en = {
         stable: "Stable",
         beta: "Beta",
       },
+      autoUpdate: {
+        label: "Automatic updates",
+        options: {
+          automatic: "Auto",
+          notify: "Notify",
+          off: "Off",
+        },
+        descriptions: {
+          automatic: "Check and download updates in the background",
+          notify: "Check for updates, but only download when you choose",
+          off: "Never check automatically. Only check when you click Check",
+        },
+      },
       updates: {
         label: "App updates",
         readyToInstall: "Ready to install: {{version}}",
+        downloadTitle: "Download desktop update",
+        downloadMessage: "This downloads and installs the Paseo update on this computer",
+        downloadConfirm: "Download & install",
+        download: "Download",
+        downloadTo: "Download {{version}}",
+        downloading: "Downloading...",
         installTitle: "Install desktop update",
         installMessage: "This updates Fulcra on this computer",
         installConfirm: "Install update",
@@ -3310,6 +3589,12 @@ export const en = {
         description: "Show an outline for jumping between prompts",
       },
       sidebar: {
+        view: {
+          title: "Sidebar view",
+          label: "View",
+          default: "Default view",
+          unavailable: "The selected view is unavailable or disabled. Showing Default view.",
+        },
         header: {
           title: "Header",
           description: "Choose which items appear at the top of the sidebar and in what order",
@@ -3345,10 +3630,11 @@ export const en = {
       layout: {
         title: "Layout",
         contentWidth: "Content width",
-        contentWidthHint: "Max width of chat and Markdown files on wide screens",
-        contentWidthAccessibility: "Content width in pixels",
-        reset: "Reset",
-        resetAccessibility: "Reset content width to default",
+        contentWidthHint: "Width of chat, composer, and Markdown previews",
+        contentWidthDefault: "Default",
+        contentWidthWide: "Wide",
+        contentWidthFull: "Full",
+        contentWidthCustom: "Custom width · {{width}} px",
       },
       syntax: {
         title: "Syntax",
@@ -3418,6 +3704,8 @@ export const en = {
         toggleFocusMode: "Toggle focus mode",
         cycleTheme: "Cycle theme",
         focusMessageInput: "Focus message input",
+        toggleModelPicker: "Toggle model picker",
+        cycleEffort: "Cycle effort",
         cycleAgentMode: "Cycle agent mode",
         toggleVoiceMode: "Toggle voice mode",
         startStopDictation: "Start/stop dictation",
@@ -3440,11 +3728,7 @@ export const en = {
       commandLine: {
         title: "Command line",
         description: "Control and script agents from your terminal",
-      },
-      actions: {
-        install: "Install",
-        installing: "Installing...",
-        installed: "Installed",
+        accessibilityLabel: "Install the Paseo CLI",
       },
     },
     permissions: {
@@ -3467,6 +3751,23 @@ export const en = {
         title: "Appearance",
         name: {
           label: "Name",
+        },
+        icon: {
+          label: "Icon",
+          accessibilityLabel: "Icon, {{value}}",
+          auto: "Auto",
+          autoDetected: "Auto ({{icon}})",
+          options: {
+            server: "Server",
+            laptop: "Laptop",
+            desktop: "Desktop",
+            mini: "Mini",
+            workstation: "Workstation",
+            cloud: "Cloud",
+            container: "Container",
+            board: "Single-board PC",
+            terminal: "Terminal",
+          },
         },
         color: {
           label: "Color",
@@ -3504,6 +3805,14 @@ export const en = {
         local: "Local",
         remoteSsh: "Remote SSH",
       },
+      connectionKinds: {
+        local: "Local",
+        relay: "Relay",
+        tailscale: "Tailscale",
+        ssh: "SSH",
+        direct: "Direct",
+        routed: "Via",
+      },
       connections: {
         title: "Connections",
         removeTitle: "Remove connection",
@@ -3514,14 +3823,12 @@ export const en = {
         timeout: "Timeout",
       },
       pairDevices: {
-        title: "Pair devices",
         rowTitle: "Pair a device",
-        rowHint: "Scan a QR code or copy a link to connect your phone to this host",
       },
       skills: {
-        sectionTitle: "Orchestration skills",
-        title: "Orchestration skills",
-        description: "Teach your agents to orchestrate through the CLI",
+        sectionTitle: "Skills",
+        title: "Paseo skills",
+        description: "Install bundled help, plugin, and orchestration skills",
         docs: "Skills",
         openDocs: "Open skills documentation",
         unavailable: "Connect to this host to manage orchestration skills",
@@ -3531,11 +3838,18 @@ export const en = {
         uninstallFailed: "Unable to uninstall orchestration skills.",
         saveSelectionFailed: "Unable to save the orchestration skills selection.",
         updateAvailable: "Update available",
+<<<<<<< HEAD
         updateTitle: "Update Fulcra skills?",
         updateFallback: "Sync bundled skills to this host.",
         uninstallTitle: "Uninstall Fulcra skills?",
         uninstallMessage:
           "Removes all Fulcra orchestration skills from ~/.agents, ~/.claude, ~/.codex on this host.",
+=======
+        updateTitle: "Update Paseo skills?",
+        uninstallTitle: "Uninstall Paseo skills?",
+        uninstallMessage:
+          "Removes all Paseo orchestration skills from ~/.agents, ~/.claude, ~/.codex, and ~/.gemini/config on this host.",
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
         choose: "Choose skills",
         chooseAll: "All skills",
         chooseAllHint: "Keep every bundled skill installed, including ones added later.",
@@ -3543,12 +3857,9 @@ export const en = {
         chooseEmpty: "This host bundles no skills.",
         removeTitle: "Remove deselected skills?",
         removeMessage:
-          "{{skills}} will be deleted from ~/.agents, ~/.claude, and ~/.codex on this host. Anything you added inside those skill folders is deleted too.",
+          "{{skills}} will be deleted from ~/.agents, ~/.claude, ~/.codex, and ~/.gemini/config on this host. Anything you added inside those skill folders is deleted too.",
         saveFailed: "Could not save your skill selection.",
         actions: {
-          install: "Install",
-          installing: "Installing...",
-          installed: "Installed",
           update: "Update",
           working: "Working...",
           remove: "Remove",
@@ -3563,13 +3874,22 @@ export const en = {
           delete: "Delete skill",
         },
       },
+      tools: {
+        instructionsTitle: "Instructions",
+        toolsTitle: "Agent tools",
+      },
       orchestration: {
         title: "Orchestration",
         unavailable: "Connect to this host to manage orchestration",
         enableTools: {
           title: "Enable Fulcra tools",
           hint: "Agents will be able to manage worktrees, agents and schedules",
+<<<<<<< HEAD
           accessibilityLabel: "Inject Fulcra tools",
+=======
+          accessibilityLabel: "Inject Paseo tools",
+          updateFailed: "Unable to update Paseo tools.",
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
         },
         systemPrompt: {
           title: "System prompt",
@@ -3653,7 +3973,7 @@ export const en = {
         featureCountOne: "{{count}} feature",
         notesLabel: "When to use",
         notesPlaceholder: "Use for UI work — components, layout and design tokens.",
-        notesHint: "Helps agents choose this profile when starting another agent.",
+        notesHint: "Tells agents when to pick this profile",
         save: "Save",
         saving: "Saving...",
         remove: "Remove",
@@ -3661,8 +3981,34 @@ export const en = {
         removeConfirmMessage: 'Remove "{{name}}"?',
         moveUp: "Move up",
         moveDown: "Move down",
+        searchPlaceholder: "Search profiles",
+        clearSearch: "Clear search",
+        noSearchMatches: 'No profiles match "{{query}}"',
+        noRoutingNote: "No note",
+        duplicate: "Duplicate",
+        copyName: "{{name}} (copy)",
+        moveToTop: "Move to top",
+        profileActions: "Actions for {{name}}",
+        reorderProfile: "Reorder {{name}}",
+        previousProfile: "Previous profile",
+        nextProfile: "Next profile",
+        chooseModelPlaceholder: "Select a model",
+        searchModelsPlaceholder: "Search models",
+        chooseModelSubtitle: "Select a model",
+        customizeSettings: "Customize settings",
+        addRoutingNoteShort: "Add a note",
+        providerOptionsLabel: "{{provider}} options",
+        discardTitle: "Discard changes?",
+        discardMessage: "You have unsaved changes to this profile.",
+        discardConfirm: "Discard",
+        columns: {
+          profile: "Profile",
+          runtime: "Model & runtime",
+          whenToUse: "When to use",
+        },
       },
       daemon: {
+        runtimeTitle: "Agent runtime",
         rename: {
           editLabel: "Edit label",
           title: "Rename host",
@@ -3740,7 +4086,27 @@ export const en = {
     providers: {
       title: "Providers",
       addProvider: "Add provider",
+<<<<<<< HEAD
       refreshModels: "Refresh models",
+=======
+      list: {
+        add: "Provider",
+        updatingTo: "Updating to {{version}}...",
+      },
+      detail: {
+        backToProviders: "Back to providers",
+        notOnHost: "This provider isn't on this host",
+        enabled: "Enabled",
+        unavailableTitle: "{{name}} isn't available",
+        troubleshooting: "Troubleshooting",
+        status: "Provider status",
+        checked: "Checked {{time}}",
+        diagnosticReport: "Diagnostic report",
+        docs: "Docs",
+        dangerZone: "Danger zone",
+        removeHint: "Deletes this provider from config.json",
+      },
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
       providerDetails: "{{name}} provider details",
       enableProvider: "Enable {{name}}",
       unavailable: "Connect to this host to see providers",
@@ -3782,9 +4148,30 @@ export const en = {
         retrying: "Retrying...",
         noSearchMatches: "No models match your search",
         noneDetected: "No models detected",
-        discovered: "Discovered",
+        noCustom: "No custom models",
+        title: "Models",
         custom: "Custom models",
         updated: "Updated {{time}}",
+      },
+      installation: {
+        title: "Installation",
+        version: "Version",
+        installed: "Installed",
+        notInstalled: "Not installed",
+        install: "Install",
+        checking: "Checking...",
+        failed: "Couldn't check this installation",
+        updates: "Updates",
+        upToDate: "Up to date",
+        updateAvailable: "Update available",
+        updateInstructions: "Update instructions",
+        update: "Update",
+        updating: "Updating...",
+        updated: "Updated",
+        updateFailed: "Update failed",
+        outputTruncated: "Earlier output was dropped.",
+        updatesFailed: "Couldn't check for updates",
+        installInstructions: "Install instructions",
       },
       diagnostic: {
         title: "Diagnostic",

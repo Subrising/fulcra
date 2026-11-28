@@ -12,6 +12,7 @@ import {
   submitGitCommandTrace,
 } from "./git-command-trace.js";
 import {
+<<<<<<< HEAD
   spawnGitProcess,
   isGitChildLimitError,
   waitForGitChildSlot,
@@ -19,6 +20,13 @@ import {
   withGitFetchPolicy,
 } from "@getpaseo/plugin/server/git";
 import { createExternalCommandProcessEnv } from "../server/paseo-env.js";
+=======
+  readRepositoryRootGitDir,
+  readSafeBareRepositorySupport,
+  resolveGitDiscovery,
+} from "./git-repository-discovery.js";
+import { spawnProcess } from "./spawn.js";
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
 import {
   GitProcessScheduler,
   type GitProcessPriority,
@@ -27,7 +35,7 @@ import {
 } from "./git-process-scheduler.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const DEFAULT_MAX_OUTPUT_BYTES = 20 * 1024 * 1024; // 20MB
+export const DEFAULT_MAX_OUTPUT_BYTES = 20 * 1024 * 1024; // 20MB
 const DEFAULT_STDERR_LIMIT = 2048;
 
 let gitProcessScheduler = new GitProcessScheduler(resolveGitProcessPolicy({ env: process.env }));
@@ -95,8 +103,17 @@ export type RunGitCommand = (
   options: GitCommandOptions,
 ) => Promise<GitCommandResult>;
 
-export function createRunGitCommand(provenance: string): RunGitCommand {
-  return (args, options) => runGitCommandWithProvenance(args, options, provenance);
+export interface GitCommandRunnerOptions {
+  /** Overrides the ambient `runWithGitCommandPriority` lane for every command this runner starts. */
+  priority?: GitProcessPriority;
+}
+
+export function createRunGitCommand(
+  provenance: string,
+  runnerOptions: GitCommandRunnerOptions = {},
+): RunGitCommand {
+  return (args, options) =>
+    executeGitCommand(args, options, decodeUtf8, { provenance, priority: runnerOptions.priority });
 }
 
 export interface GitCommandMetric {
@@ -125,6 +142,7 @@ export interface GitCommandMetricsSnapshot {
 export interface GitCommandSubmissionMetric {
   args: string[];
   cwd: string;
+  priority: GitProcessPriority;
 }
 
 interface GitCommandMetricsState {
@@ -216,8 +234,8 @@ function snapshotGitCommandMetricsState(state: GitCommandMetricsState): GitComma
   return {
     commands: [...state.commands],
     submissions: state.submissions.map((submission) => ({
+      ...submission,
       args: [...submission.args],
-      cwd: submission.cwd,
     })),
     submitted: state.submitted,
     started: state.started,
@@ -237,12 +255,16 @@ export function snapshotGitCommandRuntimeMetrics(): GitCommandRuntimeMetricsSnap
   });
 }
 
-function submitGitCommandMetric(args: string[], cwd: string): GitCommandMetricsState | null {
+function submitGitCommandMetric(
+  args: string[],
+  cwd: string,
+  priority: GitProcessPriority,
+): GitCommandMetricsState | null {
   const state = gitCommandMetricsState;
   if (!state) {
     return null;
   }
-  state.submissions.push({ args: [...args], cwd });
+  state.submissions.push({ args: [...args], cwd, priority });
   state.submitted += 1;
   state.lastSubmittedAtMs = Date.now();
   return state;
@@ -286,6 +308,7 @@ function getEnvOverlayKeys(envOverlay: ProcessEnvRecord | undefined): string[] {
   return Object.keys(envOverlay ?? {}).sort();
 }
 
+<<<<<<< HEAD
 function runGitCommandWithProvenance(
   args: string[],
   options: GitCommandOptions,
@@ -307,6 +330,15 @@ function runGitCommandWithProvenance(
     options.input,
     options.allowFetchRefFallback,
   );
+=======
+function decodeUtf8(output: Buffer): string {
+  return output.toString("utf8");
+}
+
+interface GitCommandSubmission {
+  provenance?: string;
+  priority?: GitProcessPriority;
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
 }
 
 /** Binary stdout preserves cat-file byte framing before text decoding. */
@@ -314,6 +346,7 @@ export function runGitCommandBytes(
   args: string[],
   options: GitCommandOptions,
 ): Promise<GitCommandResult<Buffer>> {
+<<<<<<< HEAD
   return withGitFetchPolicy(
     options.cwd,
     args,
@@ -322,19 +355,26 @@ export function runGitCommandBytes(
     options.input,
     options.allowFetchRefFallback,
   );
+=======
+  return executeGitCommand(args, options, (output) => output, {});
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
 }
 
 function executeGitCommand<Output>(
   args: string[],
   options: GitCommandOptions,
   decode: (output: Buffer) => Output,
-  provenance?: string,
+  submission: GitCommandSubmission,
 ): Promise<GitCommandResult<Output>> {
-  const metricsState = submitGitCommandMetric(args, options.cwd);
+  const priority = submission.priority ?? gitCommandPriority.getStore() ?? "normal";
+  // Read at submission: the scheduler may start the process from another async context.
+  const repositoryRootGitDir = readRepositoryRootGitDir(options.cwd);
+  const metricsState = submitGitCommandMetric(args, options.cwd, priority);
   const commandTrace = submitGitCommandTrace(args, options.cwd, {
     active: gitProcessScheduler.activeCount,
     pending: gitProcessScheduler.pendingCount,
   });
+<<<<<<< HEAD
   const runtimeMetric = gitRuntimeMetrics.submit(getGitOperation(args), provenance);
   const submittedAt = Date.now();
   const warningScheduler = gitProcessScheduler;
@@ -355,6 +395,10 @@ function executeGitCommand<Output>(
   }, 60_000);
   queueWarning.unref?.();
   const startCommand = () => {
+=======
+  const runtimeMetric = gitRuntimeMetrics.submit(getGitOperation(args), submission.provenance);
+  const spawnCommand = (launch: GitLaunch) => {
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
     let releaseProcessSlot!: () => void;
     const exited = new Promise<void>((resolve) => {
       releaseProcessSlot = resolve;
@@ -369,6 +413,7 @@ function executeGitCommand<Output>(
       const maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
       const acceptExitCodes = options.acceptExitCodes ?? [0];
       const command = formatGitCommand(args);
+<<<<<<< HEAD
       const envOverlay = { ...mergeEnvOverlays(options.env, options.envOverlay) };
       if (process.platform !== "win32") {
         // GUI relaunches can supply only the app's bundled bin directory.
@@ -377,6 +422,12 @@ function executeGitCommand<Output>(
           .filter(Boolean)
           .join(":");
       }
+=======
+      const envOverlay = mergeEnvOverlays(
+        mergeEnvOverlays(options.env, options.envOverlay),
+        launch.envOverlay,
+      );
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
       const startedAt = Date.now();
       beginGitCommandMetric(metricsState);
       const logger = typeof options.logger?.trace === "function" ? options.logger : undefined;
@@ -464,6 +515,7 @@ function executeGitCommand<Output>(
         settle(() => reject(processError));
       };
 
+<<<<<<< HEAD
       const stopChild = () => {
         void terminateGitProcess(child).catch((cleanupError) => {
           processError = cleanupError;
@@ -479,6 +531,83 @@ function executeGitCommand<Output>(
           options.beforeSpawn?.();
           child = spawnGitProcess(
             ["-c", "core.quotepath=false", "-c", "core.fsmonitor=false", ...args],
+=======
+      let child: ReturnType<typeof spawnProcess>;
+      try {
+        child = spawnProcess("git", [...launch.configArgs, ...args], {
+          cwd: options.cwd,
+          envOverlay,
+          shell: false,
+          stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+        });
+        spawnGitCommandTrace(commandTrace, child.pid);
+      } catch (error) {
+        rejectSpawnFailure(error);
+        return;
+      }
+
+      const stdout = child.stdout;
+      const stderr = child.stderr;
+      if (!stdout || !stderr) {
+        child.kill("SIGKILL");
+        rejectSpawnFailure(new Error("Git process did not expose piped stdout and stderr"));
+        return;
+      }
+
+      timer = setTimeout(() => {
+        timeoutError = new Error(`Git command timed out after ${timeout}ms: ${command}`);
+        child.kill("SIGKILL");
+        settle(() => reject(timeoutError));
+        if (processExit) {
+          settleTimeoutTrace(processExit.exitCode, processExit.signal);
+        }
+      }, timeout);
+
+      stdout.on("data", (chunk: Buffer | string) => {
+        if (settled || truncated) return;
+
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        const remainingBytes = maxOutputBytes - stdoutBytes;
+
+        if (remainingBytes <= 0) {
+          truncated = true;
+          child.kill("SIGKILL");
+          return;
+        }
+
+        if (buffer.length > remainingBytes) {
+          stdoutChunks.push(buffer.subarray(0, remainingBytes));
+          stdoutBytes += remainingBytes;
+          truncated = true;
+          child.kill("SIGKILL");
+          return;
+        }
+
+        stdoutChunks.push(buffer);
+        stdoutBytes += buffer.length;
+      });
+
+      stderr.on("data", (chunk: Buffer | string) => {
+        if (settled || stderrBytes >= DEFAULT_STDERR_LIMIT) return;
+
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        const remainingBytes = DEFAULT_STDERR_LIMIT - stderrBytes;
+
+        if (buffer.length > remainingBytes) {
+          stderrChunks.push(buffer.subarray(0, remainingBytes));
+          stderrBytes += remainingBytes;
+          return;
+        }
+
+        stderrChunks.push(buffer);
+        stderrBytes += buffer.length;
+      });
+
+      child.on("error", (error) => {
+        processError = error;
+        if (logger && traceContext) {
+          logger.trace(
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
             {
               cwd: options.cwd,
               env: createExternalCommandProcessEnv("git", process.env, envOverlay),
@@ -659,9 +788,16 @@ function executeGitCommand<Output>(
     });
     return { result: resultPromise, exited };
   };
-  const promise = gitProcessScheduler.run(startCommand, {
-    priority: gitCommandPriority.getStore() ?? "normal",
-  });
+  // The process slot stays held through the launch lookup because `exited`
+  // settles only after the spawned process exits. `resolveGitLaunch` never rejects.
+  const startCommand = () => {
+    const spawned = resolveGitLaunch(options, repositoryRootGitDir).then(spawnCommand);
+    return {
+      result: spawned.then((scheduled) => scheduled.result),
+      exited: spawned.then((scheduled) => scheduled.exited),
+    };
+  };
+  const promise = gitProcessScheduler.run(startCommand, { priority });
   gitRuntimeMetrics.observeLimiter(
     gitProcessScheduler.activeCount,
     gitProcessScheduler.pendingCount,
@@ -669,7 +805,38 @@ function executeGitCommand<Output>(
   return promise.finally(() => clearTimeout(queueWarning));
 }
 
-export const runGitCommand: RunGitCommand = runGitCommandWithProvenance;
+interface GitLaunch {
+  configArgs: string[];
+  envOverlay: ProcessEnvRecord;
+}
+
+// `core.quotepath=false` makes git emit raw UTF-8 paths instead of
+// octal-escaping non-ASCII bytes (e.g. `测试文件.txt` vs `"\346\265\213..."`).
+// `core.fsmonitor=false` prevents repository config from launching a command.
+async function resolveGitLaunch(
+  options: GitCommandOptions,
+  repositoryRootGitDir: string | null,
+): Promise<GitLaunch> {
+  const discovery = await resolveGitDiscovery({
+    cwd: options.cwd,
+    repositoryRootGitDir,
+    gitDirSet: Boolean(options.envOverlay?.GIT_DIR ?? options.env?.GIT_DIR ?? process.env.GIT_DIR),
+    safeBareRepositorySupported: await readSafeBareRepositorySupport(),
+  });
+  return {
+    configArgs: [
+      "-c",
+      "core.quotepath=false",
+      "-c",
+      "core.fsmonitor=false",
+      ...discovery.configArgs,
+    ],
+    envOverlay: discovery.envOverlay,
+  };
+}
+
+export const runGitCommand: RunGitCommand = (args, options) =>
+  executeGitCommand(args, options, decodeUtf8, {});
 
 function formatGitCommand(args: string[]): string {
   return ["git", ...args].join(" ");

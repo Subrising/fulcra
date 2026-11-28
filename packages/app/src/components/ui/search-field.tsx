@@ -27,6 +27,8 @@ export interface SearchFieldProps {
   /** Falls back to `placeholder`, which already names the field. */
   accessibilityLabel?: string;
   clearAccessibilityLabel: string;
+  /** Fill the container, for a search that heads one list. Defaults to the filter rail's width. */
+  fullWidth?: boolean;
   testID?: string;
   clearTestID?: string;
 }
@@ -44,6 +46,7 @@ export function SearchField({
   placeholder,
   accessibilityLabel,
   clearAccessibilityLabel,
+  fullWidth = false,
   testID,
   clearTestID,
 }: SearchFieldProps): ReactElement {
@@ -62,12 +65,16 @@ export function SearchField({
 
   return (
     <View
+<<<<<<< HEAD
       style={[
         styles.field,
         touch && styles.touchField,
         isCompact && styles.compactField,
         isFocused && styles.fieldFocused,
       ]}
+=======
+      style={[styles.field, fullWidth && styles.fieldFullWidth, isFocused && styles.fieldFocused]}
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
     >
       <ThemedSearch size={14} uniProps={mutedColorMapping} />
       <ThemedTextInput
@@ -117,10 +124,16 @@ const styles = StyleSheet.create((theme) => ({
     borderWidth: theme.borderWidth[1],
     borderColor: theme.colors.border,
   },
+<<<<<<< HEAD
   touchField: { paddingVertical: 0 },
   // A phone search field spans its row, also when the phone is held sideways.
   compactField: { maxWidth: "100%" },
   clear: { alignItems: "center", justifyContent: "center" },
+=======
+  fieldFullWidth: {
+    maxWidth: "100%",
+  },
+>>>>>>> refs/remotes/upstream/tags/v0.17.6
   fieldFocused: {
     borderColor: theme.colors.borderAccent,
     backgroundColor: theme.colors.surface2,
