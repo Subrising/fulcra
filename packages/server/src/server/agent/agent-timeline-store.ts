@@ -91,8 +91,14 @@ export class InMemoryAgentTimelineStore {
     return this.requireState(agentId).epoch;
   }
 
+<<<<<<< HEAD
   getNextSeq(agentId: string): number {
     return this.requireState(agentId).nextSeq;
+=======
+  getHead(agentId: string): { epoch: string; seq: number } {
+    const state = this.requireState(agentId);
+    return { epoch: state.epoch, seq: state.nextSeq - 1 };
+>>>>>>> refs/remotes/upstream/tags/v0.17.0
   }
 
   fetch(agentId: string, options?: AgentTimelineFetchOptions): AgentTimelineFetchResult {

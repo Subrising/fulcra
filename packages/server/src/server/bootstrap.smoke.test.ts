@@ -729,11 +729,11 @@ describe("paseo daemon bootstrap", () => {
 
   test("rolls back standalone listener without starting plugins when main listen fails", async () => {
     const mainPort = await findFreePort();
-    const standalonePort = await findFreePort();
     const occupiedMain = http.createServer((_req, res) => {
       res.end("occupied-main");
     });
     await new Promise<void>((resolve) => occupiedMain.listen(mainPort, "127.0.0.1", resolve));
+    const standalonePort = await findFreePort();
 
     const paseoHomeRoot = await mkdtemp(path.join(os.tmpdir(), "paseo-main-rollback-"));
     const paseoHome = path.join(paseoHomeRoot, ".paseo");
@@ -1133,6 +1133,7 @@ function probeWebSocketConnection(
   });
 }
 
+<<<<<<< HEAD
 test.each([0, 1250])(
   "agent MCP creates an ordinary caller's worker and returns a clear workspace path error (notice handoff delay: %i ms)",
   async (noticeDelayMs) => {
@@ -1141,6 +1142,98 @@ test.each([0, 1250])(
     const base = createTestAgentClient("codex", {
       supportsMcpServers: true,
       onStartTurn: (prompt) => prompts.push(prompt),
+=======
+test("disabled recovery closes stale active records without resuming sessions", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "paseo-stale-status-"));
+  const logger = pino({ level: "silent" });
+  const storagePath = path.join(root, ".paseo", "agents");
+  const storage = new AgentStorage(storagePath, logger);
+  const timestamp = "2025-01-01T00:00:00.000Z";
+  const registryDir = path.join(root, ".paseo", "projects");
+  await new FileBackedProjectRegistry(path.join(registryDir, "projects.json"), logger).upsert(
+    createPersistedProjectRecord({
+      projectId: "existing-project",
+      rootPath: root,
+      kind: "non_git",
+      displayName: "Existing",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }),
+  );
+  await new FileBackedWorkspaceRegistry(path.join(registryDir, "workspaces.json"), logger).upsert(
+    createPersistedWorkspaceRecord({
+      workspaceId: "existing-workspace",
+      projectId: "existing-project",
+      cwd: root,
+      kind: "directory",
+      displayName: "Existing",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }),
+  );
+  const records: StoredAgentRecord[] = ["running", "initializing", "idle", "error", "closed"].map(
+    (status, index) => ({
+      id: randomUUID(),
+      workspaceId: "existing-workspace",
+      provider: "codex",
+      cwd: root,
+      createdAt: "2025-01-01T00:00:00.000Z",
+      updatedAt: "2025-01-02T00:00:00.000Z",
+      lastActivityAt: "2025-01-02T00:00:00.000Z",
+      lastStatus: status as StoredAgentRecord["lastStatus"],
+      title: `Keep ${status}`,
+      labels: { "paseo.parent-agent-id": "parent", custom: "keep" },
+      metadata: {},
+      persistence: { provider: "codex", sessionId: `session-${index}` },
+      config: { modeId: "full-access" },
+      requiresAttention: true,
+      attentionReason: "permission",
+      attentionTimestamp: "2025-01-02T00:00:00.000Z",
+      archivedAt: index === 1 ? "2025-01-03T00:00:00.000Z" : null,
+    }),
+  );
+  for (const record of records) await storage.upsert(record);
+  let sessionsCreated = 0;
+  const handle = await createTestPaseoDaemon({
+    paseoHomeRoot: root,
+    resumeOnStartup: false,
+    agentClients: createTestAgentClients({
+      beforeCreateSession: async () => {
+        sessionsCreated++;
+      },
+    }),
+  });
+  const client = new DaemonClient({ url: `ws://127.0.0.1:${handle.port}/ws` });
+  try {
+    const expected = records.map((record) => ({
+      ...record,
+      resumeOnStartup: false,
+      lastStatus:
+        record.lastStatus === "running" || record.lastStatus === "initializing"
+          ? "closed"
+          : record.lastStatus,
+    }));
+    expect(
+      (await handle.daemon.agentStorage.listAll()).sort((a, b) => a.id.localeCompare(b.id)),
+    ).toEqual(expected.sort((a, b) => a.id.localeCompare(b.id)));
+    // A fresh reader proves the repaired states were written, rather than projected only in memory.
+    expect(
+      (await new AgentStorage(storagePath, logger).listAll()).sort((a, b) =>
+        a.id.localeCompare(b.id),
+      ),
+    ).toEqual(expected);
+    expect(handle.daemon.agentManager.listAgents()).toEqual([]);
+    expect(sessionsCreated).toBe(0);
+    await client.connect();
+    const snapshot = await client.fetchAgents({ filter: { includeArchived: true } });
+    expect(
+      Object.fromEntries(snapshot.entries.map((entry) => [entry.agent.id, entry.agent.status])),
+    ).toEqual(Object.fromEntries(expected.map((record) => [record.id, record.lastStatus])));
+    const opened = await ensureAgentLoaded(records[0]!.id, {
+      agentManager: handle.daemon.agentManager,
+      agentStorage: handle.daemon.agentStorage,
+      logger,
+>>>>>>> refs/remotes/upstream/tags/v0.17.0
     });
     const provider = Object.create(base) as AgentClient;
     provider.createSession = async (...args) => {

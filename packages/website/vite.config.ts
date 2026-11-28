@@ -130,8 +130,17 @@ export default defineConfig((): UserConfig => {
       },
     },
     plugins: [
+<<<<<<< HEAD
       cloudflare({ viteEnvironment: { name: "ssr" } }),
       // Generated workspace outputs can contain incomplete package-local configs.
+=======
+      cloudflare({
+        viteEnvironment: { name: "ssr" },
+        ...(process.env.WEBSITE_E2E_PERSIST_PATH
+          ? { persistState: { path: process.env.WEBSITE_E2E_PERSIST_PATH } }
+          : {}),
+      }),
+>>>>>>> refs/remotes/upstream/tags/v0.17.0
       tsConfigPaths({ projects: [path.join(__dirname, "tsconfig.json")] }),
       tanstackStart({
         router: {

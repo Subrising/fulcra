@@ -39,8 +39,12 @@ export interface SkillsStatus {
 
 export interface SkillTargets {
   sourceDir: string;
-  agentsDir: string;
-  claudeDir: string;
+  /**
+   * Ordered active install roots. Append new roots to the end so transaction
+   * backup indices remain stable across daemon upgrades.
+   */
+  installDirs: readonly string[];
+  /** Legacy dedicated Codex root, retired on sync unless it aliases an install root. */
   codexDir: string;
 }
 
@@ -207,14 +211,20 @@ export async function getSkillsStatus(
 ): Promise<SkillsStatus> {
   const available = await listBundledSkills(targets.sourceDir);
   const names = managedSkillNames(available);
+<<<<<<< HEAD
   const bundle = await hashSkills(targets.sourceDir, available);
   const shippedHashes = await readShippedSkillHashes(targets.sourceDir);
   const [agentsDisk, claudeDisk, codexDisk] = await Promise.all([
     hashInstalledSkills(targets.agentsDir, names, bundle, shippedHashes),
     hashInstalledSkills(targets.claudeDir, names, bundle, shippedHashes),
     hashLegacyCodexSkills(targets, names),
+=======
+  const [bundle, codexDisk, ...disks] = await Promise.all([
+    hashSkills(targets.sourceDir, available),
+    hashSkills(targets.codexDir, names),
+    ...targets.installDirs.map((root) => hashSkills(root, names)),
+>>>>>>> refs/remotes/upstream/tags/v0.17.0
   ]);
-  const disks = [agentsDisk, claudeDisk];
   const desired = resolveDesiredSkills(selection, available);
   const ops = diff(bundle, disks, names, desired);
   for (const name of codexDisk.keys()) {
@@ -255,8 +265,7 @@ async function applySkills(
   if (writes.length > 0) {
     await syncSkills({
       sourceDir: targets.sourceDir,
-      agentsDir: targets.agentsDir,
-      claudeDir: targets.claudeDir,
+      installDirs: targets.installDirs,
       codexDir: targets.codexDir,
       skillNames: writes,
     });
@@ -296,8 +305,7 @@ async function applySkills(
   for (const op of status.ops) {
     if (op.kind !== "delete") continue;
     await removeSkill(op.name, {
-      agentsDir: targets.agentsDir,
-      claudeDir: targets.claudeDir,
+      installDirs: targets.installDirs,
       codexDir: targets.codexDir,
     });
   }
@@ -342,12 +350,21 @@ export async function uninstallSkills(
   selection: SkillSelection,
 ): Promise<SkillsStatus> {
   const available = await listBundledSkills(targets.sourceDir);
+  let hasError = false;
+  let firstError: unknown = null;
   for (const name of managedSkillNames(available)) {
-    await removeSkill(name, {
-      agentsDir: targets.agentsDir,
-      claudeDir: targets.claudeDir,
-      codexDir: targets.codexDir,
-    });
+    try {
+      await removeSkill(name, {
+        installDirs: targets.installDirs,
+        codexDir: targets.codexDir,
+      });
+    } catch (error) {
+      if (!hasError) {
+        hasError = true;
+        firstError = error;
+      }
+    }
   }
+  if (hasError) throw firstError;
   return getSkillsStatus(targets, selection);
 }
