@@ -8,8 +8,13 @@ interface CatalogSyncInput {
   client: DaemonClient;
   audio: Pick<AudioEngine, "play"> | null;
   connected: boolean;
-  supported: boolean;
-  registry: Pick<PluginRegistry, "installCatalog" | "getSnapshot" | "removeHost">;
+  /** `null` while `server_info` has not yet arrived for this host. */
+  supported: boolean | null;
+  registry: Pick<
+    PluginRegistry,
+    "installCatalog" | "getSnapshot" | "removeHost" | "setCatalogStatus"
+  >;
+  onCatalogChanged?: () => void;
 }
 
 export function syncPluginCatalog({
@@ -19,37 +24,53 @@ export function syncPluginCatalog({
   connected,
   supported,
   registry,
+  onCatalogChanged,
 }: CatalogSyncInput): () => void {
+  if (supported === null) {
+    // Plugin support is unknown until `server_info` arrives; keep status "loading" so cold-launch
+    // plugin notification taps wait instead of falling back prematurely.
+    return () => {};
+  }
   if (!supported || !audio) {
     registry.removeHost(serverId);
+    registry.setCatalogStatus(serverId, "ready");
     return () => {};
   }
   // A dropped socket reconnects on the same client, so installations keep rendering offline.
   if (!connected) return () => {};
+  registry.setCatalogStatus(serverId, "loading");
   const installationOptions = { client, audio };
   let cancelled = false;
   let refreshQueue = Promise.resolve();
   function refresh(replacePluginId?: string) {
-    refreshQueue = refreshQueue.then(() =>
-      client
+    refreshQueue = refreshQueue.then(() => {
+      if (cancelled) return undefined;
+      registry.setCatalogStatus(serverId, "loading");
+      return client
         .getPluginCatalog()
         .then((catalog) => {
           if (!cancelled) {
+<<<<<<< HEAD
             registry.installCatalog(serverId, catalog.plugins, {
               ...installationOptions,
               replacePluginId,
               trustedPlugins: catalog.trustedPlugins,
             });
+=======
+            registry.installCatalog(serverId, catalog, { ...installationOptions, replacePluginId });
+            registry.setCatalogStatus(serverId, "ready");
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
           }
           return undefined;
         })
         .catch((error) => {
           if (!cancelled) {
+            registry.setCatalogStatus(serverId, "error");
             console.warn(`[Plugins] Failed to load catalog for ${serverId}`, error);
           }
           return undefined;
-        }),
-    );
+        });
+    });
     return refreshQueue;
   }
   const observation = client.observeEvents([
@@ -83,6 +104,7 @@ export function syncPluginCatalog({
         }
       }
       if (message.payload.status === "plugin_catalog_changed") {
+        onCatalogChanged?.();
         const pluginId = message.payload.pluginId;
         if (typeof pluginId === "string") void refresh(pluginId);
       }

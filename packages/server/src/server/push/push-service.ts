@@ -12,6 +12,7 @@ interface ExpoPushMessage {
   body: string;
   data?: Record<string, unknown>;
   sound?: "default";
+  priority?: "default" | "normal" | "high";
 }
 
 interface ExpoPushTicket {
@@ -31,10 +32,16 @@ const MAX_BATCH_SIZE = 100;
 export class PushService {
   private readonly logger: pino.Logger;
   private readonly revokeToken: (token: string) => void;
+  private readonly sendRequest: typeof fetch;
 
-  constructor(logger: pino.Logger, revokeToken: (token: string) => void) {
-    this.logger = logger.child({ component: "push-service" });
-    this.revokeToken = revokeToken;
+  constructor(options: {
+    logger: pino.Logger;
+    revokeToken: (token: string) => void;
+    sendRequest?: typeof fetch;
+  }) {
+    this.logger = options.logger.child({ component: "push-service" });
+    this.revokeToken = options.revokeToken;
+    this.sendRequest = options.sendRequest ?? fetch;
   }
 
   async sendPush(tokens: string[], payload: PushPayload): Promise<void> {
@@ -47,6 +54,7 @@ export class PushService {
     );
   }
 
+<<<<<<< HEAD
   // Like sendPush, but reports how many devices Expo accepted and throws when the push service
   // could not be reached or refused the request, so a caller can retry.
   async sendPushReporting(tokens: string[], payload: PushPayload): Promise<number> {
@@ -57,12 +65,18 @@ export class PushService {
   }
 
   private batches(tokens: string[], payload: PushPayload): ExpoPushMessage[][] {
+=======
+    // Expo defaults to "normal" priority on Android, which FCM holds back while
+    // the device dozes, so notifications arrive minutes late. iOS already
+    // defaults to "high".
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
     const messages: ExpoPushMessage[] = tokens.map((token) => ({
       to: token,
       title: payload.title,
       body: payload.body,
       data: payload.data,
       sound: "default",
+      priority: "high",
     }));
 
     // Batch tokens (max 100 per request per Expo limits)
@@ -73,6 +87,7 @@ export class PushService {
     return batches;
   }
 
+<<<<<<< HEAD
   // Returns the number of messages Expo accepted; throws on a network or API error.
   private async deliverBatch(messages: ExpoPushMessage[]): Promise<number> {
     const response = await fetch(EXPO_PUSH_URL, {
@@ -83,6 +98,18 @@ export class PushService {
       },
       body: JSON.stringify(messages),
     });
+=======
+  private async sendBatch(messages: ExpoPushMessage[]): Promise<void> {
+    try {
+      const response = await this.sendRequest(EXPO_PUSH_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(messages),
+      });
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
 
     if (!response.ok) {
       this.logger.error(

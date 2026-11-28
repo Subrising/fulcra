@@ -10,6 +10,7 @@ import {
   type PluginProcessRequest,
 } from "./plugin-process-protocol.js";
 import type { UsageSourceRegistration } from "@getpaseo/plugin/server/usage";
+<<<<<<< HEAD
 import type { SettingsDefinition, PluginRpcContract } from "@getpaseo/plugin";
 import type {
   PluginCredentials,
@@ -19,13 +20,43 @@ import type {
   PluginServerContribution,
 } from "@getpaseo/plugin/server";
 import { randomUUID } from "node:crypto";
+=======
+import type {
+  SettingsDefinition,
+  PluginRpcContract,
+  PluginSubscriptionContract,
+} from "@getpaseo/plugin";
+import type {
+  PluginHandlerContext,
+  PluginNotificationSendInput,
+  PluginNotificationSendResult,
+  PluginNotifications,
+  PluginServerContext,
+  PluginServerContribution,
+  PluginWorktreeCreateInput,
+  PluginWorktreeRemoveRequest,
+  PluginWorktreeRestoreRequest,
+  WorktreeManagerRegistration,
+} from "@getpaseo/plugin/server";
+import { randomUUID } from "node:crypto";
+import { assertPluginWireValue } from "@getpaseo/protocol/binary-frames/index";
+import {
+  PluginSubscriptionHandlers,
+  type PluginSubscriptionHandler,
+} from "./subscription-handlers.js";
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
 import { fileURLToPath } from "node:url";
 import type { ZodType } from "zod";
 import {
+  ProviderCatalogRefreshModeSchema,
   ProviderEventSchema,
   type ProviderConnection,
   type ProviderRegistration,
   ProviderStatusSchema,
+  ProviderInspectionSchema,
+  ProviderUpdateCheckSchema,
+  ProviderUpdateReportSchema,
+  ProviderUpdateResultSchema,
 } from "@getpaseo/plugin/server/provider";
 import { createPaseoApi, type PaseoApi } from "@getpaseo/client";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
@@ -43,6 +74,35 @@ import {
 import { initializeEnvironmentProxy } from "../network/index.js";
 function describeError(error: unknown, secretStore: PluginSecretStore | null = null): string {
   return redactPluginError(secretStore, error instanceof Error ? error.message : String(error));
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const { protocol } = new URL(value);
+    return protocol === "https:" || protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+function validateProviderInstallation(
+  id: string,
+  installation: ProviderRegistration["installation"],
+): void {
+  if (installation === undefined) return;
+  for (const url of [installation.installUrl, installation.updateUrl]) {
+    if (url !== undefined && (typeof url !== "string" || !isHttpUrl(url)))
+      throw new Error(`Plugin provider ${id} installation links must be http(s) URLs`);
+  }
+  if (installation.inspect !== undefined && typeof installation.inspect !== "function")
+    throw new Error(`Invalid installation inspect callback for plugin provider ${id}`);
+  if (
+    installation.checkForUpdates !== undefined &&
+    typeof installation.checkForUpdates !== "function"
+  )
+    throw new Error(`Invalid installation checkForUpdates callback for plugin provider ${id}`);
+  if (installation.update !== undefined && typeof installation.update !== "function")
+    throw new Error(`Invalid installation update callback for plugin provider ${id}`);
 }
 
 export interface PluginWorkerChannel {
@@ -87,13 +147,24 @@ export function createPluginWorker(options: {
     send({ type: "hooks.changed", hooks: hooks.catalog() });
   }, agentTools);
   const handlers = new Map<string, RegisteredRpc>();
+  const subscriptions = new PluginSubscriptionHandlers({ send, sendAndWait });
   const providers = new Map<string, ProviderRegistration>();
   const usageSources = new Map<string, UsageSourceRegistration>();
+  let worktreeManager: WorktreeManagerRegistration | null = null;
+  const worktreeRequests = new Map<string, AbortController>();
   const providerConnections = new Map<
     string,
     { connection: ProviderConnection; unsubscribe: () => void; closing?: Promise<void> }
   >();
   const pendingProviderConnections = new Map<string, { tombstoned: boolean }>();
+  const installationRequests = new Map<string, AbortController>();
+  const notificationRequests = new Map<
+    string,
+    {
+      resolve: (result: PluginNotificationSendResult) => void;
+      reject: (error: Error) => void;
+    }
+  >();
   let cleanup: (() => void | Promise<void>) | null = null;
   let daemonClient: DaemonClient | null = null;
   let paseo: PaseoApi | null = null;
@@ -170,17 +241,45 @@ export function createPluginWorker(options: {
     if (!/^[a-z][a-z0-9._-]*$/.test(normalized)) {
       throw new Error(`Invalid plugin RPC method: ${method}`);
     }
-    if (handlers.has(normalized)) {
+    if (handlers.has(normalized) || subscriptions.has(normalized)) {
       throw new Error(`Duplicate plugin RPC method: ${normalized}`);
     }
     return normalized;
   }
 
+<<<<<<< HEAD
   function register(
     contract: PluginRpcContract,
     handler: RpcHandler,
     rpcOptions?: { readOnly?: boolean },
   ): void {
+=======
+  function registerSubscription(
+    contract: PluginSubscriptionContract,
+    handler: PluginSubscriptionHandler,
+  ): void {
+    if (typeof handler !== "function") {
+      throw new Error(`Plugin subscription ${contract.name} must provide a handler`);
+    }
+    const method = validateMethod(contract.name);
+    subscriptions.register({ ...contract, name: method }, handler);
+  }
+
+  // One name serves either an RPC or a subscription; the contract says which.
+  const handle = ((
+    contract: PluginRpcContract | PluginSubscriptionContract,
+    handler: (input: unknown, context: never) => unknown,
+  ) => {
+    if ("event" in contract) {
+      // The subscription handlers parse the input once and pass the result here.
+      registerSubscription(contract, handler as PluginSubscriptionHandler);
+      return;
+    }
+    register(contract, (input, context) => handler(input, context as never));
+  }) as PluginServerContext["handle"];
+
+  function register(contract: PluginRpcContract, handler: RpcHandler): void {
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
     if (typeof handler !== "function") {
       throw new Error(`Plugin RPC ${contract.name} must provide a handler`);
     }
@@ -202,6 +301,12 @@ export function createPluginWorker(options: {
       throw new Error(`Plugin provider ${id} must implement connect()`);
     }
     if (
+      provider.catalogRefresh !== undefined &&
+      !ProviderCatalogRefreshModeSchema.safeParse(provider.catalogRefresh).success
+    ) {
+      throw new Error(`Invalid catalogRefresh mode for plugin provider ${id}`);
+    }
+    if (
       provider.getCatalogCacheKey !== undefined &&
       typeof provider.getCatalogCacheKey !== "function"
     ) {
@@ -209,6 +314,12 @@ export function createPluginWorker(options: {
     }
     if (provider.status !== undefined && typeof provider.status !== "function")
       throw new Error(`Invalid status callback for plugin provider ${id}`);
+    if (
+      provider.docsUrl !== undefined &&
+      (typeof provider.docsUrl !== "string" || !isHttpUrl(provider.docsUrl))
+    )
+      throw new Error(`Plugin provider ${id} docsUrl must be an http(s) URL`);
+    validateProviderInstallation(id, provider.installation);
     if (
       provider.command !== undefined &&
       (provider.command.length === 0 ||
@@ -227,7 +338,10 @@ export function createPluginWorker(options: {
       typeof source.fetch !== "function" ||
       typeof source.discover !== "function" ||
       !source.input ||
-      typeof source.input.parseAsync !== "function"
+      typeof source.input.parseAsync !== "function" ||
+      (source.providers !== undefined &&
+        (!Array.isArray(source.providers) ||
+          source.providers.some((provider) => typeof provider !== "string" || !provider.trim())))
     ) {
       throw new Error(`Invalid usage source: ${source.id}`);
     }
@@ -235,17 +349,146 @@ export function createPluginWorker(options: {
     usageSources.set(id, { ...source, id });
   }
 
+  function worktreeManagerCapabilities() {
+    if (!worktreeManager) return null;
+    return {
+      hasRemove: worktreeManager.remove !== undefined,
+      hasRestore: worktreeManager.restore !== undefined,
+    };
+  }
+
+  function registerWorktreeManager(manager: WorktreeManagerRegistration): () => void {
+    if (!manager || typeof manager.create !== "function") {
+      throw new Error("Plugin worktree manager must implement create()");
+    }
+    if (manager.remove !== undefined && typeof manager.remove !== "function") {
+      throw new Error("Invalid remove callback for plugin worktree manager");
+    }
+    if (manager.restore !== undefined && typeof manager.restore !== "function") {
+      throw new Error("Invalid restore callback for plugin worktree manager");
+    }
+    if (worktreeManager !== null) {
+      throw new Error("Plugin already registered a worktree manager");
+    }
+    worktreeManager = manager;
+    send({ type: "worktree_manager.changed", worktreeManager: worktreeManagerCapabilities() });
+    return () => {
+      if (worktreeManager !== manager) return;
+      worktreeManager = null;
+      send({ type: "worktree_manager.changed", worktreeManager: null });
+    };
+  }
+
+  const notifications: PluginNotifications = {
+    send(input: PluginNotificationSendInput): Promise<PluginNotificationSendResult> {
+      if (stopping) {
+        return Promise.reject(new Error("Plugin is stopping"));
+      }
+      let payload: unknown;
+      try {
+        payload = jsonTransportValue(input);
+      } catch (error) {
+        return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+      }
+      const requestId = randomUUID();
+      return new Promise<PluginNotificationSendResult>((resolve, reject) => {
+        notificationRequests.set(requestId, { resolve, reject });
+        send({
+          type: "notification.send",
+          requestId,
+          input: payload,
+        });
+      });
+    },
+  };
+
   function providerMetadata(provider: ProviderRegistration) {
     return {
       id: provider.id,
       label: provider.label,
       description: provider.description,
       iconPath: provider.icon,
+      docsUrl: provider.docsUrl,
       requiresConfiguration: provider.requiresConfiguration,
+      catalogRefresh: provider.catalogRefresh,
       hasCatalogCacheKey: provider.getCatalogCacheKey !== undefined,
       hasStatus: provider.status !== undefined,
+      installation: provider.installation
+        ? {
+            installUrl: provider.installation.installUrl,
+            updateUrl: provider.installation.updateUrl,
+            hasInspect: provider.installation.inspect !== undefined,
+            hasCheckForUpdates: provider.installation.checkForUpdates !== undefined,
+            hasUpdate: provider.installation.update !== undefined,
+          }
+        : undefined,
       command: provider.command,
+      launchWrap: provider.launchWrap,
     };
+  }
+
+  /** Handles installation requests; returns false for any other message. */
+  function handleInstallationMessage(message: PluginProcessRequest): boolean {
+    if (message.type === "provider.installation.cancel") {
+      installationRequests
+        .get(message.requestId)
+        ?.abort(new Error("Installation request canceled"));
+      return true;
+    }
+    if (
+      message.type !== "provider.installation.inspect" &&
+      message.type !== "provider.installation.check_updates" &&
+      message.type !== "provider.installation.update"
+    )
+      return false;
+    const controller = new AbortController();
+    installationRequests.set(message.requestId, controller);
+    const context = { launch: message.request.launch, signal: controller.signal };
+    const installedVersion =
+      message.type === "provider.installation.check_updates"
+        ? message.request.installedVersion
+        : undefined;
+    void (async () => {
+      const installation = providers.get(message.providerId)?.installation;
+      if (message.type === "provider.installation.update") {
+        if (!installation?.update)
+          throw new Error(`Provider has no update capability: ${message.providerId}`);
+        let settled = false;
+        const report = (event: unknown) => {
+          const parsed = ProviderUpdateReportSchema.safeParse(event);
+          if (settled || !parsed.success) return;
+          send({
+            type: "provider.installation.report",
+            requestId: message.requestId,
+            report: parsed.data,
+          });
+        };
+        try {
+          return ProviderUpdateResultSchema.parse(
+            await installation.update({ ...context, report }),
+          );
+        } finally {
+          settled = true;
+        }
+      }
+      if (message.type === "provider.installation.inspect") {
+        if (!installation?.inspect)
+          throw new Error(`Provider has no inspect capability: ${message.providerId}`);
+        return ProviderInspectionSchema.parse(await installation.inspect(context));
+      }
+      if (!installation?.checkForUpdates)
+        throw new Error(`Provider has no checkForUpdates capability: ${message.providerId}`);
+      return ProviderUpdateCheckSchema.parse(
+        await installation.checkForUpdates({ ...context, installedVersion }),
+      );
+    })()
+      .then(
+        (output) => send({ type: "result", requestId: message.requestId, output }),
+        (error) =>
+          send({ type: "error", requestId: message.requestId, error: describeError(error) }),
+      )
+      .finally(() => installationRequests.delete(message.requestId));
+    return true;
   }
 
   async function connectProvider(
@@ -355,6 +598,9 @@ export function createPluginWorker(options: {
       // The runtime re-attaches a session when the daemon drops this socket.
       reconnect: { enabled: true },
       transportFactory,
+      // The channel is a pipe to the daemon (or an in-process queue for built-in plugins); its
+      // loss is reported directly, so a 10 s ping would only wake both sides.
+      livenessHeartbeat: false,
     });
     paseo = createPaseoApi(daemonClient);
     await daemonClient.connect();
@@ -366,6 +612,7 @@ export function createPluginWorker(options: {
     secretStore = createPluginSecretStore({ pluginId: message.pluginId });
     hostCapabilities = message.capabilities ?? { notify: false, credentials: false };
     const contributedCleanup = contribute({
+<<<<<<< HEAD
       ...untrustedHostHooks,
       handle: (contract, handler, rpcOptions?: { readOnly?: boolean }) =>
         register(
@@ -376,9 +623,14 @@ export function createPluginWorker(options: {
       secrets: secretStore?.secrets,
       ...(hostCapabilities.notify ? { notify } : {}),
       ...(hostCapabilities.credentials ? { credentials } : {}),
+=======
+      handle,
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
       registerProvider,
       registerUsageSource,
+      registerWorktreeManager,
       registerSettings,
+      notifications,
       addHook: hooks.addHook,
       on: hooks.on,
       before: hooks.before,
@@ -393,6 +645,8 @@ export function createPluginWorker(options: {
         .map(async (source) => ({
           id: source.id,
           label: source.label,
+          provider: source.provider,
+          providers: source.providers ? [...source.providers] : undefined,
           icon: source.icon
             ? await readPluginProviderIcon(message.pluginDirectory, source.icon)
             : undefined,
@@ -401,11 +655,16 @@ export function createPluginWorker(options: {
     send({
       type: "ready",
       methods: [...handlers.keys()].sort(),
+<<<<<<< HEAD
       readMethods: [...handlers]
         .filter(([, registered]) => registered.readOnly)
         .map(([method]) => method)
         .sort(),
+=======
+      subscriptions: subscriptions.catalog(),
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
       hooks: hooks.catalog(),
+      worktreeManager: worktreeManagerCapabilities(),
       providers: [...providers.values()]
         .sort((left, right) => left.id.localeCompare(right.id))
         .map(providerMetadata),
@@ -421,10 +680,21 @@ export function createPluginWorker(options: {
       .catch((error) => console.error("Plugin API cleanup failed", error));
     hooks.close();
     agentTools.close();
+    subscriptions.releaseAll();
     for (const pending of pendingProviderConnections.values()) pending.tombstoned = true;
+<<<<<<< HEAD
     for (const pending of pendingHostCalls.values())
       pending.reject(new Error("Plugin is stopping"));
     pendingHostCalls.clear();
+=======
+    for (const request of installationRequests.values())
+      request.abort(new Error("Plugin is stopping"));
+    for (const request of worktreeRequests.values()) request.abort(new Error("Plugin is stopping"));
+    for (const pending of notificationRequests.values())
+      pending.reject(new Error("Plugin is stopping"));
+    notificationRequests.clear();
+    worktreeManager = null;
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
     const currentCleanup = cleanup;
     cleanup = null;
     try {
@@ -460,9 +730,16 @@ export function createPluginWorker(options: {
   function rejectWhileStopping(message: PluginProcessRequest): void {
     if (
       message.type === "provider.status" ||
+      message.type === "provider.installation.inspect" ||
+      message.type === "provider.installation.check_updates" ||
+      message.type === "provider.installation.update" ||
       message.type === "provider.catalog_key" ||
       message.type === "usage.fetch" ||
-      message.type === "usage.discover"
+      message.type === "usage.discover" ||
+      message.type === "worktree.create" ||
+      message.type === "worktree.remove" ||
+      message.type === "worktree.restore" ||
+      message.type === "subscribe"
     ) {
       send({ type: "error", requestId: message.requestId, error: "Plugin is stopping" });
     } else if (message.type === "provider.connect") {
@@ -519,7 +796,112 @@ export function createPluginWorker(options: {
     return false;
   }
 
+<<<<<<< HEAD
   // oxlint-disable-next-line complexity -- FULCRA: upstream body plus the named core patch seams; split on the next upstream merge.
+=======
+  function handleSubscriptionMessage(
+    message: Extract<PluginProcessRequest, { type: "subscribe" | "unsubscribe" }>,
+  ): void {
+    if (message.type === "unsubscribe") subscriptions.release(message.subscriptionId);
+    else if (paseo) subscriptions.start(message, paseo);
+    else send({ type: "error", requestId: message.requestId, error: "Plugin API unavailable" });
+  }
+
+  /** Handles a provider's status, catalogue key and installation requests; false for others. */
+  function handleProviderQueryMessage(message: PluginProcessRequest): message is Extract<
+    PluginProcessRequest,
+    {
+      type:
+        | "provider.status"
+        | "provider.catalog_key"
+        | "provider.installation.inspect"
+        | "provider.installation.check_updates"
+        | "provider.installation.update"
+        | "provider.installation.cancel";
+    }
+  > {
+    if (message.type === "provider.status") {
+      void (async () => {
+        const provider = providers.get(message.providerId);
+        if (!provider || !provider.status)
+          throw new Error(`Provider has no status capability: ${message.providerId}`);
+        const output = ProviderStatusSchema.parse(await provider.status(message.request));
+        send({ type: "result", requestId: message.requestId, output });
+      })().catch((error) =>
+        send({ type: "error", requestId: message.requestId, error: describeError(error) }),
+      );
+      return true;
+    }
+    if (message.type === "provider.catalog_key") {
+      void (async () => {
+        const provider = providers.get(message.providerId);
+        if (!provider) throw new Error(`Unknown provider: ${message.providerId}`);
+        const output = await provider.getCatalogCacheKey?.(message.options);
+        if (output !== undefined && typeof output !== "string")
+          throw new Error("Invalid catalogue key");
+        send({ type: "result", requestId: message.requestId, output });
+      })().catch((error) =>
+        send({ type: "error", requestId: message.requestId, error: describeError(error) }),
+      );
+      return true;
+    }
+    return handleInstallationMessage(message);
+  }
+
+  function handleNotificationMessage(
+    message: PluginProcessRequest,
+  ): message is Extract<
+    PluginProcessRequest,
+    { type: "notification.result" | "notification.error" }
+  > {
+    if (message.type !== "notification.result" && message.type !== "notification.error") {
+      return false;
+    }
+    const pending = notificationRequests.get(message.requestId);
+    if (!pending) return true;
+    notificationRequests.delete(message.requestId);
+    if (message.type === "notification.result") pending.resolve(message.result);
+    else pending.reject(new Error(message.error));
+    return true;
+  }
+
+  function handleProviderConnectOrSend(
+    message: PluginProcessRequest,
+  ): message is Extract<
+    PluginProcessRequest,
+    { type: "provider.connect" | "provider.send" | "provider.close" }
+  > {
+    if (message.type === "provider.connect") {
+      void connectProvider(message).catch((error) => {
+        if (stopping) return;
+        send({
+          type: "provider.connect_failed",
+          connectionId: message.connectionId,
+          error: describeError(error),
+        });
+      });
+      return true;
+    }
+    if (message.type === "provider.send") {
+      void sendProviderInput(message).catch((error) => {
+        if (stopping) return;
+        send({
+          type: "provider.rejected",
+          connectionId: message.connectionId,
+          acceptanceId: message.acceptanceId,
+          error: describeError(error),
+        });
+      });
+      return true;
+    }
+    if (message.type === "provider.close") {
+      void closeProviderConnection(message.connectionId);
+      return true;
+    }
+    return false;
+  }
+
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
   function handleMessage(rawMessage: unknown): void {
     const parsed = PluginProcessRequestSchema.safeParse(rawMessage);
     if (!parsed.success) {
@@ -557,15 +939,20 @@ export function createPluginWorker(options: {
       void shutdown();
       return;
     }
+<<<<<<< HEAD
     if (message.type === "host.result" || message.type === "host.error") {
       settleHostCall(message);
       return;
     }
+=======
+    if (handleNotificationMessage(message)) return;
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
     if (stopping) {
       rejectWhileStopping(message);
       return;
     }
     if (handleToolMessage(message)) return;
+<<<<<<< HEAD
     if (message.type === "provider.status") {
       void (async () => {
         const provider = providers.get(message.providerId);
@@ -591,10 +978,14 @@ export function createPluginWorker(options: {
       );
       return;
     }
+=======
+    if (handleProviderQueryMessage(message)) return;
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
     if (message.type === "usage.fetch" || message.type === "usage.discover") {
       handleUsageRequest(message);
       return;
     }
+<<<<<<< HEAD
     if (message.type === "provider.connect") {
       void connectProvider(message).catch((error) => {
         if (stopping) return;
@@ -622,11 +1013,23 @@ export function createPluginWorker(options: {
       void closeProviderConnection(message.connectionId);
       return;
     }
+=======
+    if (handleProviderConnectOrSend(message)) return;
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
     if (message.type === "paseo_frame" || message.type === "paseo_close") return;
     if (isHookMessage(message)) {
       handleHookMessage(message);
       return;
     }
+    if (isWorktreeMessage(message)) {
+      handleWorktreeMessage(message);
+      return;
+    }
+    if (message.type === "invoke") invoke(message);
+    else handleSubscriptionMessage(message);
+  }
+
+  function invoke(message: Extract<PluginProcessRequest, { type: "invoke" }>): void {
     const registered = handlers.get(message.method);
     if (!registered) {
       send({
@@ -677,9 +1080,16 @@ export function createPluginWorker(options: {
           ...(management ? { management: management.context } : {}),
         });
       })
+<<<<<<< HEAD
       .finally(() => management?.close())
       .then((output) => registered.contract.output.parseAsync(output))
       .then((output) => guardPluginOutput(secretStore, output))
+=======
+      .then((output: unknown) => {
+        assertPluginWireValue(output, "output");
+        return output;
+      })
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
       .then(
         (output) => send({ type: "result", requestId: message.requestId, output }),
         (error) => send({ type: "error", requestId: message.requestId, error: redact(error) }),
@@ -728,11 +1138,94 @@ export function createPluginWorker(options: {
   ): message is Extract<PluginProcessRequest, { type: "hook" | "hook.cancel" }> {
     return message.type === "hook" || message.type === "hook.cancel";
   }
+
+  function isWorktreeMessage(
+    message: PluginProcessRequest,
+  ): message is Extract<
+    PluginProcessRequest,
+    { type: "worktree.create" | "worktree.remove" | "worktree.restore" | "worktree.cancel" }
+  > {
+    return (
+      message.type === "worktree.create" ||
+      message.type === "worktree.remove" ||
+      message.type === "worktree.restore" ||
+      message.type === "worktree.cancel"
+    );
+  }
+
+  function handleWorktreeMessage(
+    message: Extract<
+      PluginProcessRequest,
+      { type: "worktree.create" | "worktree.remove" | "worktree.restore" | "worktree.cancel" }
+    >,
+  ): void {
+    if (message.type === "worktree.cancel") {
+      worktreeRequests.get(message.requestId)?.abort(new Error("Worktree request canceled"));
+      return;
+    }
+    if (!paseo) {
+      send({
+        type: "error",
+        requestId: message.requestId,
+        error: "Plugin Paseo API is unavailable",
+      });
+      return;
+    }
+    const manager = worktreeManager;
+    if (!manager) {
+      send({
+        type: "error",
+        requestId: message.requestId,
+        error: "Plugin has no registered worktree manager",
+      });
+      return;
+    }
+    const controller = new AbortController();
+    worktreeRequests.set(message.requestId, controller);
+    const context = { paseo, signal: controller.signal };
+    void (async () => {
+      if (message.type === "worktree.create") {
+        return (
+          (await manager.create(
+            structuredClone(message.request) as PluginWorktreeCreateInput,
+            context,
+          )) ?? null
+        );
+      }
+      if (message.type === "worktree.remove") {
+        if (!manager.remove) {
+          throw new Error("Plugin worktree manager does not implement remove");
+        }
+        return (
+          (await manager.remove(
+            structuredClone(message.request) as PluginWorktreeRemoveRequest,
+            context,
+          )) ?? null
+        );
+      }
+      if (!manager.restore) {
+        throw new Error("Plugin worktree manager does not implement restore");
+      }
+      return (
+        (await manager.restore(
+          structuredClone(message.request) as PluginWorktreeRestoreRequest,
+          context,
+        )) ?? null
+      );
+    })()
+      .then(
+        (output) => send({ type: "result", requestId: message.requestId, output }),
+        (error) =>
+          send({ type: "error", requestId: message.requestId, error: describeError(error) }),
+      )
+      .finally(() => worktreeRequests.delete(message.requestId));
+  }
   return { shutdown };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   let worker: ReturnType<typeof createPluginWorker> | null = null;
+  let closedByShutdown = false;
   const handlers = new Set<(message: PluginProcessRequest) => void>();
   const channel: PluginWorkerChannel = {
     send(message, callback) {
@@ -746,9 +1239,17 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       };
     },
     disconnect() {
+      closedByShutdown = true;
       process.disconnect();
     },
   };
+  // The daemon worker owns this process through the IPC channel. When the channel closes without
+  // this process closing it (the worker crashed or was killed), nothing can reach the plugin any
+  // more, so exit instead of running on as an orphan. A normal shutdown closes the channel itself
+  // and lets work still in flight finish.
+  process.once("disconnect", () => {
+    if (!closedByShutdown) process.exit(0);
+  });
   process.on("message", (raw) => {
     const parsed = PluginProcessRequestSchema.safeParse(raw);
     if (!worker && parsed.success && parsed.data.type === "initialize") {

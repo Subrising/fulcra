@@ -55,11 +55,17 @@ export async function loadRealDaemonState(): Promise<RealDaemonState> {
 
 export interface DesktopRuntimeConfig {
   serverId: string;
+<<<<<<< HEAD
   bundledPluginPins?: Record<string, string>;
   additionalDaemonUrls?: string[];
+=======
+  updateMode?: "automatic" | "notify" | "off";
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
   updateAvailable?: boolean;
   latestVersion?: string;
   updateReadyToInstall?: boolean;
+  updateDownloading?: boolean;
+  downloadProgressSteps?: number[];
   manualUpdateBypassesRollout?: boolean;
   slowInstall?: boolean;
   /** Initial PID reported by desktop_daemon_status. Defaults to null. */
@@ -112,6 +118,7 @@ declare global {
   interface Window {
     __capturedDialogCall: ConfirmDialogCall | undefined;
     __capturedDialogOpenCalls: Array<Record<string, unknown> | undefined>;
+    __capturedUpdateChecks?: Array<{ intent: unknown; releaseChannel: unknown }>;
     __recordDesktopEditorOpen?: (input: DesktopEditorOpenRecord) => Promise<void>;
     __desktopDaemonStartRequested?: boolean;
   }
@@ -140,6 +147,7 @@ export async function installDesktopRuntime(
     );
   }
 
+<<<<<<< HEAD
   await page.addInitScript(
     (cfg) => {
       // Mutable state shared across IPC calls within this page
@@ -252,6 +260,201 @@ export async function installDesktopRuntime(
           if (command === "install_app_update") {
             return installAppUpdate();
           }
+=======
+  await page.addInitScript((cfg) => {
+    // Mutable state shared across IPC calls within this page
+    let manageDaemon = cfg.manageBuiltInDaemon ?? false;
+    let updateMode = cfg.updateMode ?? "automatic";
+    let daemonRunning = true;
+    let currentPid: number | null = cfg.daemonPid ?? null;
+    let ownedByDesktop = cfg.ownedByDesktop ?? false;
+    let manualUpdateAdmitted = false;
+    const eventListeners = new Map<string, Set<(payload: unknown) => void>>();
+    window.__desktopDaemonStartRequested = false;
+    window.__capturedUpdateChecks = [];
+
+    function emitDesktopEvent(event: string, payload: unknown) {
+      const listeners = eventListeners.get(event);
+      if (!listeners) return;
+      for (const listener of listeners) {
+        listener(payload);
+      }
+    }
+
+    function buildDaemonStatus() {
+      return {
+        serverId: cfg.serverId,
+        status: daemonRunning ? "running" : "stopped",
+        listen: cfg.daemonListen ?? "127.0.0.1:6767",
+        hostname: null,
+        pid: currentPid,
+        home: cfg.daemonHome ?? "",
+        startedAt: currentPid === null ? null : "2026-09-01T00:00:00.000Z",
+        ownedByDesktop,
+        version: cfg.daemonVersion ?? null,
+        desktopManaged: manageDaemon,
+        error: null,
+      };
+    }
+
+    function startDesktopDaemon() {
+      window.__desktopDaemonStartRequested = true;
+      if (cfg.hangDaemonStart) {
+        return new Promise(() => undefined);
+      }
+      if (!daemonRunning) {
+        currentPid = (cfg.daemonPid ?? 10000) + 1000;
+        ownedByDesktop = true;
+      }
+      daemonRunning = true;
+      return buildDaemonStatus();
+    }
+
+    async function waitForDesktopSettingsResponse() {
+      const delayMs = cfg.desktopSettingsDelayMs ?? 0;
+      if (delayMs > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+
+    function buildAppUpdateCheckResult(
+      hasUpdate: boolean,
+      readyToInstall: boolean,
+      downloading = hasUpdate && !readyToInstall,
+    ) {
+      return {
+        hasUpdate,
+        readyToInstall,
+        downloading,
+        currentVersion: "1.0.0",
+        latestVersion: hasUpdate ? (cfg.latestVersion ?? "1.2.3") : null,
+        body: null,
+        date: null,
+      };
+    }
+
+    function checkAppUpdate(intent: unknown) {
+      if (intent === "automatic" && updateMode === "off") {
+        return buildAppUpdateCheckResult(false, false, false);
+      }
+      if (!cfg.manualUpdateBypassesRollout) {
+        const hasUpdate = cfg.updateAvailable === true;
+        const readyToInstall =
+          hasUpdate && (cfg.updateReadyToInstall ?? updateMode === "automatic");
+        const downloading =
+          cfg.updateDownloading ?? (hasUpdate && !readyToInstall && updateMode === "automatic");
+        return buildAppUpdateCheckResult(hasUpdate, readyToInstall, downloading);
+      }
+
+      if (intent === "manual") {
+        manualUpdateAdmitted = true;
+        return buildAppUpdateCheckResult(true, false, updateMode === "automatic");
+      }
+
+      return buildAppUpdateCheckResult(manualUpdateAdmitted, manualUpdateAdmitted, false);
+    }
+
+    async function installAppUpdate() {
+      if (cfg.downloadProgressSteps?.length) {
+        for (const percent of cfg.downloadProgressSteps) {
+          emitDesktopEvent("app-update-download-progress", {
+            version: cfg.latestVersion ?? "1.2.3",
+            percent,
+            transferred: percent * 1_000_000,
+            total: 100_000_000,
+            bytesPerSecond: 5_000_000,
+          });
+          await new Promise<void>((resolve) => setTimeout(resolve, 600));
+        }
+      }
+      if (cfg.slowInstall) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 3000));
+      }
+      emitDesktopEvent("app-update-download-progress", null);
+      return {
+        installed: true,
+        version: cfg.latestVersion ?? "1.2.3",
+        message: "App update installed. Restart required.",
+      };
+    }
+
+    function buildDesktopSettings() {
+      return {
+        releaseChannel: "stable",
+        updates: { mode: updateMode },
+        daemon: { manageBuiltInDaemon: manageDaemon, keepRunningAfterQuit: true },
+      };
+    }
+
+    function patchDesktopSettings(args?: Record<string, unknown>) {
+      const updates = args?.updates;
+      if (
+        updates !== null &&
+        typeof updates === "object" &&
+        "mode" in updates &&
+        (updates.mode === "automatic" || updates.mode === "notify" || updates.mode === "off")
+      ) {
+        updateMode = updates.mode;
+      }
+      const daemon = args?.daemon;
+      if (
+        daemon !== null &&
+        typeof daemon === "object" &&
+        "manageBuiltInDaemon" in daemon &&
+        typeof daemon.manageBuiltInDaemon === "boolean"
+      ) {
+        manageDaemon = daemon.manageBuiltInDaemon;
+      }
+      return buildDesktopSettings();
+    }
+
+    const desktopBridge: {
+      platform: string;
+      invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+      dialog: {
+        ask: (message: string, options?: Record<string, unknown>) => Promise<boolean>;
+        open: (options?: Record<string, unknown>) => Promise<string | string[] | null>;
+      };
+      getPendingOpenProject: () => Promise<string | null>;
+      events: {
+        on: (event: string, handler: (payload: unknown) => void) => Promise<() => void>;
+      };
+      editor?: {
+        listTargets: () => Promise<DesktopEditorTargetConfig[]>;
+        openTarget: (input: DesktopEditorOpenRecord) => Promise<void>;
+      };
+    } = {
+      platform: "darwin",
+      invoke: async (command: string, args?: Record<string, unknown>) => {
+        if (command === "check_app_update") {
+          window.__capturedUpdateChecks?.push({
+            intent: args?.intent,
+            releaseChannel: args?.releaseChannel,
+          });
+          return checkAppUpdate(args?.intent);
+        }
+
+        if (command === "install_app_update") {
+          return installAppUpdate();
+        }
+
+        if (command === "desktop_daemon_status") {
+          return buildDaemonStatus();
+        }
+
+        if (command === "desktop_daemon_logs") {
+          return { logPath: cfg.daemonLogPath ?? "", contents: "" };
+        }
+
+        if (command === "get_desktop_settings") {
+          await waitForDesktopSettingsResponse();
+          return buildDesktopSettings();
+        }
+
+        if (command === "patch_desktop_settings") {
+          return patchDesktopSettings(args);
+        }
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
 
           if (command === "desktop_daemon_status") {
             return buildDaemonStatus();
@@ -302,6 +505,7 @@ export async function installDesktopRuntime(
 
           return null;
         },
+<<<<<<< HEAD
         dialog: {
           ask: async (message: string, options?: Record<string, unknown>) => {
             window.__capturedDialogCall = {
@@ -314,6 +518,34 @@ export async function installDesktopRuntime(
             window.__capturedDialogOpenCalls.push(options);
             return cfg.dialogOpenResult ?? null;
           },
+=======
+        open: async (options?: Record<string, unknown>) => {
+          window.__capturedDialogOpenCalls.push(options);
+          return cfg.dialogOpenResult ?? null;
+        },
+      },
+      getPendingOpenProject: async () => null,
+      events: {
+        on: async (event: string, handler: (payload: unknown) => void) => {
+          let listeners = eventListeners.get(event);
+          if (!listeners) {
+            listeners = new Set();
+            eventListeners.set(event, listeners);
+          }
+          listeners.add(handler);
+          return () => {
+            listeners?.delete(handler);
+          };
+        },
+      },
+    };
+
+    if (cfg.editorTargets) {
+      desktopBridge.editor = {
+        listTargets: async () => cfg.editorTargets ?? [],
+        openTarget: async (input: DesktopEditorOpenRecord) => {
+          await window.__recordDesktopEditorOpen?.(input);
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
         },
         getPendingOpenProject: async () => null,
         events: { on: async () => () => undefined },
@@ -356,9 +588,7 @@ export async function waitForDirectoryDialog(
 export async function openDesktopSettings(page: Page, serverId: string): Promise<void> {
   await openSettings(page);
   await openSettingsHost(page, serverId);
-  // The daemon-lifecycle card moved to the Host section in the flat-settings
-  // layout; navigate there before asserting it.
-  await openSettingsHostSection(page, serverId, "host");
+  await openSettingsHostSection(page, serverId, "daemon");
   await expect(page.getByTestId("host-page-daemon-lifecycle-card")).toBeVisible({
     timeout: 15_000,
   });

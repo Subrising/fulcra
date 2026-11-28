@@ -35,6 +35,7 @@ export function asSessionLogger(stub: {
 export function asAgentManager(stub: {
   [K in keyof SessionOptions["agentManager"]]?: unknown;
 }): SessionOptions["agentManager"] {
+<<<<<<< HEAD
   return createStub<SessionOptions["agentManager"]>(
     withTrustedSurface({
       listProviderSubagentActivity: () => [],
@@ -53,12 +54,34 @@ export function asAgentManager(stub: {
       ...stub,
     }),
   );
+=======
+  return createStub<SessionOptions["agentManager"]>({
+    listProviderSubagentActivity: () => [],
+    getRetiredInternalAgent: () => null,
+    effectiveOptionsFor: (_provider: string, own?: Record<string, unknown>) => own ?? {},
+    getAgentBackgroundWorkSummary: () => undefined,
+    ...stub,
+  });
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
 }
 
 export function asAgentStorage(stub: {
   [K in keyof SessionOptions["agentStorage"]]?: unknown;
 }): SessionOptions["agentStorage"] {
   return createStub<SessionOptions["agentStorage"]>({
+    listAll: async () => [],
+    listActive: async function (options) {
+      return (await this.listAll()).filter(
+        (record) => options?.includeArchived || !record.archivedAt,
+      );
+    },
+    listByWorkspaces: async function (ids, options) {
+      const selected = new Set(ids);
+      return (await this.listActive(options)).filter((record) =>
+        selected.has(record.workspaceId ?? ""),
+      );
+    },
+    lastUserMessageAtByWorkspace: async () => new Map<string, string>(),
     listByProviderSession: async () => [],
     listByWorkspace: async () => [],
     ...stub,
@@ -237,7 +260,7 @@ export function createProviderSnapshotManagerStub(): {
   const listModes = vi.fn<ProviderSnapshotManager["listModes"]>(async () => []);
   const resolveCreateConfig = vi.fn<ProviderSnapshotManager["resolveCreateConfig"]>(async () => ({
     modeId: undefined,
-    featureValues: undefined,
+    providerOptions: undefined,
   }));
   const resolveDefaultModel = vi.fn<ProviderSnapshotManager["resolveDefaultModel"]>(
     async () => undefined,
@@ -305,7 +328,7 @@ export function createProviderSnapshotManagerStub(): {
 
 export function createMessageReceiptsStub(): SessionOptions["messageReceipts"] {
   return {
-    send: (input) => input.send(),
+    send: (input) => input.send(async () => {}),
   };
 }
 

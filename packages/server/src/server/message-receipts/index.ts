@@ -172,8 +172,11 @@ interface SendMessageInput {
   agentId: string;
   messageId: string;
   request: unknown;
-  send: () => Promise<void>;
-  prepare?: () => Promise<void>;
+  /**
+   * Delivers the message. It awaits `beforeDispatch` immediately before the provider can receive
+   * the message; a failure before that call proves nothing was submitted and leaves no receipt.
+   */
+  send: (beforeDispatch: () => Promise<void>) => Promise<void>;
 }
 
 /** Owns message delivery receipts; creation is owned by CreationService. */
@@ -1959,6 +1962,7 @@ export class MessageReceipts {
   private async sendOnce(key: string, input: SendMessageInput): Promise<void> {
     const file = path.join(this.directory, `${key}.json`);
     const fingerprint = digest(input.request);
+<<<<<<< HEAD
     const checkExisting = async () => {
       await this.initialize();
       const existing = await readReceipt(file);
@@ -2002,6 +2006,22 @@ export class MessageReceipts {
     await this.serial(() =>
       writeJsonFileAtomic(file, { fingerprint, agentId: input.agentId, state: "completed" }),
     );
+=======
+    const existing = await readReceipt(file);
+    if (existing) {
+      if (existing.fingerprint !== fingerprint) throw new Error("agent_request_key_conflict");
+      if (existing.state === "completed") return;
+      // A provider may have accepted the message before its receipt was committed.
+      throw new Error("agent_request_outcome_unknown");
+    }
+    const receipt = { fingerprint, agentId: input.agentId };
+    let pending: Promise<void> | null = null;
+    await input.send(() => {
+      pending ??= writeJsonFileAtomic(file, { ...receipt, state: "pending" });
+      return pending;
+    });
+    await writeJsonFileAtomic(file, { ...receipt, state: "completed" });
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
   }
 }
 

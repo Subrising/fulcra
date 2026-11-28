@@ -19,12 +19,12 @@ async function setFontFamily(page: Page, name: string, family: string) {
   await input.press("Tab");
 }
 
-for (const name of ["Code font family", "Interface font family"]) {
-  test(`keeps settings usable after an unfinished quote in ${name}`, async ({ page }, testInfo) => {
-    await openAppearance(page);
-    await setFontFamily(page, name, "'Fira Code', monospace");
-    await expect(page.getByRole("textbox", { name })).toHaveValue("'Fira Code', monospace");
+test("keeps settings usable while editing code and interface font families", async ({
+  page,
+}, testInfo) => {
+  await openAppearance(page);
 
+<<<<<<< HEAD
     await setFontFamily(page, name, "'foo");
     await expect(page.getByRole("textbox", { name })).toHaveValue("'Fira Code', monospace");
     await expect(appearanceMenuRow(page)).toBeInViewport();
@@ -38,6 +38,27 @@ for (const name of ["Code font family", "Interface font family"]) {
     await expect(page.getByRole("textbox", { name })).toHaveValue("");
   });
 }
+=======
+  for (const name of ["Code font family", "Interface font family"]) {
+    await test.step(`reject an unfinished quote in ${name} and restore the default`, async () => {
+      await setFontFamily(page, name, "'Fira Code', monospace");
+      await expect(page.getByRole("textbox", { name })).toHaveValue("'Fira Code', monospace");
+
+      await setFontFamily(page, name, "'foo");
+      await expect(page.getByRole("textbox", { name })).toHaveValue("'Fira Code', monospace");
+      await expect(page.getByRole("button", { name: "Appearance", exact: true })).toBeInViewport();
+      await expect(page.getByText("Theme", { exact: true }).first()).toHaveCSS("font-size", "12px");
+
+      await page.screenshot({ path: testInfo.outputPath(`rejected-${name}.png`) });
+      await page.reload();
+      await expect(page.getByRole("textbox", { name })).toHaveValue("'Fira Code', monospace");
+      await expect(page.getByRole("button", { name: "Appearance", exact: true })).toBeInViewport();
+      await setFontFamily(page, name, "");
+      await expect(page.getByRole("textbox", { name })).toHaveValue("");
+    });
+  }
+});
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
 
 test("opens settings with defaults when a malformed font was already saved", async ({ page }) => {
   await page.addInitScript(() => {

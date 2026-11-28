@@ -55,21 +55,47 @@ desktop:
 app:
   - "packages/app/**"
   - "packages/expo-two-way-audio/**"
+  - "packages/react-native-enriched-markdown/**"
 
 sdk:
   - "packages/plugin/**"
   - "plugin-examples/**"
   - "public-docs/plugins/**"
+  - "skills/paseo-plugin/**"
   - "packages/client/**"
   - "packages/highlight/**"
   - "packages/protocol/**"
 
 browser:
+<<<<<<< HEAD
   - "packages/app/**"
   - "packages/server/**"
   - "packages/expo-two-way-audio/**"
   - "control/orca-organization/client/**"
   - "control/orca-organization/shared/**"
+=======
+  - "packages/server/src/server/agent/provider-snapshot-manager.ts"
+  - "packages/server/src/server/session/provider/provider-catalog-session.ts"
+  - "packages/client/src/compat/normalize-provider-models.ts"
+  - "packages/protocol/src/client-capabilities.ts"
+  - "packages/server/src/server/agent/provider-registry.ts"
+  - "packages/server/src/server/agent/agent-sdk-types.ts"
+  - "packages/server/src/server/agent/providers/codex-app-server-agent.ts"
+  - "packages/server/src/server/agent/providers/claude/agent.ts"
+  - "packages/server/src/server/agent/plugin-provider.ts"
+  - "packages/server/src/server/plugins/{index,plugin-process,plugin-process-protocol,runtime}.ts"
+  - "packages/server/src/executable-resolution/**"
+  - "packages/plugin/src/server/provider.ts"
+  - "packages/app/src/!(desktop)/**"
+  - "packages/app/e2e/browser/**"
+  - "packages/app/e2e/support/**"
+  - "packages/app/assets/**"
+  - "packages/app/public/**"
+  - "packages/app/index.ts"
+  - "packages/app/*config.{cjs,js,ts}"
+  - "packages/app/package.json"
+  - "packages/react-native-enriched-markdown/**"
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
 
 relay:
   - "packages/relay/**"

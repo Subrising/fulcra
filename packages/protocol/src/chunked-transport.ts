@@ -27,6 +27,7 @@ export class ChunkedTransport {
       supportsConcurrentWrites?: boolean;
       send: (frame: Frame, waitForDrain: boolean) => void | Promise<void>;
       deliver: (frame: Frame) => void;
+      onActivity?: () => void;
       onFailure?: (error: unknown) => void;
     },
   ) {
@@ -142,6 +143,7 @@ export class ChunkedTransport {
         { cause: error },
       );
     }
+    this.io.onActivity?.();
     if (message !== undefined) this.io.deliver(message);
   }
 

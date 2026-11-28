@@ -10,8 +10,9 @@
  * `@/agent-profiles/presentation` for the real glyph and picker view types;
  * other paths remain internal.
  *
- * `useAgentProfilePicker` deliberately hands the picker a flat row view model
- * and one `applyProfile(id)` callback rather than the profiles themselves: what
+ * `useAgentProfilePicker` deliberately hands the picker — and the Command Center,
+ * which offers the same rows — a flat row view model and one `applyProfile(id)`
+ * callback rather than the profiles themselves: what
  * a profile contains, and how it reaches a live agent versus a draft, stays in
  * here.
  */
@@ -27,5 +28,13 @@ export {
   type AgentProfilePickerRow,
   type DraftAgentProfileControls,
 } from "./internal/use-agent-profile-picker";
+<<<<<<< HEAD
 export { AgentProfileGlyph } from "./presentation";
 export { AgentProfilesSection } from "./settings/agent-profiles-section";
+=======
+export { AgentProfileGlyph } from "./internal/agent-profile-glyph";
+export {
+  AgentProfilesPage,
+  type AgentProfilesBeforeLeaveGuard,
+} from "./settings/agent-profiles-section";
+>>>>>>> refs/remotes/upstream/tags/v0.18.1

@@ -22,7 +22,7 @@ const ThemedRotateCw = withUnistyles(RotateCw, (theme) => ({
   color: theme.colors.foregroundMuted,
 }));
 
-export function DesktopNotificationsSection() {
+export function DesktopNotificationsSection({ title }: { title?: string } = {}) {
   const { t } = useTranslation();
   const { settings, isSaving, updateSettings } = useDesktopSettings();
   const {
@@ -94,7 +94,6 @@ export function DesktopNotificationsSection() {
     () => (
       <Button
         variant="ghost"
-        size="sm"
         leftIcon={refreshIcon}
         onPress={handleRefreshPress}
         disabled={isPermissionBusy}
@@ -121,7 +120,10 @@ export function DesktopNotificationsSection() {
   const notificationsGranted = snapshot?.notifications.state === "granted";
 
   return (
-    <SettingsSection title={t("settings.notifications.title")} trailing={refreshButton}>
+    <SettingsSection
+      title={title ?? t("settings.notifications.desktop.title")}
+      trailing={refreshButton}
+    >
       <View style={settingsStyles.card}>
         <DesktopPermissionRow
           title={t("settings.notifications.permission")}
@@ -183,7 +185,6 @@ export function DesktopNotificationsSection() {
           </View>
           <Button
             variant="outline"
-            size="sm"
             onPress={handleSendTestNotification}
             disabled={!notificationsGranted || isPermissionBusy || isSendingTestNotification}
           >

@@ -51,13 +51,13 @@ If the remote daemon has a password, enter it in **Daemon password**; it is stor
 
 ## Fulcra relay
 
-The relay works without Tailscale, port forwarding, or network configuration. Traffic is end-to-end encrypted.
+The relay works without Tailscale, port forwarding, or network configuration. Traffic is [end-to-end encrypted](/docs/security).
 
 Relay is disabled until you enable it.
 
 ### Enable relay from Fulcra Desktop
 
-1. Open **Settings → your host → Pair a device**.
+1. Open **Settings → your host → Devices → Relay**.
 2. Select **Enable relay**.
 3. Scan the QR code with Fulcra on your phone, or copy the pairing link and paste it into the phone app.
 
@@ -75,6 +75,7 @@ Confirm when prompted. Fulcra prints a QR code and pairing link. Scan the QR cod
 
 Install [Tailscale](https://tailscale.com/download) on the daemon machine and your phone. Sign in to the same tailnet on both devices.
 
+<<<<<<< HEAD
 ### 1. Find the daemon machine's Tailscale IP
 
 Run this on the daemon machine:
@@ -118,6 +119,12 @@ If Fulcra Desktop manages the daemon, use **Settings → your host → Overview 
 3. Enter the Tailscale IP in **Host**.
 4. Enter `6767` in **Port**.
 5. Leave **Use SSL** off and select **Connect**.
+=======
+1. On a device already connected to the host, open **Settings → your host → Devices**. You can also use the phone step during setup.
+2. Turn on **Tailscale** and copy the address.
+3. In Paseo on your phone, open **Settings → Add host → Direct connection**.
+4. Enter the IP in **Host** and the number after it in **Port**. Leave **Use SSL** off, then select **Connect**.
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
 
 If the host was already paired through the relay, Fulcra adds the direct connection to the same host.
 
@@ -128,4 +135,4 @@ If the host was already paired through the relay, Fulcra adds the direct connect
 - **SSH connects but Fulcra reports "Password required":** The remote daemon is password-protected. Remove the SSH connection from the host and add it again, this time entering the daemon password in **Daemon password**.
 - **Connection timed out:** Check that Tailscale is connected on both devices and that you used the daemon machine's Tailscale IP.
 - **Connection refused:** Run `paseo daemon status` and confirm the daemon is running on the configured IP and port.
-- **Config change has no effect:** Run `paseo reload`. `daemon.listen` is a startup setting, so restart when the command reports it.
+- **Config change has no effect:** Run `paseo reload`. Restart if the command reports a change to the main listen address.

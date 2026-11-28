@@ -62,6 +62,7 @@ import {
   getBundledCliShimPath,
   getCliInstallStatus,
   installCli,
+  uninstallCli,
 } from "../integrations/cli-install/index.js";
 import {
   openLocalTransportSession,
@@ -324,7 +325,7 @@ function normalizeVersion(version: string | null): string | null {
 }
 
 function shouldRestartForVersion(current: DesktopDaemonStatus): boolean {
-  if (!current.ownedByDesktop) return false;
+  if (!current.desktopManaged) return false;
   const appVersion = normalizeVersion(resolveDesktopAppVersion());
   const daemonVersion = normalizeVersion(current.version);
   return Boolean(appVersion && daemonVersion && appVersion !== daemonVersion);
@@ -1070,14 +1071,19 @@ export async function stopDesktopDaemon(
 ): Promise<DesktopDaemonStatus> {
   const home = getPaseoHome();
   const instance = await readDaemonInstance(home);
+<<<<<<< HEAD
   if (!ownedLaunch && instance && (await ownsCommandCentreSupervisor(home, instance)))
     ownedLaunch = { home, instance, endpoint: ownedEndpoint(home, instance) };
   const owned = Boolean(
+=======
+  const launchedThisSession = Boolean(
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
     instance &&
     ownedLaunch &&
     ownedLaunch.home === home &&
     isSameDaemonInstance(instance, ownedLaunch.instance),
   );
+  const owned = launchedThisSession || (await replacesDesktopDaemon(reason, instance));
   const explicit =
     reason === "manual_ipc" &&
     confirmedInstance &&
@@ -1098,8 +1104,26 @@ export async function stopDesktopDaemon(
   });
   await writeStopMarkers(home, instance, reason, owned);
   await stopCapturedDaemon({ home, instance, reason, keepTerminals });
-  if (owned) ownedLaunch = null;
+  if (launchedThisSession) ownedLaunch = null;
   return resolveDesktopDaemonStatus();
+}
+
+/** An app update or a version mismatch replaces the daemon with the one this Desktop bundles. */
+function isReplacement(reason: DesktopDaemonStopReason): boolean {
+  return reason === "app_update" || reason === "version_mismatch";
+}
+
+/**
+ * While Desktop manages the built-in daemon, a replacement applies to every daemon Desktop
+ * launched, which `paseo.pid` records as `desktopManaged`. That includes one an earlier Desktop
+ * session left running. Other automatic stops apply only to a daemon this session launched.
+ */
+async function replacesDesktopDaemon(
+  reason: DesktopDaemonStopReason,
+  instance: DaemonInstance | null,
+): Promise<boolean> {
+  if (!isReplacement(reason) || instance?.desktopManaged !== true) return false;
+  return (await getDesktopSettingsStore().get()).daemon.manageBuiltInDaemon;
 }
 
 export interface StopCapturedDaemonInput {
@@ -1166,7 +1190,7 @@ export function keepsTerminalsOnStop(
   platform: NodeJS.Platform,
 ): boolean {
   if (platform === "win32") return false;
-  return reason === "app_update" || reason === "version_mismatch";
+  return isReplacement(reason);
 }
 
 async function restartDaemon(): Promise<DesktopDaemonStatus> {
@@ -1205,7 +1229,17 @@ async function getLocalDaemonVersion(): Promise<{ version: string | null; error:
 async function resolveRequestedReleaseChannel(
   args: Record<string, unknown> | undefined,
 ): Promise<AppReleaseChannel> {
-  return parseReleaseChannel(args) ?? (await getDesktopSettingsStore().get()).releaseChannel;
+  const explicit = parseReleaseChannel(args);
+  if (explicit) return explicit;
+  try {
+    return (await getDesktopSettingsStore().get()).releaseChannel;
+  } catch (error) {
+    console.warn(
+      "[auto-updater] Failed to read release channel from desktop settings, defaulting to stable:",
+      error,
+    );
+    return "stable";
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1309,10 +1343,12 @@ export function createDaemonCommandHandlers(): Record<string, DesktopCommandHand
     },
     check_app_update: async (args) => {
       const currentVersion = resolveDesktopAppVersion();
+      const releaseChannel = await resolveRequestedReleaseChannel(args);
+      const intent = parseAppUpdateCheckIntent(args);
       return checkForAppUpdate({
         currentVersion,
-        releaseChannel: await resolveRequestedReleaseChannel(args),
-        intent: parseAppUpdateCheckIntent(args),
+        releaseChannel,
+        intent,
       });
     },
     install_app_update: async (args) => {
@@ -1326,6 +1362,7 @@ export function createDaemonCommandHandlers(): Record<string, DesktopCommandHand
     },
     get_local_daemon_version: () => getLocalDaemonVersion(),
     install_cli: () => installCli(),
+    uninstall_cli: () => uninstallCli(),
     get_cli_install_status: () => getCliInstallStatus(),
     // Device key (CONTRACTS §3.6): the private key stays in this process.
     device_status: () => getElectronDeviceKey().status(),

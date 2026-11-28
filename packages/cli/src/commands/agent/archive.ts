@@ -1,5 +1,10 @@
 import { Command } from "commander";
+<<<<<<< HEAD
 import { connectToDaemon, resolveAgentId } from "../../utils/client.js";
+=======
+import { connectToDaemon } from "../../utils/client.js";
+import { resolveAgentEntry, type AgentLookupClient } from "../../utils/agent-directory.js";
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
 import type {
   CommandOptions,
   SingleResult,
@@ -43,6 +48,7 @@ export interface AgentArchiveOptions extends CommandOptions {
 
 export type AgentArchiveCommandResult = SingleResult<AgentArchiveResult>;
 
+<<<<<<< HEAD
 type ArchiveClient = Pick<
   Awaited<ReturnType<typeof connectToDaemon>>,
   "fetchAgent" | "fetchAgents"
@@ -63,12 +69,27 @@ export async function findAgentToArchive(client: ArchiveClient, idOrName: string
   const agents = payload.entries.map((entry) => entry.agent);
   const agentId = resolveAgentId(idOrName, agents);
   return agentId ? (agents.find((entry) => entry.id === agentId) ?? null) : null;
+=======
+export interface AgentArchiveClient extends AgentLookupClient {
+  archiveAgent(agentId: string): Promise<{ archivedAt: string }>;
+  close(): Promise<void>;
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
 }
 
 export async function runArchiveCommand(
   agentIdArg: string,
   options: AgentArchiveOptions,
   _command: Command,
+): Promise<AgentArchiveCommandResult> {
+  return archiveAgent(agentIdArg, options);
+}
+
+export async function archiveAgent(
+  agentIdArg: string,
+  options: AgentArchiveOptions,
+  connect: (
+    options: Parameters<typeof connectToDaemon>[0],
+  ) => Promise<AgentArchiveClient> = connectToDaemon,
 ): Promise<AgentArchiveCommandResult> {
   // Validate arguments
   if (!agentIdArg || agentIdArg.trim().length === 0) {
@@ -80,12 +101,16 @@ export async function runArchiveCommand(
     throw error;
   }
 
-  const client = await connectToDaemon({ target: options.daemonTarget });
+  const client = await connect({ target: options.daemonTarget });
 
   try {
+<<<<<<< HEAD
     if (client.getLastServerInfoMessage()?.features?.agentArchiveSafety !== true)
       throw new Error("Update the host to use safe agent archive.");
     const agent = await findAgentToArchive(client, agentIdArg);
+=======
+    const agent = await resolveAgentEntry(client, agentIdArg);
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
     if (!agent) {
       const error: CommandError = {
         code: "AGENT_NOT_FOUND",

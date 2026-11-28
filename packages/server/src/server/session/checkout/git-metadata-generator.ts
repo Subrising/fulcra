@@ -98,8 +98,9 @@ export function createGitMetadataGenerator(deps: {
   /** Deliberate suggestions do not read project instructions or substitute fallback wording. */
   strictDraft?: { assertCurrent: () => void };
   logger: GitMetadataLogger;
+  readHostInstructions?: () => string | undefined;
 }): GitMetadataGenerator {
-  const { workspaceGitService, generation, logger } = deps;
+  const { workspaceGitService, generation, logger, readHostInstructions } = deps;
 
   async function generateOrFallback<T>(
     request: StructuredTextGenerationRequest<T>,
@@ -136,7 +137,12 @@ export function createGitMetadataGenerator(deps: {
     const patch = truncatePatch(diff.diff, input.maxPatchChars);
     return buildMetadataPrompt({
       cwd: input.cwd,
+<<<<<<< HEAD
       workspaceGitService: deps.strictDraft ? undefined : workspaceGitService,
+=======
+      workspaceGitService,
+      hostInstructions: readHostInstructions?.(),
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
       contract: input.contract,
       styles: [{ configKey: input.styleConfigKey, default: input.styleDefault }],
       after: [

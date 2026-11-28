@@ -102,6 +102,7 @@ function makeState(
       modeId: "",
       model: "",
       thinkingOptionId: "",
+      systemPrompt: "",
 
       ...overrides,
     },
@@ -296,7 +297,7 @@ describe("mergeSelectedComposerPreferences", () => {
             codex: {
               mode: "full-access",
               thinkingByModel: { "gpt-5.4-mini": "medium" },
-              featureValues: { fast_mode: true },
+              options: { fast_mode: true },
             },
             claude: { model: "claude-sonnet-4-6", modelChosenByUser: true },
           },
@@ -312,7 +313,7 @@ describe("mergeSelectedComposerPreferences", () => {
           modelChosenByUser: true,
           mode: "full-access",
           thinkingByModel: { "gpt-5.4-mini": "medium" },
-          featureValues: { fast_mode: true },
+          options: { fast_mode: true },
         },
         claude: { model: "claude-sonnet-4-6", modelChosenByUser: true },
       },
@@ -735,6 +736,7 @@ describe("resolveFormState", () => {
         modeId: true,
         model: true,
         thinkingOptionId: true,
+        systemPrompt: false,
       },
       makeState({
         provider: "codex",
@@ -1333,6 +1335,7 @@ describe("resolveAgentForm", () => {
         modelId: "anthropic/sonnet",
         modeId: "",
         thinkingOptionId: "",
+        systemPrompt: "",
         providerDef: TEST_PI_DEFINITION,
         providerModels: [{ provider: "pi", id: "anthropic/sonnet", label: "Sonnet" }],
         providerPrefs: { mode: "full-access", modeChosenByUser: true },
@@ -1342,6 +1345,7 @@ describe("resolveAgentForm", () => {
         provider: "pi",
         model: "anthropic/sonnet",
         modeId: "",
+        systemPrompt: "",
       });
     });
 
@@ -1352,6 +1356,7 @@ describe("resolveAgentForm", () => {
         modelId: "gpt-5.3-codex",
         modeId: "full-access",
         thinkingOptionId: "",
+        systemPrompt: "",
         providerDef: TEST_CODEX_DEFINITION,
         providerModels: CODEX_MODELS,
         providerPrefs: {
@@ -1361,6 +1366,56 @@ describe("resolveAgentForm", () => {
       });
 
       expect(next.form.thinkingOptionId).toBe("low");
+    });
+
+    it("sets systemPrompt from the profile, preserves it across mode/thinking edits, and clears it on model switch", () => {
+      let state = resolveAgentForm(makeState(), {
+        type: "APPLY_PROFILE_FROM_USER",
+        provider: "codex",
+        modelId: "gpt-5.3-codex",
+        modeId: "auto",
+        thinkingOptionId: "xhigh",
+        systemPrompt: "Always write tests first.",
+        providerDef: TEST_CODEX_DEFINITION,
+        providerModels: CODEX_MODELS,
+      });
+      expect(state.form.systemPrompt).toBe("Always write tests first.");
+
+      state = resolveAgentForm(state, { type: "SET_MODE_FROM_USER", modeId: "full-access" });
+      state = resolveAgentForm(state, {
+        type: "SET_THINKING_OPTION_FROM_USER",
+        thinkingOptionId: "low",
+      });
+      expect(state.form.systemPrompt).toBe("Always write tests first.");
+
+      const afterModelPick = resolveAgentForm(state, {
+        type: "SET_MODEL_FROM_USER",
+        modelId: "gpt-5.3-codex",
+        availableModels: CODEX_MODELS,
+        providerPrefs: undefined,
+      });
+      expect(afterModelPick.form.systemPrompt).toBe("");
+
+      const afterProviderModelPick = resolveAgentForm(state, {
+        type: "SET_PROVIDER_AND_MODEL_FROM_USER",
+        provider: "claude",
+        modelId: "claude-sonnet",
+        providerDef: TEST_CLAUDE_DEFINITION,
+        providerModels: null,
+      });
+      expect(afterProviderModelPick.form.systemPrompt).toBe("");
+
+      const afterProfileWithoutPrompt = resolveAgentForm(state, {
+        type: "APPLY_PROFILE_FROM_USER",
+        provider: "codex",
+        modelId: "gpt-5.3-codex",
+        modeId: "auto",
+        thinkingOptionId: "low",
+        systemPrompt: "",
+        providerDef: TEST_CODEX_DEFINITION,
+        providerModels: CODEX_MODELS,
+      });
+      expect(afterProfileWithoutPrompt.form.systemPrompt).toBe("");
     });
   });
 

@@ -1,3 +1,5 @@
+import type { createDaemonListeners } from "../../listeners.js";
+import type { DaemonConfigStore } from "../../daemon-config-store.js";
 import type pino from "pino";
 import type { ProviderAvailability } from "../../agent/agent-manager.js";
 import type { SessionInboundMessage, SessionOutboundMessage } from "../../messages.js";
@@ -23,6 +25,12 @@ export interface DaemonRuntimeConfig {
   worktreesRoot?: string;
   appBaseUrl?: string;
   desktopManaged?: boolean;
+  getListenStatus?: (
+    localEndpoint?: string,
+  ) =>
+    | ReturnType<ReturnType<typeof createDaemonListeners>["status"]>
+    | Promise<ReturnType<ReturnType<typeof createDaemonListeners>["status"]>>;
+  setTailscaleEnabled?: DaemonConfigStore["setTailscaleEnabled"];
   getRelayConfig(): {
     pairingOfferTtlSeconds?: number;
     enabled: boolean;
@@ -181,6 +189,7 @@ export class DaemonSession {
     }
   }
 
+<<<<<<< HEAD
   /**
    * Provider availability is an optional detail on a health answer, and it is not cheap:
    * listProviderAvailability probes every registered provider, and a probe resolves a launch
@@ -220,10 +229,24 @@ export class DaemonSession {
     } finally {
       clearTimeout(timer);
     }
+=======
+  async handleSetTailscaleRequest(
+    msg: Extract<SessionInboundMessage, { type: "daemon.tailscale.set.request" }>,
+    localEndpoint?: string,
+  ): Promise<void> {
+    const setEnabled = this.daemonRuntimeConfig?.setTailscaleEnabled;
+    if (!setEnabled) throw new Error("Tailscale is unavailable");
+    const result = await setEnabled(msg.enabled, localEndpoint, msg.confirmed === true);
+    this.host.emit({
+      type: "daemon.tailscale.set.response",
+      payload: { requestId: msg.requestId, ...result },
+    });
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
   }
 
   async handleGetStatusRequest(
     msg: Extract<SessionInboundMessage, { type: "daemon.get_status.request" }>,
+    localEndpoint?: string,
   ): Promise<void> {
     // Read outside the degraded-status fallback below: a status that cannot say whether
     // terminal cleanup finished must fail the request, not report that nothing is left.
@@ -231,9 +254,20 @@ export class DaemonSession {
       ({ pid, role, reason, detail }) => ({ pid, role, reason, detail }),
     );
     const terminalsUnavailable = this.getTerminalsUnavailable();
+    const listenStatus = await this.daemonRuntimeConfig?.getListenStatus?.(localEndpoint);
     try {
       const pidInfo = await getPidLockInfo(this.paseoHome);
+<<<<<<< HEAD
       const providers = await this.listProviderAvailabilityWithin(PROVIDER_PROBE_BUDGET_MS);
+=======
+      const availability =
+        msg.includeProviders === false ? [] : await this.listProviderAvailability();
+      const providers = availability.map((p) => ({
+        provider: p.provider,
+        available: p.available,
+        error: p.error ?? null,
+      }));
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
       this.host.emit({
         type: "daemon.get_status.response",
         payload: {
@@ -247,6 +281,7 @@ export class DaemonSession {
           relay: this.daemonRuntimeConfig?.getRelayConfig() ?? null,
           providers,
           terminalCleanupUnconfirmed,
+          ...listenStatus,
           ...(terminalsUnavailable ? { terminalsUnavailable } : {}),
         },
       });
@@ -265,6 +300,7 @@ export class DaemonSession {
           relay: null,
           providers: [],
           terminalCleanupUnconfirmed,
+          ...listenStatus,
           ...(terminalsUnavailable ? { terminalsUnavailable } : {}),
         },
       });

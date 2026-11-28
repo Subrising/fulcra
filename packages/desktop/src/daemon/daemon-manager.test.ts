@@ -16,20 +16,32 @@ import {
 
 const mocks = vi.hoisted(() => ({
   paseoHome: "",
+<<<<<<< HEAD
   config: {} as Record<string, unknown>,
   readInstance: vi.fn<
     () => Promise<{ pid: number; startedAt: string; desktopManaged: boolean } | null>
   >(async () => null),
   keychainGet: vi.fn<() => Promise<string | null>>(async () => "fake-only-secret"),
   keychainSet: vi.fn(async (_service: string, _password: string) => {}),
+=======
+  settingsError: null as Error | null,
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
   settings: {
-    releaseChannel: "stable",
+    releaseChannel: "stable" as "stable" | "beta",
+    updates: {
+      mode: "automatic" as "automatic" | "notify" | "off",
+    },
+    notifications: {
+      playSound: true,
+    },
     daemon: {
       manageBuiltInDaemon: true,
       keepRunningAfterQuit: true,
       commandCentreEnabled: false,
     },
   },
+  checkForAppUpdate: vi.fn(),
+  downloadAndInstallUpdate: vi.fn(),
   runExternalCliJsonCommand: vi.fn(),
   runExternalCliTextCommand: vi.fn(),
   createNodeEntrypointInvocation: vi.fn(() => ({
@@ -56,6 +68,8 @@ vi.mock("electron", () => ({
     getVersion: vi.fn(() => "1.2.3"),
     isPackaged: true,
   },
+  autoUpdater: undefined,
+  BrowserWindow: { getAllWindows: vi.fn(() => []) },
   ipcMain: { handle: vi.fn() },
   powerMonitor: { getSystemIdleTime: vi.fn(() => 0) },
   Notification: class {
@@ -119,6 +133,7 @@ vi.mock("@getpaseo/server/auth", () => ({
 }));
 vi.mock("../settings/desktop-settings-electron.js", () => ({
   getDesktopSettingsStore: () => ({
+<<<<<<< HEAD
     get: async () => mocks.settings,
     patch: async (patch: { daemon?: Record<string, unknown> }) => {
       mocks.settings = {
@@ -128,6 +143,15 @@ vi.mock("../settings/desktop-settings-electron.js", () => ({
       } as typeof mocks.settings;
       return mocks.settings;
     },
+=======
+    get: async () => {
+      if (mocks.settingsError) {
+        throw mocks.settingsError;
+      }
+      return mocks.settings;
+    },
+    patch: vi.fn(),
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
     migrateLegacyRendererSettings: vi.fn(),
   }),
 }));
@@ -138,6 +162,12 @@ vi.mock("./runtime-paths.js", () => ({
     entryPath: path.join(mocks.paseoHome, "daemon.js"),
     execArgv: [],
   })),
+}));
+
+vi.mock("../features/auto-updater.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  checkForAppUpdate: mocks.checkForAppUpdate,
+  downloadAndInstallUpdate: mocks.downloadAndInstallUpdate,
 }));
 
 vi.mock("./cli/external.js", async (importOriginal) => ({
@@ -154,6 +184,8 @@ describe("daemon-manager commands", () => {
     mocks.paseoHome = path.join(fixtureRoot, "home");
     mocks.appLogPath = path.join(fixtureRoot, "main.log");
     mocks.settings = DEFAULT_DESKTOP_SETTINGS;
+    mocks.checkForAppUpdate.mockReset();
+    mocks.downloadAndInstallUpdate.mockReset();
     mocks.runExternalCliJsonCommand.mockReset();
     mocks.runExternalCliTextCommand.mockReset();
     mocks.createNodeEntrypointInvocation.mockReset();
@@ -1443,6 +1475,54 @@ describe("owned startup and Settings recovery", () => {
     ).rejects.toThrow();
     expect(mocks.settings.daemon.commandCentreEnabled).toBe(false);
     expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
+  });
+
+  it("delegates update checks to checkForAppUpdate even when desktop-settings.json cannot be read", async () => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    mocks.checkForAppUpdate.mockResolvedValue({
+      hasUpdate: true,
+      readyToInstall: false,
+      downloading: true,
+      currentVersion: "1.2.3",
+      latestVersion: "1.2.4",
+      body: null,
+      date: null,
+      errorMessage: null,
+    });
+    mocks.downloadAndInstallUpdate.mockResolvedValue({
+      installed: true,
+      version: "1.2.4",
+      message: "Update downloaded.",
+    });
+
+    mocks.settingsError = new SyntaxError("Unexpected token } in JSON");
+    try {
+      await createDaemonCommandHandlers().check_app_update({
+        intent: "manual",
+        releaseChannel: "beta",
+      });
+      expect(mocks.checkForAppUpdate).toHaveBeenLastCalledWith({
+        currentVersion: "1.2.3",
+        releaseChannel: "beta",
+        intent: "manual",
+      });
+
+      await createDaemonCommandHandlers().check_app_update({ intent: "automatic" });
+      expect(mocks.checkForAppUpdate).toHaveBeenLastCalledWith({
+        currentVersion: "1.2.3",
+        releaseChannel: "stable",
+        intent: "automatic",
+      });
+
+      await createDaemonCommandHandlers().install_app_update({});
+      expect(mocks.downloadAndInstallUpdate).toHaveBeenLastCalledWith(
+        { currentVersion: "1.2.3", releaseChannel: "stable" },
+        expect.any(Function),
+      );
+    } finally {
+      mocks.settingsError = null;
+      consoleWarn.mockRestore();
+    }
   });
 });
 

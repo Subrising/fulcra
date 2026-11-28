@@ -20,8 +20,13 @@ Skills give your agents reusable instructions for delegation, handoffs, and revi
 
 ## Installation
 
+<<<<<<< HEAD
 - **In Fulcra:** Open **Settings → your host → Agents → Orchestration skills** and include **fulcra** in the skills you install on that host. Repeat on each host where your agents run. **All** includes new bundled skills; an existing custom selection keeps your choices.
 - **From the terminal:** The upstream Paseo skills remain available through `npx skills add getpaseo/paseo`. That upstream catalog does not contain Fulcra's skill; install **fulcra** from the app's bundled catalog.
+=======
+- **In Paseo:** Open **Settings → Host → Tools & prompts → Paseo skills** and choose which skills to install on that host.
+- **From the terminal:** Run `npx skills add getpaseo/paseo` on the machine where your agents run.
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
 
 Use the same settings card to update or uninstall skills. The host also refreshes selected installed skills on startup. Fulcra installs its skill in `~/.claude/skills/fulcra` for Claude and `~/.agents/skills/fulcra` for Codex's shared discovery. It does not install a second copy in `~/.codex/skills`, so Codex lists `/fulcra` once. Start a new provider session if its skill catalog was loaded before installation.
 

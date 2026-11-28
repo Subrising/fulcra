@@ -41,9 +41,17 @@ function createExternalCliInvocation(
   });
 }
 
+const DEFAULT_EXTERNAL_CLI_TIMEOUT_MS = 15_000;
+const EXTERNAL_CLI_KILL_GRACE_MS = 2_000;
+
 function spawnExternalCli(
   invocation: NodeEntrypointInvocation,
+<<<<<<< HEAD
   signal?: AbortSignal,
+=======
+  args: string[],
+  timeoutMs = DEFAULT_EXTERNAL_CLI_TIMEOUT_MS,
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
 ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -58,6 +66,44 @@ function spawnExternalCli(
 
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    let killTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const cleanupTimers = () => {
+      clearTimeout(timeoutTimer);
+      if (killTimer !== null) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
+    };
+
+    const timeoutTimer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      log.warn("[desktop external-cli]", "CLI command timed out", {
+        args,
+        timeoutMs,
+        command: invocation.command,
+        stdout: stdout.trim().slice(0, 500),
+        stderr: stderr.trim().slice(0, 500),
+      });
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // Ignore kill failures if the process already exited.
+      }
+      killTimer = setTimeout(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // Ignore kill failures if the process already exited.
+        }
+      }, EXTERNAL_CLI_KILL_GRACE_MS);
+      killTimer.unref?.();
+      reject(new Error(`CLI command timed out after ${timeoutMs}ms: ${args.join(" ")}`));
+    }, timeoutMs);
 
     child.stdout!.on("data", (data: Buffer) => {
       stdout += data.toString();
@@ -66,6 +112,7 @@ function spawnExternalCli(
       stderr += data.toString();
     });
 
+<<<<<<< HEAD
     // An abort ends the child process at once and rejects; its later close is ignored.
     const onAbort = () => {
       child.kill();
@@ -75,6 +122,23 @@ function spawnExternalCli(
     child.on("error", reject);
     child.on("close", (exitCode) => {
       signal?.removeEventListener("abort", onAbort);
+=======
+    child.on("error", (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanupTimers();
+      reject(error);
+    });
+    child.on("close", (exitCode) => {
+      if (settled) {
+        cleanupTimers();
+        return;
+      }
+      settled = true;
+      cleanupTimers();
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
       resolve({ stdout, stderr, exitCode });
     });
   });
@@ -94,7 +158,7 @@ function externalCliFailureMessage(
 
 export async function runExternalCliTextCommand(args: string[]): Promise<string> {
   const invocation = createExternalCliInvocation(args);
-  const result = await spawnExternalCli(invocation);
+  const result = await spawnExternalCli(invocation, args);
 
   if (result.exitCode !== 0) {
     const stderr = result.stderr.trim();
@@ -111,12 +175,18 @@ export async function runExternalCliTextCommand(args: string[]): Promise<string>
   return result.stdout.trimEnd();
 }
 
+<<<<<<< HEAD
 export async function runExternalCliJsonCommand(
   args: string[],
   options?: { env?: NodeJS.ProcessEnv; signal?: AbortSignal },
 ): Promise<unknown> {
   const invocation = createExternalCliInvocation(args, options?.env);
   const result = await spawnExternalCli(invocation, options?.signal);
+=======
+export async function runExternalCliJsonCommand(args: string[]): Promise<unknown> {
+  const invocation = createExternalCliInvocation(args);
+  const result = await spawnExternalCli(invocation, args);
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
 
   if (result.exitCode !== 0) {
     const stderr = result.stderr.trim();

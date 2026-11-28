@@ -3,6 +3,7 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const ar: TranslationResources = {
+<<<<<<< HEAD
   plugins: {
     // Fulcra 0.2.9: English until translated; the old text gave the host-password route.
     commandCentreRelay: en.plugins.commandCentreRelay,
@@ -12,6 +13,12 @@ export const ar: TranslationResources = {
     unknownProject: "المشروع غير معروف",
     reportsTo: "يتبع {{leader}}",
     unknownAccessibility: "المشروع المالك غير معروف",
+=======
+  pluginCombobox: {
+    searching: "جارٍ البحث…",
+    empty: "لا توجد نتائج",
+    failed: "فشل البحث: {{message}}",
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
   },
   paneFind: {
     connectionFailure: "تعذر البحث في هذه المحادثة. تحقق من الاتصال بالمضيف وأعد المحاولة.",
@@ -96,14 +103,23 @@ export const ar: TranslationResources = {
       close: "إغلاق القائمة",
     },
     commandCenter: {
-      placeholder: "ابحث في الأوامر والملفات ومساحات العمل والوكلاء...",
+      placeholder: "البحث في مساحات العمل والملفات والإجراءات...",
+      placeholderWithoutFiles: "البحث في مساحات العمل والإجراءات...",
       filePlaceholder: "البحث في الملفات...",
+      workspacePlaceholder: "البحث في مساحات العمل...",
+      actionPlaceholder: "البحث في الإجراءات...",
       searchingFiles: "جارٍ البحث في الملفات...",
       noMatches: "لا توجد مباريات",
       actions: "الإجراءات",
       files: "الملفات",
       workspaces: "مساحات العمل",
-      agents: "الوكلاء",
+      recentWorkspaces: "مساحات العمل الأخيرة",
+      tabs: {
+        all: "الكل",
+        workspaces: "مساحات العمل",
+        files: "الملفات",
+        actions: "الإجراءات",
+      },
       newAgent: "وكيل جديد",
       open: "فتح {{name}}",
       openInSidePane: "فتح {{name}} في اللوحة الجانبية",
@@ -112,6 +128,9 @@ export const ar: TranslationResources = {
       home: "بيت",
       groupByProject: "تجميع حسب المشروع",
       groupByStatus: "تجميع حسب الحالة",
+      copyBrowserHostName: "نسخ اسم مضيف المتصفح",
+      profileGroupLabel: "الملف الشخصي",
+      profileSearchKeywords: "ملف شخصي تطبيق ملف شخصي ملف الوكيل إعداد مسبق",
       modelGroupLabel: "النموذج",
       modelSearchKeywords: "تبديل النموذج تغيير النموذج تعيين النموذج اختيار النموذج",
       thinkingGroupLabel: "التفكير",
@@ -271,7 +290,7 @@ export const ar: TranslationResources = {
     states: {
       notFound: "لم يتم العثور على Agent",
       failedToLoad: "فشل تحميل الوكيل",
-      reconnecting: "جارٍ إعادة الاتصال بالمضيف",
+      reconnecting: "جارٍ إعادة الاتصال",
       updating: "جارٍ تحديث الرسائل",
       timelineSyncFailed: "تعذر تحديث سجل الوكيل.",
       timelineSyncRetrying: "جارٍ إعادة المحاولة…",
@@ -292,6 +311,7 @@ export const ar: TranslationResources = {
     archived: {
       callout: "تمت أرشفة هذا الوكيل",
       unarchive: "إلغاء الأرشفة",
+      unarchiving: "جارٍ إلغاء الأرشفة...",
     },
   },
   sessions: {
@@ -346,10 +366,12 @@ export const ar: TranslationResources = {
       viewDiagram: "عرض المخطط",
     },
     actions: {
+      copyQuote: "نسخ الاقتباس",
       copyCode: "نسخ الرمز",
       copyTurn: "نسخ بدوره",
       copyMessage: "انسخ الرسالة",
       forkMenu: "تفريع الرسالة",
+      turnStats: "إحصاءات الدور",
       forkInNewTab: "تفريع في تبويب جديد",
       forkInNewWorkspace: "تفريع في مساحة عمل جديدة",
       forkUnavailable: "حدّث المضيف لاستخدام هذا.",
@@ -379,6 +401,11 @@ export const ar: TranslationResources = {
       details: "تفاصيل",
     },
     dictation: {
+      insecureContext: "افتح Paseo عبر HTTPS أو localhost لاستخدام الميكروفون.",
+      unsupported: "الإملاء غير متاح في هذا المتصفح.",
+      noMicrophone: "صِل ميكروفونًا وحاول مرة أخرى.",
+      permissionDenied: "اسمح بالوصول إلى الميكروفون وحاول مرة أخرى.",
+      startFailed: "تعذر بدء الإملاء. حاول مرة أخرى.",
       paused: "تمت مقاطعة الميكروفون. في انتظار الاستئناف…",
       start: "بدء الإملاء الصوتي",
       cancel: "إلغاء الإملاء",
@@ -394,6 +421,25 @@ export const ar: TranslationResources = {
       next: "التالي",
       answerPlaceholder: "اكتب إجابتك...",
       otherPlaceholder: "آخر...",
+    },
+    backgroundWork: {
+      heartbeat: "نبضة دورية",
+      pillOne: "مهمة واحدة في الخلفية",
+      pillMany: "{{count}} مهمة في الخلفية",
+      notRunning: "لم يعد قيد التشغيل",
+      dismiss: "إغلاق",
+      stop: "إيقاف",
+      stopping: "جارٍ الإيقاف…",
+      stopError: "تعذر تأكيد الإيقاف.",
+      label: "في الخلفية",
+      title: "عمل الخلفية",
+      waiting: "بانتظار تفاصيل عمل الخلفية",
+      error: "تعذر تحميل عمل الخلفية",
+      retry: "إعادة المحاولة",
+      running: "عمل الخلفية قيد التشغيل",
+      shell: "الصدفة",
+      monitor: "المراقبة",
+      other: "عمل آخر",
     },
     todo: {
       title: "المهام",
@@ -468,8 +514,7 @@ export const ar: TranslationResources = {
         archivedTitle: "مساحة العمل مؤرشفة",
         restoreDescription:
           "استعد {{workspaceName}} للعودة إلى وكلائها. ستستخدم شجرة العمل الفرع {{branch}}.",
-        restoreWithoutBranchDescription:
-          "استعد {{workspaceName}} للعودة إلى وكلائها. سيبدأ فرع جديد من الفرع الأساسي المحفوظ أو الفرع الافتراضي للمستودع.",
+        restoreWithoutBranchDescription: "استعد {{workspaceName}} للعودة إلى وكلائها.",
         unarchiveDescription: "{{workspaceName}} مؤرشفة. ألغِ أرشفتها لفتحها مجددًا.",
         restoreAction: "استعادة",
         unarchiveAction: "إلغاء الأرشفة",
@@ -628,6 +673,24 @@ export const ar: TranslationResources = {
         failedToLoad: "فشل تحميل الصفحة",
         invalidUrl: "متصفح غير صالح URL",
         unsupportedProtocol: "متصفح محظور غير مدعوم URL:{{protocol}}",
+      },
+      routing: {
+        tooltipHost: "التصفح عبر {{hostName}}. انقر للتصفح محلياً.",
+        tooltipLocal: "التصفح محلياً. انقر للتصفح عبر {{hostName}}.",
+        switchToLocal: "تبديل توجيه المتصفح من {{hostName}} إلى محلي",
+        switchToHost: "تبديل توجيه المتصفح من محلي إلى {{hostName}}",
+      },
+      proxy: {
+        connecting: "جارٍ الاتصال بـ {{hostName}}...",
+        reconnecting: "جارٍ إعادة الاتصال بـ {{hostName}}...",
+        updateTitle: "حدّث {{hostName}} للتصفح عبر هذا المضيف",
+        updateDescription: "لا يدعم هذا المضيف وكيل المتصفح بعد.",
+        routedTitle: "وكيل المتصفح غير متاح للمضيفين الموجَّهين",
+        routedDescription: "اتصل مباشرة بهذا المضيف أو تصفح محلياً.",
+        offlineTitle: "{{hostName}} غير متصل",
+        offlineDescription: "انتظر إعادة اتصال المضيف أو تصفح محلياً.",
+        errorTitle: "تعذر الاتصال بوكيل المتصفح",
+        browseLocally: "التصفح محلياً",
       },
     },
     terminal: {
@@ -889,6 +952,7 @@ export const ar: TranslationResources = {
           pushNoRemote: "الدفع غير متاح هنا لأن هذا الفرع غير متصل بجهاز التحكم عن بعد بعد",
           pushBehind: "الدفع غير متاح حتى الآن نظرًا لوجود تغييرات أحدث يجب إدخالها أولاً",
           pushNothing: "خدمة الدفع غير متاحة لأنه لا يوجد شيء جديد لإرساله",
+          pushUpstreamGone: "الدفع غير متاح لأن الفرع الذي يتتبعه هذا الفرع لم يعد موجودًا",
           pullAndPushNoRemote:
             "السحب والدفع غير متاح هنا لأن هذا الفرع غير متصل بجهاز التحكم عن بعد بعد",
           pullAndPushDirty:
@@ -933,6 +997,8 @@ export const ar: TranslationResources = {
         },
         archiveWarning: {
           title: 'الأرشيف "{{workspaceName}}"؟',
+          bulkTitle: "أرشفة {{count}} مساحات عمل؟",
+          bulkWorkspaceReason: "{{workspaceName}}: {{reason}}",
           confirm: "أرشيف",
           cancel: "يلغي",
           uncommittedChanges: "تغييرات غير ملتزم بها",
@@ -946,6 +1012,9 @@ export const ar: TranslationResources = {
         },
       },
       diff: {
+        baseBranch: {
+          title: "الفرع الأساسي",
+        },
         openChangesTab: "فتح علامة تبويب التغييرات",
         openDiffTab: "فتح علامة تبويب الفرق",
         closeChangesTab: "إغلاق علامة تبويب التغييرات",
@@ -1167,6 +1236,8 @@ export const ar: TranslationResources = {
     title: "ما الجديد",
     installed: "مثبّت",
     showMore: "عرض المزيد",
+    showAllChanges: "عرض كل التغييرات",
+    hideAllChanges: "إخفاء كل التغييرات",
     openWebsite: "سجل التغييرات الكامل",
     error: {
       title: "تعذّر تحميل سجل التغييرات",
@@ -1391,6 +1462,14 @@ export const ar: TranslationResources = {
     },
   },
   sidebar: {
+    view: {
+      failed: "تعذر تحميل عرض الشريط الجانبي.",
+      useDefault: "استخدام العرض الافتراضي",
+      readFailed: "تعذر تحميل تفضيل عرض الشريط الجانبي.",
+      agentUnavailable: "لم يعد الوكيل متاحًا",
+      terminalUnavailable: "لم تعد الطرفية متاحة",
+      projectUnavailable: "لم يعد المشروع متاحًا",
+    },
     statusGroupAccessibility: "مجموعة {{label}}",
     statusBucket: {
       needsInput: "تحتاج إدخالاً",
@@ -1466,6 +1545,7 @@ export const ar: TranslationResources = {
       hosts: "المضيفون",
       settings: "إعدادات",
       closeSidebar: "إغلاق الشريط الجانبي",
+      moreActions: "المزيد من الإجراءات",
     },
     footer: {
       usage: "الاستخدام",
@@ -1547,6 +1627,7 @@ export const ar: TranslationResources = {
         rename: "إعادة تسمية مساحة العمل",
         pin: "تثبيت في الأعلى",
         unpin: "إلغاء التثبيت",
+        select: "تحديد",
         archive: "أرشيف",
         archiveWorkspace: "أرشفة مساحة العمل",
         hideFromSidebar: "إخفاء من الشريط الجانبي",
@@ -1565,6 +1646,10 @@ export const ar: TranslationResources = {
         submit: "إعادة تسمية",
         invalidBranchName: "اسم الفرع غير صالح",
       },
+      selection: {
+        count: "تم تحديد {{count}}",
+        exit: "إنهاء التحديد",
+      },
       toasts: {
         workspacePathUnavailable: "مسار Workspace غير متوفر",
         pathCopied: "تم نسخ المسار",
@@ -1572,6 +1657,11 @@ export const ar: TranslationResources = {
         hostDisconnected: "Host غير متصل",
         hideFailed: "فشل في إخفاء مساحة العمل",
         archiveFailed: "فشل في أرشفة مساحة العمل",
+        archiveMultipleFailed: "فشل في أرشفة {{count}} مساحات عمل",
+        archived: "تمت أرشفة مساحة العمل",
+        archivedCount: "تمت أرشفة {{count}} مساحات عمل",
+        undoArchive: "تراجع",
+        undoArchiveFailed: "تعذّر التراجع عن الأرشفة",
       },
     },
   },
@@ -1579,8 +1669,9 @@ export const ar: TranslationResources = {
     title: "مساحة عمل جديدة",
     create: "يخلق",
     isolation: {
-      local: "محلي",
+      local: "مجلد المشروع",
       worktree: "شجرة عمل جديدة",
+      existing: "شجرة عمل موجودة",
       label: "العزل",
     },
     fields: {
@@ -1595,12 +1686,17 @@ export const ar: TranslationResources = {
       createWorktreeFailed: "فشل في إنشاء شجرة العمل",
       composerStateRequired: "حالة الملحن مطلوبة",
       selectModel: "اختر نموذجا",
+      branchInProjectDirectory:
+        "الفرع {{branch}} مفعّل في مجلد المشروع. اختر مجلد المشروع للعمل عليه، أو أنشئ فرعًا جديدًا منه.",
+      branchInWorktree:
+        "الفرع {{branch}} مفعّل في {{path}}. اختر شجرة العمل هذه من شجرة عمل موجودة، أو أنشئ فرعًا جديدًا منه.",
     },
     tooltips: {
       project: "Choose the project",
       host: "Choose the host",
       isolation: "Choose the isolation level",
       startingRef: "اختر من أين تبدأ",
+      worktree: "اختر شجرة العمل التي تعمل فيها",
       launch: "Choose what to launch",
     },
     refPicker: {
@@ -1608,8 +1704,31 @@ export const ar: TranslationResources = {
       intoBase: "إلى {{baseRef}}",
       searching: "جارٍ البحث...",
       noMatchingRefs: "لا توجد مراجع مطابقة.",
-      searchPlaceholder: "بحث الفروع والعلاقات العامة",
+      searchBranches: "ابحث في الفروع",
+      searchPullRequests: "ابحث في طلبات الدمج",
+      searchPullRequests_mr: "ابحث في MR",
+      branches: "الفروع",
+      pullRequests: "طلبات الدمج",
+      pullRequests_mr: "MR",
+      pullRequestsShort: "الدمج",
+      pullRequestsShort_mr: "MR",
+      branchOff: "فرع جديد",
+      checkout: "العمل عليه",
+      branchOffHint: "ينشئ فرعًا جديدًا منه",
+      checkoutHint: "يعمل عليه مباشرة",
+      base: "الأساس",
+      from: "من",
+      branch: "الفرع",
+      pullRequest: "طلب الدمج",
+      pullRequest_mr: "MR",
+      inProjectDirectory: "في مجلد المشروع",
+      inWorktree: "في شجرة عمل",
       title: "ابدأ من",
+    },
+    worktreePicker: {
+      title: "شجرة العمل",
+      searchPlaceholder: "ابحث في أشجار العمل",
+      empty: "لا توجد أشجار عمل مطابقة.",
     },
     launch: {
       title: "What to launch",
@@ -1687,6 +1806,8 @@ export const ar: TranslationResources = {
       status: {
         checking: "جارٍ التحقق من وجود تحديثات للتطبيق...",
         installing: "جارٍ تثبيت تحديث التطبيق...",
+        downloadingVersionProgress: "جارٍ تنزيل {{version}}... {{percent}}%",
+        downloadingProgress: "جارٍ تنزيل تحديث التطبيق... {{percent}}%",
         upToDate: "التطبيق محدث.",
         upToDateWithLastChecked: "Up to date. Last checked at {{time}}.",
         pending: "سنخبرك عندما يصبح التحديث جاهزًا.",
@@ -1694,6 +1815,14 @@ export const ar: TranslationResources = {
         pendingWithVersion: "تم العثور على تحديث: {{version}}. جارٍ التنزيل...",
         pendingWithVersionAndLastChecked:
           "تم العثور على تحديث: {{version}}. جارٍ التنزيل... آخر فحص في {{time}}.",
+        pendingWithVersionProgress: "تم العثور على تحديث: {{version}}. جارٍ التنزيل... {{percent}}%",
+        pendingWithVersionProgressAndLastChecked:
+          "تم العثور على تحديث: {{version}}. جارٍ التنزيل... {{percent}}% آخر فحص في {{time}}.",
+        downloadAvailableWithVersion: "التحديث متاح: {{version}}",
+        downloadAvailableWithVersionAndLastChecked:
+          "التحديث متاح: {{version}}. آخر فحص في {{time}}.",
+        downloadAvailable: "يتوفر تحديث للتطبيق.",
+        downloadAvailableWithLastChecked: "يتوفر تحديث للتطبيق. آخر فحص في {{time}}.",
         availableWithVersion: "التحديث جاهز:{{version}}",
         availableWithVersionAndLastChecked: "التحديث جاهز:{{version}}. آخر فحص في {{time}}.",
         available: "تحديث التطبيق جاهز للتثبيت.",
@@ -1704,14 +1833,21 @@ export const ar: TranslationResources = {
       },
       installError: "غير قادر على تثبيت تحديث تطبيق سطح المكتب.",
       callout: {
+        downloadingTitle: "جارٍ تنزيل التحديث",
         installingTitle: "تثبيت التحديث",
         failedTitle: "فشل التحديث",
         availableTitle: "التحديث متاح",
         genericError: "حدث خطأ ما.",
         whatsNew: "ما هو الجديد",
+        downloadingAction: "جارٍ التنزيل...",
         installingAction: "جارٍ التثبيت...",
+        downloadAndRestart: "تنزيل",
         installAndRestart: "التثبيت وإعادة التشغيل",
+        downloadingVersionDescription: "جارٍ تنزيل {{version}}... {{percent}}%",
+        downloadingDescription: "جارٍ تنزيل التحديث... {{percent}}%",
         installingDescription: "التثبيت وإعادة التشغيل...",
+        versionAvailable: "{{version}} متاح للتنزيل.",
+        newVersionAvailable: "يتوفر إصدار جديد للتنزيل.",
         versionReady: "{{version}}جاهز للتثبيت.",
         newVersionReady: "إصدار جديد جاهز للتثبيت.",
         restartWarning: "ستؤدي ترقية التطبيق إلى إيقاف تشغيل الوكلاء وإغلاق الجلسات الطرفية.",
@@ -1775,7 +1911,13 @@ export const ar: TranslationResources = {
     integrations: {
       cli: {
         statusFailed: "غير قادر على التحقق من حالة تثبيت CLI.",
+<<<<<<< HEAD
         installFailed: "غير قادر على تثبيت واجهة سطر أوامر Fulcra.",
+=======
+        installFailed: "غير قادر على تثبيت PaseoCLI.",
+        uninstallFailed: "تعذر إلغاء تثبيت Paseo CLI.",
+        keptForeign: "تم الإبقاء على أمر paseo لم يثبته Paseo. احذفه بنفسك لإلغاء تثبيته.",
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
       },
     },
   },
@@ -1827,6 +1969,7 @@ export const ar: TranslationResources = {
     openPath: "فتح المسار",
   },
   branchSwitcher: {
+    failedToLoad: "تعذّر تحميل الفروع. أعد فتح قائمة الفروع للمحاولة مرة أخرى.",
     triggerTooltip: "تبديل فرع مساحة العمل",
     currentBranch: "الفرع الحالي:{{branchName}}. اضغط لتبديل الفرع.",
     placeholder: "تبديل الفرع...",
@@ -1849,9 +1992,17 @@ export const ar: TranslationResources = {
     loadingCommands: "جارٍ تحميل الأوامر...",
     noFiles: "لم يتم العثور على ملفات أو أدلة",
     noCommands: "لم يتم العثور على أي أوامر",
+<<<<<<< HEAD
     accountUnavailable: "أوامر الحساب غير متاحة لهذا الكمبيوتر بعد. حدّث Fulcra على {{host}}.",
     thisComputer: "هذا الكمبيوتر",
     failedToLoad: "فشل التحميل",
+=======
+    loadingProviderCommands: "جارٍ تحميل أوامر {{provider}}...",
+    commandsFailed: "تعذر تحميل الأوامر",
+    providerCommandsFailed: "تعذر تحميل أوامر {{provider}}",
+    filesFailed: "تعذر البحث في الملفات",
+    skillTag: "مهارة",
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
     chooseProjectForCommands: "اختر مشروعًا لعرض الأوامر",
     chooseModelForCommands: "اختر نموذجًا لعرض الأوامر",
   },
@@ -1889,7 +2040,59 @@ export const ar: TranslationResources = {
     },
   },
   onboarding: {
+<<<<<<< HEAD
     title: "مرحبا بكم في Fulcra",
+=======
+    setup: {
+      title: "Paseo",
+      stepCounter: "الخطوة {{current}} من {{total}}",
+      skip: "تخطي الإعداد",
+      continue: "متابعة",
+      finish: "إنهاء",
+      steps: {
+        appearance: {
+          label: "المظهر",
+          title: "مرحبًا بك في Paseo",
+          description: "لنبدأ باختيار المظهر",
+        },
+        providers: {
+          label: "المزوّدون",
+          title: "مزوّدوك",
+          description: "يشغّل Paseo أدوات CLI للوكلاء المثبتة على هذا الكمبيوتر",
+        },
+        projects: {
+          label: "المشاريع",
+          title: "أضف مشاريعك",
+          description: "أين تريد أن يعمل وكلاؤك",
+          addProject: "إضافة مشروع",
+          added: "تمت الإضافة",
+          suggestions: {
+            loading: "جارٍ البحث عن المجلدات التي عملت فيها",
+            empty: "لم يتم العثور على مشاريع حديثة",
+            lastUsed: "آخر استخدام {{time}}",
+            addSelected_one: "إضافة مشروع واحد ({{count}})",
+            addSelected_other: "إضافة {{count}} مشاريع",
+            adding: "جارٍ الإضافة…",
+            addFailed: "تعذّرت إضافة هذا المجلد",
+          },
+        },
+        orchestration: {
+          label: "التنسيق",
+          title: "اسمح للوكلاء باستخدام Paseo",
+          description: "اسمح لوكلائك بإنشاء مساحات عمل والتحدث مع وكلاء آخرين",
+        },
+        phone: {
+          label: "الجوال",
+          title: "خذ وكلاءك معك",
+          description:
+            "يتيح لك تطبيق الجوال الأصلي كامل الميزات التحكم في أي كمبيوتر يعمل عليه Paseo من هاتفك",
+          appStore: "App Store",
+          googlePlay: "Google Play",
+        },
+      },
+    },
+    title: "مرحبا بكم في Paseo",
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
     subtitle: "قم بتوصيل جهاز الكمبيوتر الخاص بك للبدء",
     actions: {
       settings: "إعدادات",
@@ -1908,11 +2111,15 @@ export const ar: TranslationResources = {
     defaultModel: "تقصير",
     profiles: "الملفات الشخصية",
     providers: "المزودون",
+    models: "النماذج",
     model: "النموذج",
     editProfiles: "تحرير",
     editProfilesLabel: "تحرير ملفات الوكيل",
     createProfile: "إنشاء ملف شخصي",
     createProfileFromModel: "إنشاء ملف شخصي من هذا النموذج",
+    profileSaved: 'تم حفظ "{{name}}"',
+    undo: "تراجع",
+    undoProfileSave: "التراجع عن حفظ الملف الشخصي",
     editProfileLabel: "تحرير {{name}}",
     editProfilesCount: "تحرير الملفات الشخصية ({{count}})",
     modelCount: "{{count}} نموذج",
@@ -1961,6 +2168,33 @@ export const ar: TranslationResources = {
       noModelAvailable: "لا يوجد نموذج متاح للموفر المحدد",
       workspaceDirectoryNotFound: "لم يتم العثور على دليل Workspace",
       hostDisconnected: "Host غير متصل",
+    },
+  },
+  devices: {
+    title: "الأجهزة",
+    waysToConnect: "طرق الاتصال",
+    docs: "الوثائق",
+    docsAccessibility: "افتح وثائق الاتصال",
+    relay: { title: "التتابع", hint: "دون إعداد، مشفّر من طرف إلى طرف، امسح رمز QR" },
+    tailscale: {
+      hint: "اتصال مباشر عبر شبكة tailnet الخاصة بك، أدخل عنوانًا",
+      unavailable: "Tailscale لا يعمل على هذا المضيف",
+      install: "احصل على Tailscale",
+      refresh: "تحديث",
+      refreshing: "جارٍ التحديث...",
+      waiting: "في انتظار بدء Tailscale على هذا المضيف",
+      alwaysOn: "مفعّل دائمًا، لأن هذا المضيف يقبل اتصالات Tailscale بالفعل",
+      socket: "متوقف، لأن هذا المضيف يستمع على مقبس محلي",
+      launch: "يتحكم فيه الأمر الذي يشغّل هذا المضيف",
+      update: "حدّث هذا المضيف لاستخدام Tailscale",
+      updateDocs: "طريقة التحديث",
+      address: "على هاتف متصل بـ Tailscale، أضف مضيفًا بهذا العنوان",
+      statusError: "تعذّر التحقق من Tailscale",
+      turnOnError: "تعذّر تشغيل Tailscale",
+      turnOffError: "تعذّر إيقاف Tailscale",
+      confirmTitle: "إيقاف Tailscale؟",
+      confirmMessage: "هذا الجهاز متصل عبر Tailscale وسيفقد اتصاله بالمضيف.",
+      confirmAction: "إيقاف",
     },
   },
   pairing: {
@@ -2128,7 +2362,13 @@ export const ar: TranslationResources = {
       notNow: "ليس الآن",
       directConnectionHint:
         "بدون التتابع، اتصل مباشرة عبر TCP أو Tailscale أو شبكة VPN أخرى. لن يتم إنشاء رمز QR.",
+<<<<<<< HEAD
       updateRequired: "حدّث المضيف لتمكين التتابع من Fulcra Desktop.",
+=======
+      tailscaleDocs: "إعداد Tailscale",
+      tailscaleDocsAccessibility: "اقرأ كيفية الاتصال عبر Tailscale",
+      updateRequired: "حدّث المضيف لتمكين التتابع من Paseo Desktop.",
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
       unavailable: "عرض الاقتران غير متاح.",
       hint: "قم بمسح رمز QR هذا باستخدام Fulcra على هاتفك، أو انسخ الرابط أدناه.",
       securityWarning:
@@ -2174,6 +2414,7 @@ export const ar: TranslationResources = {
     hostUnavailable: "مضيف التنزيل غير متاح.",
     cancelled: "تم إلغاء التنزيل.",
     failed: "فشل تنزيل الملف.",
+    httpFailed: "فشل تنزيل الملف (HTTP {{status}}).",
     shareFile: "مشاركة الملف",
     shareFileNamed: "مشاركة{{fileName}}",
   },
@@ -2621,6 +2862,7 @@ export const ar: TranslationResources = {
     turnOn: "تشغيل",
 
     options: "الإعدادات",
+    host: "المضيف",
     refreshFailed: "تعذّر تحديث الاستخدام",
     noHosts: "لا توجد مضيفات متصلة",
     agentError: "تعذّر تحميل الاستخدام: {{reason}}",
@@ -2637,6 +2879,12 @@ export const ar: TranslationResources = {
     loginExpired: "انتهت صلاحية تسجيل الدخول {{relativeTime}}. {{remedy}}",
     title: "استخدام الخطة",
     refresh: "تحديث",
+    reorderCard: "إعادة ترتيب {{source}}",
+    sources: "المصادر",
+    sourcesCount: "{{shown}} من {{total}}",
+    providerInactive: "المزود غير نشط",
+    allSourcesHidden: "لا توجد مصادر استخدام معروضة",
+    chooseSources: "اختيار المصادر",
     refreshAll: "تحديث الكل",
     refreshing: "جارٍ التحديث...",
     loading: "جارٍ تحميل بيانات الاستخدام...",
@@ -2695,8 +2943,9 @@ export const ar: TranslationResources = {
       resetsIn: "تتم إعادة التعيين خلال {{duration}}",
       resetsAtWeekday: "{{weekday}} {{time}}",
       resetsAtDate: "{{date}}، {{time}}",
-      runsOutNow: "ينفد الآن",
-      runsOutIn: "ينفد خلال {{duration}}",
+      limitReached: "تم بلوغ الحد",
+      mayHaveRunOut: "ربما نفدت الحصة",
+      runsOutAt: "ينفد عند {{time}}",
       justNow: "الآن",
       daysAgo: "قبل {{value}} يومًا",
       daysAgo_zero: "قبل {{value}} يوم",
@@ -2726,7 +2975,7 @@ export const ar: TranslationResources = {
     title: "إعدادات",
     loading: "جارٍ تحميل الإعدادات...",
     groups: {
-      app: "برنامج",
+      app: "هذا الجهاز",
       host: "Host",
     },
     menu: en.settings.menu,
@@ -2745,7 +2994,9 @@ export const ar: TranslationResources = {
     groupInfo: "حول{{title}}",
     sections: {
       general: "عام",
+      hosts: "المضيفون",
       chat: "الدردشة",
+      chatAndPanes: "الدردشة والأجزاء",
       appearance: "مظهر",
       sidebar: "الشريط الجانبي",
       terminal: "الطرفية",
@@ -2759,6 +3010,16 @@ export const ar: TranslationResources = {
       diagnostics: "التشخيص",
       about: "عن",
       licenses: "التراخيص",
+    },
+    clientHosts: {
+      title: "المضيفون المحفوظون",
+      info: "المضيفون الذين يتصل بهم هذا الجهاز. الأسماء والأيقونات والشارات والمسارات هنا تؤثر على هذا الجهاز فقط.",
+      backToHosts: "العودة إلى المضيفين",
+      routesTitle: "كيف يتصل هذا الجهاز",
+      routesInfo:
+        "المسارات المحفوظة التي يستخدمها هذا الجهاز للوصول إلى هذا المضيف. يختار Paseo أسرع مسار متاح.",
+      addRoute: "إضافة مسار",
+      activeRoute: "نشط",
     },
     layout: en.settings.layout,
     editor: {
@@ -2776,6 +3037,47 @@ export const ar: TranslationResources = {
     },
     notifications: {
       title: "الإشعارات",
+      enabled: {
+        label: "تفعيل الإشعارات",
+        description: "تلقّي الإشعارات من الوكلاء والطرفيات والإضافات على هذا الجهاز",
+        pausedDescription: "جميع الإشعارات، بما في ذلك الإضافات، متوقفة مؤقتًا على هذا الجهاز",
+      },
+      events: {
+        title: "الأحداث",
+        agentPermission: {
+          label: "الوكيل يحتاج إلى إذن",
+          description: "الموافقات والخطط والأسئلة",
+        },
+        agentError: {
+          label: "تعطّل الوكيل بخطأ",
+          description: "عندما يتوقف الوكيل بسبب خطأ",
+        },
+        agentFinished: {
+          label: "انتهى الوكيل",
+          description: "عندما يكمل الوكيل دورة عمل",
+        },
+        terminalNeedsInput: {
+          label: "الطرفية تنتظر إدخالًا",
+          description: "عندما ينتظر أمر الطرفية إدخالًا",
+        },
+        terminalFinished: {
+          label: "انتهى أمر الطرفية",
+          description: "عندما ينتهي أمر في الطرفية",
+        },
+      },
+      plugins: {
+        title: "الإضافات",
+        enabled: {
+          label: "إشعارات الإضافات",
+          description: "السماح للإضافات المثبتة بإرسال إشعارات",
+        },
+        empty: "تظهر الإضافات المثبتة هنا لكتمها بشكل فردي",
+      },
+      legacyHostTitle: "حدّث المضيف لتفضيلات الإشعارات الفورية",
+      legacyHostHint: "حدّث المضيفين المتصلين لمزامنة تفضيلات الإشعارات المخصصة من هذا الجهاز",
+      desktop: {
+        title: "النظام",
+      },
       permission: "إذن الإشعارات",
       refreshAccessibility: "تحديث إذن الإشعارات",
       playSound: "تشغيل صوت",
@@ -2798,6 +3100,8 @@ export const ar: TranslationResources = {
       projects: "المشاريع",
       connections: "اتصالات",
       agents: "Agents",
+      tools: "الأدوات والتعليمات",
+      agentProfiles: "ملفات الوكيل",
       metadata: "البيانات الوصفية",
       voice: "الصوت",
       workspaces: "Workspaces",
@@ -2806,20 +3110,33 @@ export const ar: TranslationResources = {
       terminals: "Terminals",
       plugins: "Plugins",
       host: "نظرة عامة",
+      daemon: "الخدمة",
     },
     plugins: pluginSettings.ar,
     metadataGeneration: {
       title: "إنشاء البيانات الوصفية",
       description:
+<<<<<<< HEAD
         "اختر النموذج الذي يستخدمه Fulcra لعناوين مساحات العمل وأسماء الفروع ورسائل الالتزام ومسودات طلبات السحب",
+=======
+        "اختر النموذج والتعليمات التي يستخدمها Paseo لعناوين مساحات العمل وأسماء الفروع ورسائل الالتزام ومسودات طلبات السحب",
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
       selection: "اختيار النموذج",
       automatic: "تلقائي",
       preferred: "يدوي",
       automaticHint: "يختار Fulcra نموذجًا سريعًا متاحًا",
       preferredHint: "اختر النموذج الذي يستخدمه Fulcra",
       model: "النموذج",
+<<<<<<< HEAD
       fallbackHint: "إذا لم يكن متاحًا، يستخدم Fulcra نموذجًا آخر متاحًا",
       modelHint: "يُستخدم هذا النموذج فقط. إذا فشل، لا يجرّب Fulcra نموذجًا آخر",
+=======
+      modelHint: "يُستخدم هذا النموذج فقط. إذا فشل، لا يجرّب Paseo نموذجًا آخر",
+      instructions: "التعليمات",
+      instructionsHint: "تُطبَّق على جميع البيانات الوصفية المنشأة على هذا المضيف",
+      instructionsPlaceholder:
+        "مثال: اكتب باللغة العربية. حافظ على أسلوب متسق بين العناوين ورسائل الالتزام. لا تستخدم الشرطات الطويلة.",
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
       docs: "الوثائق",
       saveError: "تعذر تحديث إنشاء البيانات الوصفية",
     },
@@ -2889,6 +3206,11 @@ export const ar: TranslationResources = {
     general: {
       title: "عام",
       sending: "الإرسال",
+      setup: {
+        label: "الإعداد الأولي",
+        description: "أعد المرور على المظهر والمزوّدين والمشاريع وإقران الهاتف",
+        action: "إظهار الإعداد مجددًا",
+      },
       browserData: {
         title: "بيانات المتصفح",
         siteData: "ملفات تعريف الارتباط وبيانات المواقع",
@@ -3015,9 +3337,28 @@ export const ar: TranslationResources = {
         stable: "Stable",
         beta: "Beta",
       },
+      autoUpdate: {
+        label: "التحديثات التلقائية",
+        options: {
+          automatic: "تلقائي",
+          notify: "إشعار",
+          off: "إيقاف",
+        },
+        descriptions: {
+          automatic: "التحقق من التحديثات وتنزيلها في الخلفية",
+          notify: "التحقق من التحديثات وتنزيلها فقط عند اختيارك",
+          off: "عدم التحقق تلقائيًا. يتم التحقق فقط عند النقر على فحص",
+        },
+      },
       updates: {
         label: "تحديثات التطبيق",
         readyToInstall: "جاهز للتثبيت:{{version}}",
+        downloadTitle: "تنزيل تحديث سطح المكتب",
+        downloadMessage: "سيؤدي هذا إلى تنزيل تحديث Paseo وتثبيته على هذا الكمبيوتر",
+        downloadConfirm: "تنزيل وتثبيت",
+        download: "تنزيل",
+        downloadTo: "تنزيل {{version}}",
+        downloading: "جارٍ التنزيل...",
         installTitle: "تثبيت تحديث سطح المكتب",
         installMessage: "يؤدي هذا إلى تحديث Fulcra على هذا الكمبيوتر",
         installConfirm: "تثبيت التحديث",
@@ -3053,6 +3394,12 @@ export const ar: TranslationResources = {
         description: "عرض مخطط للتنقل بين المطالبات",
       },
       sidebar: {
+        view: {
+          title: "عرض الشريط الجانبي",
+          label: "العرض",
+          default: "العرض الافتراضي",
+          unavailable: "العرض المحدد غير متاح أو معطل. يتم عرض العرض الافتراضي.",
+        },
         header: {
           title: "الرأس",
           description: "اختر العناصر التي تظهر أعلى الشريط الجانبي وترتيبها",
@@ -3088,10 +3435,11 @@ export const ar: TranslationResources = {
       layout: {
         title: "التخطيط",
         contentWidth: "عرض المحتوى",
-        contentWidthHint: "أقصى عرض للمحادثة وملفات Markdown على الشاشات العريضة",
-        contentWidthAccessibility: "عرض المحتوى بالبكسل",
-        reset: "إعادة تعيين",
-        resetAccessibility: "إعادة عرض المحتوى إلى الافتراضي",
+        contentWidthHint: "عرض المحادثة ومحرر الرسائل ومعاينات Markdown",
+        contentWidthDefault: "افتراضي",
+        contentWidthWide: "عريض",
+        contentWidthFull: "كامل",
+        contentWidthCustom: "عرض مخصص · {{width}} بكسل",
       },
       syntax: {
         title: "بناء الجملة",
@@ -3162,6 +3510,8 @@ export const ar: TranslationResources = {
         toggleFocusMode: "تبديل وضع التركيز",
         cycleTheme: "موضوع الدورة",
         focusMessageInput: "التركيز على إدخال الرسالة",
+        toggleModelPicker: "فتح منتقي النموذج أو إغلاقه",
+        cycleEffort: "التنقل بين مستويات الجهد",
         cycleAgentMode: "تبديل وضع الوكيل",
         toggleVoiceMode: "تبديل الوضع الصوتي",
         startStopDictation: "بدء إملاء /stop",
@@ -3184,11 +3534,7 @@ export const ar: TranslationResources = {
       commandLine: {
         title: "سطر الأوامر",
         description: "وكلاء التحكم والبرنامج النصي من المحطة الطرفية الخاصة بك",
-      },
-      actions: {
-        install: "ثَبَّتَ",
-        installing: "جارٍ التثبيت...",
-        installed: "تم التثبيت",
+        accessibilityLabel: "تثبيت Paseo CLI",
       },
     },
     permissions: {
@@ -3211,6 +3557,23 @@ export const ar: TranslationResources = {
         title: "المظهر",
         name: {
           label: "الاسم",
+        },
+        icon: {
+          label: "الأيقونة",
+          accessibilityLabel: "الأيقونة، {{value}}",
+          auto: "تلقائي",
+          autoDetected: "تلقائي ({{icon}})",
+          options: {
+            server: "خادم",
+            laptop: "حاسوب محمول",
+            desktop: "حاسوب مكتبي",
+            mini: "حاسوب مصغّر",
+            workstation: "محطة عمل",
+            cloud: "سحابي",
+            container: "حاوية",
+            board: "حاسوب أحادي اللوحة",
+            terminal: "طرفية",
+          },
         },
         color: {
           label: "اللون",
@@ -3248,6 +3611,14 @@ export const ar: TranslationResources = {
         local: "محلي",
         remoteSsh: "SSH عن بُعد",
       },
+      connectionKinds: {
+        local: "محلي",
+        relay: "تتابع",
+        tailscale: "Tailscale",
+        ssh: "SSH",
+        direct: "مباشر",
+        routed: "عبر",
+      },
       connections: {
         title: "اتصالات",
         removeTitle: "إزالة الاتصال",
@@ -3258,20 +3629,25 @@ export const ar: TranslationResources = {
         timeout: "نفذ الوقت",
       },
       pairDevices: {
-        title: "إقران الأجهزة",
         rowTitle: "إقران جهاز",
-        rowHint: "امسح رمز QR ضوئيًا أو انسخ رابطًا لتوصيل هاتفك بهذا المضيف",
       },
       skills: {
         ...en.settings.host.skills,
         sectionTitle: "مهارات التنسيق",
         title: "مهارات التنسيق",
-        description: "قم بتعليم عملائك كيفية التنسيق من خلال CLI",
+        description: "علّم وكلاءك كيفية استخدام أدوات Paseo",
         updateAvailable: "التحديث متاح",
+<<<<<<< HEAD
         updateTitle: "تحديث مهارات Fulcra ؟",
         updateFallback: "مزامنة المهارات المجمعة لجهازك.",
         uninstallTitle: "إلغاء تثبيت مهارات Fulcra ؟",
         uninstallMessage: "يزيل جميع مهارات تنسيق Fulcra من ~/.agents ، ~/.claude ، ~/.codex.",
+=======
+        updateTitle: "تحديث مهارات Paseo ؟",
+        uninstallTitle: "إلغاء تثبيت مهارات Paseo ؟",
+        uninstallMessage:
+          "يزيل جميع مهارات تنسيق Paseo من ~/.agents و~/.claude و~/.codex و~/.gemini/config.",
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
         choose: "اختيار المهارات",
         chooseAll: "كل المهارات",
         chooseAllHint: "أبقِ جميع المهارات المرفقة مثبتة، بما فيها ما يُضاف لاحقًا.",
@@ -3279,16 +3655,13 @@ export const ar: TranslationResources = {
         chooseEmpty: "لا تتضمن هذه النسخة أي مهارات.",
         removeTitle: "إزالة المهارات غير المحددة؟",
         removeMessage:
-          "سيتم حذف {{skills}} من ~/.agents و~/.claude و~/.codex. كما يُحذف كل ما أضفته داخل مجلدات المهارات تلك.",
+          "سيتم حذف {{skills}} من ~/.agents و~/.claude و~/.codex و~/.gemini/config. كما يُحذف كل ما أضفته داخل مجلدات المهارات تلك.",
         saveFailed: "تعذر حفظ اختيار المهارات.",
         statusFailed: "غير قادر على التحقق من حالة مهارات التنسيق.",
         updateFailed: "غير قادر على تحديث مهارات التنسيق.",
         uninstallFailed: "غير قادر على إلغاء تثبيت مهارات التنسيق.",
         saveSelectionFailed: "غير قادر على حفظ اختيار مهارات التنسيق.",
         actions: {
-          install: "ثَبَّتَ",
-          installing: "جارٍ التثبيت...",
-          installed: "تم التثبيت",
           update: "تحديث",
           working: "عمل...",
           remove: "إزالة",
@@ -3303,13 +3676,22 @@ export const ar: TranslationResources = {
           delete: "حذف المهارة",
         },
       },
+      tools: {
+        instructionsTitle: "التعليمات",
+        toolsTitle: "أدوات الوكلاء",
+      },
       orchestration: {
         title: "التنسيق",
         unavailable: "اتصل بهذا المضيف لإدارة التنسيق",
         enableTools: {
           title: "تمكين أدوات Fulcra",
           hint: "سيتمكن الوكلاء من إدارة أشجار العمل والوكلاء والجداول الزمنية",
+<<<<<<< HEAD
           accessibilityLabel: "حقن أدوات Fulcra",
+=======
+          accessibilityLabel: "حقن أدوات Paseo",
+          updateFailed: "تعذر تحديث أدوات Paseo.",
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
         },
         systemPrompt: {
           title: "موجه النظام",
@@ -3368,6 +3750,8 @@ export const ar: TranslationResources = {
       },
       agentProfiles: {
         sectionTitle: "ملفات تعريف الوكيل",
+        sectionDescription:
+          "احفظ إعدادات الوكيل لاختيارها بسرعة ولكي يستخدمها الوكلاء عند تفويض العمل",
         unavailable: "اتصل بهذا المضيف لإدارة ملفات تعريف الوكيل",
         unsupported: "يشغّل هذا المضيف نسخة Daemon لا تدعم ملفات تعريف الوكيل بعد",
         emptyState: "لا توجد ملفات تعريف بعد. أضف واحدًا لبدء الوكلاء من مزود ونموذج محفوظين.",
@@ -3391,6 +3775,9 @@ export const ar: TranslationResources = {
         featuresLabel: "السمات",
         featureCount: "{{count}} سمة",
         featureCountOne: "{{count}} سمة",
+        systemPromptLabel: "موجه النظام",
+        systemPromptPlaceholder: "ركز على التخطيط وإمكانية الوصول ورموز التصميم.",
+        systemPromptHint: "ينطبق على الوكلاء الجدد فقط",
         notesLabel: "متى يُستخدم",
         notesPlaceholder: "استخدمه لعمل الواجهة — المكونات والتخطيط ورموز التصميم.",
         notesHint: "يساعد الوكلاء على اختيار ملف التعريف هذا عند بدء وكيل آخر.",
@@ -3401,8 +3788,34 @@ export const ar: TranslationResources = {
         removeConfirmMessage: 'إزالة "{{name}}"؟',
         moveUp: "نقل لأعلى",
         moveDown: "نقل لأسفل",
+        searchPlaceholder: "ابحث عن الملفات",
+        clearSearch: "مسح البحث",
+        noSearchMatches: 'لا توجد ملفات تطابق "{{query}}"',
+        noRoutingNote: "بدون ملاحظة",
+        duplicate: "تكرار",
+        copyName: "{{name}} (نسخة)",
+        moveToTop: "نقل إلى الأعلى",
+        profileActions: "إجراءات {{name}}",
+        reorderProfile: "إعادة ترتيب {{name}}",
+        previousProfile: "الملف السابق",
+        nextProfile: "الملف التالي",
+        chooseModelPlaceholder: "اختر نموذجًا",
+        searchModelsPlaceholder: "ابحث عن النماذج",
+        chooseModelSubtitle: "اختر نموذجًا",
+        customizeSettings: "تخصيص الإعدادات",
+        addRoutingNoteShort: "إضافة ملاحظة",
+        providerOptionsLabel: "خيارات {{provider}}",
+        discardTitle: "تجاهل التغييرات؟",
+        discardMessage: "لديك تغييرات غير محفوظة في هذا الملف.",
+        discardConfirm: "تجاهل",
+        columns: {
+          profile: "الملف",
+          runtime: "النموذج والتشغيل",
+          whenToUse: "متى يُستخدم",
+        },
       },
       daemon: {
+        runtimeTitle: "بيئة تشغيل الوكلاء",
         rename: {
           editLabel: "تحرير التسمية",
           title: "إعادة تسمية المضيف",
@@ -3479,7 +3892,27 @@ export const ar: TranslationResources = {
     providers: {
       title: "مقدمي الخدمات",
       addProvider: "إضافة مزود",
+<<<<<<< HEAD
       refreshModels: "تحديث النماذج",
+=======
+      list: {
+        add: "مزود",
+        updatingTo: "جارٍ التحديث إلى {{version}}...",
+      },
+      detail: {
+        backToProviders: "العودة إلى المزودين",
+        notOnHost: "هذا المزود غير موجود على هذا المضيف",
+        enabled: "مفعّل",
+        unavailableTitle: "{{name}} غير متاح",
+        troubleshooting: "استكشاف الأخطاء",
+        status: "حالة المزود",
+        checked: "تم الفحص {{time}}",
+        diagnosticReport: "تقرير التشخيص",
+        docs: "الوثائق",
+        dangerZone: "منطقة الخطر",
+        removeHint: "يحذف هذا المزود من config.json",
+      },
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
       providerDetails: "تفاصيل مزود{{name}}",
       enableProvider: "تمكين{{name}}",
       unavailable: "اتصل بهذا المضيف لرؤية مقدمي الخدمة",
@@ -3521,9 +3954,30 @@ export const ar: TranslationResources = {
         retrying: "جارٍ إعادة المحاولة...",
         noSearchMatches: "لا توجد نماذج تطابق بحثك",
         noneDetected: "لم يتم اكتشاف أي نماذج",
-        discovered: "اكتشف",
+        noCustom: "لا توجد نماذج مخصصة",
+        title: "النماذج",
         custom: "نماذج مخصصة",
         updated: "تم تحديث{{time}}",
+      },
+      installation: {
+        title: "التثبيت",
+        version: "الإصدار",
+        installed: "مثبّت",
+        notInstalled: "غير مثبّت",
+        install: "تثبيت",
+        checking: "جارٍ التحقق...",
+        failed: "تعذّر التحقق من التثبيت",
+        updates: "التحديثات",
+        upToDate: "محدّث",
+        updateAvailable: "يتوفر تحديث",
+        updateInstructions: "تعليمات التحديث",
+        update: "تحديث",
+        updating: "جارٍ التحديث...",
+        updated: "تم التحديث",
+        updateFailed: "فشل التحديث",
+        outputTruncated: "تم حذف المخرجات السابقة.",
+        updatesFailed: "تعذّر التحقق من التحديثات",
+        installInstructions: "تعليمات التثبيت",
       },
       diagnostic: {
         title: "التشخيص",

@@ -17,8 +17,9 @@ import {
 } from "../bootstrap.js";
 import type { AgentClient, AgentProvider } from "../agent/agent-sdk-types.js";
 import { createTestAgentClients } from "./fake-agent-client.js";
-import type { PushNotificationSender } from "../push/index.js";
+import type { PushNotifications, PushNotificationSender } from "../push/index.js";
 import type { AgentProfile } from "@getpaseo/protocol/messages";
+import type { TailscaleNetwork } from "../listeners.js";
 
 interface TestPaseoDaemonOptions {
   // Never the OS keychain: daemon tests get an in-memory credential store unless they pass one.
@@ -27,8 +28,10 @@ interface TestPaseoDaemonOptions {
   desktopManaged?: boolean;
   downloadTokenTtlMs?: number;
   corsAllowedOrigins?: string[];
+  hostnames?: PaseoDaemonConfig["hostnames"];
   listen?: string;
   listenPort?: number;
+  getTailscaleNetwork?: () => TailscaleNetwork;
   logger?: Parameters<typeof createPaseoDaemon>[1];
   mcpEnabled?: boolean;
   mcpDebug?: boolean;
@@ -43,6 +46,7 @@ interface TestPaseoDaemonOptions {
   relayConfigCapability?: boolean;
   agentClients?: Partial<Record<AgentProvider, AgentClient>>;
   providerOverrides?: PaseoDaemonConfig["providerOverrides"];
+  providerCatalogRefreshTimeoutMs?: PaseoDaemonConfig["providerCatalogRefreshTimeoutMs"];
   paseoHomeRoot?: string;
   staticDir?: string;
   cleanup?: boolean;
@@ -55,6 +59,7 @@ interface TestPaseoDaemonOptions {
   dictationFinalTimeoutMs?: number;
   auth?: PaseoDaemonConfig["auth"];
   pushNotificationSender?: PushNotificationSender;
+  pushNotifications?: PushNotifications;
   serviceProxy?: PaseoDaemonConfig["serviceProxy"];
   webUi?: PaseoDaemonConfig["webUi"];
   trustedProxies?: PaseoDaemonConfig["trustedProxies"];
@@ -69,8 +74,13 @@ interface TestPaseoDaemonOptions {
   /** FU-834: a worker's turn end reaches its lead (report-up). Off unless a test asks for it. */
   reportUpOnTurnEnd?: boolean;
   pluginsEnabled?: PaseoDaemonConfig["pluginsEnabled"];
+<<<<<<< HEAD
   bundledPluginsDirectory?: string;
+=======
+  pluginRegistryUrl?: PaseoDaemonConfig["pluginRegistryUrl"];
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
   builtinPlugins?: BuiltinPluginLoader;
+  lazyTerminalWorker?: boolean;
   plugins?: PaseoDaemonConfig["plugins"];
   timelineStoreStep?: PaseoDaemonDependencies["timelineStoreStep"];
 }
@@ -124,7 +134,9 @@ export async function createTestPaseoDaemon(
       await prepareTestDaemonConfig(options);
     const logger = options.logger ?? pino({ level: "silent" });
     const daemon = await createPaseoDaemon(config, logger, {
+      getTailscaleNetwork: options.getTailscaleNetwork,
       builtinPlugins: options.builtinPlugins ?? new BuiltinPluginLoader(undefined, []),
+      lazyTerminalWorker: options.lazyTerminalWorker ?? true,
       serverFeatureOverrides: {
         daemonStatusRpc: options.daemonStatusRpcCapability,
         relayConfig: options.relayConfigCapability,
@@ -212,13 +224,14 @@ async function prepareTestDaemonConfig(
     daemonVersion: options.daemonVersion,
     desktopManaged: options.desktopManaged,
     corsAllowedOrigins: options.corsAllowedOrigins ?? [],
-    hostnames: true,
+    hostnames: options.hostnames ?? true,
     mcpEnabled: options.mcpEnabled ?? true,
     staticDir,
     mcpDebug: options.mcpDebug ?? false,
     isDev: options.isDev,
     agentClients: options.agentClients ?? createTestAgentClients(),
     providerOverrides: options.providerOverrides,
+    providerCatalogRefreshTimeoutMs: options.providerCatalogRefreshTimeoutMs,
     agentStoragePath: path.join(paseoHome, "agents"),
     relayEnabled: options.relayEnabled ?? false,
     relayEndpoint: options.relayEndpoint ?? "127.0.0.1:8787",
@@ -229,6 +242,7 @@ async function prepareTestDaemonConfig(
     appBaseUrl: "fulcra://pair",
     auth: options.auth,
     pushNotificationSender: options.pushNotificationSender,
+    pushNotifications: options.pushNotifications,
     serviceProxy: options.serviceProxy,
     webUi: options.webUi,
     trustedProxies: options.trustedProxies,
@@ -260,6 +274,7 @@ async function prepareTestDaemonConfig(
     pluginsEnabled: options.pluginsEnabled,
     bundledPluginsDirectory: options.bundledPluginsDirectory,
     plugins: options.plugins,
+    pluginRegistryUrl: options.pluginRegistryUrl,
   };
   return { config, paseoHomeRoot, paseoHome, staticDir, createdDirs };
 }

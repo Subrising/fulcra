@@ -29,7 +29,15 @@ Revocation immediately denies the device in memory, detaches and closes its sock
 
 The unchanged relay has no authenticated host-slot token. It can replace a transport slot, drop traffic, delay it or prevent connections; endpoint host-key authentication still prevents impersonation. A leaked unused offer can be claimed by an attacker before its owner uses it. A stolen paired device is a powerful host operator until revoked. App storage is not OS-protected secret storage in this version, and a stolen host private key can expose captured traffic: forward secrecy against host-key theft is not provided. A hostile process running as the daemon's OS user remains inside the local trust boundary.
 
+<<<<<<< HEAD
 See [self-hosting and recovery](docs/relay-self-host.md). Identity rotation requires a stopped daemon and unpairs every device.
+=======
+- **Impersonate the daemon to your phone** — Without the daemon's secret key, it cannot derive the shared key, so any traffic it injects fails authenticated decryption on the phone
+- **Open a session without pairing** — The daemon's public key is carried only in the pairing offer and is never sent to the relay. With a daemon password configured, the daemon also rejects any relay client that does not send the right password inside the encrypted channel.
+- **Read your traffic** — After the handshake every message is encrypted: ChaCha20-Poly1305 in protected mode, XSalsa20-Poly1305 (NaCl box) in legacy mode
+- **Forge messages** — Both constructions are authenticated encryption; a tampered message is rejected in either mode
+- **Replay old messages** — In protected mode the daemon contributes a fresh ephemeral key to every session and every record carries a strictly increasing counter, so a recorded session cannot be replayed into a new one and a duplicated, reordered, or reflected record closes the session. Legacy mode has neither property: it uses random nonces, and a daemon that still admits legacy clients accepts a recorded legacy transcript (hello, credentials, commands) as a new session. Set `daemon.relay.requireProtectedSecurity: true` to refuse legacy clients once every client you use has updated.
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
 
 Relay admission requires the paired-device handshake and its fresh owner grants. A password or anonymous `hello` never substitutes for the device identity.
 

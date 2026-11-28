@@ -1,9 +1,8 @@
-import { resolve } from "node:path";
-import type { CreateObservationBackend, ObserverMetrics } from "./internal/contracts.js";
+import type { CreateObservationBackend } from "./internal/contracts.js";
 import { createLinuxBackend } from "./internal/linux.js";
 import { createNativeRecursiveBackend } from "./internal/native-recursive.js";
-import { createManagedObservation, type ManagedObservation } from "./internal/observation.js";
 import { createObserverPaths } from "./internal/paths.js";
+import { FileObserverService } from "./internal/service.js";
 
 export type FileChangeType = "create" | "update" | "delete";
 
@@ -70,6 +69,7 @@ export function createFileObserver(): FileObserver {
       : (host) => createLinuxBackend(host, paths);
   return new FileObserverService(createBackend, paths);
 }
+<<<<<<< HEAD
 
 class FileObserverService implements FileObserver {
   private state:
@@ -201,3 +201,5 @@ function emptyDiagnostics(): FileObserverDiagnostics {
     ...createObserverMetrics(),
   };
 }
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.18.1
