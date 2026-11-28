@@ -190,12 +190,10 @@ function DaemonCliStatusModal({
           {cliStatusOutput ?? ""}
         </Text>
         <View style={styles.modalActions}>
-          <Button variant="outline" size="sm" onPress={onClose}>
+          <Button variant="outline" onPress={onClose}>
             {t("common.actions.close")}
           </Button>
-          <Button size="sm" onPress={onCopy}>
-            {t("common.actions.copy")}
-          </Button>
+          <Button onPress={onCopy}>{t("common.actions.copy")}</Button>
         </View>
       </View>
     </AdaptiveModalSheet>
@@ -288,13 +286,12 @@ function DaemonInfoCard(props: DaemonInfoCardProps) {
         </View>
         <View style={styles.actionGroup}>
           {daemonLogs?.logPath ? (
-            <Button variant="outline" size="sm" leftIcon={copyIcon} onPress={handleCopyLogPath}>
+            <Button variant="outline" leftIcon={copyIcon} onPress={handleCopyLogPath}>
               {t("desktop.daemon.logs.copyPath")}
             </Button>
           ) : null}
           <Button
             variant="outline"
-            size="sm"
             leftIcon={fileTextIcon}
             onPress={handleOpenLogs}
             disabled={!daemonLogs}
@@ -310,7 +307,6 @@ function DaemonInfoCard(props: DaemonInfoCardProps) {
         </View>
         <Button
           variant="outline"
-          size="sm"
           leftIcon={activityIcon}
           onPress={handleRunCliStatus}
           disabled={isLoadingCliStatus}
@@ -462,12 +458,32 @@ export function LocalDaemonSection() {
     [theme.iconSize.sm, theme.colors.foreground],
   );
 
+<<<<<<< HEAD
+=======
+  const advancedSettingsLink = useMemo(
+    () => ({
+      href: ADVANCED_DAEMON_SETTINGS_URL,
+      label: t("desktop.daemon.advancedSettings"),
+      accessibilityLabel: t("desktop.daemon.openAdvancedSettings"),
+    }),
+    [t],
+  );
+
+>>>>>>> refs/remotes/upstream/tags/v0.15.2
   if (!showSection) {
     return null;
   }
 
   return (
+<<<<<<< HEAD
     <SettingsSection title={t("desktop.daemon.title")} testID="host-page-daemon-lifecycle-card">
+=======
+    <SettingsSection
+      title={t("desktop.daemon.title")}
+      link={advancedSettingsLink}
+      testID="host-page-daemon-lifecycle-card"
+    >
+>>>>>>> refs/remotes/upstream/tags/v0.15.2
       {isLoading || isLoadingSettings ? (
         <View style={[settingsStyles.card, styles.loadingCard]}>
           <LoadingSpinner size="small" color={theme.colors.foregroundMuted} />
@@ -505,7 +521,7 @@ export function LocalDaemonSection() {
                   </Text>
                   <Text style={settingsStyles.rowHint}>{daemonStatus.home}</Text>
                 </View>
-                <Button variant="outline" size="sm" onPress={handleStop} disabled={isStopping}>
+                <Button variant="outline" onPress={handleStop} disabled={isStopping}>
                   {isStopping
                     ? t("desktop.daemon.lifecycle.stopping")
                     : t("desktop.daemon.lifecycle.stop")}

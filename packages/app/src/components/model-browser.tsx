@@ -1261,6 +1261,7 @@ function ProviderErrorEmptyState({
       {savedModelsLabel && <Text style={styles.emptyStateText}>{savedModelsLabel}</Text>}
       <Text style={styles.emptyStateText}>{message}</Text>
       {onRetryProvider ? (
+<<<<<<< HEAD
         <Button
           variant={savedModelsLabel ? "outline" : "default"}
           size="sm"
@@ -1268,6 +1269,9 @@ function ProviderErrorEmptyState({
           disabled={isRetryingProvider}
           testID={`model-provider-retry-${providerId}`}
         >
+=======
+        <Button variant="default" onPress={handleRetry} disabled={isRetryingProvider}>
+>>>>>>> refs/remotes/upstream/tags/v0.15.2
           {isRetryingProvider ? t("modelSelector.retrying") : t("modelSelector.retry")}
         </Button>
       ) : null}

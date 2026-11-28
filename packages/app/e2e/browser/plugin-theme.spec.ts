@@ -2,7 +2,6 @@ import { pluginRequirements } from "../support/helpers/plugin-fixture";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { Page } from "@playwright/test";
 import { expect, test } from "../support/fixtures";
 import { connectNewWorkspaceDaemonClient } from "../support/helpers/new-workspace";
 import { openSettingsSection } from "../support/helpers/settings";
@@ -75,8 +74,12 @@ test("applies a contributed theme and falls back when its plugin is gone", async
     await openSettingsSection(page, "appearance");
 
     const sectionTitle = page.getByText("Theme", { exact: true }).first();
+<<<<<<< HEAD
     await page.getByLabel(DEFAULT_THEME_LABEL, { exact: true }).click();
     const mochaItem = page.getByText("Catppuccin Mocha", { exact: true });
+=======
+    const mochaItem = page.getByRole("radio", { name: "Catppuccin Mocha", exact: true });
+>>>>>>> refs/remotes/upstream/tags/v0.15.2
     await expect(mochaItem).toBeVisible({ timeout: 30_000 });
     await page.screenshot({
       path: testInfo.outputPath("plugin-theme-picker.png"),
@@ -85,14 +88,14 @@ test("applies a contributed theme and falls back when its plugin is gone", async
     });
 
     await test.step("a contributed light theme uses the light palette", async () => {
-      await page.getByText("Catppuccin Latte", { exact: true }).click();
-      await expect(page.getByLabel("Theme: Catppuccin Latte", { exact: true })).toBeVisible();
+      const latteItem = page.getByRole("radio", { name: "Catppuccin Latte", exact: true });
+      await latteItem.click();
+      await expect(latteItem).toBeChecked();
       await expect(sectionTitle).toHaveCSS("color", LATTE_MUTED_FOREGROUND);
-      await page.getByLabel("Theme: Catppuccin Latte", { exact: true }).click();
     });
 
     await mochaItem.click();
-    await expect(page.getByLabel("Theme: Catppuccin Mocha", { exact: true })).toBeVisible();
+    await expect(mochaItem).toBeChecked();
     await expect(sectionTitle).toHaveCSS("color", MOCHA_MUTED_FOREGROUND);
     await page.screenshot({
       path: testInfo.outputPath("plugin-theme-applied.png"),
@@ -101,15 +104,17 @@ test("applies a contributed theme and falls back when its plugin is gone", async
 
     await test.step("the selection survives a reload", async () => {
       await page.reload();
-      await expect(page.getByLabel("Theme: Catppuccin Mocha", { exact: true })).toBeVisible({
-        timeout: 30_000,
-      });
+      await expect(mochaItem).toBeChecked({ timeout: 30_000 });
       await expect(sectionTitle).toHaveCSS("color", MOCHA_MUTED_FOREGROUND);
     });
 
     await test.step("removing the plugin falls back to the default theme", async () => {
       await client.removePlugin(PLUGIN_ID);
+<<<<<<< HEAD
       await expect(page.getByLabel(DEFAULT_THEME_LABEL, { exact: true })).toBeVisible({
+=======
+      await expect(page.getByRole("radio", { name: "System", exact: true })).toBeChecked({
+>>>>>>> refs/remotes/upstream/tags/v0.15.2
         timeout: 30_000,
       });
       await expect(sectionTitle).not.toHaveCSS("color", MOCHA_MUTED_FOREGROUND);
@@ -153,15 +158,7 @@ const MANY_THEMES_SOURCE = `export default function contribute(plugin) {
   return () => {};
 }`;
 
-async function scrollThemeMenuToLastTheme(page: Page) {
-  const firstTheme = page.getByText("Pack theme 1", { exact: true });
-  await expect(firstTheme).toBeVisible({ timeout: 30_000 });
-  await firstTheme.hover();
-  await page.mouse.wheel(0, 4000);
-  await expect(page.getByText(LAST_THEME_NAME, { exact: true })).toBeInViewport({ ratio: 1 });
-}
-
-test("scrolls to the last theme when a plugin contributes more themes than fit", async ({
+test("reaches the last theme when a plugin contributes more themes than fit", async ({
   page,
 }, testInfo) => {
   const directory = await mkdtemp(path.join(tmpdir(), "paseo-plugin-theme-many-e2e-"));
@@ -181,15 +178,21 @@ test("scrolls to the last theme when a plugin contributes more themes than fit",
     await expect(page.getByTestId("settings-sidebar")).toBeVisible();
     await openSettingsSection(page, "appearance");
 
+<<<<<<< HEAD
     await page.getByLabel(DEFAULT_THEME_LABEL, { exact: true }).click();
     await scrollThemeMenuToLastTheme(page);
+=======
+    const lastTheme = page.getByRole("radio", { name: LAST_THEME_NAME, exact: true });
+    await expect(lastTheme).toBeAttached({ timeout: 30_000 });
+    await lastTheme.scrollIntoViewIfNeeded();
+>>>>>>> refs/remotes/upstream/tags/v0.15.2
     await page.screenshot({
       path: testInfo.outputPath("plugin-theme-picker-scrolled.png"),
       animations: "disabled",
     });
 
-    await page.getByText(LAST_THEME_NAME, { exact: true }).click();
-    await expect(page.getByLabel(`Theme: ${LAST_THEME_NAME}`, { exact: true })).toBeVisible();
+    await lastTheme.click();
+    await expect(lastTheme).toBeChecked();
   } finally {
     await client.removePlugin(MANY_THEMES_PLUGIN_ID).catch(() => undefined);
     await client

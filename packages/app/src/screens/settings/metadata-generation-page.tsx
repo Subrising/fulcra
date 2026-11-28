@@ -87,6 +87,13 @@ export function MetadataGenerationPage({ serverId }: { serverId: string }) {
     (provider: AgentProvider) => snapshot.refresh([provider]),
     [snapshot],
   );
+<<<<<<< HEAD
+=======
+  const docsLink = useMemo(
+    () => ({ href: METADATA_GENERATION_DOCS_URL, label: t("settings.metadataGeneration.docs") }),
+    [t],
+  );
+>>>>>>> refs/remotes/upstream/tags/v0.15.2
 
   if (isConfigLoading || !config) {
     return (
@@ -100,6 +107,10 @@ export function MetadataGenerationPage({ serverId }: { serverId: string }) {
     <SettingsSection
       title={t("settings.metadataGeneration.title")}
       info={t("settings.metadataGeneration.description")}
+<<<<<<< HEAD
+=======
+      link={docsLink}
+>>>>>>> refs/remotes/upstream/tags/v0.15.2
       testID="metadata-generation-settings"
     >
       <View style={settingsStyles.card}>
@@ -118,7 +129,6 @@ export function MetadataGenerationPage({ serverId }: { serverId: string }) {
             options={modeOptions}
             value={mode}
             onValueChange={handleModeChange}
-            size="sm"
             testID="metadata-generation-mode"
           />
         </View>

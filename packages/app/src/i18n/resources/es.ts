@@ -1828,7 +1828,14 @@ export const es: TranslationResources = {
     integrations: {
       cli: {
         statusFailed: "No se puede verificar el estado de instalación deCLI.",
+<<<<<<< HEAD
         installFailed: "No se puede instalar la CLI de Fulcra.",
+=======
+        installFailed: "No se puede instalar elPaseoCLI.",
+        uninstallFailed: "No se pudo desinstalar la CLI de Paseo.",
+        keptForeign:
+          "Se conservó un comando paseo que Paseo no instaló. Elimínalo tú mismo para desinstalarlo.",
+>>>>>>> refs/remotes/upstream/tags/v0.15.2
       },
     },
   },
@@ -1944,7 +1951,65 @@ export const es: TranslationResources = {
     },
   },
   onboarding: {
+<<<<<<< HEAD
     title: "Bienvenido a Fulcra",
+=======
+    setup: {
+      title: "Paseo",
+      stepCounter: "Paso {{current}} de {{total}}",
+      skip: "Omitir configuración",
+      continue: "Continuar",
+      finish: "Finalizar",
+      steps: {
+        appearance: {
+          label: "Apariencia",
+          title: "Te damos la bienvenida a Paseo",
+          description: "Empecemos por elegir una apariencia",
+        },
+        providers: {
+          label: "Proveedores",
+          title: "Tus agentes",
+          description: "Paseo usa las CLI de agentes que ya están en este ordenador",
+        },
+        projects: {
+          label: "Proyectos",
+          title: "Añade tus proyectos",
+          description: "Dónde quieres que trabajen tus agentes",
+          addProject: "Añadir proyecto",
+          added: "Añadido",
+          suggestions: {
+            loading: "Buscando carpetas en las que has trabajado",
+            empty: "No se encontraron proyectos recientes",
+            lastUsed: "Último uso {{time}}",
+            addSelected_one: "Añadir {{count}} proyecto",
+            addSelected_other: "Añadir {{count}} proyectos",
+            adding: "Añadiendo…",
+            addFailed: "No se pudo añadir esta carpeta",
+          },
+        },
+        orchestration: {
+          label: "Orquestación",
+          title: "Deja que los agentes usen Paseo",
+          description: "Deja que tus agentes creen espacios de trabajo y hablen con otros agentes",
+        },
+        phone: {
+          label: "Móvil",
+          title: "Lleva tus agentes contigo",
+          description:
+            "La app móvil nativa completa te permite controlar cualquier ordenador con Paseo desde tu teléfono",
+          appStore: "App Store",
+          googlePlay: "Google Play",
+          connectTitle: "Elige cómo conectarte",
+          connectDocs: "Docs",
+          openConnectDocs: "Abrir la documentación de conectividad",
+          recommended: "Recomendado",
+          relay: { title: "Relé", hint: "Cifrado de extremo a extremo, escanea un código QR" },
+          tailscale: { title: "Tailscale", hint: "Requiere algo de configuración" },
+        },
+      },
+    },
+    title: "Bienvenido aPaseo",
+>>>>>>> refs/remotes/upstream/tags/v0.15.2
     subtitle: "Conecte su computadora para comenzar",
     actions: {
       settings: "Ajustes",
@@ -2185,7 +2250,13 @@ export const es: TranslationResources = {
       notNow: "Ahora no",
       directConnectionHint:
         "Sin relé, conéctese directamente por TCP, Tailscale u otra VPN. No se crea ningún código QR.",
+<<<<<<< HEAD
       updateRequired: "Actualice el host para habilitar el relé desde Fulcra Desktop.",
+=======
+      tailscaleDocs: "Configurar Tailscale",
+      tailscaleDocsAccessibility: "Leer cómo conectarse con Tailscale",
+      updateRequired: "Actualice el host para habilitar el relé desde Paseo Desktop.",
+>>>>>>> refs/remotes/upstream/tags/v0.15.2
       unavailable: "Oferta de maridaje no disponible.",
       hint: "Escanee este código QR con Fulcra en su teléfono o copie el enlace a continuación.",
       securityWarning:
@@ -2922,6 +2993,12 @@ export const es: TranslationResources = {
     general: {
       title: "General",
       sending: "Envío",
+      setup: {
+        label: "Configuración inicial",
+        description:
+          "Vuelve a recorrer apariencia, proveedores, proyectos y emparejamiento del teléfono",
+        action: "Mostrar configuración de nuevo",
+      },
       browserData: {
         title: "Datos del navegador",
         siteData: "Cookies y datos de sitios",
@@ -3225,11 +3302,7 @@ export const es: TranslationResources = {
       commandLine: {
         title: "línea de comando",
         description: "Agentes de control y script desde tu terminal",
-      },
-      actions: {
-        install: "Instalar",
-        installing: "Instalando...",
-        installed: "Instalado",
+        accessibilityLabel: "Instalar la CLI de Paseo",
       },
     },
     permissions: {
@@ -3307,11 +3380,16 @@ export const es: TranslationResources = {
         ...en.settings.host.skills,
         sectionTitle: "Habilidades de orquestación",
         title: "Habilidades de orquestación",
-        description: "Enseñe a sus agentes a orquestar a través delCLI",
+        description: "Enseña a tus agentes a usar las herramientas de Paseo",
         updateAvailable: "Actualización disponible",
+<<<<<<< HEAD
         updateTitle: "¿Actualizar las habilidades de Fulcra?",
         updateFallback: "Sincronice las habilidades incluidas con su máquina.",
         uninstallTitle: "¿Desinstalar las habilidades de Fulcra?",
+=======
+        updateTitle: "¿Actualizar las habilidades dePaseo?",
+        uninstallTitle: "¿Desinstalar las habilidadesPaseo?",
+>>>>>>> refs/remotes/upstream/tags/v0.15.2
         uninstallMessage:
           "Elimina todas las habilidades de orquestación de Fulcra de ~/.agents, ~/.claude, ~/.codex.",
         choose: "Elegir habilidades",
@@ -3329,9 +3407,6 @@ export const es: TranslationResources = {
         uninstallFailed: "No se pueden desinstalar las habilidades de orquestación.",
         saveSelectionFailed: "No se puede guardar la selección de habilidades de orquestación.",
         actions: {
-          install: "Instalar",
-          installing: "Instalando...",
-          installed: "Instalado",
           update: "Actualizar",
           working: "Laboral...",
           remove: "Eliminar",
@@ -3352,7 +3427,12 @@ export const es: TranslationResources = {
         enableTools: {
           title: "Habilitar herramientas de Fulcra",
           hint: "Los agentes podrán gestionar árboles de trabajo, agentes y horarios.",
+<<<<<<< HEAD
           accessibilityLabel: "Inyectar herramientas de Fulcra",
+=======
+          accessibilityLabel: "Inyectar herramientasPaseo",
+          updateFailed: "No se pudieron actualizar las herramientas de Paseo.",
+>>>>>>> refs/remotes/upstream/tags/v0.15.2
         },
         systemPrompt: {
           title: "Aviso del sistema",
