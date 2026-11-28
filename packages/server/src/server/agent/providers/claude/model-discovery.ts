@@ -2,6 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import * as os from "node:os";
 import type { ModelInfo, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 
+<<<<<<< HEAD
 import type { AgentModelDefinition } from "../../agent-sdk-types.js";
 import { createProviderEnv, type ProviderRuntimeSettings } from "../../provider-launch-config.js";
 import {
@@ -26,6 +27,14 @@ const exitingProbes = new Map<ChildProcess, () => Promise<void>>();
 
 export interface ClaudeModelProbeInput {
   claudeBinary: string;
+=======
+const DISCOVERY_WAIT_MS = 5_000;
+// Long enough for the CLI to finish an OAuth token refresh it started before the wait ended.
+const DISCOVERY_EXIT_GRACE_MS = 60_000;
+
+interface ClaudeModelDiscoveryOptions {
+  resolveBinary: () => Promise<string>;
+>>>>>>> refs/remotes/upstream/tags/v0.17.2
   runtimeSettings?: ProviderRuntimeSettings;
   queryFactory?: ClaudeQueryFactory;
   signal?: AbortSignal;
@@ -34,6 +43,7 @@ export interface ClaudeModelProbeInput {
 
 export type ClaudeModelProbe = (input: ClaudeModelProbeInput) => Promise<ClaudeRuntimeModel[]>;
 
+<<<<<<< HEAD
 /**
  * Ask the installed Claude Code which models this account can use, without a model turn.
  *
@@ -49,6 +59,30 @@ export async function probeClaudeModels(
   let releasePrompt: () => void = () => {};
   const promptHeld = new Promise<void>((resolve) => {
     releasePrompt = resolve;
+=======
+type DiscoveryQuery = ReturnType<OpenDiscoveryQuery>;
+
+// Discovery processes left to exit on their own after their caller stopped waiting.
+const exitingDiscoveries = new Map<ChildProcess, () => Promise<void>>();
+
+// The curated catalog survives a failed or slow probe. This process never receives
+// a prompt and must not persist a session or launch user MCP servers/hooks.
+export async function discoverClaudeModels(
+  options: ClaudeModelDiscoveryOptions,
+  openQuery: OpenDiscoveryQuery = claudeQuery,
+): Promise<ModelInfo[]> {
+  const waitController = new AbortController();
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, waitController.signal])
+    : waitController.signal;
+  const timer = setTimeout(
+    () => waitController.abort(new Error("Claude model discovery timed out")),
+    DISCOVERY_WAIT_MS,
+  );
+  let endInput!: () => void;
+  const ended = new Promise<void>((resolve) => {
+    endInput = resolve;
+>>>>>>> refs/remotes/upstream/tags/v0.17.2
   });
   // A prompt stream that ends only when released, having yielded nothing.
   const noPrompt: AsyncIterable<SDKUserMessage> = {
@@ -59,6 +93,7 @@ export async function probeClaudeModels(
       },
     }),
   };
+<<<<<<< HEAD
   let child: ChildProcess | undefined;
   let childExit: Promise<void> | undefined;
   const query = claudeQuery(
@@ -72,6 +107,29 @@ export async function probeClaudeModels(
         extraArgs: { "strict-mcp-config": null },
         persistSession: false,
         env: createProviderEnv({ baseEnv: process.env, runtimeSettings: input.runtimeSettings }),
+=======
+  let query: DiscoveryQuery | undefined;
+  let child: ChildProcess | undefined;
+  try {
+    signal.throwIfAborted();
+    const binary = await raceProviderRefreshAbort(signal, options.resolveBinary());
+    query = openQuery(
+      {
+        prompt: input,
+        options: {
+          pathToClaudeCodeExecutable: binary,
+          cwd: os.homedir(),
+          env: options.env,
+          persistSession: false,
+          tools: [],
+          mcpServers: {},
+          strictMcpConfig: true,
+          settingSources: ["user"],
+          settings: { disableAllHooks: true },
+          // No abortController: the SDK kills the process when it aborts, and the end of
+          // the wait must not.
+        },
+>>>>>>> refs/remotes/upstream/tags/v0.17.2
       },
     },
     {
@@ -90,6 +148,7 @@ export async function probeClaudeModels(
           spawned.once("close", settled);
         });
       },
+<<<<<<< HEAD
     },
   );
   // Nothing is sent, but the stream still has to be drained for control responses to arrive.
@@ -139,10 +198,26 @@ export async function probeClaudeModels(
       if (input.signal) await childExit;
     } else {
       closeProbeQuery(query);
+=======
+    );
+    return await raceProviderRefreshAbort(signal, query.supportedModels());
+  } finally {
+    clearTimeout(timer);
+    endInput();
+    if (query && child && !hasExited(child)) {
+      // The CLI may be refreshing an expired OAuth token, even after it has answered.
+      // Claude Code rotates the refresh token before saving the new pair, so killing it now
+      // leaves a revoked token on disk and logs the user out (#9314). With its input ended
+      // it exits once that work is done; the grace period and daemon shutdown bound the wait.
+      letDiscoveryExit(query, child);
+    } else {
+      await retireDiscovery(query, child);
+>>>>>>> refs/remotes/upstream/tags/v0.17.2
     }
   }
 }
 
+<<<<<<< HEAD
 /** Kills probe processes still exiting after their probe ended. Called on daemon shutdown. */
 export async function killExitingClaudeModelDiscoveries(): Promise<void> {
   await Promise.all(Array.from(exitingProbes.values(), (kill) => kill()));
@@ -340,4 +415,46 @@ export function claudeRuntimeFastModeSupport(
     runtimeFastModeById.get(trimmed) ??
     runtimeFastModeById.get(normalizeClaudeRuntimeModelId(trimmed) ?? trimmed)
   );
+=======
+/** Kills discovery processes still exiting after their wait ended. Called on daemon shutdown. */
+export async function killExitingClaudeModelDiscoveries(): Promise<void> {
+  await Promise.all(Array.from(exitingDiscoveries.values(), (kill) => kill()));
+}
+
+function letDiscoveryExit(query: DiscoveryQuery, child: ChildProcess): void {
+  function forget(): void {
+    clearTimeout(graceTimer);
+    child.off("exit", onExit);
+    exitingDiscoveries.delete(child);
+  }
+  function onExit(): void {
+    forget();
+    query.close();
+  }
+  async function kill(): Promise<void> {
+    forget();
+    await retireDiscovery(query, child);
+  }
+  const graceTimer = setTimeout(() => void kill(), DISCOVERY_EXIT_GRACE_MS);
+  graceTimer.unref();
+  child.once("exit", onExit);
+  exitingDiscoveries.set(child, kill);
+}
+
+async function retireDiscovery(
+  query: DiscoveryQuery | undefined,
+  child: ChildProcess | undefined,
+): Promise<void> {
+  try {
+    query?.close();
+  } finally {
+    if (child) {
+      await terminateWithTreeKill(child, { gracefulTimeoutMs: 200, forceTimeoutMs: 200 });
+    }
+  }
+}
+
+function hasExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+>>>>>>> refs/remotes/upstream/tags/v0.17.2
 }

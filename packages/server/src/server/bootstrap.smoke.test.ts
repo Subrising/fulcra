@@ -15,6 +15,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 
 import { createPaseoDaemon, parseListenString, type PaseoDaemonConfig } from "./bootstrap.js";
+import { BuiltinPluginLoader } from "./plugins/builtin/index.js";
 import { loadConfig } from "./config.js";
 import { AgentManagerShuttingDownError } from "./agent/agent-manager.js";
 import { FileAgentTimelineStore } from "./agent/file-agent-timeline-store.js";
@@ -249,7 +250,10 @@ describe("paseo daemon bootstrap", () => {
         voiceTts: { provider: "local", explicit: true, enabled: false },
       },
     };
-    const daemon = await createPaseoDaemon(config, pino({ level: "silent" }));
+    const daemon = await createPaseoDaemon(config, pino({ level: "silent" }), {
+      builtinPlugins: new BuiltinPluginLoader(undefined, []),
+      lazyTerminalWorker: true,
+    });
     let client: DaemonClient | null = null;
     let proxyUpstream: http.Server | null = null;
 
@@ -526,7 +530,10 @@ describe("paseo daemon bootstrap", () => {
         standaloneListen: `127.0.0.1:${address.port}`,
       },
     };
-    const daemon = await createPaseoDaemon(config, pino({ level: "silent" }));
+    const daemon = await createPaseoDaemon(config, pino({ level: "silent" }), {
+      builtinPlugins: new BuiltinPluginLoader(undefined, []),
+      lazyTerminalWorker: true,
+    });
 
     try {
       await expect(daemon.start()).rejects.toThrow();
@@ -639,6 +646,8 @@ describe("paseo daemon bootstrap", () => {
       speech: undefined,
     };
     const daemon = await createPaseoDaemon(config, pino({ level: "silent" }), {
+      builtinPlugins: new BuiltinPluginLoader(undefined, []),
+      lazyTerminalWorker: true,
       hubRelationshipRemote: remote,
     });
     const starting = daemon.start();
@@ -729,11 +738,11 @@ describe("paseo daemon bootstrap", () => {
 
   test("rolls back standalone listener without starting plugins when main listen fails", async () => {
     const mainPort = await findFreePort();
-    const standalonePort = await findFreePort();
     const occupiedMain = http.createServer((_req, res) => {
       res.end("occupied-main");
     });
     await new Promise<void>((resolve) => occupiedMain.listen(mainPort, "127.0.0.1", resolve));
+    const standalonePort = await findFreePort();
 
     const paseoHomeRoot = await mkdtemp(path.join(os.tmpdir(), "paseo-main-rollback-"));
     const paseoHome = path.join(paseoHomeRoot, ".paseo");
@@ -779,7 +788,10 @@ export default function contribute(plugin: unknown) {
         ? {}
         : { "startup-rollback": { source: "directory", path: pluginDirectory } },
     };
-    const daemon = await createPaseoDaemon(config, pino({ level: "silent" }));
+    const daemon = await createPaseoDaemon(config, pino({ level: "silent" }), {
+      builtinPlugins: new BuiltinPluginLoader(undefined, []),
+      lazyTerminalWorker: true,
+    });
 
     try {
       await expect(daemon.start()).rejects.toThrow();
@@ -871,7 +883,10 @@ export default function contribute(plugin: unknown) {
     };
 
     try {
-      const daemon = await createPaseoDaemon(config, pino({ level: "silent" }));
+      const daemon = await createPaseoDaemon(config, pino({ level: "silent" }), {
+        builtinPlugins: new BuiltinPluginLoader(undefined, []),
+        lazyTerminalWorker: true,
+      });
       try {
         await daemon.start();
         expect(daemon.getListenTarget()).toBeDefined();
@@ -1002,7 +1017,10 @@ export default function contribute(plugin: unknown) {
         speech: undefined,
       };
 
-      const daemon = await createPaseoDaemon(config, logger);
+      const daemon = await createPaseoDaemon(config, logger, {
+        builtinPlugins: new BuiltinPluginLoader(undefined, []),
+        lazyTerminalWorker: true,
+      });
 
       try {
         await daemon.start();
@@ -1133,6 +1151,7 @@ function probeWebSocketConnection(
   });
 }
 
+<<<<<<< HEAD
 test.each([0, 1250])(
   "agent MCP creates an ordinary caller's worker and returns a clear workspace path error (notice handoff delay: %i ms)",
   async (noticeDelayMs) => {
@@ -1141,6 +1160,98 @@ test.each([0, 1250])(
     const base = createTestAgentClient("codex", {
       supportsMcpServers: true,
       onStartTurn: (prompt) => prompts.push(prompt),
+=======
+test("disabled recovery closes stale active records without resuming sessions", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "paseo-stale-status-"));
+  const logger = pino({ level: "silent" });
+  const storagePath = path.join(root, ".paseo", "agents");
+  const storage = new AgentStorage(storagePath, logger);
+  const timestamp = "2025-01-01T00:00:00.000Z";
+  const registryDir = path.join(root, ".paseo", "projects");
+  await new FileBackedProjectRegistry(path.join(registryDir, "projects.json"), logger).upsert(
+    createPersistedProjectRecord({
+      projectId: "existing-project",
+      rootPath: root,
+      kind: "non_git",
+      displayName: "Existing",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }),
+  );
+  await new FileBackedWorkspaceRegistry(path.join(registryDir, "workspaces.json"), logger).upsert(
+    createPersistedWorkspaceRecord({
+      workspaceId: "existing-workspace",
+      projectId: "existing-project",
+      cwd: root,
+      kind: "directory",
+      displayName: "Existing",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }),
+  );
+  const records: StoredAgentRecord[] = ["running", "initializing", "idle", "error", "closed"].map(
+    (status, index) => ({
+      id: randomUUID(),
+      workspaceId: "existing-workspace",
+      provider: "codex",
+      cwd: root,
+      createdAt: "2025-01-01T00:00:00.000Z",
+      updatedAt: "2025-01-02T00:00:00.000Z",
+      lastActivityAt: "2025-01-02T00:00:00.000Z",
+      lastStatus: status as StoredAgentRecord["lastStatus"],
+      title: `Keep ${status}`,
+      labels: { "paseo.parent-agent-id": "parent", custom: "keep" },
+      metadata: {},
+      persistence: { provider: "codex", sessionId: `session-${index}` },
+      config: { modeId: "full-access" },
+      requiresAttention: true,
+      attentionReason: "permission",
+      attentionTimestamp: "2025-01-02T00:00:00.000Z",
+      archivedAt: index === 1 ? "2025-01-03T00:00:00.000Z" : null,
+    }),
+  );
+  for (const record of records) await storage.upsert(record);
+  let sessionsCreated = 0;
+  const handle = await createTestPaseoDaemon({
+    paseoHomeRoot: root,
+    resumeOnStartup: false,
+    agentClients: createTestAgentClients({
+      beforeCreateSession: async () => {
+        sessionsCreated++;
+      },
+    }),
+  });
+  const client = new DaemonClient({ url: `ws://127.0.0.1:${handle.port}/ws` });
+  try {
+    const expected = records.map((record) => ({
+      ...record,
+      resumeOnStartup: false,
+      lastStatus:
+        record.lastStatus === "running" || record.lastStatus === "initializing"
+          ? "closed"
+          : record.lastStatus,
+    }));
+    expect(
+      (await handle.daemon.agentStorage.listAll()).sort((a, b) => a.id.localeCompare(b.id)),
+    ).toEqual(expected.sort((a, b) => a.id.localeCompare(b.id)));
+    // A fresh reader proves the repaired states were written, rather than projected only in memory.
+    expect(
+      (await new AgentStorage(storagePath, logger).listAll()).sort((a, b) =>
+        a.id.localeCompare(b.id),
+      ),
+    ).toEqual(expected);
+    expect(handle.daemon.agentManager.listAgents()).toEqual([]);
+    expect(sessionsCreated).toBe(0);
+    await client.connect();
+    const snapshot = await client.fetchAgents({ filter: { includeArchived: true } });
+    expect(
+      Object.fromEntries(snapshot.entries.map((entry) => [entry.agent.id, entry.agent.status])),
+    ).toEqual(Object.fromEntries(expected.map((record) => [record.id, record.lastStatus])));
+    const opened = await ensureAgentLoaded(records[0]!.id, {
+      agentManager: handle.daemon.agentManager,
+      agentStorage: handle.daemon.agentStorage,
+      logger,
+>>>>>>> refs/remotes/upstream/tags/v0.17.2
     });
     const provider = Object.create(base) as AgentClient;
     provider.createSession = async (...args) => {
@@ -1360,6 +1471,7 @@ test.each(["reject", "stall"] as const)(
   30_000,
 );
 
+<<<<<<< HEAD
 test("FU-365 agent MCP accepts the newer Claude protocol and keeps version validation", async () => {
   const daemon = await createTestPaseoDaemon({
     auth: { password: hashDaemonPassword("mcp-fixture-password") },
@@ -1422,3 +1534,189 @@ test("FU-365 agent MCP accepts the newer Claude protocol and keeps version valid
     await daemon.close();
   }
 });
+=======
+test("shutdown finishes promptly when a persisted ACP plugin reopen is still streaming history replay", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "paseo-shutdown-acp-replay-"));
+  const pluginDirectory = path.join(root, "plugin");
+  const agentScriptPath = path.join(root, "streaming-acp-agent.mjs");
+  const replayStartedPath = path.join(root, "replay-started.pid");
+  const workspace = path.join(root, "workspace");
+  await mkdir(pluginDirectory, { recursive: true });
+  await mkdir(workspace, { recursive: true });
+  const pluginId = "streaming-replay-plugin";
+  const providerId = "streaming-replay-acp";
+
+  await writeFile(
+    agentScriptPath,
+    `
+import { writeFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+const send = (msg) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\\n");
+let stream;
+createInterface({ input: process.stdin }).on("line", (line) => {
+  if (!line.trim()) return;
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") {
+    send({ id: msg.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true } } });
+  } else if (msg.method === "session/new") {
+    send({ id: msg.id, result: { sessionId: "new-session", configOptions: [] } });
+  } else if (msg.method === "session/load") {
+    const sid = msg.params.sessionId;
+    send({ id: msg.id, result: { configOptions: [] } });
+    writeFileSync(${JSON.stringify(replayStartedPath)}, String(process.pid));
+    let count = 0;
+    stream = setInterval(() => {
+      count += 1;
+      send({
+        method: "session/update",
+        params: {
+          sessionId: sid,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            messageId: "chunk-" + count,
+            content: { type: "text", text: "replayed message " + count },
+          },
+        },
+      });
+    }, 20);
+  } else if (msg.method === "session/close") {
+    clearInterval(stream);
+    send({ id: msg.id, result: {} });
+  }
+});
+process.on("SIGTERM", () => {
+  clearInterval(stream);
+  process.exit(0);
+});
+`,
+  );
+  await writeFile(
+    path.join(pluginDirectory, "paseo-plugin.json"),
+    JSON.stringify({
+      id: pluginId,
+      requirements: { paseo: `>=${resolveDaemonVersion(import.meta.url)}` },
+    }),
+  );
+  await writeFile(
+    path.join(pluginDirectory, "index.server.ts"),
+    `import { runAcpProvider } from "@getpaseo/plugin/server/acp";
+import type { ProviderRegistration } from "@getpaseo/plugin/server/provider";
+
+const provider: ProviderRegistration = runAcpProvider({
+  id: ${JSON.stringify(providerId)},
+  label: "Streaming replay ACP",
+  command: [${JSON.stringify(process.execPath)}, ${JSON.stringify(agentScriptPath)}],
+  acpOptions: { loadReplayQuietPeriodMs: 100 },
+});
+
+export default function contribute(server: { registerProvider(p: ProviderRegistration): void }) {
+  server.registerProvider(provider);
+  return () => undefined;
+}
+`,
+  );
+
+  const paseoHomeRoot = path.join(root, "home");
+  const paseoHome = path.join(paseoHomeRoot, ".paseo");
+  const logger = pino({ level: "silent" });
+  const storage = new AgentStorage(path.join(paseoHome, "agents"), logger);
+  const agentId = randomUUID();
+  const persistence = { version: 1, data: { sessionId: "persisted-acp-session" } };
+  await storage.upsert({
+    id: agentId,
+    workspaceId: "workspace-1",
+    provider: providerId,
+    cwd: workspace,
+    createdAt: "2025-01-01T00:00:00.000Z",
+    updatedAt: "2025-01-02T00:00:00.000Z",
+    lastActivityAt: "2025-01-02T00:00:00.000Z",
+    lastStatus: "closed",
+    title: "Streaming replay agent",
+    labels: {},
+    metadata: {},
+    persistence: {
+      provider: providerId,
+      sessionId: `plugin:${JSON.stringify(persistence)}`,
+      metadata: { pluginProviderPersistence: persistence },
+    },
+    config: {},
+    requiresAttention: false,
+    attentionReason: null,
+    attentionTimestamp: null,
+    archivedAt: null,
+  });
+
+  const handle = await createTestPaseoDaemon({
+    paseoHomeRoot,
+    staticDir: path.join(root, "static"),
+    pluginsEnabled: true,
+    plugins: {
+      [pluginId]: { source: "directory", path: pluginDirectory, enabled: true },
+    },
+  });
+  const client = new DaemonClient({ url: `ws://127.0.0.1:${handle.port}/ws` });
+  let stopped = false;
+  let childPid: number | null = null;
+  try {
+    await client.connect();
+    const timelineRequest = client
+      .fetchAgentTimeline(agentId, { direction: "tail", limit: 20 })
+      .catch(() => "rejected");
+
+    await expect
+      .poll(
+        async () => {
+          try {
+            const raw = (await readFile(replayStartedPath, "utf8")).trim();
+            const pid = Number(raw);
+            if (Number.isInteger(pid) && pid > 0) {
+              childPid = pid;
+              return pid;
+            }
+            return null;
+          } catch {
+            return null;
+          }
+        },
+        { timeout: 10_000 },
+      )
+      .not.toBeNull();
+
+    const outcome = await Promise.race([
+      handle.daemon.stop().then(() => {
+        stopped = true;
+        return "stopped";
+      }),
+      new Promise<string>((resolve) => setTimeout(() => resolve("timed_out"), 12_000)),
+    ]);
+    expect(outcome).toBe("stopped");
+    await expect(timelineRequest).resolves.toBe("rejected");
+    // The ACP child process must be terminated when provider shutdown cancels replay.
+    await expect
+      .poll(
+        () => {
+          if (!childPid) return false;
+          try {
+            process.kill(childPid, 0);
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        { timeout: 3_000 },
+      )
+      .toBe(false);
+  } finally {
+    await client.close().catch(() => undefined);
+    if (!stopped && childPid) {
+      try {
+        process.kill(childPid, "SIGKILL");
+      } catch {
+        // already exited
+      }
+    }
+    if (!stopped) await handle.daemon.stop().catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  }
+}, 30_000);
+>>>>>>> refs/remotes/upstream/tags/v0.17.2

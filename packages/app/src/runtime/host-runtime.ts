@@ -6,6 +6,7 @@ import {
 } from "@/relay/device-identity";
 import { createHostPluginClientBundleStore } from "@/plugins/client-bundles";
 import { watchdog } from "@/watchdog";
+import { createHostLogger } from "./host-logger";
 import { createHostChannelTransport } from "@getpaseo/client/internal/hosts";
 import type { OwnedSubscription } from "@getpaseo/client";
 import type { HostDirectory } from "@getpaseo/protocol/hosts";
@@ -23,17 +24,22 @@ import {
 import {
   connectionFromListen,
   createRemoteSshHostConnection,
-  normalizeStoredHostProfile,
+  forgetUnreadableHost,
   pinRelayProtectedSecurityInProfiles,
+  readHostRegistry,
   upsertHostConnectionInProfiles,
   canLearnDirectRoutesFrom,
   withLearnedDirectDeviceRoutes,
   registryHasConnection,
   relayConnectionFromOffer,
-  StoredHostRegistrySchema,
+  writeHostRegistry,
   type HostConnection,
   type HostProfile,
+<<<<<<< HEAD
   type HostPairingReason,
+=======
+  type UnreadableHostEntries,
+>>>>>>> refs/remotes/upstream/tags/v0.17.2
 } from "@/types/host-connection";
 import { defaultHostAppearance, type HostBadgeDisplay, type HostColor } from "@/hosts/appearance";
 import {
@@ -55,7 +61,7 @@ import {
 } from "@/utils/test-daemon-connection";
 import { getOrCreateClientId } from "@/utils/client-id";
 import { z } from "zod";
-import { readValidatedJson, readValidatedString } from "@/storage/validated-storage";
+import { readValidatedString } from "@/storage/validated-storage";
 import {
   connectionPreferenceRank,
   selectBestConnection,
@@ -66,10 +72,8 @@ import {
   buildDesktopDaemonTransportUrl,
   createDesktopDaemonTransportFactory,
 } from "@/desktop/daemon/desktop-daemon-transport";
-import { getDesktopHost } from "@/desktop/host";
 import { readDesktopManagedLocalCredential } from "@/desktop/daemon/local-credential";
 import { CLIENT_CAPS } from "@getpaseo/protocol/client-capabilities";
-import { BROWSER_AUTOMATION_COMMAND_NAMES } from "@getpaseo/protocol/browser-automation/rpc-schemas";
 import {
   useSessionStore,
   toDaemonServerInfo,
@@ -85,7 +89,10 @@ import {
   invalidateServerDataQueriesAfterReconnect,
   mountServerDataPushRouter,
 } from "@/data/push-router";
-import { mountBrowserAutomationDaemonClientHandler } from "@/desktop/browser/automation/handler";
+import {
+  getDesktopBrowserHostRegistration,
+  mountBrowserAutomationDaemonClientHandler,
+} from "@/desktop/browser/automation/handler";
 import { schedulesQueryBaseKey } from "@/schedules/aggregated-schedules";
 import { dispatchComposerAgentMessage, sendQueuedComposerMessageNow } from "@/composer/actions";
 import { createMessageSubmissionWriter } from "@/composer/submission/writer";
@@ -598,6 +605,7 @@ function probeIntervalForConnection(
 export function createDefaultDeps(
   resolveOrigin: (serverId: string) => DaemonClient | null = () => null,
 ): HostRuntimeControllerDeps {
+<<<<<<< HEAD
   const browserHostAvailable =
     typeof getDesktopHost()?.browser?.executeAutomationCommand === "function";
   const browserAutomationCapabilities = browserHostAvailable
@@ -612,6 +620,12 @@ export function createDefaultDeps(
     [CLIENT_CAPS.archiveConfirmation]: true,
     ...browserAutomationCapabilities,
   };
+=======
+  const browserHostRegistration = getDesktopBrowserHostRegistration();
+  const appCapabilities = browserHostRegistration
+    ? { [CLIENT_CAPS.browserHost]: browserHostRegistration }
+    : {};
+>>>>>>> refs/remotes/upstream/tags/v0.17.2
 
   return {
     createClient: ({ host, connection, clientId, runtimeGeneration }) => {
@@ -625,6 +639,7 @@ export function createDefaultDeps(
         runtimeGeneration,
         capabilities: appCapabilities,
         trace: createPerformanceTrace({ host: host.serverId, connection: connection.id }),
+        logger: createHostLogger(() => host.serverId),
         providerSnapshots: "wire",
         createPluginClientBundleStore: createHostPluginClientBundleStore,
         ...(host.password ? { password: host.password } : {}),
@@ -717,6 +732,7 @@ export function createDefaultDeps(
             null,
           ),
           reconnect: { enabled: false },
+          logger: createHostLogger(() => host.serverId),
           appVersion: resolveAppVersion() ?? undefined,
           createPluginClientBundleStore: createHostPluginClientBundleStore,
         });
@@ -745,12 +761,14 @@ export function createDefaultDeps(
         queryClient,
         serverId: host.serverId,
       });
-      if (!browserAutomationCapabilities) {
+      if (!browserHostRegistration) {
         return unmountServerData;
       }
-      const unmountBrowserAutomation = mountBrowserAutomationDaemonClientHandler(client, {
-        serverId: host.serverId,
-      });
+      const unmountBrowserAutomation = mountBrowserAutomationDaemonClientHandler(
+        client,
+        browserHostRegistration,
+        { serverId: host.serverId },
+      );
       return () => {
         unmountBrowserAutomation();
         unmountServerData();
@@ -911,9 +929,17 @@ export class HostRuntimeController {
       this.unsubscribeClientHandlers();
       this.unsubscribeClientHandlers = null;
     }
+<<<<<<< HEAD
     const prev = this.activeClient;
     this.activeClient = null;
     prev?.setReconnectEnabled(false);
+=======
+    if (this.activeClient) {
+      const prev = this.activeClient;
+      this.activeClient = null;
+      await prev.close().catch(() => undefined);
+    }
+>>>>>>> refs/remotes/upstream/tags/v0.17.2
     this.resetSwitchCandidate();
     this.clearActiveRttSamples();
     this.resetInactiveOnlineProbeBackoff();
@@ -933,7 +959,13 @@ export class HostRuntimeController {
       this.authRejectedConnectionIds.clear();
       this.updateSnapshot({ authFailureReason: null });
     }
+<<<<<<< HEAD
     this.resetInactiveOnlineProbeBackoffIf(passwordChanged, connectionsChanged);
+=======
+    if (passwordChanged || connectionsChanged) {
+      this.resetInactiveOnlineProbeBackoff();
+    }
+>>>>>>> refs/remotes/upstream/tags/v0.17.2
     const activeConnectionId = this.snapshot.activeConnectionId;
     const previousActiveConnection = findConnectionById(this.host, activeConnectionId);
     const relayChanged = !equal(
@@ -989,11 +1021,30 @@ export class HostRuntimeController {
   }
 
   ensureConnected(options?: { verify?: boolean }): void {
+<<<<<<< HEAD
     if (this.isPairingRequired()) return;
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.17.2
     if (options?.verify) {
       this.resetInactiveOnlineProbeBackoff();
     }
     this.activeClient?.ensureConnected(options);
+  }
+
+  async reconnectVia(originServerId: string): Promise<void> {
+    const routes = this.host.connections.filter(
+      (connection) =>
+        connection.type === "routed" &&
+        connection.originServerId === originServerId &&
+        !this.authRejectedConnectionIds.has(connection.id),
+    );
+    if (routes.length === 0 || !this.started || isHostRuntimeConnected(this.snapshot)) return;
+    if (routes.some((route) => route.id === this.snapshot.activeConnectionId))
+      this.ensureConnected();
+    await this.probeCycleInFlight;
+    if (!this.started || this.snapshot.connectionStatus === "online") return;
+    for (const route of routes) this.connectionLastProbedAt.delete(route.id);
+    await this.runProbeCycleNow();
   }
 
   markAgentDirectorySyncLoading(): void {
@@ -1155,6 +1206,9 @@ export class HostRuntimeController {
       }
 
       const currentActiveConnectionId = this.snapshot.activeConnectionId;
+      if (currentActiveConnectionId) {
+        this.reconcileActiveProbeWithClient(currentActiveConnectionId, probeByConnectionId);
+      }
       const activeProbe = currentActiveConnectionId
         ? probeByConnectionId.get(currentActiveConnectionId)
         : null;
@@ -1191,8 +1245,7 @@ export class HostRuntimeController {
             expectedProbeVersion: requestVersion,
           });
         }
-        this.switchCandidateConnectionId = null;
-        this.switchCandidateHitCount = 0;
+        this.resetSwitchCandidate();
         return;
       }
 
@@ -1202,12 +1255,17 @@ export class HostRuntimeController {
       // rolling minimum of recent active heartbeats filters out single busy/stalled ticks so a
       // loaded working socket does not lose to an idle probe, and a proportional threshold avoids
       // flapping on normal jitter on high-RTT links.
+<<<<<<< HEAD
       // L46: never switch to a connection of a lower kind, such as a faster relay while direct is up.
       const activeRank = rankOfConnection(this.host, currentActiveConnectionId);
       const sampledCandidates = connectionsToProbe.filter(
         (connection) =>
           connection.id !== currentActiveConnectionId &&
           rankOfConnection(this.host, connection.id) <= activeRank,
+=======
+      const sampledCandidates = connectionsToProbe.filter(
+        (connection) => connection.id !== currentActiveConnectionId,
+>>>>>>> refs/remotes/upstream/tags/v0.17.2
       );
       if (sampledCandidates.length === 0) {
         // An active-only tick carries no evidence about any candidate.
@@ -1218,6 +1276,7 @@ export class HostRuntimeController {
           .flatMap((connection) => {
             const probe = probeByConnectionId.get(connection.id);
             return probe?.status === "available"
+<<<<<<< HEAD
               ? [
                   {
                     connectionId: connection.id,
@@ -1230,6 +1289,12 @@ export class HostRuntimeController {
           // L46: a direct connection outranks the relay; latency orders connections of the same kind.
           .sort((left, right) => left.rank - right.rank || left.latencyMs - right.latencyMs)[0] ??
         null;
+=======
+              ? [{ connectionId: connection.id, latencyMs: probe.latencyMs }]
+              : [];
+          })
+          .sort((left, right) => left.latencyMs - right.latencyMs)[0] ?? null;
+>>>>>>> refs/remotes/upstream/tags/v0.17.2
       if (!fastest) {
         // Every candidate sampled this cycle failed: that breaks the streak and backs off.
         this.resetSwitchCandidate();
@@ -1247,8 +1312,12 @@ export class HostRuntimeController {
         activeRttMs * ADAPTIVE_SWITCH_MIN_IMPROVEMENT_RATIO,
       );
       const improvement = activeRttMs - fastest.latencyMs;
+<<<<<<< HEAD
       const upgradesKind = fastest.rank < rankOfConnection(this.host, currentActiveConnectionId);
       if (!upgradesKind && improvement < requiredImprovementMs) {
+=======
+      if (improvement < requiredImprovementMs) {
+>>>>>>> refs/remotes/upstream/tags/v0.17.2
         this.resetSwitchCandidate();
         this.advanceInactiveOnlineProbeBackoff();
         return;
@@ -1263,8 +1332,7 @@ export class HostRuntimeController {
       }
 
       if (this.switchCandidateHitCount >= ADAPTIVE_SWITCH_CONSECUTIVE_PROBES) {
-        this.switchCandidateConnectionId = null;
-        this.switchCandidateHitCount = 0;
+        this.resetSwitchCandidate();
         await this.switchToConnection({
           connectionId: fastest.connectionId,
           expectedProbeVersion: requestVersion,
@@ -1426,10 +1494,13 @@ export class HostRuntimeController {
     }
   }
 
+<<<<<<< HEAD
   private resetInactiveOnlineProbeBackoffIf(...changes: boolean[]): void {
     if (changes.some(Boolean)) this.resetInactiveOnlineProbeBackoff();
   }
 
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.17.2
   private resetInactiveOnlineProbeBackoff(): void {
     this.inactiveOnlineProbeBackoffStep = 0;
   }
@@ -1780,10 +1851,13 @@ export class HostRuntimeController {
       this.deps.mountClientHandlers?.({ client, host: this.host, connection }) ?? null;
     this.unsubscribeClientStatus = client.subscribeConnectionStatus((state) => {
       if (this.activeClient !== client) return;
+<<<<<<< HEAD
       if (client.pairingRequired) {
         this.requirePairing(client.pairingRequired);
         return;
       }
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.17.2
       if (client.authFailureReason) {
         void this.failActiveConnection({
           client,
@@ -1816,12 +1890,15 @@ export class HostRuntimeController {
   }): Promise<void> {
     const { client, connection, error } = input;
     if (this.activeClient !== client) return;
+<<<<<<< HEAD
     if (client.pairingRequired || error instanceof PairingRequiredError) {
       this.requirePairing(
         client.pairingRequired ?? (error as PairingRequiredError).pairingRequired,
       );
       return;
     }
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.17.2
     const authFailure = getConnectionAuthFailureReason(error);
     if (authFailure) this.authRejectedConnectionIds.add(connection.id);
     this.unsubscribeClientStatus?.();
@@ -1989,6 +2066,7 @@ export class HostRuntimeStore {
   private hostListVersion = 0;
   private hostRegistryLoaded = false;
   private hosts: HostProfile[] = [];
+  private unreadableHosts: UnreadableHostEntries = { hosts: [], connectionsByServerId: new Map() };
   private hostAppearanceMutationTail: Promise<void> = Promise.resolve();
   private hostRegistryStatus: HostRegistryStatus = "loading";
   private deps: HostRuntimeControllerDeps;
@@ -2100,35 +2178,21 @@ export class HostRuntimeStore {
     let shouldPersistHosts = false;
     let profiles: HostProfile[] = [];
     try {
-      const stored = await readValidatedJson(
-        this.storage,
-        REGISTRY_STORAGE_KEY,
-        StoredHostRegistrySchema,
-      );
+      const stored = await this.readStoredRegistry();
       if (stored) {
-        const normalizedProfiles: HostProfile[] = [];
-        for (const entry of stored) {
-          const profile = normalizeStoredHostProfile(entry);
-          if (!profile) {
-            await this.storage.removeItem(REGISTRY_STORAGE_KEY);
-            normalizedProfiles.length = 0;
-            break;
-          }
-          // COMPAT(connectionPassword): added in v0.9.1, remove after 2027-03-24 with stored-password migration.
-          if (
-            entry.connections.some(
-              (connection) => connection.type === "directTcp" && connection.password,
-            )
-          ) {
-            shouldPersistHosts = true;
-          }
-          normalizedProfiles.push(profile);
+        // An entry this build can't read skips only that host or connection, and stays stored.
+        const registry = readHostRegistry(stored);
+        this.unreadableHosts = registry.unreadable;
+        // COMPAT(connectionPassword): added in v0.9.1, remove after 2027-03-24 with stored-password migration.
+        if (registry.movedConnectionPassword) {
+          shouldPersistHosts = true;
         }
-        profiles = normalizedProfiles.filter((entry) => !isPlaceholderServerId(entry.serverId));
-        if (profiles.length !== normalizedProfiles.length) {
+        profiles = registry.hosts.filter((entry) => !isPlaceholderServerId(entry.serverId));
+        if (profiles.length !== registry.hosts.length) {
           shouldPersistHosts = true;
         }
       }
+<<<<<<< HEAD
       if (profiles.some((h) => h.connections.some((c) => c.type === "relay"))) {
         const hasIdentity = await hasStoredDeviceIdentity(this.storage);
         profiles = profiles.map((host) => {
@@ -2144,9 +2208,11 @@ export class HostRuntimeStore {
       }
       this.hosts = profiles;
       this.replicaCache.setHosts(profiles.map((profile) => profile.serverId));
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.17.2
       projectIconCache.setHosts(profiles.map((profile) => profile.serverId));
       await projectIconCache.restore();
-      this.syncHosts(profiles);
+      this.setHostsAndSync(profiles);
       for (const profile of profiles) {
         void this.directorySyncByServer
           .get(profile.serverId)
@@ -2774,6 +2840,7 @@ export class HostRuntimeStore {
     }
     await this.revokePushNotifications({ client, serverId });
     const remaining = this.hosts.filter((daemon) => daemon.serverId !== serverId);
+    this.unreadableHosts = forgetUnreadableHost(this.unreadableHosts, serverId);
     this.setHostsAndSync(remaining);
     await this.persistHosts();
   }
@@ -2890,7 +2957,27 @@ export class HostRuntimeStore {
   }
 
   private async persistHosts(hosts = this.hosts): Promise<void> {
-    await this.storage.setItem(REGISTRY_STORAGE_KEY, JSON.stringify(hosts));
+    await this.storage.setItem(
+      REGISTRY_STORAGE_KEY,
+      JSON.stringify(writeHostRegistry(hosts, this.unreadableHosts)),
+    );
+  }
+
+  /**
+   * Reads the stored registry without removing it. A value that isn't a JSON array is copied to
+   * `<key>:unreadable` first, because the next save overwrites the key.
+   */
+  private async readStoredRegistry(): Promise<unknown[] | null> {
+    const raw = await this.storage.getItem(REGISTRY_STORAGE_KEY);
+    if (raw === null) return null;
+    try {
+      const value: unknown = JSON.parse(raw);
+      if (Array.isArray(value)) return value;
+    } catch {
+      // Not JSON: copied aside below.
+    }
+    await this.storage.setItem(`${REGISTRY_STORAGE_KEY}:unreadable`, raw);
+    return null;
   }
 
   private emitHostList(): void {
@@ -3148,6 +3235,7 @@ export class HostRuntimeStore {
     }
     if (didTransitionOnline) {
       useSessionStore.getState().bumpHistorySyncGeneration(serverId);
+      for (const child of this.controllers.values()) void child.reconnectVia(serverId);
       // Checkout git data is push-driven; pushes emitted while disconnected are gone for
       // good (the daemon dedupes by snapshot fingerprint). Mark the caches stale so active
       // queries refetch now and evicted ones on their next mount.
@@ -3441,7 +3529,22 @@ export class HostRuntimeStore {
       replica,
       replaceDemandedAgentIds: (agentIds) => directory.setAgentRouteDemand(agentIds),
       drainQueuedAgentMessage: (agentId) => this.drainQueuedAgentMessage(serverId, agentId),
-      ports,
+      applyTurnLiveness: (agentId, transitions) =>
+        directory.applyAgentTurnLiveness(agentId, transitions),
+      ports: {
+        ...ports,
+        observe: (agentIds, cursors) => {
+          const keepAgents = directory.captureSubscribedAgents(agentIds);
+          const observation = ports.observe(agentIds, cursors);
+          return {
+            ready: observation.ready.then((answer) => {
+              if (answer?.agents) keepAgents(answer.agents);
+              return answer;
+            }),
+            release: () => observation.release(),
+          };
+        },
+      },
     });
   }
 

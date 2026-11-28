@@ -121,6 +121,7 @@ function createServer(terminalManager: TerminalManager, workspaceRegistry?: Work
     setAgentAttentionCallback: vi.fn(),
     setNativeMessageReceipts: vi.fn(),
     subscribe: vi.fn(() => () => {}),
+    onStop: () => () => {},
     getAgent: vi.fn(() => null),
     getLastAssistantMessage: vi.fn(async () => null),
     getMetricsSnapshot: vi.fn(() => ({

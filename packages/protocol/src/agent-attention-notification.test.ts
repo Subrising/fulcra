@@ -71,6 +71,7 @@ describe("buildAgentAttentionNotificationPayload", () => {
     });
   });
 
+<<<<<<< HEAD
   it("keeps a question's text, redacted, since it is the assistant's own prose", () => {
     const payload = buildAgentAttentionNotificationPayload({
       reason: "permission",
@@ -374,6 +375,25 @@ describe("buildAgentAttentionNotificationPayload", () => {
     });
     expect(everything(finished)).not.toContain(sentinel);
     expect(everything(finished)).not.toMatch(/sk-abcdef|ghp_abcdef|a1B2c3D4a1B2/);
+=======
+  it("includes the tool input when a permission has a reason but no title", () => {
+    const payload = buildAgentAttentionNotificationPayload({
+      reason: "permission",
+      serverId: "srv-1",
+      workspaceId: "workspace-1",
+      agentId: "agent-1",
+      permissionRequest: {
+        id: "perm-1",
+        provider: "claude",
+        name: "Bash",
+        kind: "tool",
+        input: { command: "echo hello" },
+        description: "Hook requires approval",
+      },
+    });
+
+    expect(payload.body).toBe('{"command":"echo hello"} - Hook requires approval');
+>>>>>>> refs/remotes/upstream/tags/v0.17.2
   });
 
   it("uses error-specific defaults when reason is error", () => {

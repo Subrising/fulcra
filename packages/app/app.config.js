@@ -8,6 +8,7 @@ const withFdroidAutolinking = require("./plugins/with-fdroid-autolinking");
 const withPasteInput = require("./plugins/with-paste-input");
 const withPersonalDeviceIos = require("./plugins/with-personal-device-ios");
 const withAndroidScroll = require("./modules/paseo-scroll/app.plugin");
+const withAndroidDisplayMetrics = require("./modules/paseo-display-metrics/app.plugin");
 const { getNativeReleaseVersion } = require("./native-release-version");
 const appVariant = process.env.APP_VARIANT ?? "production";
 const isPrivatePreview = appVariant === "private-preview";
@@ -158,9 +159,11 @@ export default {
       searchPaths: ["../../node_modules", "./node_modules"],
     },
     plugins: [
+      "./modules/paseo-hardware-keyboard/app.plugin",
       "expo-router",
       withPasteInput,
       withAndroidScroll,
+      withAndroidDisplayMetrics,
       [withAndroidAsyncStorageSize, 64],
       ...buildProfile.cameraPlugins,
       withAndroidOptionalCamera,

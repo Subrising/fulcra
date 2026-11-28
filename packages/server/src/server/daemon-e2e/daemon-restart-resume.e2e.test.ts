@@ -111,6 +111,204 @@ async function stopFixture(child: ChildProcess, abrupt: boolean) {
   else child.send("stop");
   await exited;
 }
+<<<<<<< HEAD
+=======
+async function readPrompts(root: string): Promise<string[]> {
+  try {
+    return (await readFile(path.join(root, "parent-prompts.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as string);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+test.each([false, true])(
+  "durable finish subscriptions recover a running child after restart (abrupt=%s)",
+  async (abrupt) => {
+    const root = await mkdtemp(path.join(tmpdir(), "durable-finish-process-"));
+    const processes: ChildProcess[] = [];
+    let client: DaemonClient | undefined;
+    let mcp: Client | undefined;
+    try {
+      const first = await restartFixture(root, { resumeOnStartup: true });
+      processes.push(first.child);
+      client = new DaemonClient({ url: `ws://127.0.0.1:${first.port}/ws`, appVersion: "0.13.0" });
+      await client.connect();
+      await client.fetchAgents({ subscribe: {} });
+      const parent = await client.createAgent({
+        provider: "claude",
+        cwd: first.cwd,
+        title: "Durable parent",
+        modeId: "full-access",
+      });
+      mcp = new Client({ name: "durable-parent", version: "1" });
+      await mcp.connect(
+        new StreamableHTTPClientTransport(
+          new URL(`http://127.0.0.1:${first.port}/mcp/agents?callerAgentId=${parent.id}`),
+        ),
+      );
+      const result = await mcp.callTool({
+        name: "create_agent",
+        arguments: {
+          provider: "claude/claude-test",
+          title: "Held child",
+          initialPrompt: "HOLD_CHILD",
+        },
+      });
+      expect(result.isError).not.toBe(true);
+      const childId = (result.structuredContent as { agentId: string }).agentId;
+      expect((await client.fetchAgent(childId))?.agent.status).toBe("running");
+      // Kill only after the running snapshot commits, so this exercises bootstrap repair
+      // rather than recovery of the earlier idle snapshot while its write is pending.
+      await expect
+        .poll(
+          async () =>
+            (
+              await new AgentStorage(path.join(first.paseoHome, "agents"), createTestLogger()).get(
+                childId,
+              )
+            )?.lastStatus,
+        )
+        .toBe("running");
+      expect(
+        JSON.parse(await readFile(path.join(first.paseoHome, "finish-subscriptions.json"), "utf8")),
+      ).toHaveLength(1);
+      await mcp.close();
+      mcp = undefined;
+      await client.close();
+      client = undefined;
+      await stopFixture(first.child, abrupt);
+      const second = await restartFixture(root, { resumeOnStartup: true });
+      processes.push(second.child);
+      await expect.poll(() => readPrompts(root), { timeout: 15000 }).toHaveLength(1);
+      const prompts = await readPrompts(root);
+      expect(prompts[0]).toContain(`Agent ${childId}`);
+      expect(prompts[0]).not.toContain("was closed");
+      const recoveredPrompts = (await readFile(path.join(root, "all-prompts.jsonl"), "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(recoveredPrompts.filter((entry) => entry.prompt === "Resume working.")).toHaveLength(
+        1,
+      );
+      const restored = recoveredPrompts.find((entry) => entry.prompt === "Resume working.").config;
+      const original = recoveredPrompts.find((entry) =>
+        String(entry.prompt).includes("HOLD_CHILD"),
+      ).config;
+      expect(restored).toMatchObject({
+        provider: original.provider,
+        model: original.model,
+        modeId: original.modeId,
+        cwd: original.cwd,
+      });
+
+      await expect
+        .poll(
+          async () =>
+            JSON.parse(
+              await readFile(path.join(second.paseoHome, "finish-subscriptions.json"), "utf8"),
+            ),
+          { timeout: 5000 },
+        )
+        .toEqual([]);
+      client = new DaemonClient({ url: `ws://127.0.0.1:${second.port}/ws`, appVersion: "0.13.0" });
+      await client.connect();
+      await client.fetchAgents({ subscribe: {} });
+      expect((await client.fetchAgent(childId))?.agent.status).toBe("idle");
+      await client.close();
+      client = undefined;
+      await stopFixture(second.child, false);
+      const third = await restartFixture(root, { resumeOnStartup: true });
+      processes.push(third.child);
+      expect(await readPrompts(root)).toHaveLength(1);
+      expect(
+        JSON.parse(await readFile(path.join(third.paseoHome, "finish-subscriptions.json"), "utf8")),
+      ).toEqual([]);
+    } catch (error) {
+      console.error(
+        await readFile(path.join(root, "fixture.log"), "utf8").catch(() => "No fixture log"),
+      );
+      throw error;
+    } finally {
+      await mcp?.close();
+      await client?.close();
+      for (const child of processes.toReversed()) await stopFixture(child, true);
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+  60000,
+);
+
+test.each([undefined, false, true])(
+  "host restart recovery settings (enabled=%s)",
+  async (enabled) => {
+    const root = await mkdtemp(path.join(tmpdir(), "resume-settings-process-"));
+    const processes: ChildProcess[] = [];
+    let client: DaemonClient | undefined;
+    const settings = { resumeOnStartup: enabled, resumePrompt: "Continue exactly.\n" };
+    try {
+      const first = await restartFixture(root, settings);
+      processes.push(first.child);
+      client = new DaemonClient({ url: `ws://127.0.0.1:${first.port}/ws`, appVersion: "0.13.0" });
+      await client.connect();
+      const working = await client.createAgent({
+        provider: "claude",
+        cwd: first.cwd,
+        modeId: "full-access",
+      });
+      const idle = await client.createAgent({
+        provider: "claude",
+        cwd: first.cwd,
+        modeId: "full-access",
+      });
+      await client.sendMessage(working.id, "HOLD_CHILD");
+      await expect
+        .poll(
+          async () =>
+            (
+              await new AgentStorage(path.join(first.paseoHome, "agents"), createTestLogger()).get(
+                working.id,
+              )
+            )?.lastStatus,
+        )
+        .toBe("running");
+      const original = await new AgentStorage(
+        path.join(first.paseoHome, "agents"),
+        createTestLogger(),
+      ).get(working.id);
+      await client.close();
+      client = undefined;
+      await stopFixture(first.child, false);
+      const second = await restartFixture(root, settings);
+      processes.push(second.child);
+      client = new DaemonClient({ url: `ws://127.0.0.1:${second.port}/ws`, appVersion: "0.13.0" });
+      await client.connect();
+      const storage = new AgentStorage(path.join(second.paseoHome, "agents"), createTestLogger());
+      // Resume runs in the background; it is done once the saved intent is consumed.
+      await expect.poll(async () => (await storage.get(working.id))?.resumeOnStartup).toBe(false);
+      const resumePrompts = async () =>
+        (await readFile(path.join(root, "all-prompts.jsonl"), "utf8"))
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line))
+          .filter((entry) => entry.prompt === settings.resumePrompt);
+      await expect.poll(resumePrompts).toHaveLength(enabled ? 1 : 0);
+      expect((await client.fetchAgent(idle.id))?.agent.status).toBe("closed");
+      const restored = await storage.get(working.id);
+      expect(restored?.persistence?.sessionId).toBe(original?.persistence?.sessionId);
+    } finally {
+      await client?.close();
+      for (const child of processes.toReversed()) await stopFixture(child, true);
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+  60000,
+);
+>>>>>>> refs/remotes/upstream/tags/v0.17.2
 
 // FU-657 row 9: the upstream durable finish subscription tests were removed. Fulcra keeps its own
 // finish notice path. Row 4: the upstream host restart recovery settings tests were removed.
@@ -120,7 +318,11 @@ test("a provider that is slow to reopen does not hold daemon startup", async () 
   const processes: ChildProcess[] = [];
   let client: DaemonClient | undefined;
   try {
+<<<<<<< HEAD
     const first = await restartFixture(root, { resumeOnStartup: true, reviveOnRestart: false });
+=======
+    const first = await restartFixture(root, { resumeOnStartup: true });
+>>>>>>> refs/remotes/upstream/tags/v0.17.2
     processes.push(first.child);
     client = new DaemonClient({ url: `ws://127.0.0.1:${first.port}/ws`, appVersion: "0.13.0" });
     await client.connect();
@@ -144,11 +346,15 @@ test("a provider that is slow to reopen does not hold daemon startup", async () 
     client = undefined;
     await stopFixture(first.child, false);
 
+<<<<<<< HEAD
     const second = await restartFixture(
       root,
       { resumeOnStartup: true, reviveOnRestart: false },
       { holdResume: true },
     );
+=======
+    const second = await restartFixture(root, { resumeOnStartup: true }, { holdResume: true });
+>>>>>>> refs/remotes/upstream/tags/v0.17.2
     processes.push(second.child);
     client = new DaemonClient({ url: `ws://127.0.0.1:${second.port}/ws`, appVersion: "0.13.0" });
     await client.connect();

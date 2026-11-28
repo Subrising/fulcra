@@ -116,7 +116,7 @@ describe("resolveAndValidateCreateAgentMode", () => {
         availableModes: OPENCODE_MODES,
       }),
     ).toThrow(
-      "cannot inherit mode 'bypassPermissions' from caller (provider 'claude') for new agent (provider 'opencode'). Pass an explicit mode. Available modes for 'opencode': build, plan",
+      "cannot inherit mode 'bypassPermissions' from caller (provider 'claude') for new agent (provider 'opencode'). Pass an explicit mode in settings.modeId. Available modes for 'opencode': build, plan",
     );
   });
 
@@ -130,7 +130,7 @@ describe("resolveAndValidateCreateAgentMode", () => {
         availableModes: CODEX_MODES,
       }),
     ).toThrow(
-      "cannot inherit mode '<none>' from caller (provider 'opencode') for new agent (provider 'codex'). Pass an explicit mode. Available modes for 'codex': auto, full-access",
+      "cannot inherit mode '<none>' from caller (provider 'opencode') for new agent (provider 'codex'). Pass an explicit mode in settings.modeId. Available modes for 'codex': auto, full-access",
     );
   });
 
@@ -218,7 +218,7 @@ describe("resolveAndValidateCreateAgentMode", () => {
         targetUnattendedMode: "full-access",
       }),
     ).toThrow(
-      "cannot inherit mode 'default' from caller (provider 'claude') for new agent (provider 'codex'). Pass an explicit mode. Available modes for 'codex': auto, full-access",
+      "cannot inherit mode 'default' from caller (provider 'claude') for new agent (provider 'codex'). Pass an explicit mode in settings.modeId. Available modes for 'codex': auto, full-access",
     );
   });
 
@@ -233,7 +233,7 @@ describe("resolveAndValidateCreateAgentMode", () => {
         targetUnattendedMode: undefined,
       }),
     ).toThrow(
-      "cannot inherit mode 'bypassPermissions' from caller (provider 'claude') for new agent (provider 'zai-custom'). Pass an explicit mode. Available modes for 'zai-custom': unknown",
+      "cannot inherit mode 'bypassPermissions' from caller (provider 'claude') for new agent (provider 'zai-custom'). Pass an explicit mode in settings.modeId. Available modes for 'zai-custom': unknown",
     );
   });
 

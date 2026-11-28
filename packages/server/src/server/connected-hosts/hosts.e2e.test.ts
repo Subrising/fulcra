@@ -182,7 +182,7 @@ test("ordinary routed APIs isolate scopes and enforce one-hop, disable and origi
   await paseo.dispose();
 });
 
-test("routed authority is bounded by the caller, with isolated simultaneous sessions", async () => {
+test("routed authority isolates simultaneous sessions and preserves ordinary permission RPC errors", async () => {
   const b = await daemon();
   const a = await daemon();
   const owner = await api(a);
@@ -209,33 +209,16 @@ test("routed authority is bounded by the caller, with isolated simultaneous sess
     code: "permission_denied",
   });
   expect((await owner.paseo.hosts.list()).hosts).toHaveLength(1);
-  await remote.dispose();
-});
-
-test("SDK host clients preserve ordinary permission RPC errors", async () => {
-  const b = await daemon();
-  const a = await daemon();
-  const owner = await api(a);
-  await owner.paseo.hosts.add({ connection: `127.0.0.1:${b.port}` });
-  const serverId = (await online(owner.paseo)).hosts[0]!.serverId!;
-  const clients = [a, b].map((host) =>
-    createHostClient(`127.0.0.1:${host.port}`, {
-      clientId: crypto.randomUUID(),
-      sessionPermissions: ["daemon.read", "workspace.read"],
-      reconnect: { enabled: false },
-    }),
-  );
-  for (const client of clients) {
-    cleanup.push(() => client.close());
-    await client.connect();
-  }
-  const origin = createPaseoApi(clients[0]!);
-  const direct = createPaseoApi(clients[1]!);
-  const remote = await origin.hosts.client(serverId);
+  const directClient = createHostClient(`127.0.0.1:${b.port}`, {
+    clientId: crypto.randomUUID(),
+    sessionPermissions: ["daemon.read", "workspace.read"],
+    reconnect: { enabled: false },
+  });
+  await directClient.connect();
+  const direct = createPaseoApi(directClient);
   cleanup.push(async () => {
-    await remote.dispose();
     await direct.dispose();
-    await origin.dispose();
+    await directClient.close();
   });
   const input = { source: { kind: "directory" as const, path: b.staticDir } };
   const directError = (await direct.workspaces.create(input).catch((error: unknown) => error)) as {
@@ -246,6 +229,7 @@ test("SDK host clients preserve ordinary permission RPC errors", async () => {
   };
   expect(directError.code).toBe("access_denied");
   expect(remoteError.code).toBe(directError.code);
+  await remote.dispose();
 });
 
 test("distinct origin sessions cannot collide through a caller-selected route scope, including terminal binary output", async () => {
@@ -781,6 +765,211 @@ test("old capabilities fail before execution and authentication errors recover t
     connection: `tcp://127.0.0.1:${b.port}?password=right-password`,
   });
   expect((await online(paseo)).hosts[0]!.serverId).toBe(b.daemon.getServerId());
+});
+
+async function updatableDestination() {
+  let features: { connectedHosts: boolean; hostMultiplexing: boolean } | undefined;
+  let holding = false;
+  const held: (() => void)[] = [];
+  let connections = 0;
+  const http = createServer();
+  const ws = new WebSocketServer({ server: http });
+  ws.on("connection", (socket) => {
+    connections++;
+    socket.on("message", (data) => {
+      const frame = JSON.parse(data.toString());
+      if (frame.type === "ping") socket.send(JSON.stringify({ type: "pong" }));
+      if (frame.type !== "hello") return;
+      const reply = () =>
+        socket.send(
+          JSON.stringify({
+            type: "session",
+            message: {
+              type: "status",
+              payload: {
+                status: "server_info",
+                serverId: "srv_updated",
+                hostname: "updated",
+                version: "0.12.0",
+                ...(features ? { features } : {}),
+              },
+            },
+          }),
+        );
+      if (holding) held.push(reply);
+      else reply();
+    });
+  });
+  http.listen(0, "127.0.0.1");
+  await once(http, "listening");
+  cleanup.push(async () => {
+    for (const socket of ws.clients) socket.terminate();
+    await new Promise<void>((resolve) => ws.close(() => resolve()));
+    await new Promise<void>((resolve) => http.close(() => resolve()));
+  });
+  const address = http.address();
+  if (!address || typeof address === "string") throw new Error("Missing destination port");
+  return {
+    port: address.port,
+    connections: () => connections,
+    hold: () => {
+      holding = true;
+    },
+    update: () => {
+      features = { connectedHosts: true, hostMultiplexing: true };
+      holding = false;
+      for (const reply of held.splice(0)) reply();
+    },
+  };
+}
+async function capabilityRetry(paseo: ReturnType<typeof createPaseoApi>): Promise<number> {
+  let retryAt = "";
+  await expect
+    .poll(
+      async () => {
+        const row = (await paseo.hosts.list()).hosts[0];
+        retryAt = row?.nextRetryAt ?? "";
+        return row;
+      },
+      { timeout: 5000 },
+    )
+    .toMatchObject({
+      status: "offline",
+      nextRetryAt: expect.any(String),
+      error: { code: "unsupported_capability" },
+    });
+  return Date.parse(retryAt);
+}
+
+test("a destination updated past unsupported_capability keeps its guidance while retrying and comes online, while duplicate_host stays terminal", async () => {
+  const destination = await updatableDestination();
+  const a = await daemon();
+  const { paseo } = await api(a);
+  const host = await paseo.hosts.add({ connection: `127.0.0.1:${destination.port}` });
+  await capabilityRetry(paseo);
+  destination.hold();
+  await expect
+    .poll(async () => (await paseo.hosts.list()).hosts[0], { timeout: 5000 })
+    .toMatchObject({ status: "connecting", error: { code: "unsupported_capability" } });
+  await expect(paseo.hosts.client("srv_updated")).rejects.toMatchObject({
+    code: "unsupported_capability",
+  });
+  destination.update();
+  expect((await online(paseo)).hosts[0]).toMatchObject({
+    registrationId: host.registrationId,
+    serverId: "srv_updated",
+    nextRetryAt: null,
+    error: null,
+  });
+  await paseo.hosts.add({ connection: `ws://127.0.0.1:${destination.port}/ws` });
+  await expect
+    .poll(async () => (await paseo.hosts.list()).hosts[1], { timeout: 5000 })
+    .toMatchObject({ status: "error", nextRetryAt: null, error: { code: "duplicate_host" } });
+});
+
+test("disabling or removing a host cancels its pending capability retry", async () => {
+  const destination = await updatableDestination();
+  const a = await daemon();
+  const { paseo } = await api(a);
+  const host = await paseo.hosts.add({ connection: `127.0.0.1:${destination.port}` });
+  let retryAt = await capabilityRetry(paseo);
+  let connections = destination.connections();
+  await paseo.hosts.update(host.registrationId, { enabled: false });
+  await new Promise((resolve) => setTimeout(resolve, retryAt - Date.now() + 500));
+  expect(destination.connections()).toBe(connections);
+  await paseo.hosts.update(host.registrationId, { enabled: true });
+  retryAt = await capabilityRetry(paseo);
+  connections = destination.connections();
+  await paseo.hosts.remove(host.registrationId);
+  await new Promise((resolve) => setTimeout(resolve, retryAt - Date.now() + 500));
+  expect(destination.connections()).toBe(connections);
+});
+
+import {
+  createDaemonChannel,
+  exportPublicKey,
+  generateKeyPair,
+  openDaemonSecureChannel,
+  type Transport,
+} from "@getpaseo/relay/e2ee";
+test("a capability retry over a relay keeps the protected endpoint security it negotiated", async () => {
+  const keys = generateKeyPair();
+  const legacyReceived: unknown[] = [];
+  let connections = 0;
+  let retryClosed = false;
+  const http = createServer();
+  const ws = new WebSocketServer({ server: http });
+  ws.on("connection", (socket) => {
+    connections++;
+    const wire: Transport = {
+      send: (data) => socket.send(data),
+      close: (code, reason) => socket.close(code, reason),
+      onmessage: null,
+      onclose: null,
+      onerror: null,
+    };
+    socket.on("message", (data, isBinary) => {
+      const bytes = Buffer.from(data as Buffer);
+      wire.onmessage?.({
+        data: isBinary
+          ? bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+          : bytes.toString(),
+        isBinary,
+      });
+    });
+    socket.on("close", (code, reason) => wire.onclose?.(code, reason.toString()));
+    if (connections > 1) {
+      socket.on("close", () => {
+        retryClosed = true;
+      });
+      void createDaemonChannel(wire, keys, {
+        onmessage: (data) => legacyReceived.push(data),
+      }).catch(() => {});
+      return;
+    }
+    const channel = openDaemonSecureChannel(wire, {
+      daemonKeyPair: keys,
+      events: {
+        onmessage: (data) => {
+          if (typeof data !== "string" || JSON.parse(data).type !== "hello") return;
+          void channel.then((secure) =>
+            secure.send(
+              JSON.stringify({
+                type: "session",
+                message: {
+                  type: "status",
+                  payload: {
+                    status: "server_info",
+                    serverId: "srv_relayed",
+                    hostname: "relayed",
+                    version: "0.12.0",
+                  },
+                },
+              }),
+            ),
+          );
+        },
+      },
+    });
+    void channel.catch(() => {});
+  });
+  http.listen(0, "127.0.0.1");
+  await once(http, "listening");
+  cleanup.push(async () => {
+    for (const socket of ws.clients) socket.terminate();
+    await new Promise<void>((resolve) => ws.close(() => resolve()));
+    await new Promise<void>((resolve) => http.close(() => resolve()));
+  });
+  const address = http.address();
+  if (!address || typeof address === "string") throw new Error("Missing relay port");
+  const a = await daemon();
+  const { paseo } = await api(a);
+  await paseo.hosts.add({
+    connection: `relay://127.0.0.1:${address.port}/srv_relayed?key=${encodeURIComponent(exportPublicKey(keys.publicKey))}`,
+  });
+  await capabilityRetry(paseo);
+  await expect.poll(() => retryClosed, { timeout: 15000 }).toBe(true);
+  expect(legacyReceived).toEqual([]);
 });
 
 test("an unreachable saved target becomes online after its daemon starts without being added again", async () => {
@@ -1358,9 +1547,442 @@ test("cancelling a logical scope during admission settles it and releases its ow
   await delivery.close();
 });
 
+<<<<<<< HEAD
 // FU-657 row 9: two upstream cross-host tests were removed. They expect the upstream finish
 // notice text and a CLI send to another host from an agent. Fulcra keeps its own finish notice
 // path, and its CLI refuses that send (SENDER_HOST_MISMATCH); remote sends use host links.
+=======
+test(
+  "agent MCP discovers hosts, creates children on self and B, and notifies their parent",
+  { timeout: 30000 },
+  async () => {
+    const parentPrompts: string[] = [];
+    const a = await daemon({
+      agentClients: createTestAgentClients({
+        onStartTurn: (prompt, config) => {
+          if (config.title === "Fleet parent") parentPrompts.push(JSON.stringify(prompt));
+        },
+      }),
+    });
+    const b = await daemon();
+    const { paseo, client: aClient } = await api(a);
+    await paseo.hosts.add({ connection: `127.0.0.1:${b.port}`, label: "Fleet B" });
+    const directory = await online(paseo);
+    const workspace = await paseo.workspaces.create({
+      source: { kind: "directory", path: a.staticDir },
+    });
+    const parent = await workspace.agents.create({
+      config: { provider: "claude/claude-test" },
+      title: "Fleet parent",
+    });
+    const mcp = new Client({ name: "fleet-delegation", version: "1" });
+    cleanup.push(() => mcp.close());
+    await mcp.connect(
+      new StreamableHTTPClientTransport(
+        new URL(`http://127.0.0.1:${a.port}/mcp/agents?callerAgentId=${parent.id}`),
+      ),
+    );
+    const result = await mcp.callTool({ name: "list_hosts", arguments: {} });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      self: { serverId: directory.self.serverId },
+      hosts: [
+        expect.objectContaining({ serverId: directory.hosts[0]!.serverId, label: "Fleet B" }),
+      ],
+    });
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const response = await mcp.callTool({ name, arguments: args });
+      expect(response.isError, JSON.stringify(response)).not.toBe(true);
+      return z.record(z.string(), z.unknown()).parse(response.structuredContent);
+    };
+    const serverId = directory.hosts[0]!.serverId!;
+    const destination = await call("create_workspace", {
+      serverId,
+      isolation: "local",
+      path: b.staticDir,
+      title: "Destination workspace",
+    });
+    expect(await call("list_workspaces", { serverId })).toMatchObject({
+      serverId,
+      workspaces: [expect.objectContaining({ workspaceId: destination.workspaceId })],
+    });
+    const self = await call("create_agent", {
+      title: "Self child",
+      provider: "claude/claude-test",
+      initialPrompt: "Finish local delegation",
+    });
+    const remote = await call("create_agent", {
+      serverId,
+      workspaceId: destination.workspaceId,
+      title: "B child",
+      provider: "claude/claude-test",
+      initialPrompt: "Finish destination delegation",
+    });
+    expect(self.serverId).toBe(directory.self.serverId);
+    expect(remote.serverId).toBe(serverId);
+    const bApi = await api(b);
+    expect(
+      (await bApi.paseo.agents.ref(String(remote.agentId)).refresh())?.agent.labels,
+    ).toMatchObject({
+      "paseo.parent-agent-id": parent.id,
+      "paseo.parent-server-id": directory.self.serverId,
+    });
+    await expect
+      .poll(() => parentPrompts.join("\n"), { timeout: 10000 })
+      .toContain(`Agent ${self.agentId}`);
+    await expect
+      .poll(() => parentPrompts.join("\n"), { timeout: 10000 })
+      .toContain(`Agent ${remote.agentId}`);
+    expect(parentPrompts.join("\n")).toContain(`Server: ${serverId}`);
+    expect(parentPrompts.join("\n")).toContain(`Server: ${directory.self.serverId}`);
+
+    await aClient.createAgent({
+      agentId: String(remote.agentId),
+      provider: "claude",
+      model: "claude-test",
+      cwd: a.staticDir,
+      workspaceId: workspace.id,
+      title: "Unrelated equal ID on A",
+    });
+    expect(await call("get_agent_status", { serverId, agentId: remote.agentId })).toMatchObject({
+      serverId,
+      snapshot: { id: remote.agentId, title: "B child", cwd: b.staticDir },
+    });
+    expect(await call("get_agent_status", { agentId: remote.agentId })).toMatchObject({
+      serverId: directory.self.serverId,
+      snapshot: { title: "Unrelated equal ID on A" },
+    });
+    const beforeFollowup = parentPrompts.filter((prompt) =>
+      prompt.includes(`Agent ${remote.agentId}`),
+    ).length;
+    expect(beforeFollowup).toBe(1);
+    expect(
+      await call("send_agent_prompt", {
+        serverId,
+        agentId: remote.agentId,
+        prompt: "REMOTE_FOLLOWUP_MARKER",
+        sessionMode: "full-access",
+      }),
+    ).toMatchObject({ success: true, serverId, guidance: expect.stringContaining("notified") });
+    await bApi.client.waitForFinish(String(remote.agentId), 10000);
+    expect(await call("get_agent_activity", { serverId, agentId: remote.agentId })).toMatchObject({
+      serverId,
+      agentId: remote.agentId,
+      currentModeId: "full-access",
+      content: expect.stringContaining("REMOTE_FOLLOWUP_MARKER"),
+    });
+    expect(await call("list_agents", { serverId })).toMatchObject({
+      serverId,
+      agents: expect.arrayContaining([
+        expect.objectContaining({ id: remote.agentId, title: "B child", cwd: b.staticDir }),
+      ]),
+    });
+    expect(await call("list_agents", {})).toMatchObject({
+      serverId: directory.self.serverId,
+      agents: expect.arrayContaining([
+        expect.objectContaining({
+          id: remote.agentId,
+          title: "Unrelated equal ID on A",
+          cwd: a.staticDir,
+        }),
+      ]),
+    });
+    await expect
+      .poll(
+        () => parentPrompts.filter((prompt) => prompt.includes(`Agent ${remote.agentId}`)).length,
+        { timeout: 10000 },
+      )
+      .toBe(2);
+    expect(
+      parentPrompts.findLast((prompt) => prompt.includes(`Agent ${remote.agentId}`)),
+    ).toContain(`Server: ${serverId}`);
+    expect((await aClient.fetchAgent(String(remote.agentId)))?.agent.lastUserMessageAt).toBeNull();
+    expect(JSON.stringify(await aClient.fetchAgentTimeline(String(remote.agentId)))).not.toContain(
+      "REMOTE_FOLLOWUP_MARKER",
+    );
+
+    for (const selector of [{}, { serverId: directory.self.serverId }]) {
+      expect(await call("get_agent_status", { ...selector, agentId: self.agentId })).toMatchObject({
+        serverId: directory.self.serverId,
+        snapshot: { title: "Self child" },
+      });
+      const previous = parentPrompts.filter((prompt) =>
+        prompt.includes(`Agent ${self.agentId}`),
+      ).length;
+      expect(
+        await call("send_agent_prompt", {
+          ...selector,
+          agentId: self.agentId,
+          prompt: "SELF_FOLLOWUP_MARKER",
+        }),
+      ).toMatchObject({
+        success: true,
+        serverId: directory.self.serverId,
+        deliveryStatus: "queued",
+      });
+      await aClient.waitForFinish(String(self.agentId), 10000);
+      expect(
+        await call("get_agent_activity", { ...selector, agentId: self.agentId }),
+      ).toMatchObject({
+        serverId: directory.self.serverId,
+        content: expect.stringContaining("SELF_FOLLOWUP_MARKER"),
+      });
+      expect(await call("list_agents", selector)).toMatchObject({
+        serverId: directory.self.serverId,
+        agents: expect.arrayContaining([
+          expect.objectContaining({ id: self.agentId, title: "Self child" }),
+        ]),
+      });
+      await expect
+        .poll(
+          () => parentPrompts.filter((prompt) => prompt.includes(`Agent ${self.agentId}`)).length,
+          { timeout: 10000 },
+        )
+        .toBe(previous + 1);
+    }
+  },
+);
+
+test(
+  "a background caller's MCP and SDK children and workspaces on B are background unless it overrides",
+  { timeout: 30000 },
+  async () => {
+    const a = await daemon();
+    const b = await daemon();
+    const { paseo } = await api(a);
+    await paseo.hosts.add({ connection: `127.0.0.1:${b.port}`, label: "Fleet B" });
+    const directory = await online(paseo);
+    const workspace = await paseo.workspaces.create({
+      source: { kind: "directory", path: a.staticDir },
+    });
+    const parent = await workspace.agents.create({
+      config: { provider: "claude/claude-test" },
+      title: "Background parent",
+      background: true,
+    });
+    const mcp = new Client({ name: "background-delegation", version: "1" });
+    cleanup.push(() => mcp.close());
+    await mcp.connect(
+      new StreamableHTTPClientTransport(
+        new URL(`http://127.0.0.1:${a.port}/mcp/agents?callerAgentId=${parent.id}`),
+      ),
+    );
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const response = await mcp.callTool({ name, arguments: args });
+      expect(response.isError, JSON.stringify(response)).not.toBe(true);
+      return z.record(z.string(), z.unknown()).parse(response.structuredContent);
+    };
+    const serverId = directory.hosts[0]!.serverId!;
+    const hidden = await call("create_workspace", {
+      serverId,
+      isolation: "local",
+      path: b.staticDir,
+      title: "Inherited workspace",
+    });
+    const helper = await call("create_agent", {
+      serverId,
+      workspaceId: hidden.workspaceId,
+      title: "Inherited helper",
+      provider: "claude/claude-test",
+      initialPrompt: "Summarize",
+    });
+    const visible = await call("create_agent", {
+      serverId,
+      workspaceId: hidden.workspaceId,
+      title: "Visible helper",
+      provider: "claude/claude-test",
+      initialPrompt: "Summarize",
+      background: false,
+    });
+
+    const bApi = await api(b);
+    const workspaces = await bApi.client.fetchWorkspaces({ includeBackground: true });
+    expect(workspaces.entries.find((entry) => entry.id === hidden.workspaceId)).toMatchObject({
+      background: true,
+    });
+    const snapshot = async (agentId: unknown) =>
+      (await bApi.paseo.agents.ref(String(agentId)).refresh())?.agent;
+    expect(await snapshot(helper.agentId)).toMatchObject({ background: true });
+    expect((await snapshot(visible.agentId))?.background).toBeUndefined();
+
+    const sdkChild = await bApi.paseo.workspaces.ref(String(hidden.workspaceId)).agents.create({
+      config: { provider: "claude/claude-test" },
+      title: "SDK helper",
+      parent,
+    });
+    expect(sdkChild.current()).toMatchObject({ background: true });
+  },
+);
+
+test(
+  "remote agent reports, local CLI sends and automatic completion reach the same recipient",
+  { timeout: 30000 },
+  async () => {
+    const parentPrompts: string[] = [];
+    const childStarted = Promise.withResolvers<void>();
+    const finishChild = Promise.withResolvers<void>();
+    cleanup.push(async () => {
+      finishChild.resolve();
+    });
+    const a = await daemon({
+      logger: completionLogger(),
+      agentClients: createTestAgentClients({
+        onStartTurn: (prompt, config) => {
+          if (config.title === "Batch parent")
+            parentPrompts.push(typeof prompt === "string" ? prompt : JSON.stringify(prompt));
+        },
+      }),
+    });
+    const b = await daemon({
+      agentClients: createTestAgentClients({
+        onStartTurn: () => childStarted.resolve(),
+        beforeTurnComplete: () => finishChild.promise,
+      }),
+    });
+    const origin = await api(a);
+    const destination = await api(b);
+    await origin.paseo.hosts.add({ connection: `127.0.0.1:${b.port}` });
+    await destination.paseo.hosts.add({ connection: `127.0.0.1:${a.port}` });
+    const aDirectory = await online(origin.paseo);
+    const bDirectory = await online(destination.paseo);
+    const aId = aDirectory.self.serverId;
+    const bId = bDirectory.self.serverId;
+    const aWorkspace = await origin.paseo.workspaces.create({
+      source: { kind: "directory", path: a.staticDir },
+    });
+    const bWorkspace = await destination.paseo.workspaces.create({
+      source: { kind: "directory", path: b.staticDir },
+    });
+    const parent = await aWorkspace.agents.create({
+      config: { provider: "claude/claude-test", modeId: "full-access" },
+      title: "Batch parent",
+    });
+    const child = await bWorkspace.agents.create({
+      config: { provider: "claude/claude-test", modeId: "full-access" },
+      title: "Batch child",
+      labels: { "paseo.parent-agent-id": parent.id, "paseo.parent-server-id": aId },
+    });
+    const caller = async (host: TestPaseoDaemon, agentId: string) => {
+      const mcp = new Client({ name: "batching-agent", version: "1" });
+      await mcp.connect(
+        new StreamableHTTPClientTransport(
+          new URL(`http://127.0.0.1:${host.port}/mcp/agents?callerAgentId=${agentId}`),
+        ),
+      );
+      cleanup.push(() => mcp.close());
+      return mcp;
+    };
+    const parentMcp = await caller(a, parent.id);
+    const childMcp = await caller(b, child.id);
+    const task = await parentMcp.callTool({
+      name: "send_agent_prompt",
+      arguments: { serverId: bId, agentId: child.id, prompt: "Do the delegated task" },
+    });
+    expect(task.isError).not.toBe(true);
+    expect(task.content).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining('"deliveryStatus": "queued"'),
+      }),
+    ]);
+    expect(task.structuredContent).toMatchObject({
+      success: true,
+      deliveryStatus: "queued",
+      serverId: bId,
+    });
+    // An idle recipient must not report old idle as completion of its queued task.
+    expect((await destination.client.waitForFinish(child.id, 50)).status).toBe("timeout");
+    await childStarted.promise;
+    const report = await childMcp.callTool({
+      name: "send_agent_prompt",
+      arguments: {
+        serverId: aId,
+        agentId: parent.id,
+        prompt: "REMOTE_REPORT <ready>",
+        notifyOnFinish: false,
+      },
+    });
+    expect(report.isError).not.toBe(true);
+    expect(report.structuredContent).toMatchObject({ deliveryStatus: "queued", serverId: aId });
+    // A CLI process can take longer than the two-second quiet window to start.
+    // Exercise each delivery across windows; delivery.test.ts owns batching with a clock.
+    await expect.poll(() => parentPrompts, { timeout: 10000 }).toHaveLength(1);
+    expect(parentPrompts[0]).toContain("REMOTE_REPORT &lt;ready&gt;");
+
+    const cli = await promisify(execFile)(
+      process.execPath,
+      [
+        "--conditions=source",
+        "--import",
+        "tsx",
+        fileURLToPath(new URL("../../../../cli/src/index.ts", import.meta.url)),
+        "--host",
+        `127.0.0.1:${a.port}`,
+        "send",
+        parent.id,
+        "LOCAL_CLI_REPORT",
+        "--no-wait",
+        "--json",
+      ],
+      {
+        env: { ...process.env, PASEO_AGENT_ID: parent.id },
+        timeout: 15000,
+      },
+    );
+    expect(JSON.parse(cli.stdout)).toMatchObject({ status: "queued" });
+    await expect.poll(() => parentPrompts, { timeout: 10000 }).toHaveLength(2);
+    expect(parentPrompts[1]).toContain("LOCAL_CLI_REPORT");
+    const receiptStates = async () => {
+      const directory = join(a.paseoHome, "agent-requests");
+      const receipts = await Promise.all(
+        (await readdir(directory))
+          .filter((file) => file.endsWith(".json"))
+          .map(async (file) => JSON.parse(await readFile(join(directory, file), "utf8"))),
+      );
+      return receipts
+        .filter(
+          (receipt) => receipt.agentId === parent.id && typeof receipt.fingerprint === "string",
+        )
+        .map((receipt) => receipt.state)
+        .sort();
+    };
+    finishChild.resolve();
+    await expect.poll(() => parentPrompts, { timeout: 10000 }).toHaveLength(3);
+    expect(parentPrompts[2]).toContain('event="finished"');
+    expect(parentPrompts[2]).toContain(`source-agent-id="${child.id}"`);
+    await expect
+      .poll(receiptStates, {
+        timeout: 10000,
+        message: "Parent accepted the batch; waiting for durable receipt commits",
+      })
+      .toEqual(["completed", "completed"]);
+    const timeline = await origin.client.fetchAgentTimeline(parent.id);
+    const messages = timeline.entries.flatMap((row) =>
+      row.item.type === "tool_call" && row.item.agentMessage ? [row.item.agentMessage] : [],
+    );
+    expect(
+      messages.map((message) => [message.event, message.sender.id, message.sender.serverId]),
+    ).toEqual([
+      ["message", child.id, bId],
+      ["message", parent.id, undefined],
+      ["finished", child.id, bId],
+    ]);
+    expect(messages[0]!.text).toBe("REMOTE_REPORT <ready>");
+    expect(timeline.entries.filter((row) => row.item.type === "user_message")).toEqual([]);
+
+    const human = await aWorkspace.agents.create({
+      config: { provider: "claude/claude-test", modeId: "full-access" },
+      title: "Human recipient",
+    });
+    expect(await origin.client.sendAgentMessage(human.id, "HUMAN_PROMPT")).toEqual({});
+    expect(
+      (await origin.client.fetchAgentTimeline(human.id)).entries.some(
+        (row) => row.item.type === "user_message" && row.item.text === "HUMAN_PROMPT",
+      ),
+    ).toBe(true);
+  },
+);
+>>>>>>> refs/remotes/upstream/tags/v0.17.2
 
 test(
   "remote top-level sends set the mode through the existing RPC before sending",
@@ -1511,6 +2133,57 @@ test(
     expect(parentPrompts[0]).toContain(`Server: ${remoteId}`);
     expect(parentPrompts[0]).toContain('event="finished"');
     await expect.poll(() => records(restarted.paseoHome), { timeout: 5000 }).toEqual([]);
+  },
+);
+
+test(
+  "a remote child without a mode starts in its same-provider caller's mode",
+  { timeout: 30000 },
+  async () => {
+    const a = await daemon({ mcpEnabled: true });
+    const b = await daemon();
+    const origin = await api(a);
+    const destination = await api(b);
+    await origin.paseo.hosts.add({ connection: `127.0.0.1:${b.port}` });
+    const directory = await online(origin.paseo);
+    const workspace = await origin.paseo.workspaces.create({
+      source: { kind: "directory", path: a.staticDir },
+    });
+    const remoteWorkspace = await destination.paseo.workspaces.create({
+      source: { kind: "directory", path: b.staticDir },
+    });
+    const parent = await workspace.agents.create({
+      config: { provider: "claude/claude-test", modeId: "bypassPermissions" },
+      title: "Mode parent",
+    });
+    const mcp = new Client({ name: "mode-parent", version: "1" });
+    cleanup.push(() => mcp.close());
+    await mcp.connect(
+      new StreamableHTTPClientTransport(
+        new URL(`http://127.0.0.1:${a.port}/mcp/agents?callerAgentId=${parent.id}`),
+      ),
+    );
+    const remoteMode = async (provider: string, settings?: { modeId: string }) => {
+      const response = await mcp.callTool({
+        name: "create_agent",
+        arguments: {
+          serverId: directory.hosts[0]!.serverId,
+          workspaceId: remoteWorkspace.id,
+          provider,
+          title: "Mode child",
+          initialPrompt: "Report your mode",
+          settings,
+        },
+      });
+      expect(response.isError, JSON.stringify(response)).not.toBe(true);
+      const childId = (response.structuredContent as { agentId: string }).agentId;
+      return (await destination.client.fetchAgent(childId))?.agent.currentModeId;
+    };
+
+    expect(await remoteMode("claude/claude-test")).toBe("bypassPermissions");
+    expect(await remoteMode("claude/claude-test", { modeId: "default" })).toBe("default");
+    // Another provider's modes are unknown here, so the destination applies its own default.
+    expect(await remoteMode("codex/gpt-5.4")).toBeNull();
   },
 );
 
@@ -1989,3 +2662,74 @@ test("a pre-write host budget rejection leaves sibling routes connected", async 
     true,
   ]);
 }, 30000);
+
+test.each([false, true])(
+  "remote prompt to a closed agent (archived=%s) reports its new turn instead of stale closure",
+  { timeout: 30000 },
+  async (archived) => {
+    const parentPrompts: string[] = [];
+    const started = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const a = await daemon({
+      agentClients: createTestAgentClients({
+        onStartTurn: (prompt) => parentPrompts.push(String(prompt)),
+      }),
+    });
+    const b = await daemon({
+      agentClients: createTestAgentClients({
+        onStartTurn: () => started.resolve(),
+        beforeTurnComplete: () => finish.promise,
+      }),
+    });
+    cleanup.push(async () => finish.resolve());
+    const origin = await api(a);
+    const destination = await api(b);
+    await origin.paseo.hosts.add({ connection: `127.0.0.1:${b.port}` });
+    const remoteId = (await online(origin.paseo)).hosts[0]!.serverId!;
+    const workspace = await origin.paseo.workspaces.create({
+      source: { kind: "directory", path: a.staticDir },
+    });
+    const remoteWorkspace = await destination.paseo.workspaces.create({
+      source: { kind: "directory", path: b.staticDir },
+    });
+    const parent = await workspace.agents.create({
+      config: { provider: "claude/claude-test", modeId: "full-access" },
+      title: "Closed target caller",
+    });
+    const child = await remoteWorkspace.agents.create({
+      config: { provider: "claude/claude-test", modeId: "full-access" },
+      title: "Closed target",
+    });
+    if (archived) await child.archive();
+    else await b.daemon.agentManager.closeAgent(child.id);
+    expect((await destination.client.fetchAgent(child.id))?.agent.status).toBe("closed");
+    const mcp = new Client({ name: "closed-target-caller", version: "1" });
+    await mcp.connect(
+      new StreamableHTTPClientTransport(
+        new URL(`http://127.0.0.1:${a.port}/mcp/agents?callerAgentId=${parent.id}`),
+      ),
+    );
+    cleanup.push(() => mcp.close());
+    const result = await mcp.callTool({
+      name: "send_agent_prompt",
+      arguments: { serverId: remoteId, agentId: child.id, prompt: "Finish the new task" },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({ deliveryStatus: "queued", status: "closed" });
+    await started.promise;
+    expect(parentPrompts).toEqual([]);
+    finish.resolve();
+    await expect.poll(() => parentPrompts, { timeout: 10000 }).toHaveLength(1);
+    expect(parentPrompts[0]).toContain('event="finished"');
+    expect(parentPrompts[0]).not.toContain('event="closed"');
+    expect((await destination.client.fetchAgent(child.id))?.agent).toMatchObject({
+      status: "idle",
+      archivedAt: null,
+    });
+    await expect
+      .poll(async () =>
+        JSON.parse(await readFile(join(a.paseoHome, "finish-subscriptions.json"), "utf8")),
+      )
+      .toEqual([]);
+  },
+);
