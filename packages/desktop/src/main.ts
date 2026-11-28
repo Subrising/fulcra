@@ -45,10 +45,14 @@ import {
   buildStandardContextMenuItems,
 } from "./window/window-manager.js";
 import { setupDarwinCompositorWatchdog } from "./window/compositor-watchdog/index.js";
+<<<<<<< HEAD
 import {
   logChildProcessGone,
   setupRendererCrashRecovery,
 } from "./window/renderer-crash-recovery.js";
+=======
+import { reloadWhenRendererExits } from "./window/renderer-recovery.js";
+>>>>>>> refs/remotes/upstream/tags/v0.16.2
 import { showWindowWhenReady } from "./window/show-when-ready.js";
 import { resolveDesktopWindowChromeMode, windowChromeModeArgument } from "./window/chrome.js";
 import { registerDialogHandlers } from "./features/dialogs.js";
@@ -749,7 +753,11 @@ async function createWindow(
   }
 
   setupDarwinCompositorWatchdog(mainWindow);
+<<<<<<< HEAD
   setupRendererCrashRecovery(mainWindow, { logger: log });
+=======
+  reloadWhenRendererExits(mainWindow);
+>>>>>>> refs/remotes/upstream/tags/v0.16.2
   setupWindowResizeEvents(mainWindow);
   if (windowStateStore) {
     setupWindowStatePersistence(mainWindow, windowStateStore);

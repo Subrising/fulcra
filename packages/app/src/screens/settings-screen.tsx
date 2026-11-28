@@ -1,14 +1,15 @@
+<<<<<<< HEAD
 import { CommandCentreSection } from "@/desktop/components/desktop-updates-section";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+=======
+import { useSettingsContentPresented } from "@/navigation/settings-presentation";
+import { AppearanceText as Text } from "@/appearance/text";
+import { useHardwareKeyboardPresent } from "@/keyboard";
+import { useAddHost } from "@/hosts/add-host";
+import { useCallback, useMemo, useRef, useState } from "react";
+>>>>>>> refs/remotes/upstream/tags/v0.16.2
 import type { ComponentType, ReactNode } from "react";
-import {
-  Alert,
-  Pressable,
-  ScrollView,
-  Text,
-  View,
-  type PressableStateCallbackType,
-} from "react-native";
+import { Alert, Pressable, ScrollView, View, type PressableStateCallbackType } from "react-native";
 import { useRouter } from "expo-router";
 import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { useFocusEffect } from "expo-router/react-navigation";
@@ -80,10 +81,6 @@ import { WindowChromeRegion, WindowChromeSafeArea } from "@/utils/desktop-window
 import { confirmDialog } from "@/utils/confirm-dialog";
 import { BackHeader } from "@/components/headers/back-header";
 import { PageLayout } from "@/components/page-layout";
-import { AddHostMethodModal } from "@/components/add-host-method-modal";
-import { AddHostModal } from "@/components/add-host-modal";
-import { AddRemoteSshHostModal } from "@/components/add-remote-ssh-host-modal";
-import { PairLinkModal } from "@/components/pair-link-modal";
 import { KeyboardShortcutsSection } from "@/screens/settings/keyboard-shortcuts-section";
 import { EditorSection } from "@/screens/settings/editor-section";
 import { LicensesSection } from "@/screens/settings/licenses-section";
@@ -120,6 +117,7 @@ import {
   HostWorkspacesPage,
   HostTerminalsPage,
 } from "@/screens/settings/host-page";
+<<<<<<< HEAD
 import { PluginSettingsContent } from "@/plugins/settings";
 import { useInstalledPlugins } from "@/plugins/registry";
 import { pluginIconComponent } from "@/plugins/icons";
@@ -141,6 +139,14 @@ import {
   type AdvancedGroupId,
 } from "@/screens/settings/settings-menu";
 import { HostPluginsPage } from "@/screens/settings/plugins-page";
+=======
+import {
+  PluginGalleryMenu,
+  PluginGalleryPage,
+  PluginPage,
+  type PluginPageSubject,
+} from "@/plugins/gallery";
+>>>>>>> refs/remotes/upstream/tags/v0.16.2
 import { MetadataGenerationPage } from "@/screens/settings/metadata-generation-page";
 import { HostVoicePage } from "@/screens/settings/voice/voice-page";
 import ProjectsScreen from "@/screens/projects-screen";
@@ -150,7 +156,7 @@ import {
   SETTINGS_DESKTOP_SIDEBAR_WIDTH,
   useIsCompactFormFactor,
 } from "@/constants/layout";
-import { densityIconBox, densityIconSize } from "@/styles/density";
+import { density, densityIconBox, densityIconSize } from "@/styles/density";
 import { useLocalDaemonServerId } from "@/hooks/use-is-local-daemon";
 import {
   type EnableBuiltInDaemonOption,
@@ -168,7 +174,8 @@ import {
   useSettingsSidebarScroll,
 } from "@/navigation/settings-presentation";
 import { returnFromSettings, type SettingsView } from "@/navigation/settings-navigation";
-import { isWeb } from "@/constants/platform";
+import { isNative, isWeb } from "@/constants/platform";
+import { useOpenOnboarding } from "@/onboarding";
 
 // ---------------------------------------------------------------------------
 // View model
@@ -180,6 +187,7 @@ interface SidebarSectionItem {
   icon: ComponentType<{ size: number; color: string; strokeWidth?: number }>;
   desktopOnly?: boolean;
   webOnly?: boolean;
+  hardwareKeyboardOnly?: boolean;
   /** The page body, for pages that need nothing from the settings screen. */
   Content?: ComponentType;
 }
@@ -231,7 +239,7 @@ const SIDEBAR_SECTION_ITEMS: SidebarSectionItem[] = [
     id: "shortcuts",
     labelKey: SECTION_LABEL_KEYS.shortcuts,
     icon: Keyboard,
-    desktopOnly: true,
+    hardwareKeyboardOnly: true,
     Content: KeyboardShortcutsSection,
   },
   {
@@ -259,6 +267,18 @@ const SIDEBAR_SECTION_ITEMS: SidebarSectionItem[] = [
   { id: "about", labelKey: SECTION_LABEL_KEYS.about, icon: Info },
 ];
 
+<<<<<<< HEAD
+=======
+function isSectionAvailable(
+  item: SidebarSectionItem,
+  isDesktopApp: boolean,
+  hardwareKeyboardPresent: boolean,
+): boolean {
+  if (item.hardwareKeyboardOnly && !hardwareKeyboardPresent) return false;
+  return (!item.desktopOnly || isDesktopApp) && (!item.webOnly || isWeb);
+}
+
+>>>>>>> refs/remotes/upstream/tags/v0.16.2
 interface HostSectionItem {
   id: HostSectionSlug;
   labelKey: string;
@@ -343,7 +363,7 @@ function renderHostSettingsContent(
     case "terminals":
       return <HostTerminalsPage serverId={view.serverId} />;
     case "plugins":
-      return <HostPluginsPage serverId={view.serverId} />;
+      return <PluginGalleryPage serverId={view.serverId} />;
     case "host":
       return <HostSettingsPage serverId={view.serverId} onHostRemoved={onHostRemoved} />;
   }
@@ -452,8 +472,25 @@ function GeneralSection({ settings, handleLanguageChange }: GeneralSectionProps)
             </DropdownMenuContent>
           </DropdownMenu>
         </View>
+        {isNative ? null : <ShowSetupAgainRow />}
       </View>
     </SettingsSection>
+  );
+}
+
+function ShowSetupAgainRow() {
+  const { t } = useTranslation();
+  const openOnboarding = useOpenOnboarding();
+  return (
+    <View style={[settingsStyles.row, settingsStyles.rowBorder]}>
+      <View style={settingsStyles.rowContent}>
+        <Text style={settingsStyles.rowTitle}>{t("settings.general.setup.label")}</Text>
+        <Text style={settingsStyles.rowHint}>{t("settings.general.setup.description")}</Text>
+      </View>
+      <Button variant="secondary" onPress={openOnboarding ?? undefined} disabled={!openOnboarding}>
+        {t("settings.general.setup.action")}
+      </Button>
+    </View>
   );
 }
 
@@ -483,7 +520,7 @@ function DiagnosticsSection({
             <Text style={settingsStyles.rowTitle}>{t("settings.diagnostics.app.rowTitle")}</Text>
             <Text style={settingsStyles.rowHint}>{t("settings.diagnostics.app.rowHint")}</Text>
           </View>
-          <Button variant="secondary" size="sm" onPress={openAppDiagnostic}>
+          <Button variant="secondary" onPress={openAppDiagnostic}>
             {t("settings.diagnostics.app.run")}
           </Button>
         </View>
@@ -496,7 +533,6 @@ function DiagnosticsSection({
           </View>
           <Button
             variant="secondary"
-            size="sm"
             onPress={handlePlayPress}
             disabled={!voiceAudioEngine || isPlaybackTestRunning}
           >
@@ -754,7 +790,6 @@ function DesktopAppUpdateRow() {
           </Text>
         </View>
         <SegmentedControl
-          size="sm"
           value={settings.releaseChannel}
           onValueChange={handleReleaseChannelChange}
           options={releaseChannelOptions}
@@ -776,7 +811,6 @@ function DesktopAppUpdateRow() {
         <View style={styles.aboutUpdateActions}>
           <Button
             variant="outline"
-            size="sm"
             onPress={handleCheckForUpdates}
             disabled={isChecking || isInstalling}
           >
@@ -784,7 +818,6 @@ function DesktopAppUpdateRow() {
           </Button>
           <Button
             variant="default"
-            size="sm"
             onPress={handleInstallUpdate}
             disabled={isChecking || isInstalling || !isUpdateReady}
           >
@@ -1110,8 +1143,14 @@ function SettingsSidebar({
   const hasHosts = sortedHosts.length > 0;
   const enableBuiltInDaemonOption = useEnableBuiltInDaemonOption();
   const isDesktopApp = isElectronRuntime();
+<<<<<<< HEAD
   const items = SIDEBAR_SECTION_ITEMS.filter(
     (item) => (!item.desktopOnly || isDesktopApp) && (!item.webOnly || isWeb),
+=======
+  const hardwareKeyboardPresent = useHardwareKeyboardPresent();
+  const items = SIDEBAR_SECTION_ITEMS.filter((item) =>
+    isSectionAvailable(item, isDesktopApp, hardwareKeyboardPresent),
+>>>>>>> refs/remotes/upstream/tags/v0.16.2
   );
   const insets = useSafeAreaInsets();
   const isDesktop = layout === "desktop";
@@ -1128,10 +1167,14 @@ function SettingsSidebar({
   let selectedHostSection: HostSectionSlug | null = null;
   if (view.kind === "host") selectedHostSection = view.section;
   if (view.kind === "project") selectedHostSection = "projects";
+<<<<<<< HEAD
   const selectedPluginScreen =
     view.kind === "plugin" ? `${view.serverId}/${view.pluginId}/${view.screenId}` : null;
   const isPluginScreenSelected = (entry: PluginScreenEntry) =>
     selectedPluginScreen === `${entry.serverId}/${entry.pluginId}/${entry.screenId}`;
+=======
+  if (view.kind === "plugin" || view.kind === "pluginListing") selectedHostSection = "plugins";
+>>>>>>> refs/remotes/upstream/tags/v0.16.2
 
   const pluginScreens = usePluginScreenEntries(activeHostServerId);
   const accountsScreen = pluginScreens.find(
@@ -1347,25 +1390,21 @@ function SettingsSidebar({
 
 export interface SettingsScreenProps {
   view: SettingsView;
-  openAddHostIntent?: string | null;
 }
 
-export default function SettingsScreen({ view, openAddHostIntent = null }: SettingsScreenProps) {
+export default function SettingsScreen({ view }: SettingsScreenProps) {
   const router = useRouter();
   const { t } = useTranslation();
   const voiceAudioEngine = useVoiceAudioEngineOptional();
   const { settings, isLoading: settingsLoading, updateSettings } = useAppSettings();
-  const [isAddHostMethodVisible, setIsAddHostMethodVisible] = useState(false);
-  const [isDirectHostVisible, setIsDirectHostVisible] = useState(false);
-  const [isRemoteSshVisible, setIsRemoteSshVisible] = useState(false);
-  const [isPasteLinkVisible, setIsPasteLinkVisible] = useState(false);
   const [isPlaybackTestRunning, setIsPlaybackTestRunning] = useState(false);
   const [playbackTestResult, setPlaybackTestResult] = useState<string | null>(null);
-  const lastOpenedAddHostIntentRef = useRef<string | null>(null);
   const isDesktopApp = isElectronRuntime();
+  const hardwareKeyboardPresent = useHardwareKeyboardPresent();
   const appVersion = resolveAppVersion();
   const appVersionText = formatVersionWithPrefix(appVersion);
   const isCompactLayout = useIsCompactFormFactor();
+  const onContentLayout = useSettingsContentPresented();
   const insets = useSafeAreaInsets();
   const insetBottomStyle = useMemo(() => ({ paddingBottom: insets.bottom }), [insets.bottom]);
   const hosts = useHosts();
@@ -1376,7 +1415,12 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
   // The host the four sections scope to: the host on the active view, otherwise
   // the picker choice, otherwise the connected local daemon, otherwise the first host.
   const activeHostServerId = useMemo(() => {
-    if (view.kind === "host" || view.kind === "project" || view.kind === "plugin")
+    if (
+      view.kind === "host" ||
+      view.kind === "project" ||
+      view.kind === "plugin" ||
+      view.kind === "pluginListing"
+    )
       return view.serverId;
     return resolveActiveHostServerId({
       selectedServerId: selectedSettingsHostServerId,
@@ -1422,50 +1466,10 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
     }
   }, [isPlaybackTestRunning, t, voiceAudioEngine]);
 
-  const closeAddConnectionFlow = useCallback(() => {
-    setIsAddHostMethodVisible(false);
-    setIsDirectHostVisible(false);
-    setIsRemoteSshVisible(false);
-    setIsPasteLinkVisible(false);
-  }, []);
-
-  const goBackToAddConnectionMethods = useCallback(() => {
-    setIsDirectHostVisible(false);
-    setIsRemoteSshVisible(false);
-    setIsPasteLinkVisible(false);
-    setIsAddHostMethodVisible(true);
-  }, []);
-
-  const handleAddHost = useCallback(() => {
-    setIsAddHostMethodVisible(true);
-  }, []);
-
-  useEffect(() => {
-    if (!openAddHostIntent || lastOpenedAddHostIntentRef.current === openAddHostIntent) {
-      return;
-    }
-    lastOpenedAddHostIntentRef.current = openAddHostIntent;
-    handleAddHost();
-  }, [handleAddHost, openAddHostIntent]);
-
-  const handleSelectDirectConnection = useCallback(() => {
-    setIsAddHostMethodVisible(false);
-    setIsDirectHostVisible(true);
-  }, []);
-
-  const handleSelectRemoteSsh = useCallback(() => {
-    setIsAddHostMethodVisible(false);
-    setIsRemoteSshVisible(true);
-  }, []);
-
-  const handleSelectPasteLink = useCallback(() => {
-    setIsAddHostMethodVisible(false);
-    setIsPasteLinkVisible(true);
-  }, []);
-
   const handleHostAdded = useCallback(
-    ({ serverId }: { serverId: string }) => {
-      const target = buildSettingsHostSectionRoute(serverId, "connections");
+    (serverId: string) => {
+      selectSettingsHost(serverId);
+      const target = buildSettingsHostSectionRoute(serverId, "host");
       if (isCompactLayout) {
         router.push(target);
       } else {
@@ -1474,6 +1478,8 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
     },
     [isCompactLayout, router],
   );
+
+  const handleAddHost = useAddHost({ onAdded: handleHostAdded });
 
   const handleSelectSection = useCallback(
     (section: SettingsSectionSlug) => {
@@ -1530,14 +1536,6 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
     [activeHostServerId, handleAddHost, isCompactLayout, router],
   );
 
-  const handleScanQr = useCallback(() => {
-    closeAddConnectionFlow();
-    router.push({
-      pathname: "/pair-scan",
-      params: { source: "settings" },
-    });
-  }, [closeAddConnectionFlow, router]);
-
   const handleHostRemoved = useCallback(() => {
     const fallback = buildSettingsSectionRoute("general");
     if (isCompactLayout) {
@@ -1555,6 +1553,7 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
     returnFromSettings({ kind: "root" });
   }, []);
 
+<<<<<<< HEAD
   const installedPlugins = useInstalledPlugins();
   const detailHeader = ((): {
     title: string;
@@ -1572,6 +1571,22 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
         description: descriptionKey ? t(descriptionKey) : undefined,
       };
     }
+=======
+  // A plugin's page draws its own header; the compact back header names the plugin.
+  const pluginPage = useMemo((): { serverId: string; subject: PluginPageSubject } | null => {
+    if (view.kind === "plugin")
+      return {
+        serverId: view.serverId,
+        subject: { kind: "installed", pluginId: view.pluginId, screenId: view.screenId },
+      };
+    if (view.kind === "pluginListing")
+      return { serverId: view.serverId, subject: { kind: "listing", listingId: view.listingId } };
+    return null;
+  }, [view]);
+  const detailTitle = ((): string | undefined => {
+    // The plugin page heads itself with the plugin's name and icon.
+    if (pluginPage) return undefined;
+>>>>>>> refs/remotes/upstream/tags/v0.16.2
     if (view.kind === "host") {
       const item = HOST_SECTION_ITEMS.find((s) => s.id === view.section);
       if (!item) return null;
@@ -1592,6 +1607,7 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
     return null;
   })();
 
+<<<<<<< HEAD
   const content = (() => {
     if (view.kind === "plugin")
       return (
@@ -1602,6 +1618,25 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
           onBackToPlugins={handleBackFromDetail}
           // Accounts & models is an everyday entry, not a page under Plugins.
           showBackToPlugins={!isCompactLayout && view.screenId !== ACCOUNTS_PLUGIN_SCREEN_ID}
+=======
+  const pluginGalleryServerId =
+    view.kind === "host" && view.section === "plugins" ? view.serverId : null;
+  const detailActions = useMemo(
+    () =>
+      pluginGalleryServerId ? <PluginGalleryMenu serverId={pluginGalleryServerId} /> : undefined,
+    [pluginGalleryServerId],
+  );
+  // The gallery and a plugin's page share one width, so opening a plugin keeps the page edges put.
+  const detailWidth = pluginGalleryServerId || pluginPage ? "wide" : "default";
+
+  const content: ReactNode = (() => {
+    if (pluginPage)
+      return (
+        <PluginPage
+          serverId={pluginPage.serverId}
+          subject={pluginPage.subject}
+          onBack={handleBackFromDetail}
+>>>>>>> refs/remotes/upstream/tags/v0.16.2
         />
       );
     if (view.kind === "host") {
@@ -1618,6 +1653,7 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
       );
     }
     if (view.kind === "section") {
+<<<<<<< HEAD
       const PropFreeSection = PROP_FREE_SECTIONS[view.section];
       if (PropFreeSection) return <PropFreeSection />;
       const menuPage = renderCombinedSection(view.section, {
@@ -1626,6 +1662,10 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
         isDesktopApp,
       });
       if (menuPage) return menuPage;
+=======
+      const item = SIDEBAR_SECTION_ITEMS.find((candidate) => candidate.id === view.section);
+      if (!item || !isSectionAvailable(item, isDesktopApp, hardwareKeyboardPresent)) return null;
+>>>>>>> refs/remotes/upstream/tags/v0.16.2
       switch (view.section) {
         case "editor":
           return isWeb ? <EditorSection /> : null;
@@ -1661,47 +1701,16 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
 
   if (settingsLoading) {
     return (
-      <View style={styles.loadingContainer}>
+      <View style={styles.loadingContainer} onLayout={onContentLayout}>
         <Text style={styles.loadingText}>{t("settings.loading")}</Text>
       </View>
     );
   }
 
-  const addHostModals = (
-    <>
-      <AddHostMethodModal
-        visible={isAddHostMethodVisible}
-        onClose={closeAddConnectionFlow}
-        onDirectConnection={handleSelectDirectConnection}
-        onRemoteSsh={handleSelectRemoteSsh}
-        onPasteLink={handleSelectPasteLink}
-        onScanQr={handleScanQr}
-      />
-      <AddHostModal
-        visible={isDirectHostVisible}
-        onClose={closeAddConnectionFlow}
-        onCancel={goBackToAddConnectionMethods}
-        onSaved={handleHostAdded}
-      />
-      <AddRemoteSshHostModal
-        visible={isRemoteSshVisible}
-        onClose={closeAddConnectionFlow}
-        onCancel={goBackToAddConnectionMethods}
-        onSaved={handleHostAdded}
-      />
-      <PairLinkModal
-        visible={isPasteLinkVisible}
-        onClose={closeAddConnectionFlow}
-        onCancel={goBackToAddConnectionMethods}
-        onSaved={handleHostAdded}
-      />
-    </>
-  );
-
   // Mobile root: full-screen sidebar-as-list.
   if (isCompactLayout && view.kind === "root") {
     return (
-      <View style={styles.container}>
+      <View style={styles.container} onLayout={onContentLayout}>
         <BackHeader title={t("settings.title")} onBack={handleBackToWorkspace} />
         <ScrollView style={styles.scrollView} contentContainerStyle={insetBottomStyle}>
           <SettingsSidebar
@@ -1715,21 +1724,29 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
             layout="mobile"
           />
         </ScrollView>
-        {addHostModals}
       </View>
     );
   }
 
   if (isCompactLayout) {
     return (
+<<<<<<< HEAD
       <View style={styles.container}>
         <PageLayout title={detailHeader?.title} onBack={handleBackFromDetail}>
           {detailHeader?.description ? (
             <Text style={styles.pageIntro}>{detailHeader.description}</Text>
           ) : null}
+=======
+      <View style={styles.container} onLayout={onContentLayout}>
+        <PageLayout
+          title={detailTitle}
+          onBack={handleBackFromDetail}
+          actions={detailActions}
+          width={detailWidth}
+        >
+>>>>>>> refs/remotes/upstream/tags/v0.16.2
           {content}
         </PageLayout>
-        {addHostModals}
       </View>
     );
   }
@@ -1738,7 +1755,7 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
   // region + traffic-light padding; detail pane renders whatever header the
   // selected section provides.
   return (
-    <View style={styles.container}>
+    <View style={styles.container} onLayout={onContentLayout}>
       <View style={desktopStyles.row}>
         <WindowChromeRegion corners="top-left">
           <SettingsSidebar
@@ -1755,7 +1772,13 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
         <WindowChromeRegion corners="top-right">
           <View style={desktopStyles.contentPane} testID="settings-detail-pane">
             <PageLayout
+<<<<<<< HEAD
               title={detailHeader?.title}
+=======
+              title={detailTitle}
+              actions={detailActions}
+              width={detailWidth}
+>>>>>>> refs/remotes/upstream/tags/v0.16.2
               titleTestID="settings-detail-header-title"
               testID="settings-detail-scroll-body"
             >
@@ -1767,7 +1790,6 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
           </View>
         </WindowChromeRegion>
       </View>
-      {addHostModals}
     </View>
   );
 }
@@ -1939,11 +1961,20 @@ const sidebarStyles = StyleSheet.create((theme) => ({
   item: {
     flexDirection: "row",
     alignItems: "center",
+<<<<<<< HEAD
     gap: theme.spacing[2],
     minHeight: 36,
     paddingVertical: theme.spacing[2],
     paddingHorizontal: theme.spacing[2],
     borderRadius: theme.borderRadius.lg,
+=======
+    gap: { xs: theme.spacing[3], md: theme.spacing[2] },
+    minHeight: { xs: 52, md: density.tightRowHeight.md },
+    paddingVertical: theme.spacing[1],
+    paddingHorizontal: { xs: theme.spacing[4], md: theme.spacing[2] },
+    borderRadius: { xs: 0, md: theme.borderRadius.lg },
+    backgroundColor: { xs: theme.colors.surface1, md: "transparent" },
+>>>>>>> refs/remotes/upstream/tags/v0.16.2
   },
   itemHovered: {
     backgroundColor: theme.colors.surfaceSidebarHover,
@@ -1987,11 +2018,20 @@ const sidebarStyles = StyleSheet.create((theme) => ({
   pickerTrigger: {
     flexDirection: "row",
     alignItems: "center",
+<<<<<<< HEAD
     gap: theme.spacing[2],
     minHeight: 36,
     paddingVertical: theme.spacing[2],
     paddingHorizontal: theme.spacing[2],
     borderRadius: theme.borderRadius.lg,
+=======
+    gap: { xs: theme.spacing[3], md: theme.spacing[2] },
+    minHeight: { xs: 52, md: density.tightRowHeight.md },
+    paddingVertical: theme.spacing[1],
+    paddingHorizontal: { xs: theme.spacing[4], md: theme.spacing[2] },
+    borderRadius: { xs: 0, md: theme.borderRadius.lg },
+    backgroundColor: { xs: theme.colors.surface1, md: "transparent" },
+>>>>>>> refs/remotes/upstream/tags/v0.16.2
   },
   pickerTriggerHovered: {
     backgroundColor: theme.colors.surfaceSidebarHover,

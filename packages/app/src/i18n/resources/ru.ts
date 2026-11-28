@@ -3,6 +3,7 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const ru: TranslationResources = {
+<<<<<<< HEAD
   plugins: {
     // Fulcra 0.2.9: English until translated; the old text gave the host-password route.
     commandCentreRelay: en.plugins.commandCentreRelay,
@@ -12,6 +13,12 @@ export const ru: TranslationResources = {
     unknownProject: "Проект неизвестен",
     reportsTo: "Подчиняется {{leader}}",
     unknownAccessibility: "Владеющий проект неизвестен",
+=======
+  pluginCombobox: {
+    searching: "Поиск…",
+    empty: "Нет результатов",
+    failed: "Не удалось выполнить поиск: {{message}}",
+>>>>>>> refs/remotes/upstream/tags/v0.16.2
   },
   paneFind: {
     connectionFailure:
@@ -97,14 +104,23 @@ export const ru: TranslationResources = {
       close: "Закрыть меню",
     },
     commandCenter: {
-      placeholder: "Поиск команд, файлов, рабочих пространств и агентов...",
+      placeholder: "Поиск рабочих пространств, файлов и действий...",
+      placeholderWithoutFiles: "Поиск рабочих пространств и действий...",
       filePlaceholder: "Поиск файлов...",
+      workspacePlaceholder: "Поиск рабочих пространств...",
+      actionPlaceholder: "Поиск действий...",
       searchingFiles: "Поиск файлов...",
       noMatches: "Нет совпадений",
       actions: "Действия",
       files: "Файлы",
       workspaces: "Рабочие пространства",
-      agents: "Агенты",
+      recentWorkspaces: "Недавние рабочие пространства",
+      tabs: {
+        all: "Все",
+        workspaces: "Рабочие пространства",
+        files: "Файлы",
+        actions: "Действия",
+      },
       newAgent: "Новый агент",
       open: "Открыть {{name}}",
       openInSidePane: "Открыть {{name}} в боковой панели",
@@ -275,7 +291,7 @@ export const ru: TranslationResources = {
     states: {
       notFound: "Агент не найден",
       failedToLoad: "Не удалось загрузить агента",
-      reconnecting: "Повторное подключение к хосту",
+      reconnecting: "Повторное подключение",
       updating: "Обновление сообщений",
       timelineSyncFailed: "Не удалось обновить историю агента.",
       timelineSyncRetrying: "Повторная попытка…",
@@ -401,6 +417,24 @@ export const ru: TranslationResources = {
       answerPlaceholder: "Введите ответ...",
       otherPlaceholder: "Другой ответ...",
     },
+    backgroundWork: {
+      pillOne: "1 фоновая задача",
+      pillMany: "Фоновые задачи: {{count}}",
+      notRunning: "Больше не выполняется",
+      dismiss: "Закрыть",
+      stop: "Остановить",
+      stopping: "Остановка…",
+      stopError: "Не удалось подтвердить остановку.",
+      label: "В фоне",
+      title: "Фоновые задачи",
+      waiting: "Ожидание сведений о задачах",
+      error: "Не удалось загрузить фоновые задачи",
+      retry: "Повторить",
+      running: "Фоновые задачи выполняются",
+      shell: "Оболочка",
+      monitor: "Монитор",
+      other: "Другая задача",
+    },
     todo: {
       title: "Задачи",
       empty: "Задач пока нет.",
@@ -475,7 +509,7 @@ export const ru: TranslationResources = {
         restoreDescription:
           "Восстановите «{{workspaceName}}», чтобы вернуться к его агентам. Worktree будет использовать ветку {{branch}}.",
         restoreWithoutBranchDescription:
-          "Восстановите «{{workspaceName}}», чтобы вернуться к его агентам. Новая ветка будет создана от сохранённой базовой или ветки репозитория по умолчанию.",
+          "Восстановите «{{workspaceName}}», чтобы вернуться к его агентам.",
         unarchiveDescription:
           "Рабочее пространство «{{workspaceName}}» находится в архиве. Разархивируйте его, чтобы снова открыть.",
         restoreAction: "Восстановить",
@@ -965,6 +999,9 @@ export const ru: TranslationResources = {
         },
       },
       diff: {
+        baseBranch: {
+          title: "Базовая ветка",
+        },
         openChangesTab: "Открыть вкладку «Изменения»",
         openDiffTab: "Открыть вкладку «Дифф»",
         closeChangesTab: "Закрыть вкладку «Изменения»",
@@ -1186,6 +1223,8 @@ export const ru: TranslationResources = {
     title: "Что нового",
     installed: "Установлена",
     showMore: "Показать ещё",
+    showAllChanges: "Показать все изменения",
+    hideAllChanges: "Скрыть все изменения",
     openWebsite: "Полный список изменений",
     error: {
       title: "Не удалось загрузить список изменений",
@@ -1413,6 +1452,14 @@ export const ru: TranslationResources = {
     },
   },
   sidebar: {
+    view: {
+      failed: "Не удалось загрузить вид боковой панели.",
+      useDefault: "Использовать стандартный вид",
+      readFailed: "Не удалось загрузить настройку вида боковой панели.",
+      agentUnavailable: "Агент больше недоступен",
+      terminalUnavailable: "Терминал больше недоступен",
+      projectUnavailable: "Проект больше недоступен",
+    },
     statusGroupAccessibility: "Группа «{{label}}»",
     statusBucket: {
       needsInput: "Ожидает ввода",
@@ -1489,6 +1536,7 @@ export const ru: TranslationResources = {
       hosts: "Хосты",
       settings: "Настройки",
       closeSidebar: "Закрыть боковую панель",
+      moreActions: "Дополнительные действия",
     },
     footer: {
       usage: "Использование",
@@ -1595,6 +1643,9 @@ export const ru: TranslationResources = {
         hostDisconnected: "Хост не подключён",
         hideFailed: "Не удалось скрыть рабочее пространство",
         archiveFailed: "Не удалось архивировать рабочее пространство",
+        archived: "Рабочее пространство архивировано",
+        undoArchive: "Отменить",
+        undoArchiveFailed: "Не удалось отменить архивацию",
       },
     },
   },
@@ -1807,7 +1858,14 @@ export const ru: TranslationResources = {
     integrations: {
       cli: {
         statusFailed: "Не удалось проверить состояние установки CLI.",
+<<<<<<< HEAD
         installFailed: "Не удалось установить Fulcra CLI.",
+=======
+        installFailed: "Не удалось установить Paseo CLI.",
+        uninstallFailed: "Не удалось удалить Paseo CLI.",
+        keptForeign:
+          "Команда paseo, установленная не Paseo, оставлена. Чтобы удалить её, сделайте это вручную.",
+>>>>>>> refs/remotes/upstream/tags/v0.16.2
       },
     },
   },
@@ -1859,6 +1917,7 @@ export const ru: TranslationResources = {
     openPath: "Открыть путь",
   },
   branchSwitcher: {
+    failedToLoad: "Не удалось загрузить ветки. Откройте список заново, чтобы повторить попытку.",
     triggerTooltip: "Переключить ветку рабочего пространства",
     currentBranch: "Текущая ветка: {{branchName}}. Нажмите, чтобы переключить ветку.",
     placeholder: "Сменить ветку...",
@@ -1883,10 +1942,18 @@ export const ru: TranslationResources = {
     loadingCommands: "Загрузка команд...",
     noFiles: "Файлы и каталоги не найдены",
     noCommands: "Команды не найдены",
+<<<<<<< HEAD
     accountUnavailable:
       "Команды аккаунта пока недоступны для этого компьютера. Обновите Fulcra на {{host}}.",
     thisComputer: "этот компьютер",
     failedToLoad: "Не удалось загрузить",
+=======
+    loadingProviderCommands: "Загрузка команд {{provider}}...",
+    commandsFailed: "Не удалось загрузить команды",
+    providerCommandsFailed: "Не удалось загрузить команды {{provider}}",
+    filesFailed: "Не удалось найти файлы",
+    skillTag: "Навык",
+>>>>>>> refs/remotes/upstream/tags/v0.16.2
     chooseProjectForCommands: "Выберите проект, чтобы увидеть команды",
     chooseModelForCommands: "Выберите модель, чтобы увидеть команды",
   },
@@ -1924,7 +1991,66 @@ export const ru: TranslationResources = {
     },
   },
   onboarding: {
+<<<<<<< HEAD
     title: "Добро пожаловать в Fulcra",
+=======
+    setup: {
+      title: "Paseo",
+      stepCounter: "Шаг {{current}} из {{total}}",
+      skip: "Пропустить настройку",
+      continue: "Продолжить",
+      finish: "Готово",
+      steps: {
+        appearance: {
+          label: "Оформление",
+          title: "Добро пожаловать в Paseo",
+          description: "Начнём с выбора оформления",
+        },
+        providers: {
+          label: "Провайдеры",
+          title: "Ваши агенты",
+          description: "Paseo использует CLI агентов, уже установленные на этом компьютере",
+        },
+        projects: {
+          label: "Проекты",
+          title: "Добавьте проекты",
+          description: "Где будут работать ваши агенты",
+          addProject: "Добавить проект",
+          added: "Добавлено",
+          suggestions: {
+            loading: "Ищем папки, в которых вы работали",
+            empty: "Недавних проектов не найдено",
+            lastUsed: "Последнее использование {{time}}",
+            addSelected_one: "Добавить {{count}} проект",
+            addSelected_other: "Добавить проекты: {{count}}",
+            adding: "Добавляем…",
+            addFailed: "Не удалось добавить эту папку",
+          },
+        },
+        orchestration: {
+          label: "Оркестрация",
+          title: "Дайте агентам доступ к Paseo",
+          description:
+            "Разрешите агентам создавать рабочие пространства и общаться с другими агентами",
+        },
+        phone: {
+          label: "Мобильный",
+          title: "Агенты всегда под рукой",
+          description:
+            "Полнофункциональное нативное мобильное приложение позволяет управлять любым компьютером с Paseo с телефона",
+          appStore: "App Store",
+          googlePlay: "Google Play",
+          connectTitle: "Выберите способ подключения",
+          connectDocs: "Документация",
+          openConnectDocs: "Открыть документацию по подключению",
+          recommended: "Рекомендуется",
+          relay: { title: "Ретранслятор", hint: "Сквозное шифрование, отсканируйте QR-код" },
+          tailscale: { title: "Tailscale", hint: "Требует небольшой настройки" },
+        },
+      },
+    },
+    title: "Добро пожаловать в Paseo",
+>>>>>>> refs/remotes/upstream/tags/v0.16.2
     subtitle: "Подключите компьютер, чтобы начать",
     actions: {
       settings: "Настройки",
@@ -2166,7 +2292,13 @@ export const ru: TranslationResources = {
       notNow: "Не сейчас",
       directConnectionHint:
         "Без ретранслятора подключайтесь напрямую через TCP, Tailscale или другую VPN. QR-код создаваться не будет.",
+<<<<<<< HEAD
       updateRequired: "Обновите хост, чтобы включить ретранслятор из Fulcra Desktop.",
+=======
+      tailscaleDocs: "Настроить Tailscale",
+      tailscaleDocsAccessibility: "Узнать, как подключиться через Tailscale",
+      updateRequired: "Обновите хост, чтобы включить ретранслятор из Paseo Desktop.",
+>>>>>>> refs/remotes/upstream/tags/v0.16.2
       unavailable: "Данные для сопряжения недоступны.",
       hint: "Отсканируйте этот QR-код с помощью Fulcra на телефоне или скопируйте ссылку ниже.",
       securityWarning:
@@ -2212,6 +2344,7 @@ export const ru: TranslationResources = {
     hostUnavailable: "Хост загрузки недоступен.",
     cancelled: "Загрузка отменена.",
     failed: "Не удалось загрузить файл.",
+    httpFailed: "Не удалось загрузить файл (HTTP {{status}}).",
     shareFile: "Поделиться файлом",
     shareFileNamed: "Поделиться {{fileName}}",
   },
@@ -2667,6 +2800,7 @@ export const ru: TranslationResources = {
     turnOn: "Включить",
 
     options: "Настройки",
+    host: "Хост",
     refreshFailed: "Не удалось обновить использование",
     noHosts: "Нет подключённых хостов",
     agentError: "Не удалось загрузить использование: {{reason}}",
@@ -2683,6 +2817,8 @@ export const ru: TranslationResources = {
     loginExpired: "Срок входа истёк {{relativeTime}}. {{remedy}}",
     title: "Использование плана",
     refresh: "Обновить",
+    reorderCard: "Переместить {{source}}",
+    showCard: "Показывать {{source}}",
     refreshAll: "Обновить всё",
     refreshing: "Обновление...",
     loading: "Загрузка данных об использовании...",
@@ -2901,6 +3037,11 @@ export const ru: TranslationResources = {
     general: {
       title: "Основные",
       sending: "Отправка",
+      setup: {
+        label: "Первоначальная настройка",
+        description: "Снова пройти оформление, провайдеры, проекты и привязку телефона",
+        action: "Показать настройку снова",
+      },
       browserData: {
         title: "Данные браузера",
         siteData: "Файлы cookie и данные сайтов",
@@ -3072,6 +3213,12 @@ export const ru: TranslationResources = {
         description: "Показывать оглавление для перехода между запросами",
       },
       sidebar: {
+        view: {
+          title: "Вид боковой панели",
+          label: "Вид",
+          default: "Стандартный вид",
+          unavailable: "Выбранный вид недоступен или отключён. Показан стандартный вид.",
+        },
         header: {
           title: "Верх",
           description:
@@ -3205,11 +3352,7 @@ export const ru: TranslationResources = {
       commandLine: {
         title: "Командная строка",
         description: "Управляйте агентами и автоматизируйте их работу из терминала",
-      },
-      actions: {
-        install: "Установить",
-        installing: "Установка...",
-        installed: "Установлено",
+        accessibilityLabel: "Установить Paseo CLI",
       },
     },
     permissions: {
@@ -3288,15 +3431,20 @@ export const ru: TranslationResources = {
       skills: {
         sectionTitle: "Навыки оркестрации",
         title: "Навыки оркестрации",
-        description: "Научите агентов координировать работу через CLI",
+        description: "Научите агентов пользоваться инструментами Paseo",
         docs: "Навыки",
         openDocs: "Открыть документацию по навыкам",
         unavailable: "Подключитесь к этому хосту, чтобы управлять навыками оркестрации",
         unsupported: "Обновите этот хост, чтобы управлять навыками оркестрации",
         updateAvailable: "Доступно обновление",
+<<<<<<< HEAD
         updateTitle: "Обновить навыки Fulcra?",
         updateFallback: "Встроенные навыки будут синхронизированы с этим хостом.",
         uninstallTitle: "Удалить навыки Fulcra?",
+=======
+        updateTitle: "Обновить навыки Paseo?",
+        uninstallTitle: "Удалить навыки Paseo?",
+>>>>>>> refs/remotes/upstream/tags/v0.16.2
         uninstallMessage:
           "Удаляет все навыки оркестрации Fulcra из ~/.agents, ~/.claude и ~/.codex на этом хосте.",
         choose: "Выбрать навыки",
@@ -3313,9 +3461,6 @@ export const ru: TranslationResources = {
         uninstallFailed: "Не удалось удалить навыки оркестрации.",
         saveSelectionFailed: "Не удалось сохранить выбор навыков оркестрации.",
         actions: {
-          install: "Установить",
-          installing: "Установка...",
-          installed: "Установлено",
           update: "Обновить",
           working: "Выполняется...",
           remove: "Удалить",
@@ -3336,7 +3481,12 @@ export const ru: TranslationResources = {
         enableTools: {
           title: "Включить инструменты Fulcra",
           hint: "Агенты смогут управлять worktree, агентами и расписаниями.",
+<<<<<<< HEAD
           accessibilityLabel: "Добавить инструменты Fulcra",
+=======
+          accessibilityLabel: "Добавить инструменты Paseo",
+          updateFailed: "Не удалось обновить инструменты Paseo.",
+>>>>>>> refs/remotes/upstream/tags/v0.16.2
         },
         systemPrompt: {
           title: "Системный промпт",

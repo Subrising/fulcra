@@ -197,6 +197,7 @@ export type WorktreeSource =
   | { kind: "branch-off"; baseBranch: string; branchName: string }
   | { kind: "checkout-branch"; branchName: string }
   | { kind: "restore"; branchName: string; baseRef: string | null }
+  | { kind: "restore-commit"; commit: string; baseRef: string }
   | { kind: "restore-from-base"; baseRef: string; branchName: string }
   | {
       kind: "checkout-change-request";
@@ -1166,6 +1167,32 @@ async function assertWorktreeBelongsToRepo(cwd: string, worktreePath: string): P
   }
 }
 
+export async function readWorktreeHead(worktreePath: string): Promise<string | null> {
+  if (!(await pathExists(join(worktreePath, ".git")))) return null;
+  try {
+    const { stdout } = await runGitCommand(["rev-parse", "--verify", "HEAD^{commit}"], {
+      cwd: worktreePath,
+    });
+    return stdout.trim();
+  } catch {
+    return null;
+  }
+}
+
+export async function readWorktreeHeadReference(worktreePath: string): Promise<string | null> {
+  if (!(await pathExists(join(worktreePath, ".git")))) return null;
+  try {
+    const result = await runGitCommand(["symbolic-ref", "--quiet", "HEAD"], {
+      cwd: worktreePath,
+      acceptExitCodes: [0, 1],
+    });
+    if (result.exitCode === 0) return result.stdout.trim();
+    return readWorktreeHead(worktreePath);
+  } catch {
+    return null;
+  }
+}
+
 export async function deletePaseoWorktree({
   cwd,
   worktreePath,
@@ -1222,12 +1249,53 @@ export async function deletePaseoWorktree({
     await assertWorktreeBelongsToRepo(cwd, resolvedWorktree);
   }
 
+<<<<<<< HEAD
   // The shared guard owns checks and removal. No teardown or force fallback can bypass it.
   // Keep the original path. Normalization must not hide a link before the guard checks it.
   return removeWithCleanupGuard(requestedPath, {
     worktreesRoot: resolvePaseoWorktreesBaseRoot({ paseoHome, worktreesRoot: worktreesBaseRoot }),
     agentProof,
   });
+=======
+  if (await pathExists(resolvedWorktree)) {
+    for (const teardownCwd of teardownCwds ?? [resolvedWorktree]) {
+      await runWorktreeTeardownCommands({
+        worktreePath: resolvedWorktree,
+        teardownCwd,
+      });
+    }
+    const commit = await readWorktreeHead(resolvedWorktree);
+    if (commit) {
+      await runGitCommand(["update-ref", `refs/paseo/kept-commits/${commit}`, commit], {
+        cwd: resolvedWorktree,
+      });
+    }
+  }
+
+  if (cwd) {
+    try {
+      await runGitCommand(["worktree", "remove", resolvedWorktree, "--force"], {
+        cwd,
+        timeout: 120_000,
+      });
+    } catch {
+      // `git worktree remove` fails if the admin dir is already gone (e.g. a
+      // prior archive attempt removed it before the working tree could be
+      // fully cleaned up), or if the repo root has moved. Fall through to the
+      // rm retry loop below so the operation stays idempotent.
+    }
+  }
+
+  await removeDirectoryWithRetries(resolvedWorktree);
+
+  if (cwd) {
+    try {
+      await runGitCommand(["worktree", "prune"], { cwd, timeout: 30_000 });
+    } catch {
+      // not critical; git will prune lazily
+    }
+  }
+>>>>>>> refs/remotes/upstream/tags/v0.16.2
 }
 
 export async function rollbackCreatedPaseoWorktree(
@@ -1407,14 +1475,22 @@ export async function resolveDefaultWorktreePath(
 /**
  * Create a git worktree with proper naming conventions
  */
-export const createWorktree = async ({
+export function createWorktree(
+  options: CreateWorktreeOptions & { source: Exclude<WorktreeSource, { kind: "restore-commit" }> },
+): Promise<CreatedWorktree>;
+export function createWorktree(
+  options: CreateWorktreeOptions,
+): Promise<Omit<CreatedWorktree, "branchName"> & { branchName: string | null }>;
+export async function createWorktree({
   cwd,
   source,
   worktreeSlug,
   paseoHome,
   worktreesRoot,
   worktreePath: explicitWorktreePath,
-}: CreateWorktreeOptions): Promise<CreatedWorktree> => {
+}: CreateWorktreeOptions): Promise<
+  Omit<CreatedWorktree, "branchName"> & { branchName: string | null }
+> {
   const branchesBefore =
     source.kind === "checkout-branch" ||
     source.kind === "checkout-change-request" ||
@@ -1450,14 +1526,14 @@ export const createWorktree = async ({
     }
     worktreePath = await normalizePathForOwnership(worktreePath);
 
-    if (sourcePlan.pushRemote) {
+    if (sourcePlan.pushRemote && sourcePlan.branchName) {
       await configureWorktreePushRemote({
         cwd,
         branchName: sourcePlan.branchName,
         remote: sourcePlan.pushRemote,
       });
     }
-    if (sourcePlan.trackingRemote) {
+    if (sourcePlan.trackingRemote && sourcePlan.branchName) {
       await configureWorktreeTrackingRemote({
         cwd,
         branchName: sourcePlan.branchName,
@@ -1490,7 +1566,7 @@ export const createWorktree = async ({
     }
     throw error;
   }
-};
+}
 
 interface ResolveWorktreeSourcePlanOptions {
   cwd: string;
@@ -1499,7 +1575,7 @@ interface ResolveWorktreeSourcePlanOptions {
 }
 
 interface WorktreeSourcePlan {
-  branchName: string;
+  branchName: string | null;
   // Display name and exact ref are two different facts. The name cannot round-trip to a
   // commit — "main" resolves local-first even when the worktree was cut from a fork's
   // upstream — so comparisons and actions read the ref and the UI reads the name.
@@ -1545,6 +1621,26 @@ async function resolveRestoredWorktreeSourcePlan(
       localBranchName: source.branchName,
     }),
     addArguments: [source.branchName],
+  };
+}
+
+async function resolveRestoredCommitSourcePlan(
+  cwd: string,
+  source: Extract<WorktreeSource, { kind: "restore-commit" }>,
+): Promise<WorktreeSourcePlan> {
+  let exactBase: string | undefined;
+  if (isQualifiedRef(source.baseRef)) {
+    try {
+      exactBase = await resolveBaseBranchForWorktree(cwd, source.baseRef);
+    } catch {
+      // Restore the saved commit even when its comparison ref no longer exists.
+    }
+  }
+  return {
+    branchName: null,
+    metadataBaseRefName: normalizeRequiredBaseBranch(source.baseRef),
+    ...(exactBase ? { metadataBaseRef: exactBase } : {}),
+    addArguments: ["--detach", source.commit],
   };
 }
 
@@ -1600,6 +1696,8 @@ async function resolveWorktreeSourcePlan({
       return resolveBranchOffWorktreeSourcePlan(cwd, source, desiredSlug);
     case "restore":
       return resolveRestoredWorktreeSourcePlan(cwd, source);
+    case "restore-commit":
+      return resolveRestoredCommitSourcePlan(cwd, source);
     case "restore-from-base":
       return resolveRestoredWorktreeFromBasePlan(cwd, source);
     case "checkout-branch": {

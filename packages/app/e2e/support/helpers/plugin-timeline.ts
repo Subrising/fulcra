@@ -49,7 +49,13 @@ export function trackPluginChatRecovery(page: Page) {
     async expectRecoveredWithoutRetransmission() {
       await this.expectCatalogWithoutRetransmission();
       await expect
-        .poll(() => messages.some((message) => message.type === "fetch_agent_timeline_response"))
+        .poll(() =>
+          messages.some(
+            (message) =>
+              message.type === "fetch_agent_timeline_response" ||
+              message.type === "agent.timeline.set_subscription.response",
+          ),
+        )
         .toBe(true);
     },
   };
@@ -135,7 +141,7 @@ export default function contribute(client) {
 }`;
 }
 
-async function withDirectoryPlugin(options: {
+export async function withDirectoryPlugin(options: {
   pluginId: string;
   source: string;
   run: () => Promise<void>;

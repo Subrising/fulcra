@@ -12,6 +12,7 @@ import {
   WorkspaceSetupSnapshotSchema,
   WorkspaceSetupProgressMessageSchema,
   AgentTimelineEntryPayloadSchema,
+<<<<<<< HEAD
   SendAgentMessageResponseMessageSchema,
   SendAgentMessageRequestSchema,
   AgentMessageRouteCheckRequestSchema,
@@ -34,10 +35,65 @@ test("send receipts retain legacy parsing while adding held and target-miss fiel
     payload: {
       requestId: "request",
       agentId: "target",
+=======
+  CheckoutStatusResponseSchema,
+  BranchSuggestionsRequestSchema,
+  WorkspaceBaseBranchSetRequestSchema,
+  WorkspaceBaseBranchSetResponseSchema,
+} from "./messages.js";
+
+test("base selection RPCs are correlated while older checkout and branch messages remain valid", () => {
+  const payload = {
+    cwd: "/repo",
+    requestId: "status",
+    error: null,
+    isGit: true,
+    isPaseoOwnedWorktree: false,
+    repoRoot: "/repo",
+    currentBranch: "feature",
+    isDirty: false,
+    baseRef: "release",
+    aheadBehind: null,
+    aheadOfOrigin: null,
+    behindOfOrigin: null,
+    hasRemote: false,
+    remoteUrl: null,
+  };
+  expect(
+    CheckoutStatusResponseSchema.safeParse({ type: "checkout_status_response", payload }).success,
+  ).toBe(true);
+  expect(
+    CheckoutStatusResponseSchema.parse({
+      type: "checkout_status_response",
+      payload: { ...payload, baseRefExact: "refs/remotes/upstream/release" },
+    }).payload.baseRefExact,
+  ).toBe("refs/remotes/upstream/release");
+  expect(
+    BranchSuggestionsRequestSchema.safeParse({
+      type: "branch_suggestions_request",
+      cwd: "/repo",
+      requestId: "branches",
+    }).success,
+  ).toBe(true);
+  const request = {
+    type: "workspace.base_branch.set.request",
+    workspaceId: "workspace",
+    baseRef: "refs/heads/release",
+    requestId: "base",
+  };
+  expect(WorkspaceBaseBranchSetRequestSchema.parse(request)).toEqual(request);
+  const response = {
+    type: "workspace.base_branch.set.response",
+    payload: {
+      workspaceId: "workspace",
+      baseRef: "refs/heads/release",
+      requestId: "base",
+>>>>>>> refs/remotes/upstream/tags/v0.16.2
       accepted: true,
       error: null,
     },
   };
+<<<<<<< HEAD
   expect(SendAgentMessageResponseMessageSchema.parse(oldMessage)).toEqual(oldMessage);
   const held = {
     ...oldMessage,
@@ -58,6 +114,9 @@ test("send receipts retain legacy parsing while adding held and target-miss fiel
     "AGENT_NOT_FOUND",
   );
   expect(legacy.parse(missing).payload.accepted).toBe(false);
+=======
+  expect(WorkspaceBaseBranchSetResponseSchema.parse(response)).toEqual(response);
+>>>>>>> refs/remotes/upstream/tags/v0.16.2
 });
 
 test("terminal listings accept older rows and retain new per-terminal directories", () => {
