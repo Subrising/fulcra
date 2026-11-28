@@ -151,9 +151,11 @@ import {
   toAgentPersistenceHandle,
 } from "./persistence-hooks.js";
 import {
+  AgentNotFoundError,
   agentLoadInProgress,
   ensureAgentLoaded,
   ensureUnarchivedAgentLoaded,
+  findAgentWithoutResume,
 } from "./agent/agent-loading.js";
 import {
   sendPromptToAgent,
@@ -9971,17 +9973,21 @@ export class Session {
     msg: Extract<SessionInboundMessage, { type: "agent.provider_subagents.list.request" }>,
   ): Promise<void> {
     try {
-      await ensureUnarchivedAgentLoaded(msg.parentAgentId, {
+      // FU-843: provider subagents live in memory beside a loaded chat. A chat that is not loaded has
+      // none yet; it answers at once instead of resuming the chat, and later ones arrive as updates.
+      const found = await findAgentWithoutResume(msg.parentAgentId, {
         agentManager: this.agentManager,
         agentStorage: this.agentStorage,
-        logger: this.sessionLogger,
       });
+      if (found.kind === "archived") throw new Error(`Agent is archived: ${msg.parentAgentId}`);
+      if (found.kind === "missing") throw new AgentNotFoundError(msg.parentAgentId);
       this.emit({
         type: "agent.provider_subagents.list.response",
         payload: {
           requestId: msg.requestId,
           parentAgentId: msg.parentAgentId,
-          subagents: this.agentManager.listProviderSubagents(msg.parentAgentId),
+          subagents:
+            found.kind === "live" ? this.agentManager.listProviderSubagents(msg.parentAgentId) : [],
           error: null,
         },
       });

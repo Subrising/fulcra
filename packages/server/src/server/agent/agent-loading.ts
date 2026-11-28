@@ -26,6 +26,32 @@ interface PendingAgentInitialization {
 
 const pendingAgentInitializations = new Map<string, PendingAgentInitialization>();
 
+/**
+ * FU-843: a chat as a read-only answer sees it, without a resume. A resume replays the chat's whole
+ * history first. On 28 Nov 2026 the Mac mini made chat opens wait up to 16
+ * minutes for its provider subagents, which never needed the resume.
+ */
+export type AgentWithoutResume =
+  | { kind: "live"; agent: ManagedAgent }
+  | { kind: "stored"; record: StoredAgentRecord }
+  | { kind: "archived" }
+  | { kind: "missing" };
+
+export async function findAgentWithoutResume(
+  agentId: string,
+  deps: {
+    agentManager: Pick<AgentManager, "getAgent">;
+    agentStorage: Pick<AgentStorage, "get">;
+  },
+): Promise<AgentWithoutResume> {
+  const agent = deps.agentManager.getAgent(agentId);
+  if (agent) return { kind: "live", agent };
+  const record = await deps.agentStorage.get(agentId);
+  if (!record) return { kind: "missing" };
+  if (record.archivedAt) return { kind: "archived" };
+  return { kind: "stored", record };
+}
+
 /** Registration can finish while history hydration is still pending. */
 export function agentLoadInProgress(agentId: string): boolean {
   return pendingAgentInitializations.has(agentId);
