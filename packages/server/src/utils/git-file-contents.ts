@@ -1,4 +1,4 @@
-import { runGitCommandBytes } from "./run-git-command.js";
+import { runGitCommandBytes, runGitCommand } from "./run-git-command.js";
 
 // Match the existing git-show ceiling. Oversized batches use bounded per-file reads.
 const MAX_CONTENT_BYTES = 20 * 1024 * 1024;
@@ -47,6 +47,7 @@ export async function readGitFileContents(
   return contents;
 }
 
+<<<<<<< HEAD
 /**
  * One blob's exact bytes by object id (`git cat-file blob <id>`), for callers that must keep binary
  * content intact; readGitFileContents decodes as UTF-8. Null when the blob exceeds `maxBytes`.
@@ -63,5 +64,18 @@ export async function readGitBlobBytes(
     maxOutputBytes: maxBytes + 1,
   });
   if (result.truncated || result.stdout.length > maxBytes) return null;
+=======
+export async function readGitFileContentAtRef(
+  cwd: string,
+  ref: string,
+  path: string,
+): Promise<string | null> {
+  const result = await runGitCommand(["show", `${ref}:${path}`], {
+    cwd,
+    envOverlay: { GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" },
+    acceptExitCodes: [0, 128],
+  });
+  if (result.exitCode !== 0 || result.truncated) return null;
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
   return result.stdout;
 }

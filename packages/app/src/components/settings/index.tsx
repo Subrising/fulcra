@@ -25,16 +25,30 @@ import { DropdownTrigger } from "@/components/ui/dropdown-trigger";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { settingsStyles } from "@/styles/settings";
 import { ControlSizeProvider } from "@/components/ui/control-size";
+import { ExternalLink, type ExternalLinkProps } from "@/components/ui/external-link";
 import { useSettingsRowLayout } from "./row-density";
+import { SettingsRowTitle } from "./row-label";
+export { SettingsRowChildren } from "./row-children";
 export { SettingsGroup } from "./headings/settings-group";
 export { SettingsSection } from "./headings/settings-section";
 export { SettingsCollapsibleRow } from "./collapsible-row";
 export { SettingsDetailRow } from "./detail-row";
+export type { SettingsRowHintStatus } from "./row-header";
+export { SettingsAddRow } from "./add-row";
+export { SettingsBackLink, SettingsDetailHeader } from "./detail-header";
 export { SettingsInfoTip } from "./headings/settings-info-tip";
+export { MenuSettingsRows } from "./row-density";
 
-/** What app screens can add to a plugin-facing row: an accessory beside the label, such as an info tip. */
+/**
+ * What app screens can add to a plugin-facing row: an accessory beside the label, such as an info
+ * tip, an icon before the label, and a link to a page outside the app under the hint.
+ */
 interface AppRowExtras {
   labelAccessory?: ReactNode;
+  /** An icon before the label, such as the thing the row is about. */
+  leading?: ReactNode;
+  /** A page outside the app that helps with this row, drawn under the hint as "Label ↗". */
+  link?: Pick<ExternalLinkProps, "href" | "label" | "accessibilityLabel">;
 }
 
 interface AppSettingsRowProps extends Omit<SettingsRowProps, "hint">, AppRowExtras {
@@ -58,8 +72,10 @@ export function SettingsCard({ children, testID }: { children: ReactNode; testID
 
 export function SettingsRow({
   label,
+  leading,
   labelAccessory,
   hint,
+  link,
   error,
   children,
   testID,
@@ -67,6 +83,7 @@ export function SettingsRow({
 }: AppSettingsRowProps) {
   const compact = useIsCompactFormFactor();
   const layout = useSettingsRowLayout();
+<<<<<<< HEAD
   const stacked = arrangement === "stacked";
   const rowStyle = useMemo(
     () => [layout.row, compact && styles.compactRow, stacked && styles.stackedRow],
@@ -84,7 +101,20 @@ export function SettingsRow({
         ) : (
           <Text style={layout.title}>{label}</Text>
         )}
+=======
+  const rowStyle = useMemo(() => [layout.row, compact && styles.compactRow], [compact, layout]);
+  return (
+    <View style={rowStyle} testID={testID}>
+      {leading ? <View style={styles.leading}>{leading}</View> : null}
+      <View style={styles.label}>
+        <SettingsRowTitle label={label} accessory={labelAccessory} />
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
         {typeof hint === "string" ? <Text style={layout.hint}>{hint}</Text> : hint}
+        {link ? (
+          <View style={styles.link}>
+            <ExternalLink {...link} />
+          </View>
+        ) : null}
         {error ? (
           <Text accessibilityRole="alert" style={settingsStyles.rowError}>
             {error}
@@ -100,7 +130,15 @@ export function SettingsRow({
   );
 }
 
-export function SettingsSwitch({ value, onValueChange, disabled, ...row }: SettingsSwitchProps) {
+/** A switch row. App screens may pass `null` while the value is not known yet; see `Switch`. */
+export function SettingsSwitch({
+  value,
+  onValueChange,
+  disabled,
+  ...row
+}: Omit<SettingsSwitchProps, "onValueChange" | "value"> &
+  Partial<Pick<SettingsSwitchProps, "onValueChange">> &
+  AppRowExtras & { value: boolean | null }) {
   return (
     <SettingsRow {...row}>
       <Switch
@@ -203,7 +241,12 @@ export function SettingsInput({
   );
 }
 
-export function SettingsAction({ actionLabel, onPress, disabled, ...row }: SettingsActionProps) {
+export function SettingsAction({
+  actionLabel,
+  onPress,
+  disabled,
+  ...row
+}: SettingsActionProps & AppRowExtras) {
   return (
     <SettingsRow {...row}>
       <Button variant="outline" onPress={onPress} disabled={disabled}>
@@ -214,18 +257,20 @@ export function SettingsAction({ actionLabel, onPress, disabled, ...row }: Setti
 }
 
 const styles = StyleSheet.create((theme) => ({
+<<<<<<< HEAD
   stackedRow: { flexDirection: "column", alignItems: "stretch", gap: theme.spacing[2] },
   stackedLabel: { flexGrow: 0, flexBasis: "auto", marginRight: 0 },
   stackedControl: { width: "100%" },
   compactRow: { flexWrap: "wrap", gap: theme.spacing[3] },
+=======
+  // A control that wraps under the label gets space above it. Across the row, the leading slot and
+  // the label already carry their own margins, so a column gap would double them.
+  compactRow: { flexWrap: "wrap", rowGap: theme.spacing[3] },
+  // The same leading slot as `SettingsRowHeader`, so icons and labels share rails across row kinds.
+  leading: { marginRight: theme.spacing[3], alignItems: "center", justifyContent: "center" },
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
   label: { flexGrow: 1, flexShrink: 1, flexBasis: 160, marginRight: theme.spacing[3] },
-  labelRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    alignItems: "center",
-    gap: theme.spacing[2],
-  },
-  accessoryLabel: { flexShrink: 1, minWidth: 0 },
+  link: { alignItems: "flex-start", marginTop: theme.spacing[1] },
   control: { flexShrink: 1, maxWidth: "100%" },
   input: { minWidth: 180 },
 }));

@@ -15,8 +15,12 @@
     "*.lock",
     "**/*.gen.ts",
     "**/*.gen.tsx",
+<<<<<<< HEAD
     "docs/fork-patches.md",
     "control/src/control/admission-guard.mjs",
     "control/src/control/admission-guard-bbc624cf9.fixture.mjs"
+=======
+    "packages/react-native-enriched-markdown/**"
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
   ]
 }

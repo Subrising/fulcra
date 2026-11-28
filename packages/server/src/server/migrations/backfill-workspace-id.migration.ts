@@ -68,8 +68,15 @@ export async function backfillWorkspaceIdForLegacyAgents(options: {
   workspaceRegistry: WorkspaceRegistry;
   logger: Logger;
 }): Promise<number> {
+<<<<<<< HEAD
   const workspaceRecords = await options.workspaceRegistry.list();
   const records = await options.agentStorage.listLoaded();
+=======
+  // One-time migration resolves ownership against archived workspace history.
+  const workspaceRecords = await options.workspaceRegistry.listAll();
+  // One-time migration updates archived agents as well as active agents.
+  const records = await options.agentStorage.listAll();
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
   let migrated = 0;
 
   for (const record of records) {

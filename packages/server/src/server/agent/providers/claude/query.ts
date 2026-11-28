@@ -9,8 +9,13 @@ import {
   type ProviderRuntimeSettings,
 } from "../../provider-launch-config.js";
 import { buildSelfNodeCommand, createExternalProcessEnv } from "../../../paseo-env.js";
+<<<<<<< HEAD
 import { spawnProcess, type SpawnProcessOptions } from "../../../../utils/spawn.js";
 import { moveMcpConfigOffArgv } from "./mcp-config-file.js";
+=======
+import { execCommand, spawnProcess } from "../../../../utils/spawn.js";
+import type { AgentLaunchContext } from "../../agent-sdk-types.js";
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
 
 // Keep the raw SDK query import in this module only. Claude process launch behavior
 // must stay shared between production and tests so Windows .cmd/.bat handling cannot
@@ -23,6 +28,8 @@ export type ClaudeQueryFactory = (input: ClaudeQueryInput) => Query;
 export interface ClaudeQueryContext {
   runtimeSettings?: ProviderRuntimeSettings;
   launchEnv?: Record<string, string>;
+  /** Start Claude Code as `[...wrap, command, ...args]`. */
+  wrap?: AgentLaunchContext["wrap"];
   queryFactory?: ClaudeQueryFactory;
   /** Called with the spawned child process so the caller can tree-kill it on close. */
   onChildProcess?: (child: ChildProcess) => void;
@@ -47,7 +54,7 @@ function isChildProcessWithStreams(child: ChildProcess): child is ChildProcessWi
 }
 
 function resolveClaudeSpawnCommand(
-  spawnOptions: SpawnOptions,
+  spawnOptions: Pick<SpawnOptions, "command" | "args">,
   runtimeSettings?: ProviderRuntimeSettings,
 ): { command: string; args: string[] } {
   const commandConfig = runtimeSettings?.command;
@@ -71,6 +78,7 @@ function resolveClaudeSpawnCommand(
   };
 }
 
+<<<<<<< HEAD
 function prepareApiKeyGuard(
   launchEnv: Record<string, string> | undefined,
   cwd: string | undefined,
@@ -102,13 +110,46 @@ function buildClaudeSpawnEnv(
   // A pooled API launch owns authentication; inherited keys and tokens never reach it.
   if (launchEnv?.FULCRA_API_KEY_HELPER) sanitizeClaudeApiEnv(providerEnv);
   return { providerEnvSpec, providerEnv };
+=======
+type ClaudeLaunchEnvironment = Pick<ClaudeQueryContext, "runtimeSettings" | "launchEnv">;
+
+function createClaudeSpawnEnvSpec(
+  baseEnv: SpawnOptions["env"],
+  { runtimeSettings, launchEnv }: ClaudeLaunchEnvironment,
+) {
+  const spec = createProviderEnvSpec({ baseEnv, runtimeSettings, overlays: [launchEnv] });
+  // Session-open hooks may supply a client identity. Clear inherited SDK/parent identities.
+  spec.envOverlay.CLAUDE_CODE_ENTRYPOINT = launchEnv?.CLAUDE_CODE_ENTRYPOINT;
+  return spec;
+}
+
+export interface ClaudeLaunchVersionProbe extends ClaudeLaunchEnvironment {
+  executable: string;
+  cwd: string;
+  env: SpawnOptions["env"];
+}
+
+export function probeClaudeLaunchVersion(
+  launch: ClaudeLaunchVersionProbe,
+): Promise<{ stdout: string; stderr: string }> {
+  const { command, args } = resolveClaudeSpawnCommand(
+    { command: launch.executable, args: ["--version"] },
+    launch.runtimeSettings,
+  );
+  return execCommand(command, args, {
+    ...createClaudeSpawnEnvSpec(launch.env, launch),
+    cwd: launch.cwd,
+    shell: false,
+    timeout: 5_000,
+  });
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
 }
 
 function applyRuntimeSettingsToClaudeOptions(
   options: ClaudeOptions,
   context: ClaudeQueryContext,
 ): ClaudeOptions {
-  const { runtimeSettings, launchEnv, onChildProcess } = context;
+  const { runtimeSettings, onChildProcess, wrap } = context;
   return {
     ...options,
     spawnClaudeCodeProcess: (spawnOptions) => {
@@ -118,6 +159,7 @@ function applyRuntimeSettingsToClaudeOptions(
       // PATH lookup failures in the managed runtime bundle.
       // When the SDK passes a native binary path (from pathToClaudeCodeExecutable)
       // or the user overrides the command via runtime settings, use that directly.
+<<<<<<< HEAD
       const isDefaultRuntime = ["node", "bun"].includes(resolved.command);
       const api = Boolean(launchEnv?.FULCRA_API_KEY_HELPER);
       const { providerEnvSpec, providerEnv } = buildClaudeSpawnEnv(
@@ -125,11 +167,17 @@ function applyRuntimeSettingsToClaudeOptions(
         runtimeSettings,
         launchEnv,
       );
+=======
+      const isDefaultRuntime = resolved.command === "node" || resolved.command === "bun";
+      const providerEnvSpec = createClaudeSpawnEnvSpec(spawnOptions.env, context);
+      const providerEnv = createExternalProcessEnv(spawnOptions.env, providerEnvSpec.envOverlay);
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
       const selfNodeCommand = isDefaultRuntime
         ? buildSelfNodeCommand(resolved.args, providerEnv)
         : null;
       if (api && selfNodeCommand) sanitizeClaudeApiEnv(selfNodeCommand.env);
       const command = selfNodeCommand?.command ?? resolved.command;
+<<<<<<< HEAD
       // The MCP config can hold the agent's bearer token. Keep it out of argv, where the process list shows it.
       const moved = moveMcpConfigOffArgv(selfNodeCommand?.args ?? resolved.args);
       const args = moved.args;
@@ -163,6 +211,22 @@ function applyRuntimeSettingsToClaudeOptions(
       child.once("exit", moved.cleanup);
       child.once("error", moved.cleanup);
       guard?.attach(child);
+=======
+      const args = selfNodeCommand?.args ?? resolved.args;
+      const child = spawnProcess(command, args, {
+        wrap,
+        cwd: spawnOptions.cwd,
+        ...(selfNodeCommand
+          ? { env: selfNodeCommand.env, envMode: "internal" as const }
+          : providerEnvSpec),
+        signal: spawnOptions.signal,
+        stdio: ["pipe", "pipe", "pipe"],
+        // Bypass cmd.exe on Windows: the SDK passes --mcp-config with inline JSON
+        // containing double quotes, which cmd.exe mangles (strips quotes, breaks parsing).
+        // The command is always a resolved binary path, so shell routing is unnecessary.
+        shell: false,
+      });
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
       onChildProcess?.(child);
       if (typeof options.stderr === "function") {
         child.stderr?.on("data", (chunk: Buffer | string) => {

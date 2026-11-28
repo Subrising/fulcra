@@ -719,19 +719,36 @@ describe("background Claude subagents", () => {
 test("Claude runtime safety protects silent shells, monitors and pending completion notifications", () => {
   const safety = new ClaudeRuntimeSafety();
   const observe = (message: unknown) => safety.observe(message as SDKMessage);
-  observe({ type: "system", subtype: "init", claude_code_version: "2.1.292" });
+  expect(observe({ type: "system", subtype: "init", claude_code_version: "2.1.292" })).toEqual([]);
   expect(safety.canStopRuntime()).toBe(true);
+  expect(
+    observe({
+      type: "system",
+      subtype: "background_tasks_changed",
+      tasks: [
+        { task_id: "quiet-shell", task_type: "local_bash", description: "sleep 7200" },
+        { task_id: "monitor", task_type: "local_bash", description: "watch build" },
+        { task_id: "native-child", task_type: "local_agent", description: "research" },
+      ],
+    }),
+  ).toEqual([
+    { id: "quiet-shell", kind: "shell", description: "sleep 7200", canStop: true },
+    { id: "monitor", kind: "shell", description: "watch build", canStop: true },
+  ]);
+  expect(safety.canStopRuntime()).toBe(false);
   observe({
     type: "system",
-    subtype: "background_tasks_changed",
-    tasks: [
-      { task_id: "quiet-shell", task_type: "local_bash", description: "sleep 7200" },
-      { task_id: "monitor", task_type: "local_bash", description: "watch build" },
-      { task_id: "native-child", task_type: "local_agent", description: "research" },
-    ],
+    subtype: "task_started",
+    task_id: "monitor",
+    tool_use_id: "tool-monitor",
   });
-  expect(safety.canStopRuntime()).toBe(false);
-  observe({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+  expect(
+    observe({
+      type: "assistant",
+      message: { content: [{ type: "tool_use", id: "tool-monitor", name: "Monitor" }] },
+    })?.find((item) => item.id === "monitor")?.kind,
+  ).toBe("monitor");
+  expect(observe({ type: "system", subtype: "background_tasks_changed", tasks: [] })).toEqual([]);
   expect(safety.canStopRuntime()).toBe(false);
   for (const task_id of ["quiet-shell", "monitor"])
     observe({ type: "system", subtype: "task_notification", task_id });
@@ -743,8 +760,62 @@ test("Claude runtime safety protects silent shells, monitors and pending complet
   expect(safety.canStopRuntime()).toBe(false);
   observe({ type: "system", subtype: "background_tasks_changed", tasks: [] });
   expect(safety.canStopRuntime()).toBe(true);
+  safety.retire();
+  expect(
+    observe({
+      type: "system",
+      subtype: "background_tasks_changed",
+      tasks: [{ task_id: "late", task_type: "local_bash" }],
+    }),
+  ).toBeUndefined();
+  safety.reset();
+  expect(
+    observe({
+      type: "system",
+      subtype: "background_tasks_changed",
+      tasks: [{ task_id: "new", task_type: "local_bash" }],
+    }),
+  ).toEqual([{ id: "new", kind: "shell", description: null, canStop: true }]);
 });
 
+<<<<<<< HEAD
+=======
+test("emits inventory only when relevant observations change it", () => {
+  const safety = new ClaudeRuntimeSafety();
+  const observe = (message: unknown) => safety.observe(message as SDKMessage);
+  expect(observe({ type: "system", subtype: "init", claude_code_version: "2.1.292" })).toEqual([]);
+  expect(
+    observe({
+      type: "system",
+      subtype: "background_tasks_changed",
+      tasks: [{ task_id: "m", task_type: "local_bash" }],
+    }),
+  ).toEqual([{ id: "m", kind: "shell", description: null, canStop: true }]);
+  expect(
+    observe({
+      type: "system",
+      subtype: "background_tasks_changed",
+      tasks: [{ task_id: "m", task_type: "local_bash" }],
+    }),
+  ).toBeUndefined();
+  expect(
+    observe({ type: "system", subtype: "task_started", task_id: "m", tool_use_id: "tool" }),
+  ).toBeUndefined();
+  expect(
+    observe({
+      type: "assistant",
+      message: { content: [{ type: "tool_use", id: "tool", name: "Monitor" }] },
+    }),
+  ).toEqual([{ id: "m", kind: "monitor", description: null, canStop: true }]);
+  expect(
+    observe({ type: "assistant", message: { content: [{ type: "text", text: "streamed" }] } }),
+  ).toBeUndefined();
+  expect(
+    observe({ type: "system", subtype: "task_started", task_id: "m", tool_use_id: "other" }),
+  ).toEqual([{ id: "m", kind: "shell", description: null, canStop: true }]);
+});
+
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
 test("Claude runtime safety releases a process that has not been sent a turn", () => {
   const safety = new ClaudeRuntimeSafety();
   // A resumed process that only answered control requests never sends init.
@@ -758,6 +829,11 @@ test("Claude runtime safety releases a process that has not been sent a turn", (
   // A CLI without a roster that ran a turn may own background work.
   safety.observe({ type: "system", subtype: "init", claude_code_version: "2.1.220" } as SDKMessage);
   expect(safety.canStopRuntime()).toBe(false);
+<<<<<<< HEAD
+=======
+  safety.retire();
+  expect(safety.canStopRuntime()).toBe(false);
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
 });
 
 test("Claude session started by a control request without a turn can stop its runtime", async () => {
@@ -794,7 +870,12 @@ test("Claude session started by a control request without a turn can stop its ru
   }
 });
 
+<<<<<<< HEAD
 test("Claude session runtime safety observes pumped background work and autonomous replies", async () => {
+=======
+/** A Claude session whose SDK stream the test feeds one message at a time. */
+async function createPumpedClaudeSession() {
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
   let wake: (() => void) | undefined;
   const channel = { closed: false };
   const queue: Array<{ message: SDKMessage; consumed(): void }> = [];
@@ -867,12 +948,33 @@ test("Claude session runtime safety observes pumped background work and autonomo
     usage: { input_tokens: 1, output_tokens: 1 },
     total_cost_usd: 0,
   };
-  try {
-    await session.startTurn("start background work");
+  // A session-only cron lives in this process, and Claude reports it only to the Stop hook.
+  const stop = (session_crons: SessionCronSummary[]) => {
+    const stopInput: StopHookInput = {
+      hook_event_name: "Stop",
+      session_id: "runtime-safety",
+      transcript_path: "",
+      cwd: process.cwd(),
+      stop_hook_active: false,
+      session_crons,
+    };
+    return stopHook!(stopInput, undefined, { signal: new AbortController().signal });
+  };
+  /** Starts a foreground turn and returns once Claude has opened it. */
+  async function startTurn(prompt: string) {
+    await session.startTurn(prompt);
     await connection;
     const input = await nativeInput.next();
     await push({ type: "command_lifecycle", command_uuid: input.value.uuid, state: "started" });
     await push(init);
+  }
+  return { session, push, stop, startTurn, init, result };
+}
+
+test("Claude session runtime safety observes pumped background work and autonomous replies", async () => {
+  const { session, push, stop, startTurn, init, result } = await createPumpedClaudeSession();
+  try {
+    await startTurn("start background work");
     await push(result);
     expect(await session.canStopRuntime!()).toBe(true);
     await push({
@@ -896,6 +998,7 @@ test("Claude session runtime safety observes pumped background work and autonomo
     expect(await session.canStopRuntime!()).toBe(false);
     await push(result);
     expect(await session.canStopRuntime!()).toBe(true);
+<<<<<<< HEAD
     // A session-only cron lives in this process, and Claude reports it only to the Stop hook.
     const stop = (session_crons: SessionCronSummary[]) => {
       const stopInput: StopHookInput = {
@@ -908,10 +1011,54 @@ test("Claude session runtime safety observes pumped background work and autonomo
       };
       return stopHook!(stopInput, undefined, { signal: new AbortController().signal });
     };
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
     await stop([{ id: "99eb0b69", schedule: "0 */6 * * *", recurring: true, prompt: "say hi" }]);
     expect(await session.canStopRuntime!()).toBe(false);
     await stop([]);
     expect(await session.canStopRuntime!()).toBe(true);
+<<<<<<< HEAD
+=======
+  } finally {
+    await session.close();
+  }
+});
+
+test("Claude session reports a pending wakeup until the turn its background work starts", async () => {
+  const { session, push, stop, startTurn, init, result } = await createPumpedClaudeSession();
+  try {
+    await startTurn("run the build in the background");
+    await push({
+      type: "system",
+      subtype: "background_tasks_changed",
+      tasks: [{ task_id: "build", task_type: "local_bash", description: "npm run build" }],
+    });
+    await push(result);
+    expect(session.hasPendingWakeup!()).toBe(true);
+    // Claude's order at wake-up: the notification, the empty roster, then the new turn.
+    await push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "build",
+      status: "completed",
+      output: "built",
+      summary: "built",
+    });
+    await push({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+    expect(session.hasPendingWakeup!()).toBe(true);
+    await push(init);
+    expect(session.hasPendingWakeup!()).toBe(false);
+    await push(result);
+    expect(session.hasPendingWakeup!()).toBe(false);
+
+    // A one-shot wakeup starts a turn by itself; a recurring cron never settles.
+    const wakeup = { id: "wake", schedule: "30 14 26 11 *", recurring: false, prompt: "check" };
+    const cron = { id: "cron", schedule: "0 */6 * * *", recurring: true, prompt: "say hi" };
+    await stop([wakeup, cron]);
+    expect(session.hasPendingWakeup!()).toBe(true);
+    await stop([cron]);
+    expect(session.hasPendingWakeup!()).toBe(false);
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
   } finally {
     await session.close();
   }

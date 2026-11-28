@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { TimelineProjection, type ProjectedTimelineRow } from "./timeline-projection.js";
 import { limitAgentTimelineItemContent } from "./agent-timeline-content.js";
+<<<<<<< HEAD
 import type { AgentTimelineItem } from "./agent-sdk-types.js";
 import { isSeqInTurn } from "./timeline-turn-index.js";
+=======
+import type { AgentMetric, AgentTimelineItem } from "./agent-sdk-types.js";
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
 import type {
   AgentTimelineFetchOptions,
   AgentTimelineFetchResult,
@@ -87,12 +91,27 @@ export class InMemoryAgentTimelineStore {
     );
   }
 
+  /** Records a completed turn's metrics on its footer row. Null when the turn has none. */
+  stampTurnMetrics(
+    agentId: string,
+    metrics: AgentMetric[],
+    options?: { turnId?: string },
+  ): AgentTimelineRow | null {
+    return this.requireState(agentId).projection.stampTurnMetrics(metrics, options?.turnId);
+  }
+
   getEpoch(agentId: string): string {
     return this.requireState(agentId).epoch;
   }
 
+<<<<<<< HEAD
   getNextSeq(agentId: string): number {
     return this.requireState(agentId).nextSeq;
+=======
+  getHead(agentId: string): { epoch: string; seq: number } {
+    const state = this.requireState(agentId);
+    return { epoch: state.epoch, seq: state.nextSeq - 1 };
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
   }
 
   fetch(agentId: string, options?: AgentTimelineFetchOptions): AgentTimelineFetchResult {

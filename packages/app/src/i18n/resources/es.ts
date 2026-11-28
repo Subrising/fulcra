@@ -3,6 +3,7 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const es: TranslationResources = {
+<<<<<<< HEAD
   plugins: {
     // Fulcra 0.2.9: English until translated; the old text gave the host-password route.
     commandCentreRelay: en.plugins.commandCentreRelay,
@@ -12,6 +13,12 @@ export const es: TranslationResources = {
     unknownProject: "Proyecto desconocido",
     reportsTo: "Depende de {{leader}}",
     unknownAccessibility: "Proyecto propietario desconocido",
+=======
+  pluginCombobox: {
+    searching: "Buscando…",
+    empty: "Sin resultados",
+    failed: "La búsqueda falló: {{message}}",
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
   },
   paneFind: {
     connectionFailure:
@@ -97,14 +104,23 @@ export const es: TranslationResources = {
       close: "Cerrar menú",
     },
     commandCenter: {
-      placeholder: "Buscar comandos, archivos, espacios de trabajo y agentes...",
+      placeholder: "Buscar espacios de trabajo, archivos y acciones...",
+      placeholderWithoutFiles: "Buscar espacios de trabajo y acciones...",
       filePlaceholder: "Buscar archivos...",
+      workspacePlaceholder: "Buscar espacios de trabajo...",
+      actionPlaceholder: "Buscar acciones...",
       searchingFiles: "Buscando archivos...",
       noMatches: "No hay coincidencias",
       actions: "Comportamiento",
       files: "Archivos",
       workspaces: "Espacios de trabajo",
-      agents: "Agentes",
+      recentWorkspaces: "Espacios de trabajo recientes",
+      tabs: {
+        all: "Todo",
+        workspaces: "Espacios de trabajo",
+        files: "Archivos",
+        actions: "Acciones",
+      },
       newAgent: "Nuevo agente",
       open: "Abrir {{name}}",
       openInSidePane: "Abrir {{name}} en el panel lateral",
@@ -113,6 +129,9 @@ export const es: TranslationResources = {
       home: "Hogar",
       groupByProject: "Agrupar por proyecto",
       groupByStatus: "Agrupar por estado",
+      copyBrowserHostName: "Copiar el nombre del host del navegador",
+      profileGroupLabel: "Perfil",
+      profileSearchKeywords: "perfil aplicar perfil perfil de agente preajuste",
       modelGroupLabel: "Modelo",
       modelSearchKeywords: "cambiar modelo modificar modelo establecer modelo seleccionar modelo",
       thinkingGroupLabel: "Razonamiento",
@@ -275,7 +294,7 @@ export const es: TranslationResources = {
     states: {
       notFound: "Agentno encontrado",
       failedToLoad: "No se pudo cargar el agente",
-      reconnecting: "Reconectando al host",
+      reconnecting: "Reconectando",
       updating: "Actualizando mensajes",
       timelineSyncFailed: "No se pudo actualizar el historial del agente.",
       timelineSyncRetrying: "Reintentando…",
@@ -353,10 +372,12 @@ export const es: TranslationResources = {
       viewDiagram: "Ver diagrama",
     },
     actions: {
+      copyQuote: "Copiar cita",
       copyCode: "Copiar código",
       copyTurn: "Copiar turno",
       copyMessage: "Copiar mensaje",
       forkMenu: "Bifurcar mensaje",
+      turnStats: "Estadísticas del turno",
       forkInNewTab: "Bifurcar en una pestaña nueva",
       forkInNewWorkspace: "Bifurcar en un espacio de trabajo nuevo",
       forkUnavailable: "Actualiza el host para usar esto.",
@@ -386,6 +407,11 @@ export const es: TranslationResources = {
       details: "Detalles",
     },
     dictation: {
+      insecureContext: "Abre Paseo por HTTPS o en localhost para usar el micrófono.",
+      unsupported: "El dictado no está disponible en este navegador.",
+      noMicrophone: "Conecta un micrófono e inténtalo de nuevo.",
+      permissionDenied: "Permite el acceso al micrófono e inténtalo de nuevo.",
+      startFailed: "No se pudo iniciar el dictado. Inténtalo de nuevo.",
       paused: "Micrófono interrumpido. Esperando para reanudar…",
       start: "Iniciar dictado de voz",
       cancel: "Cancelar dictado",
@@ -401,6 +427,25 @@ export const es: TranslationResources = {
       next: "Siguiente",
       answerPlaceholder: "Escribe tu respuesta...",
       otherPlaceholder: "Otro...",
+    },
+    backgroundWork: {
+      heartbeat: "Latido",
+      pillOne: "1 tarea en segundo plano",
+      pillMany: "{{count}} tareas en segundo plano",
+      notRunning: "Ya no está en ejecución",
+      dismiss: "Cerrar",
+      stop: "Detener",
+      stopping: "Deteniendo…",
+      stopError: "No se pudo confirmar la detención.",
+      label: "Segundo plano",
+      title: "Trabajo en segundo plano",
+      waiting: "Esperando los detalles",
+      error: "No se pudo cargar el trabajo en segundo plano",
+      retry: "Reintentar",
+      running: "Trabajo en segundo plano en curso",
+      shell: "Consola",
+      monitor: "Monitor",
+      other: "Otro trabajo",
     },
     todo: {
       title: "Tareas",
@@ -475,8 +520,7 @@ export const es: TranslationResources = {
         archivedTitle: "Espacio de trabajo archivado",
         restoreDescription:
           "Restaura {{workspaceName}} para volver a sus agentes. Su worktree usará la rama {{branch}}.",
-        restoreWithoutBranchDescription:
-          "Restaura {{workspaceName}} para volver a sus agentes. Se creará una rama nueva desde la base guardada o la rama predeterminada del repositorio.",
+        restoreWithoutBranchDescription: "Restaura {{workspaceName}} para volver a sus agentes.",
         unarchiveDescription:
           "{{workspaceName}} está archivado. Desarchívalo para volver a abrirlo.",
         restoreAction: "Restaurar",
@@ -904,6 +948,8 @@ export const es: TranslationResources = {
           pushBehind:
             "Push aún no está disponible porque hay cambios más nuevos que implementar primero",
           pushNothing: "Push no está disponible porque no hay nada nuevo que enviar",
+          pushUpstreamGone:
+            "Push no está disponible porque la rama que sigue esta rama ya no existe",
           pullAndPushNoRemote:
             "Tirar y empujar no está disponible aquí porque esta rama aún no está conectada a un control remoto",
           pullAndPushDirty:
@@ -968,6 +1014,8 @@ export const es: TranslationResources = {
         },
         archiveWarning: {
           title: '¿Archivo "{{workspaceName}}"?',
+          bulkTitle: "¿Archivar {{count}} espacios de trabajo?",
+          bulkWorkspaceReason: "{{workspaceName}}: {{reason}}",
           confirm: "Archivo",
           cancel: "Cancelar",
           uncommittedChanges: "Cambios no confirmados",
@@ -981,6 +1029,9 @@ export const es: TranslationResources = {
         },
       },
       diff: {
+        baseBranch: {
+          title: "Rama base",
+        },
         openChangesTab: "Abrir la pestaña Cambios",
         openDiffTab: "Abrir la pestaña Diferencia",
         closeChangesTab: "Cerrar la pestaña Cambios",
@@ -1205,6 +1256,8 @@ export const es: TranslationResources = {
     title: "Novedades",
     installed: "Instalada",
     showMore: "Mostrar más",
+    showAllChanges: "Mostrar todos los cambios",
+    hideAllChanges: "Ocultar todos los cambios",
     openWebsite: "Registro de cambios completo",
     error: {
       title: "No se pudo cargar el registro de cambios",
@@ -1435,6 +1488,14 @@ export const es: TranslationResources = {
     },
   },
   sidebar: {
+    view: {
+      failed: "No se pudo cargar la vista de la barra lateral.",
+      useDefault: "Usar vista predeterminada",
+      readFailed: "No se pudo cargar tu preferencia de vista de la barra lateral.",
+      agentUnavailable: "El agente ya no está disponible",
+      terminalUnavailable: "La terminal ya no está disponible",
+      projectUnavailable: "El proyecto ya no está disponible",
+    },
     statusGroupAccessibility: "Grupo {{label}}",
     statusBucket: {
       needsInput: "Necesita datos",
@@ -1510,6 +1571,7 @@ export const es: TranslationResources = {
       hosts: "Hosts",
       settings: "Ajustes",
       closeSidebar: "Cerrar barra lateral",
+      moreActions: "Más acciones",
     },
     footer: {
       usage: "Uso",
@@ -1591,6 +1653,7 @@ export const es: TranslationResources = {
         rename: "Cambiar nombre del espacio de trabajo",
         pin: "Anclar arriba",
         unpin: "Desanclar",
+        select: "Seleccionar",
         archive: "Archivo",
         archiveWorkspace: "Archivar espacio de trabajo",
         hideFromSidebar: "Ocultar de la barra lateral",
@@ -1609,6 +1672,10 @@ export const es: TranslationResources = {
         submit: "Rebautizar",
         invalidBranchName: "Nombre de sucursal no válido",
       },
+      selection: {
+        count: "{{count}} seleccionados",
+        exit: "Salir de la selección",
+      },
       toasts: {
         workspacePathUnavailable: "RutaWorkspaceno disponible",
         pathCopied: "Ruta copiada",
@@ -1616,6 +1683,11 @@ export const es: TranslationResources = {
         hostDisconnected: "Hostno está conectado",
         hideFailed: "No se pudo ocultar el espacio de trabajo",
         archiveFailed: "No se pudo archivar el espacio de trabajo",
+        archiveMultipleFailed: "No se pudieron archivar {{count}} espacios de trabajo",
+        archived: "Espacio de trabajo archivado",
+        archivedCount: "{{count}} espacios de trabajo archivados",
+        undoArchive: "Deshacer",
+        undoArchiveFailed: "No se pudo deshacer el archivado",
       },
     },
   },
@@ -1623,8 +1695,9 @@ export const es: TranslationResources = {
     title: "Nuevo espacio de trabajo",
     create: "Crear",
     isolation: {
-      local: "Local",
+      local: "Directorio del proyecto",
       worktree: "Nuevo worktree",
+      existing: "Worktree existente",
       label: "Aislamiento",
     },
     fields: {
@@ -1639,12 +1712,17 @@ export const es: TranslationResources = {
       createWorktreeFailed: "No se pudo crear el árbol de trabajo",
       composerStateRequired: "Se requiere el estado del compositor",
       selectModel: "Selecciona un modelo",
+      branchInProjectDirectory:
+        "{{branch}} está activa en el directorio del proyecto. Elige Directorio del proyecto para trabajar en ella, o crea una rama a partir de ella.",
+      branchInWorktree:
+        "{{branch}} está activa en {{path}}. Elige ese worktree en Worktree existente, o crea una rama a partir de ella.",
     },
     tooltips: {
       project: "Choose the project",
       host: "Choose the host",
       isolation: "Choose the isolation level",
       startingRef: "Elige por dónde empezar",
+      worktree: "Elige el worktree en el que trabajar",
       launch: "Choose what to launch",
     },
     refPicker: {
@@ -1652,8 +1730,31 @@ export const es: TranslationResources = {
       intoBase: "en {{baseRef}}",
       searching: "Búsqueda...",
       noMatchingRefs: "No hay árbitros coincidentes.",
-      searchPlaceholder: "Buscar sucursales y relaciones públicas",
+      searchBranches: "Buscar ramas",
+      searchPullRequests: "Buscar pull requests",
+      searchPullRequests_mr: "Buscar merge requests",
+      branches: "Ramas",
+      pullRequests: "Pull requests",
+      pullRequests_mr: "Merge requests",
+      pullRequestsShort: "PR",
+      pullRequestsShort_mr: "MR",
+      branchOff: "Nueva rama",
+      checkout: "Usar directamente",
+      branchOffHint: "Crea una rama nueva a partir de ella",
+      checkoutHint: "Trabaja directamente en ella",
+      base: "Base",
+      from: "desde",
+      branch: "Rama",
+      pullRequest: "Pull request",
+      pullRequest_mr: "Merge request",
+      inProjectDirectory: "En el directorio del proyecto",
+      inWorktree: "En un worktree",
       title: "Empezar desde",
+    },
+    worktreePicker: {
+      title: "Worktree",
+      searchPlaceholder: "Buscar worktrees",
+      empty: "No hay worktrees que coincidan.",
     },
     launch: {
       title: "What to launch",
@@ -1731,6 +1832,8 @@ export const es: TranslationResources = {
       status: {
         checking: "Buscando actualizaciones de la aplicación...",
         installing: "Instalando actualización de la aplicación...",
+        downloadingVersionProgress: "Descargando {{version}}... {{percent}}%",
+        downloadingProgress: "Descargando actualización de la aplicación... {{percent}}%",
         upToDate: "La aplicación está actualizada.",
         upToDateWithLastChecked: "Up to date. Last checked at {{time}}.",
         pending: "Le avisaremos cuando la actualización esté lista.",
@@ -1739,6 +1842,16 @@ export const es: TranslationResources = {
         pendingWithVersion: "Actualización encontrada: {{version}}. Descargando...",
         pendingWithVersionAndLastChecked:
           "Actualización encontrada: {{version}}. Descargando... Última comprobación a las {{time}}.",
+        pendingWithVersionProgress:
+          "Actualización encontrada: {{version}}. Descargando... {{percent}}%",
+        pendingWithVersionProgressAndLastChecked:
+          "Actualización encontrada: {{version}}. Descargando... {{percent}}% Última comprobación a las {{time}}.",
+        downloadAvailableWithVersion: "Actualización disponible: {{version}}",
+        downloadAvailableWithVersionAndLastChecked:
+          "Actualización disponible: {{version}}. Última comprobación a las {{time}}.",
+        downloadAvailable: "Hay una actualización de la aplicación disponible.",
+        downloadAvailableWithLastChecked:
+          "Hay una actualización de la aplicación disponible. Última comprobación a las {{time}}.",
         availableWithVersion: "Actualización lista:{{version}}",
         availableWithVersionAndLastChecked:
           "Actualización lista:{{version}}. Última comprobación a las {{time}}.",
@@ -1751,14 +1864,21 @@ export const es: TranslationResources = {
       },
       installError: "No se puede instalar la actualización de la aplicación de escritorio.",
       callout: {
+        downloadingTitle: "Descargando actualización",
         installingTitle: "Instalando actualización",
         failedTitle: "La actualización falló",
         availableTitle: "Actualización disponible",
         genericError: "Algo salió mal.",
         whatsNew: "Qué hay de nuevo",
+        downloadingAction: "Descargando...",
         installingAction: "Instalando...",
+        downloadAndRestart: "Descargar",
         installAndRestart: "Instalar y reiniciar",
+        downloadingVersionDescription: "Descargando {{version}}... {{percent}}%",
+        downloadingDescription: "Descargando actualización... {{percent}}%",
         installingDescription: "Instalando y reiniciando...",
+        versionAvailable: "{{version}} está disponible para descargar.",
+        newVersionAvailable: "Una nueva versión está disponible para descargar.",
         versionReady: "{{version}}está listo para instalar.",
         newVersionReady: "Una nueva versión está lista para instalar.",
         restartWarning:
@@ -1828,7 +1948,14 @@ export const es: TranslationResources = {
     integrations: {
       cli: {
         statusFailed: "No se puede verificar el estado de instalación deCLI.",
+<<<<<<< HEAD
         installFailed: "No se puede instalar la CLI de Fulcra.",
+=======
+        installFailed: "No se puede instalar elPaseoCLI.",
+        uninstallFailed: "No se pudo desinstalar la CLI de Paseo.",
+        keptForeign:
+          "Se conservó un comando paseo que Paseo no instaló. Elimínalo tú mismo para desinstalarlo.",
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
       },
     },
   },
@@ -1880,6 +2007,7 @@ export const es: TranslationResources = {
     openPath: "Abrir ruta",
   },
   branchSwitcher: {
+    failedToLoad: "No se pudieron cargar las ramas. Vuelve a abrir el selector para reintentarlo.",
     triggerTooltip: "Cambiar rama del espacio de trabajo",
     currentBranch: "Sucursal actual:{{branchName}}. Presione para cambiar de rama.",
     placeholder: "Cambiar de rama...",
@@ -1903,10 +2031,18 @@ export const es: TranslationResources = {
     loadingCommands: "Cargando comandos...",
     noFiles: "No se encontraron archivos ni directorios",
     noCommands: "No se encontraron comandos",
+<<<<<<< HEAD
     accountUnavailable:
       "Los comandos de cuenta aún no están disponibles para este ordenador. Actualiza Fulcra en {{host}}.",
     thisComputer: "este ordenador",
     failedToLoad: "No se pudo cargar",
+=======
+    loadingProviderCommands: "Cargando comandos de {{provider}}...",
+    commandsFailed: "No se pudieron cargar los comandos",
+    providerCommandsFailed: "No se pudieron cargar los comandos de {{provider}}",
+    filesFailed: "No se pudieron buscar archivos",
+    skillTag: "Skill",
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
     chooseProjectForCommands: "Elige un proyecto para ver los comandos",
     chooseModelForCommands: "Selecciona un modelo para ver los comandos",
   },
@@ -1944,7 +2080,59 @@ export const es: TranslationResources = {
     },
   },
   onboarding: {
+<<<<<<< HEAD
     title: "Bienvenido a Fulcra",
+=======
+    setup: {
+      title: "Paseo",
+      stepCounter: "Paso {{current}} de {{total}}",
+      skip: "Omitir configuración",
+      continue: "Continuar",
+      finish: "Finalizar",
+      steps: {
+        appearance: {
+          label: "Apariencia",
+          title: "Te damos la bienvenida a Paseo",
+          description: "Empecemos por elegir una apariencia",
+        },
+        providers: {
+          label: "Proveedores",
+          title: "Tus proveedores",
+          description: "Paseo usa las CLI de agentes que ya están en este ordenador",
+        },
+        projects: {
+          label: "Proyectos",
+          title: "Añade tus proyectos",
+          description: "Dónde quieres que trabajen tus agentes",
+          addProject: "Añadir proyecto",
+          added: "Añadido",
+          suggestions: {
+            loading: "Buscando carpetas en las que has trabajado",
+            empty: "No se encontraron proyectos recientes",
+            lastUsed: "Último uso {{time}}",
+            addSelected_one: "Añadir {{count}} proyecto",
+            addSelected_other: "Añadir {{count}} proyectos",
+            adding: "Añadiendo…",
+            addFailed: "No se pudo añadir esta carpeta",
+          },
+        },
+        orchestration: {
+          label: "Orquestación",
+          title: "Deja que los agentes usen Paseo",
+          description: "Deja que tus agentes creen espacios de trabajo y hablen con otros agentes",
+        },
+        phone: {
+          label: "Móvil",
+          title: "Lleva tus agentes contigo",
+          description:
+            "La app móvil nativa completa te permite controlar cualquier ordenador con Paseo desde tu teléfono",
+          appStore: "App Store",
+          googlePlay: "Google Play",
+        },
+      },
+    },
+    title: "Bienvenido aPaseo",
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
     subtitle: "Conecte su computadora para comenzar",
     actions: {
       settings: "Ajustes",
@@ -1963,11 +2151,15 @@ export const es: TranslationResources = {
     defaultModel: "Por defecto",
     profiles: "Perfiles",
     providers: "Proveedores",
+    models: "Modelos",
     model: "Modelo",
     editProfiles: "Editar",
     editProfilesLabel: "Editar perfiles de agente",
     createProfile: "Crear perfil",
     createProfileFromModel: "Crear perfil desde este modelo",
+    profileSaved: 'Guardado "{{name}}"',
+    undo: "Deshacer",
+    undoProfileSave: "Deshacer perfil guardado",
     editProfileLabel: "Editar {{name}}",
     editProfilesCount: "Editar perfiles ({{count}})",
     modelCount: "{{count}} modelo",
@@ -2016,6 +2208,33 @@ export const es: TranslationResources = {
       noModelAvailable: "No hay ningún modelo disponible para el proveedor seleccionado",
       workspaceDirectoryNotFound: "DirectorioWorkspaceno encontrado",
       hostDisconnected: "Hostno está conectado",
+    },
+  },
+  devices: {
+    title: "Dispositivos",
+    waysToConnect: "Formas de conectarse",
+    docs: "Docs",
+    docsAccessibility: "Abrir la documentación de conectividad",
+    recommended: "Recomendado",
+    relay: { title: "Relé", hint: "Cifrado de extremo a extremo, escanea un código QR" },
+    tailscale: {
+      hint: "Conexión directa por tu tailnet, introduce una dirección",
+      unavailable: "Tailscale no se está ejecutando en este host",
+      install: "Obtener Tailscale",
+      waiting: "Esperando a que Tailscale se inicie en este host",
+      alwaysOn: "Siempre activado, porque este host ya acepta conexiones de Tailscale",
+      socket: "Desactivado, porque este host escucha en un socket local",
+      launch: "Lo controla el comando que inicia este host",
+      update: "Actualiza este host para usar Tailscale",
+      updateDocs: "Cómo actualizar",
+      address: "En un teléfono con Tailscale, añade un host con esta dirección",
+      statusError: "No se pudo comprobar Tailscale",
+      turnOnError: "No se pudo activar Tailscale",
+      turnOffError: "No se pudo desactivar Tailscale",
+      confirmTitle: "¿Desactivar Tailscale?",
+      confirmMessage:
+        "Este dispositivo está conectado mediante Tailscale y perderá la conexión con el host.",
+      confirmAction: "Desactivar",
     },
   },
   pairing: {
@@ -2185,7 +2404,13 @@ export const es: TranslationResources = {
       notNow: "Ahora no",
       directConnectionHint:
         "Sin relé, conéctese directamente por TCP, Tailscale u otra VPN. No se crea ningún código QR.",
+<<<<<<< HEAD
       updateRequired: "Actualice el host para habilitar el relé desde Fulcra Desktop.",
+=======
+      tailscaleDocs: "Configurar Tailscale",
+      tailscaleDocsAccessibility: "Leer cómo conectarse con Tailscale",
+      updateRequired: "Actualice el host para habilitar el relé desde Paseo Desktop.",
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
       unavailable: "Oferta de maridaje no disponible.",
       hint: "Escanee este código QR con Fulcra en su teléfono o copie el enlace a continuación.",
       securityWarning:
@@ -2231,6 +2456,7 @@ export const es: TranslationResources = {
     hostUnavailable: "El host de descarga no está disponible.",
     cancelled: "La descarga fue cancelada.",
     failed: "No se pudo descargar el archivo.",
+    httpFailed: "No se pudo descargar el archivo (HTTP {{status}}).",
     shareFile: "compartir archivo",
     shareFileNamed: "Compartir{{fileName}}",
   },
@@ -2690,6 +2916,7 @@ export const es: TranslationResources = {
     turnOn: "Activar",
 
     options: "Configuración",
+    host: "Host",
     refreshFailed: "No se pudo actualizar el uso",
     noHosts: "No hay hosts conectados",
     agentError: "No se pudo cargar el uso: {{reason}}",
@@ -2706,6 +2933,12 @@ export const es: TranslationResources = {
     loginExpired: "La sesión caducó {{relativeTime}}. {{remedy}}",
     title: "Uso del plan",
     refresh: "Actualizar",
+    reorderCard: "Reordenar {{source}}",
+    sources: "Fuentes",
+    sourcesCount: "{{shown}} de {{total}}",
+    providerInactive: "Proveedor inactivo",
+    allSourcesHidden: "No hay fuentes de uso visibles",
+    chooseSources: "Elegir fuentes",
     refreshAll: "Actualizar todo",
     refreshing: "Actualizando...",
     loading: "Cargando uso...",
@@ -2746,8 +2979,9 @@ export const es: TranslationResources = {
       resetsIn: "se restablece en {{duration}}",
       resetsAtWeekday: "{{weekday}} {{time}}",
       resetsAtDate: "{{date}}, {{time}}",
-      runsOutNow: "se agota ahora",
-      runsOutIn: "se agota en {{duration}}",
+      limitReached: "Límite alcanzado",
+      mayHaveRunOut: "Puede que ya se haya agotado",
+      runsOutAt: "agotamiento previsto {{time}}",
       justNow: "ahora mismo",
       daysAgo: "hace {{value}} d",
       hoursAgo: "hace {{value}} h",
@@ -2831,6 +3065,7 @@ export const es: TranslationResources = {
       projects: "Proyectos",
       connections: "Conexiones",
       agents: "Agents",
+      agentProfiles: "Perfiles de agente",
       metadata: "Metadatos",
       voice: "Voz",
       workspaces: "Workspaces",
@@ -2922,6 +3157,12 @@ export const es: TranslationResources = {
     general: {
       title: "General",
       sending: "Envío",
+      setup: {
+        label: "Configuración inicial",
+        description:
+          "Vuelve a recorrer apariencia, proveedores, proyectos y emparejamiento del teléfono",
+        action: "Mostrar configuración de nuevo",
+      },
       browserData: {
         title: "Datos del navegador",
         siteData: "Cookies y datos de sitios",
@@ -3054,9 +3295,28 @@ export const es: TranslationResources = {
         stable: "Stable",
         beta: "Beta",
       },
+      autoUpdate: {
+        label: "Actualizaciones automáticas",
+        options: {
+          automatic: "Auto",
+          notify: "Notificar",
+          off: "Desactivado",
+        },
+        descriptions: {
+          automatic: "Buscar y descargar actualizaciones en segundo plano",
+          notify: "Buscar actualizaciones, pero descargar solo cuando lo elijas",
+          off: "No buscar automáticamente. Solo buscar al hacer clic en Comprobar",
+        },
+      },
       updates: {
         label: "Actualizaciones de aplicaciones",
         readyToInstall: "Listo para instalar:{{version}}",
+        downloadTitle: "Descargar actualización de escritorio",
+        downloadMessage: "Esto descarga e instala la actualización de Paseo en esta computadora.",
+        downloadConfirm: "Descargar e instalar",
+        download: "Descargar",
+        downloadTo: "Descargar {{version}}",
+        downloading: "Descargando...",
         installTitle: "Instalar actualización de escritorio",
         installMessage: "Esto actualiza Fulcra en esta computadora.",
         installConfirm: "Instalar actualización",
@@ -3092,6 +3352,13 @@ export const es: TranslationResources = {
         description: "Muestra un esquema para saltar entre instrucciones",
       },
       sidebar: {
+        view: {
+          title: "Vista de la barra lateral",
+          label: "Vista",
+          default: "Vista predeterminada",
+          unavailable:
+            "La vista seleccionada no está disponible o está desactivada. Se muestra la vista predeterminada.",
+        },
         header: {
           title: "Encabezado",
           description:
@@ -3129,10 +3396,11 @@ export const es: TranslationResources = {
       layout: {
         title: "Diseño",
         contentWidth: "Ancho del contenido",
-        contentWidthHint: "Ancho máximo del chat y de los archivos Markdown en pantallas anchas",
-        contentWidthAccessibility: "Ancho del contenido en píxeles",
-        reset: "Restablecer",
-        resetAccessibility: "Restablecer el ancho del contenido",
+        contentWidthHint: "Ancho del chat, el campo de mensaje y las vistas previas de Markdown",
+        contentWidthDefault: "Predeterminado",
+        contentWidthWide: "Ancho",
+        contentWidthFull: "Completo",
+        contentWidthCustom: "Ancho personalizado · {{width}} px",
       },
       syntax: {
         title: "Sintaxis",
@@ -3203,6 +3471,8 @@ export const es: TranslationResources = {
         toggleFocusMode: "Alternar modo de enfoque",
         cycleTheme: "Tema del ciclo",
         focusMessageInput: "Entrada de mensaje de enfoque",
+        toggleModelPicker: "Abrir o cerrar el selector de modelos",
+        cycleEffort: "Alternar el nivel de esfuerzo",
         cycleAgentMode: "Alternar modo del agente",
         toggleVoiceMode: "Alternar modo de voz",
         startStopDictation: "Iniciar dictado/stop",
@@ -3225,11 +3495,7 @@ export const es: TranslationResources = {
       commandLine: {
         title: "línea de comando",
         description: "Agentes de control y script desde tu terminal",
-      },
-      actions: {
-        install: "Instalar",
-        installing: "Instalando...",
-        installed: "Instalado",
+        accessibilityLabel: "Instalar la CLI de Paseo",
       },
     },
     permissions: {
@@ -3252,6 +3518,23 @@ export const es: TranslationResources = {
         title: "Apariencia",
         name: {
           label: "Nombre",
+        },
+        icon: {
+          label: "Icono",
+          accessibilityLabel: "Icono, {{value}}",
+          auto: "Automático",
+          autoDetected: "Automático ({{icon}})",
+          options: {
+            server: "Servidor",
+            laptop: "Portátil",
+            desktop: "Escritorio",
+            mini: "Mini",
+            workstation: "Estación de trabajo",
+            cloud: "Nube",
+            container: "Contenedor",
+            board: "PC de placa única",
+            terminal: "Terminal",
+          },
         },
         color: {
           label: "Color",
@@ -3289,6 +3572,14 @@ export const es: TranslationResources = {
         local: "Local",
         remoteSsh: "SSH remoto",
       },
+      connectionKinds: {
+        local: "Local",
+        relay: "Relé",
+        tailscale: "Tailscale",
+        ssh: "SSH",
+        direct: "Directo",
+        routed: "Vía",
+      },
       connections: {
         title: "Conexiones",
         removeTitle: "Quitar conexión",
@@ -3299,21 +3590,26 @@ export const es: TranslationResources = {
         timeout: "Se acabó el tiempo",
       },
       pairDevices: {
-        title: "Emparejar dispositivos",
         rowTitle: "Emparejar un dispositivo",
-        rowHint: "Escanee un códigoQRo copie un enlace para conectar su teléfono a este host",
       },
       skills: {
         ...en.settings.host.skills,
         sectionTitle: "Habilidades de orquestación",
         title: "Habilidades de orquestación",
-        description: "Enseñe a sus agentes a orquestar a través delCLI",
+        description: "Enseña a tus agentes a usar las herramientas de Paseo",
         updateAvailable: "Actualización disponible",
+<<<<<<< HEAD
         updateTitle: "¿Actualizar las habilidades de Fulcra?",
         updateFallback: "Sincronice las habilidades incluidas con su máquina.",
         uninstallTitle: "¿Desinstalar las habilidades de Fulcra?",
         uninstallMessage:
           "Elimina todas las habilidades de orquestación de Fulcra de ~/.agents, ~/.claude, ~/.codex.",
+=======
+        updateTitle: "¿Actualizar las habilidades dePaseo?",
+        uninstallTitle: "¿Desinstalar las habilidadesPaseo?",
+        uninstallMessage:
+          "Elimina todas las habilidades de orquestación Paseo de ~/.agents, ~/.claude, ~/.codex y ~/.gemini/config.",
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
         choose: "Elegir habilidades",
         chooseAll: "Todas las habilidades",
         chooseAllHint:
@@ -3322,16 +3618,13 @@ export const es: TranslationResources = {
         chooseEmpty: "Esta versión no incluye habilidades.",
         removeTitle: "¿Eliminar las habilidades deseleccionadas?",
         removeMessage:
-          "{{skills}} se eliminarán de ~/.agents, ~/.claude y ~/.codex. También se elimina todo lo que hayas añadido dentro de esas carpetas de habilidades.",
+          "{{skills}} se eliminarán de ~/.agents, ~/.claude, ~/.codex y ~/.gemini/config. También se elimina todo lo que hayas añadido dentro de esas carpetas de habilidades.",
         saveFailed: "No se pudo guardar tu selección de habilidades.",
         statusFailed: "No se puede comprobar el estado de las habilidades de orquestación.",
         updateFailed: "No se pueden actualizar las habilidades de orquestación.",
         uninstallFailed: "No se pueden desinstalar las habilidades de orquestación.",
         saveSelectionFailed: "No se puede guardar la selección de habilidades de orquestación.",
         actions: {
-          install: "Instalar",
-          installing: "Instalando...",
-          installed: "Instalado",
           update: "Actualizar",
           working: "Laboral...",
           remove: "Eliminar",
@@ -3352,7 +3645,12 @@ export const es: TranslationResources = {
         enableTools: {
           title: "Habilitar herramientas de Fulcra",
           hint: "Los agentes podrán gestionar árboles de trabajo, agentes y horarios.",
+<<<<<<< HEAD
           accessibilityLabel: "Inyectar herramientas de Fulcra",
+=======
+          accessibilityLabel: "Inyectar herramientasPaseo",
+          updateFailed: "No se pudieron actualizar las herramientas de Paseo.",
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
         },
         systemPrompt: {
           title: "Aviso del sistema",
@@ -3445,6 +3743,31 @@ export const es: TranslationResources = {
         removeConfirmMessage: '¿Eliminar "{{name}}"?',
         moveUp: "Mover hacia arriba",
         moveDown: "Mover hacia abajo",
+        searchPlaceholder: "Buscar perfiles",
+        clearSearch: "Limpiar búsqueda",
+        noSearchMatches: 'Ningún perfil coincide con "{{query}}"',
+        noRoutingNote: "Sin nota",
+        duplicate: "Duplicar",
+        copyName: "{{name}} (copia)",
+        moveToTop: "Mover al principio",
+        profileActions: "Acciones para {{name}}",
+        reorderProfile: "Reordenar {{name}}",
+        previousProfile: "Perfil anterior",
+        nextProfile: "Perfil siguiente",
+        chooseModelPlaceholder: "Seleccionar un modelo",
+        searchModelsPlaceholder: "Buscar modelos",
+        chooseModelSubtitle: "Seleccionar un modelo",
+        customizeSettings: "Personalizar ajustes",
+        addRoutingNoteShort: "Añadir una nota",
+        providerOptionsLabel: "Opciones de {{provider}}",
+        discardTitle: "¿Descartar cambios?",
+        discardMessage: "Tienes cambios sin guardar en este perfil.",
+        discardConfirm: "Descartar",
+        columns: {
+          profile: "Perfil",
+          runtime: "Modelo y ejecución",
+          whenToUse: "Cuándo usarlo",
+        },
       },
       daemon: {
         rename: {
@@ -3526,7 +3849,27 @@ export const es: TranslationResources = {
     providers: {
       title: "Proveedores",
       addProvider: "Agregar proveedor",
+<<<<<<< HEAD
       refreshModels: "Actualizar modelos",
+=======
+      list: {
+        add: "Proveedor",
+        updatingTo: "Actualizando a {{version}}...",
+      },
+      detail: {
+        backToProviders: "Volver a proveedores",
+        notOnHost: "Este proveedor no está en este host",
+        enabled: "Activado",
+        unavailableTitle: "{{name}} no está disponible",
+        troubleshooting: "Solución de problemas",
+        status: "Estado del proveedor",
+        checked: "Comprobado {{time}}",
+        diagnosticReport: "Informe de diagnóstico",
+        docs: "Documentación",
+        dangerZone: "Zona de peligro",
+        removeHint: "Elimina este proveedor de config.json",
+      },
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
       providerDetails: "Detalles del proveedor{{name}}",
       enableProvider: "Habilitar{{name}}",
       unavailable: "Conéctese a este host para ver proveedores",
@@ -3568,9 +3911,30 @@ export const es: TranslationResources = {
         retrying: "Reintentando...",
         noSearchMatches: "Ningún modelo coincide con tu búsqueda",
         noneDetected: "No se detectaron modelos",
-        discovered: "descubierto",
+        noCustom: "No hay modelos personalizados",
+        title: "Modelos",
         custom: "Modelos personalizados",
         updated: "{{time}}actualizado",
+      },
+      installation: {
+        title: "Instalación",
+        version: "Versión",
+        installed: "Instalado",
+        notInstalled: "No instalado",
+        install: "Instalar",
+        checking: "Comprobando...",
+        failed: "No se pudo comprobar la instalación",
+        updates: "Actualizaciones",
+        upToDate: "Actualizado",
+        updateAvailable: "Actualización disponible",
+        updateInstructions: "Instrucciones de actualización",
+        update: "Actualizar",
+        updating: "Actualizando...",
+        updated: "Actualizado",
+        updateFailed: "No se pudo actualizar",
+        outputTruncated: "Se descartó la salida anterior.",
+        updatesFailed: "No se pudo comprobar si hay actualizaciones",
+        installInstructions: "Instrucciones de instalación",
       },
       diagnostic: {
         title: "Diagnóstico",

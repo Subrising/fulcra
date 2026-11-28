@@ -1,15 +1,16 @@
+<<<<<<< HEAD
 import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+=======
+import { useAddHost } from "@/hosts/add-host";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
 import { useTranslation } from "react-i18next";
 import { Pressable, Text, View, ScrollView } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { QrCode, Link2, ClipboardPaste, Settings, Terminal } from "lucide-react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import type { HostProfile } from "@/types/host-connection";
 import { getHostRuntimeStore, isHostRuntimeConnected, useHosts } from "@/runtime/host-runtime";
-import { AddHostModal } from "./add-host-modal";
-import { AddRemoteSshHostModal } from "./add-remote-ssh-host-modal";
-import { PairLinkModal } from "./pair-link-modal";
 import { Button } from "@/components/ui/button";
 import { resolveAppVersion } from "@/utils/app-version";
 import { formatVersionWithPrefix } from "@/desktop/updates/desktop-updates";
@@ -142,20 +143,13 @@ function useAnyHostOnline(serverIds: string[]): string | null {
   );
 }
 
-export interface WelcomeScreenProps {
-  onHostAdded?: (profile: HostProfile) => void;
-}
-
-export function WelcomeScreen({ onHostAdded }: WelcomeScreenProps) {
+export function WelcomeScreen() {
   const { theme } = useUnistyles();
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const appVersion = resolveAppVersion();
   const appVersionText = formatVersionWithPrefix(appVersion);
-  const [isDirectOpen, setIsDirectOpen] = useState(false);
-  const [isRemoteSshOpen, setIsRemoteSshOpen] = useState(false);
-  const [isPasteLinkOpen, setIsPasteLinkOpen] = useState(false);
   const hosts = useHosts();
   const anyOnlineServerId = useAnyHostOnline(hosts.map((h) => h.serverId));
 
@@ -179,6 +173,7 @@ export function WelcomeScreen({ onHostAdded }: WelcomeScreenProps) {
     router.push("/settings");
   }, [router]);
 
+<<<<<<< HEAD
   const handleOpenDirect = useCallback(() => setIsDirectOpen(true), []);
   const handleCloseDirect = useCallback(() => setIsDirectOpen(false), []);
   const handleOpenRemoteSsh = useCallback(() => setIsRemoteSshOpen(true), []);
@@ -196,6 +191,12 @@ export function WelcomeScreen({ onHostAdded }: WelcomeScreenProps) {
     },
     [onHostAdded, finishOnboarding],
   );
+=======
+  const handleOpenDirect = useAddHost({ method: "direct", onAdded: finishOnboarding });
+  const handleOpenRemoteSsh = useAddHost({ method: "ssh", onAdded: finishOnboarding });
+  const handleOpenPasteLink = useAddHost({ method: "link", onAdded: finishOnboarding });
+  const handleScanQr = useAddHost({ method: "scan", onAdded: finishOnboarding });
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
 
   const actions: WelcomeAction[] =
     isWeb || isFdroidBuild
@@ -286,7 +287,6 @@ export function WelcomeScreen({ onHostAdded }: WelcomeScreenProps) {
 
           <Button
             variant="ghost"
-            size="sm"
             leftIcon={Settings}
             onPress={handleOpenSettings}
             style={styles.settingsButton}
@@ -296,24 +296,6 @@ export function WelcomeScreen({ onHostAdded }: WelcomeScreenProps) {
           </Button>
         </View>
         <Text style={styles.versionLabel}>{appVersionText}</Text>
-
-        <AddHostModal
-          visible={isDirectOpen}
-          onClose={handleCloseDirect}
-          onSaved={handleHostSaved}
-        />
-
-        <AddRemoteSshHostModal
-          visible={isRemoteSshOpen}
-          onClose={handleCloseRemoteSsh}
-          onSaved={handleHostSaved}
-        />
-
-        <PairLinkModal
-          visible={isPasteLinkOpen}
-          onClose={handleClosePasteLink}
-          onSaved={handleHostSaved}
-        />
       </ScrollView>
     </View>
   );

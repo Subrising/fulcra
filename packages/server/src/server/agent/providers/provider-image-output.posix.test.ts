@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import { createHash } from "node:crypto";
 import {
   openSync,
@@ -16,6 +17,18 @@ import {
   symlinkSync,
   readdirSync,
 } from "node:fs";
+=======
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import os from "node:os";
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
 import path from "node:path";
 import { describe, expect, test } from "vitest";
 
@@ -40,6 +53,7 @@ describe.skipIf(process.platform === "win32")("materializeProviderImage", () => 
   });
 });
 
+<<<<<<< HEAD
 test("confined materializer rejects hardlink replacement before touching outside bytes", () => {
   const first = materializeProviderImage({
     data: Buffer.from("hardlink-proof").toString("base64"),
@@ -177,3 +191,31 @@ test("genuine deleted root releases pool only with descriptor proof otherwise fa
     closeSync(fd);
   }
 });
+=======
+test.skipIf(process.platform === "win32")(
+  "replaces a cached attachment directory turned into a symlink",
+  async () => {
+    const image = { data: "c3ltbGluayByZWdyZXNzaW9u", mimeType: "image/png" };
+    const first = await materializeProviderImage(image);
+    const dir = path.dirname(first.path);
+    const target = mkdtempSync(path.join(os.tmpdir(), "paseo-image-symlink-test-"));
+    let replacement: string | undefined;
+    try {
+      rmSync(dir, { recursive: true });
+      // Populate the target to exercise validation before accepting a cache hit.
+      writeFileSync(path.join(target, path.basename(first.path)), "symlink target");
+      symlinkSync(target, dir, "dir");
+
+      const second = await materializeProviderImage(image);
+      replacement = path.dirname(second.path);
+      expect(replacement).not.toBe(dir);
+      expect(path.basename(replacement)).toMatch(/^paseo-attachments-/);
+      expect(readFileSync(second.path, "utf8")).toBe("symlink regression");
+    } finally {
+      if (replacement && replacement !== dir) rmSync(replacement, { recursive: true });
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(target, { recursive: true, force: true });
+    }
+  },
+);
+>>>>>>> refs/remotes/upstream/tags/v0.17.5

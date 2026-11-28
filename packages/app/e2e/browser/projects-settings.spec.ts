@@ -45,12 +45,17 @@ import {
   unblockPaseoConfigWrites,
 } from "../support/helpers/project-settings";
 import { gotoAppShell } from "../support/helpers/app";
+<<<<<<< HEAD
 import { openCompactSettings, openSettingsAdvanced } from "../support/helpers/settings";
 import {
   addProjectFlowInput,
   chooseAddProjectMethod,
   openAddProjectFlow,
 } from "../support/helpers/add-project-flow";
+=======
+import { openCompactSettings } from "../support/helpers/settings";
+import { addProjectFlowInput, openAddProjectFlow } from "../support/helpers/add-project-flow";
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
 import { createTempGitRepo } from "../support/helpers/workspace";
 import {
   buildOpenProjectRoute,
@@ -167,7 +172,6 @@ async function readProjectConfigFile(project: ProjectsSettingsProject): Promise<
 
 async function addProjectFromSidebar(page: Page, projectPath: string): Promise<string> {
   await openAddProjectFlow(page);
-  await chooseAddProjectMethod(page, "directory-search");
 
   const input = addProjectFlowInput(page);
   await input.fill(projectPath);

@@ -10,6 +10,8 @@ log.initialize({ spyRendererConsole: true });
 import { inheritLoginShellEnv } from "./login-shell-env.js";
 
 import path from "node:path";
+import { randomBytes, randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import { pathToFileURL } from "node:url";
 import { existsSync } from "node:fs";
 import { execGitCommandSync } from "@getpaseo/plugin/server/git";
@@ -45,10 +47,14 @@ import {
   buildStandardContextMenuItems,
 } from "./window/window-manager.js";
 import { setupDarwinCompositorWatchdog } from "./window/compositor-watchdog/index.js";
+<<<<<<< HEAD
 import {
   logChildProcessGone,
   setupRendererCrashRecovery,
 } from "./window/renderer-crash-recovery.js";
+=======
+import { reloadWhenRendererExits } from "./window/renderer-recovery.js";
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
 import { showWindowWhenReady } from "./window/show-when-ready.js";
 import { resolveDesktopWindowChromeMode, windowChromeModeArgument } from "./window/chrome.js";
 import { registerDialogHandlers } from "./features/dialogs.js";
@@ -107,7 +113,7 @@ import {
 import { runDesktopStartup } from "./desktop-startup.js";
 import { registerBrowserAutomationIpc } from "./features/browser-automation/ipc.js";
 import { BrowserKeyboard } from "./features/browser-keyboard/index.js";
-import { installAppUpdateOnQuit } from "./features/auto-updater.js";
+import { installAppUpdateOnQuit, startAppUpdatePacing } from "./features/auto-updater.js";
 import {
   buildAgentDeepLinkRoute,
   parseAgentDeepLink,
@@ -681,6 +687,14 @@ function getWorkAreasPrimaryFirst(): Electron.Rectangle[] {
   return [primary, ...others].map((display) => display.workArea);
 }
 
+const browserHostComputerName =
+  hostname()
+    .replace(/\.local$/i, "")
+    .trim()
+    .slice(0, 120) || "Desktop";
+const browserHostSessionCode = randomBytes(3).toString("hex").toUpperCase();
+let browserHostWindowNumber = 0;
+
 async function createWindow(
   options: {
     initialRoute?: string | null;
@@ -704,7 +718,12 @@ async function createWindow(
     ? clampWindowStateToWorkAreas(savedWindowState, getWorkAreasPrimaryFirst())
     : null;
 
+<<<<<<< HEAD
   const title = devWorktreeName ? `${APP_DISPLAY_NAME} (${devWorktreeName})` : APP_DISPLAY_NAME;
+=======
+  const title = devWorktreeName ? `${APP_NAME} (${devWorktreeName})` : APP_NAME;
+  const browserHostLabel = `${browserHostComputerName} · Window ${++browserHostWindowNumber} (${browserHostSessionCode})`;
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
   const mainWindow = new BrowserWindow({
     title,
     ...resolveWindowBounds(restoredWindowState),
@@ -717,7 +736,11 @@ async function createWindow(
     }),
     webPreferences: {
       preload: getPreloadPath(),
-      additionalArguments: [windowChromeModeArgument(DESKTOP_WINDOW_CHROME_MODE)],
+      additionalArguments: [
+        windowChromeModeArgument(DESKTOP_WINDOW_CHROME_MODE),
+        `--paseo-browser-host-label=${browserHostLabel}`,
+        `--paseo-browser-host-instance-id=${randomUUID()}`,
+      ],
       contextIsolation: true,
       nodeIntegration: false,
       webviewTag: true,
@@ -749,7 +772,11 @@ async function createWindow(
   }
 
   setupDarwinCompositorWatchdog(mainWindow);
+<<<<<<< HEAD
   setupRendererCrashRecovery(mainWindow, { logger: log });
+=======
+  reloadWhenRendererExits(mainWindow);
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
   setupWindowResizeEvents(mainWindow);
   if (windowStateStore) {
     setupWindowStatePersistence(mainWindow, windowStateStore);
@@ -971,6 +998,7 @@ async function bootstrap(): Promise<void> {
   }
 
   await app.whenReady();
+  void startAppUpdatePacing();
 
   const appDistDir = getAppDistDir();
   protocol.handle(APP_SCHEME, (request) => {
@@ -1085,10 +1113,18 @@ const quitLifecycle = createQuitLifecycle({
       showShutdownFeedback: showDaemonShutdownDialog,
     }),
   installAppUpdateOnQuit: async (signal) => {
-    const settings = await getDesktopSettingsStore().get();
+    let releaseChannel: "stable" | "beta" = "stable";
+    try {
+      releaseChannel = (await getDesktopSettingsStore().get()).releaseChannel;
+    } catch (error) {
+      log.warn(
+        "[auto-updater] Failed to read desktop settings on quit, defaulting to stable:",
+        error,
+      );
+    }
     return installAppUpdateOnQuit({
       currentVersion: app.getVersion(),
-      releaseChannel: settings.releaseChannel,
+      releaseChannel,
       signal,
     });
   },

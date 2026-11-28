@@ -1,26 +1,32 @@
+import { useOverlayRegistration, type KeyboardInputEvent } from "@/keyboard";
+import { useAddHost } from "@/hosts/add-host";
 import { Modal } from "@/components/ui/modal";
-import { usePanelStore } from "@/stores/panel-store";
 import { createElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView, Text, View, type PressableStateCallbackType } from "react-native";
 import {
   EditingTextInput as TextInput,
   type EditingTextInputHandle,
 } from "@/components/ui/text-input";
-import { router } from "expo-router";
-import { Server } from "lucide-react-native";
 import { create } from "zustand";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
-import { HostStatusDotSlot } from "@/components/hosts/host-picker";
+import { HostStatusDot } from "@/components/host-status-dot";
 import { isWeb } from "@/constants/platform";
 import { useLocalDaemonServerId } from "@/hooks/use-is-local-daemon";
+<<<<<<< HEAD
 import {
   OverlayLayerProvider,
   useGlobalWebOverlayLayer,
   useWebOverlayRegistration,
 } from "@/lib/overlay-root";
 import { useHosts, useHostRuntimeSnapshot } from "@/runtime/host-runtime";
+=======
+import { resolveHostIcon } from "@/hosts/appearance";
+import { HostConnectionLine, HostIconGlyph, HostLatencyLabel } from "@/hosts/host-icon";
+import { OverlayLayerProvider, useGlobalOverlayLayer } from "@/lib/overlay-root";
+import { getHostRuntimeStore, useHosts } from "@/runtime/host-runtime";
+import { useSessionStore } from "@/stores/session-store";
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
 import { orderHostsLocalFirst, type HostProfile } from "@/types/host-connection";
-import { buildSettingsAddHostRoute } from "@/utils/host-routes";
 
 type HostFilter = (host: HostProfile) => boolean;
 type HostChoiceHandler = (serverId: string) => void | Promise<void>;
@@ -65,6 +71,7 @@ function matchesHostQuery(host: HostProfile, query: string): boolean {
 }
 
 export function useHostChooser() {
+  const addHost = useAddHost();
   const hosts = useHosts();
   const localServerId = useLocalDaemonServerId();
   const open = useHostChooserStore((state) => state.open);
@@ -76,13 +83,7 @@ export function useHostChooser() {
       );
 
       if (availableHosts.length === 0) {
-        (
-          input.onNoHosts ??
-          (() => {
-            usePanelStore.getState().showMobileAgent();
-            router.push(buildSettingsAddHostRoute(Date.now()));
-          })
-        )();
+        (input.onNoHosts ?? addHost)();
         return false;
       }
 
@@ -98,7 +99,7 @@ export function useHostChooser() {
       });
       return true;
     },
-    [hosts, localServerId, open],
+    [hosts, localServerId, open, addHost],
   );
 }
 
@@ -111,18 +112,29 @@ function HostChooserRow({
   active: boolean;
   onChooseHost: (serverId: string) => void;
 }) {
+<<<<<<< HEAD
   const { theme } = useUnistyles();
   const pairingRequired = useHostRuntimeSnapshot(host.serverId)?.pairingRequired;
+=======
+  const detectedMachineKind = useSessionStore(
+    (state) => state.sessions[host.serverId]?.serverInfo?.machineKind ?? null,
+  );
+  const resolvedIcon = resolveHostIcon({ appearance: host.appearance, detectedMachineKind });
+  const [hovered, setHovered] = useState(false);
+  const handlePointerEnter = useCallback(() => setHovered(true), []);
+  const handlePointerLeave = useCallback(() => setHovered(false), []);
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
   const handlePress = useCallback(() => onChooseHost(host.serverId), [host.serverId, onChooseHost]);
   const rowStyle = useCallback(
-    ({ hovered = false, pressed }: PressableStateCallbackType & { hovered?: boolean }) => [
+    ({ pressed }: PressableStateCallbackType) => [
       styles.row,
       (active || hovered || pressed) && styles.rowActive,
     ],
-    [active],
+    [active, hovered],
   );
 
   return (
+<<<<<<< HEAD
     <Pressable
       accessibilityRole="button"
       onPress={handlePress}
@@ -142,6 +154,37 @@ function HostChooserRow({
       </View>
       <Server size={theme.iconSize.sm} color={theme.colors.foregroundMuted} />
     </Pressable>
+=======
+    <View onPointerEnter={handlePointerEnter} onPointerLeave={handlePointerLeave}>
+      <Pressable
+        accessibilityRole="button"
+        onPress={handlePress}
+        style={rowStyle}
+        testID={`host-chooser-row-${host.serverId}`}
+      >
+        <View style={styles.rowIconSlot}>
+          <HostStatusDot serverId={host.serverId} />
+        </View>
+        <View style={styles.rowText}>
+          <View style={styles.rowHeader}>
+            <HostIconGlyph
+              icon={resolvedIcon}
+              color={host.appearance.color}
+              size={14}
+              style={styles.rowGlyph}
+            />
+            <Text style={styles.rowTitle} numberOfLines={1}>
+              {host.label}
+            </Text>
+          </View>
+          <HostConnectionLine serverId={host.serverId} />
+        </View>
+        <View style={styles.rowTrailing}>
+          <HostLatencyLabel serverId={host.serverId} />
+        </View>
+      </Pressable>
+    </View>
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
   );
 }
 
@@ -153,7 +196,7 @@ export function HostChooserModal() {
   const inputRef = useRef<EditingTextInputHandle>(null);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
-  const modalLayer = useGlobalWebOverlayLayer("modal", isWeb && request != null);
+  const modalLayer = useGlobalOverlayLayer("modal", request != null);
 
   const requestHosts = useMemo(() => {
     if (!request) return [];
@@ -172,6 +215,7 @@ export function HostChooserModal() {
 
   useEffect(() => {
     if (!request) return;
+    getHostRuntimeStore().refreshActiveLatencies(request.serverIds);
     inputRef.current?.replaceText("");
     setQuery("");
     setActiveIndex(0);
@@ -194,8 +238,8 @@ export function HostChooserModal() {
     [close, request],
   );
 
-  const handleWebOverlayKeyDown = useCallback(
-    (event: KeyboardEvent) => {
+  const handleOverlayKeyDown = useCallback(
+    (event: KeyboardInputEvent) => {
       if (
         event.key !== "ArrowDown" &&
         event.key !== "ArrowUp" &&
@@ -235,51 +279,56 @@ export function HostChooserModal() {
     },
     [activeOptionIndex, chooseHost, close, options],
   );
-  const setWebOverlayScope = useWebOverlayRegistration({
-    active: isWeb && request != null,
+  const setOverlayScope = useOverlayRegistration({
+    keys: ["Escape", "Enter", "ArrowUp", "ArrowDown"],
+    active: request != null,
     layer: modalLayer,
-    onKeyDown: handleWebOverlayKeyDown,
+    onKeyDown: handleOverlayKeyDown,
   });
 
   if (!request) return null;
 
   const modal = (
     <Modal visible transparent animationType="fade" onRequestClose={close} testID="host-chooser">
-      <View style={styles.overlay}>
-        <Pressable style={styles.backdrop} onPress={close} />
-        <View ref={setWebOverlayScope} style={styles.panel}>
-          <View style={styles.header}>
-            <Text style={styles.title}>{request.title}</Text>
-            <TextInput
-              ref={inputRef}
-              initialValue={query}
-              onChangeText={handleQueryChange}
-              placeholder="Search hosts..."
-              placeholderTextColor={theme.colors.foregroundMuted}
-              style={styles.input}
-              autoCapitalize="none"
-              autoCorrect={false}
-              testID="host-chooser-search"
-            />
-          </View>
-          <ScrollView
-            style={styles.results}
-            contentContainerStyle={styles.resultsContent}
-            keyboardShouldPersistTaps="always"
-            showsVerticalScrollIndicator={false}
-          >
-            {options.length === 0 ? <Text style={styles.emptyText}>No matching hosts</Text> : null}
-            {options.map((host, index) => (
-              <HostChooserRow
-                key={host.serverId}
-                host={host}
-                active={index === activeOptionIndex}
-                onChooseHost={chooseHost}
+      <OverlayLayerProvider layer={modalLayer}>
+        <View style={styles.overlay}>
+          <Pressable style={styles.backdrop} onPress={close} />
+          <View ref={setOverlayScope} style={styles.panel}>
+            <View style={styles.header}>
+              <Text style={styles.title}>{request.title}</Text>
+              <TextInput
+                ref={inputRef}
+                initialValue={query}
+                onChangeText={handleQueryChange}
+                placeholder="Search hosts..."
+                placeholderTextColor={theme.colors.foregroundMuted}
+                style={styles.input}
+                autoCapitalize="none"
+                autoCorrect={false}
+                testID="host-chooser-search"
               />
-            ))}
-          </ScrollView>
+            </View>
+            <ScrollView
+              style={styles.results}
+              contentContainerStyle={styles.resultsContent}
+              keyboardShouldPersistTaps="always"
+              showsVerticalScrollIndicator={false}
+            >
+              {options.length === 0 ? (
+                <Text style={styles.emptyText}>No matching hosts</Text>
+              ) : null}
+              {options.map((host, index) => (
+                <HostChooserRow
+                  key={host.serverId}
+                  host={host}
+                  active={index === activeOptionIndex}
+                  onChooseHost={chooseHost}
+                />
+              ))}
+            </ScrollView>
+          </View>
         </View>
-      </View>
+      </OverlayLayerProvider>
     </Modal>
   );
 
@@ -334,7 +383,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   row: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     gap: theme.spacing[3],
     minHeight: 56,
     paddingHorizontal: theme.spacing[4],
@@ -343,19 +392,39 @@ const styles = StyleSheet.create((theme) => ({
   rowActive: {
     backgroundColor: theme.colors.surface1,
   },
+  rowTrailing: {
+    flexDirection: "row",
+    alignItems: "center",
+    height: 20,
+    flexShrink: 0,
+  },
   rowIconSlot: {
-    width: 18,
+    width: 16,
+    height: 20,
     alignItems: "center",
     justifyContent: "center",
+    flexShrink: 0,
   },
   rowText: {
     flex: 1,
     minWidth: 0,
     gap: theme.spacing[1],
   },
+  rowHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    minWidth: 0,
+  },
+  rowGlyph: {
+    flexShrink: 0,
+  },
   rowTitle: {
+    flex: 1,
+    minWidth: 0,
     color: theme.colors.foreground,
     fontSize: theme.fontSize.base,
+    lineHeight: 20,
   },
   rowSubtitle: {
     color: theme.colors.foregroundMuted,

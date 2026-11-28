@@ -1,7 +1,16 @@
+<<<<<<< HEAD
 import { limitChildOutput } from "./child-output-limit.js";
 import { trackOwnedDetachedProcess } from "./tree-kill.js";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { spawnProcess as spawnCli, execCommand as execCli } from "@getpaseo/plugin/server";
+=======
+import type { ChildProcess } from "node:child_process";
+import {
+  spawnProcess as spawnCli,
+  execCommand as execCli,
+  type SpawnProcessOptions as CliSpawnOptions,
+} from "@getpaseo/plugin/server";
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
 import { createExternalCommandProcessEnv, type ProcessEnvRecord } from "../server/paseo-env.js";
 
 interface ExternalEnvOptions {
@@ -11,7 +20,7 @@ interface ExternalEnvOptions {
   envOverlay?: ProcessEnvRecord;
 }
 
-export type SpawnProcessOptions = Omit<SpawnOptions, "env"> & ExternalEnvOptions;
+export type SpawnProcessOptions = Omit<CliSpawnOptions, "env"> & ExternalEnvOptions;
 
 interface ExecCommandOptions extends ExternalEnvOptions {
   cwd?: string;

@@ -5,6 +5,7 @@ import { useMemo } from "react";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { navigateToWorkspace } from "@/stores/navigation-active-workspace-store";
 import { navigateToAgent } from "@/utils/navigate-to-agent";
+import { getHostRuntimeStore } from "@/runtime/host-runtime";
 
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { openExplorerSidebarView } from "@/workspace-tabs/explorer-sidebar";
@@ -12,6 +13,7 @@ import { buildWorkspaceTabPersistenceKey } from "@/workspace-tabs/model";
 import { getIsElectron } from "@/constants/platform";
 import { createWorkspaceBrowser } from "@/desktop/browser/store";
 import { createPluginHostNavigation } from "./host-navigation-model";
+import { useSidebarViewStore } from "@/stores/sidebar-view-store";
 
 function readChangesWorkspace(serverId: string, agentId: string) {
   const session = useSessionStore.getState().sessions[serverId];
@@ -35,9 +37,14 @@ export function usePluginHostNavigation(
     () => ({
       ...createPluginHostNavigation(serverId, {
         browserAvailable: getIsElectron(),
+        isHostRegistered: (targetServerId) =>
+          getHostRuntimeStore()
+            .getHosts()
+            .some((host) => host.serverId === targetServerId),
         openAgent: navigateToAgent,
         openWorkspace: navigateToWorkspace,
         createBrowser: createWorkspaceBrowser,
+        focusHost: (targetServerId) => useSidebarViewStore.getState().focusHost(targetServerId),
         resolveWorkspace: ({ serverId: targetServerId, workspaceId }) =>
           resolveWorkspaceMapKeyByIdentity({
             workspaces: useSessionStore.getState().sessions[targetServerId]?.workspaces,

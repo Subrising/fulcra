@@ -4,7 +4,6 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowUpToLine,
-  ChevronRight,
   Globe,
   Monitor,
   Pencil,
@@ -16,16 +15,17 @@ import {
 import type { TFunction } from "i18next";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Alert, Pressable, Text, View } from "react-native";
+import { Alert, Text, View } from "react-native";
 import { StyleSheet, useUnistyles, withUnistyles } from "react-native-unistyles";
 import type { TerminalProfile } from "@getpaseo/protocol/messages";
 import {
   getTerminalProfileIcon,
   DEFAULT_TERMINAL_PROFILES,
 } from "@getpaseo/protocol/terminal-profiles";
-import { AgentProfilesSection } from "@/agent-profiles";
+import { AgentProfilesPage, type AgentProfilesBeforeLeaveGuard } from "@/agent-profiles";
 import { AgentSkillsSection } from "@/agent-skills";
 import { AdaptiveModalSheet, type SheetHeader } from "@/components/adaptive-modal-sheet";
+import { PageLayout } from "@/components/page-layout";
 import { SettingsTextAreaCard } from "@/components/settings-textarea";
 import { Alert as InlineAlert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -39,7 +39,7 @@ import { startDesktopDaemon, stopDesktopDaemon } from "@/desktop/daemon/desktop-
 import { LocalDaemonSection } from "@/desktop/components/desktop-updates-section";
 import { useDaemonStatus } from "@/desktop/hooks/use-daemon-status";
 import { useDesktopSettings } from "@/desktop/settings/desktop-settings";
-import { PairDeviceModal } from "@/desktop/components/pair-device-modal";
+import { WaysToConnect } from "@/devices";
 import { useDaemonConfig } from "@/hooks/use-daemon-config";
 import { useIsLocalDaemon } from "@/hooks/use-is-local-daemon";
 import {
@@ -51,7 +51,8 @@ import {
   useHostRuntimeSnapshot,
   useHosts,
 } from "@/runtime/host-runtime";
-import { ProvidersSection } from "@/screens/settings/providers-section";
+import { ProviderList } from "@/provider-settings";
+import { openProviderSettings } from "@/navigation/settings-navigation";
 import { HostUsageSection } from "@/usage";
 import { HostAppearanceSection } from "@/screens/settings/host-appearance-section";
 import { ReplaceOldHostCard } from "@/components/hosts/replace-old-host";
@@ -72,6 +73,7 @@ import { ICON_SIZE } from "@/styles/theme";
 import type { Theme } from "@/styles/theme";
 import { useProviderIcon } from "@/components/provider-icons";
 import { BrowserToolsOptInCard } from "./browser-tools-card";
+import { PaseoToolsCard } from "./paseo-tools-card";
 import { RestartRecoveryCard } from "./restart-recovery-card";
 import { IdleRuntimeCleanupCard } from "./idle-runtime-cleanup-card";
 import { restartDaemonFromSettings, updateDaemonFromSettings } from "./daemon-lifecycle";
@@ -269,19 +271,14 @@ export function HostConnectionsPage({ serverId }: { serverId: string }) {
   );
 }
 
-export function HostPairDevicePage({ serverId }: { serverId: string }) {
-  const { t } = useTranslation();
+export function HostDevicesPage({ serverId }: { serverId: string }) {
   const host = useHostProfile(serverId);
 
   if (!host) {
     return <HostNotFound />;
   }
 
-  return (
-    <SettingsSection title={t("settings.host.pairDevices.title")}>
-      <PairDeviceRow serverId={serverId} />
-    </SettingsSection>
-  );
+  return <WaysToConnect serverId={serverId} />;
 }
 
 export function HostAgentsPage({ serverId }: { serverId: string }) {
@@ -297,7 +294,7 @@ export function HostAgentsPage({ serverId }: { serverId: string }) {
     <View>
       {isConnected ? (
         <SettingsSection title={t("settings.hostSections.agents")}>
-          <InjectPaseoToolsCard serverId={serverId} />
+          <PaseoToolsCard serverId={serverId} />
           <BrowserToolsOptInCard serverId={serverId} />
           <AppendSystemPromptCard serverId={serverId} />
           <RestartRecoveryCard serverId={serverId} />
@@ -309,8 +306,40 @@ export function HostAgentsPage({ serverId }: { serverId: string }) {
         </View>
       )}
       <AgentSkillsSection serverId={serverId} />
-      <AgentProfilesSection serverId={serverId} />
     </View>
+  );
+}
+
+export function HostAgentProfilesPage({
+  serverId,
+  onBack,
+  onRegisterBeforeLeave,
+}: {
+  serverId: string;
+  onBack?: () => void;
+  onRegisterBeforeLeave?: (guard: AgentProfilesBeforeLeaveGuard | null) => void;
+}) {
+  const { t } = useTranslation();
+  const host = useHostProfile(serverId);
+
+  if (!host) {
+    return (
+      <PageLayout
+        title={t("settings.host.agentProfiles.sectionTitle")}
+        onBack={onBack}
+        titleTestID="settings-detail-header-title"
+      >
+        <HostNotFound />
+      </PageLayout>
+    );
+  }
+
+  return (
+    <AgentProfilesPage
+      serverId={serverId}
+      onBack={onBack}
+      onRegisterBeforeLeave={onRegisterBeforeLeave}
+    />
   );
 }
 
@@ -342,6 +371,10 @@ export function HostWorkspacesPage({ serverId }: { serverId: string }) {
 
 export function HostProvidersPage({ serverId }: { serverId: string }) {
   const host = useHostProfile(serverId);
+  const openProvider = useCallback(
+    (providerId: string) => openProviderSettings(serverId, providerId),
+    [serverId],
+  );
 
   if (!host) {
     return <HostNotFound />;
@@ -349,7 +382,7 @@ export function HostProvidersPage({ serverId }: { serverId: string }) {
 
   return (
     <View>
-      <ProvidersSection serverId={serverId} />
+      <ProviderList serverId={serverId} onOpenProvider={openProvider} />
     </View>
   );
 }
@@ -484,7 +517,6 @@ function ConnectionsSection({ host }: { host: HostProfile }) {
           <View style={styles.confirmActions}>
             <Button
               variant="secondary"
-              size="sm"
               style={FLEX_1_STYLE}
               onPress={handleCancelConfirm}
               disabled={isRemovingConnection}
@@ -493,7 +525,6 @@ function ConnectionsSection({ host }: { host: HostProfile }) {
             </Button>
             <Button
               variant="destructive"
-              size="sm"
               style={FLEX_1_STYLE}
               onPress={handleConfirmRemove}
               disabled={isRemovingConnection}
@@ -560,12 +591,7 @@ function ConnectionRow({
         </Text>
       </View>
       <Text style={latencyTextStyle}>{latencyText}</Text>
-      <Button
-        variant="ghost"
-        size="sm"
-        textStyle={destructiveTextStyle}
-        onPress={handlePressRemove}
-      >
+      <Button variant="ghost" textStyle={destructiveTextStyle} onPress={handlePressRemove}>
         {t("settings.host.connections.removeAction")}
       </Button>
     </View>
@@ -683,7 +709,6 @@ function RestartDaemonCard({ host }: { host: HostProfile }) {
         </View>
         <Button
           variant="outline"
-          size="sm"
           leftIcon={restartIcon}
           onPress={handleRestart}
           disabled={isRestarting || !daemonClient || !isConnected}
@@ -703,7 +728,6 @@ function RestartDaemonCard({ host }: { host: HostProfile }) {
           </View>
           <Button
             variant="outline"
-            size="sm"
             onPress={handleRestartAndCloseTerminals}
             disabled={isRestarting || !daemonClient || !isConnected}
             testID="host-page-restart-close-terminals-button"
@@ -887,7 +911,6 @@ function UpdateDaemonCard({ host }: { host: HostProfile }) {
         </View>
         <Button
           variant="outline"
-          size="sm"
           leftIcon={updateIcon}
           onPress={handleUpdate}
           disabled={desktopManaged || isUpdating || !daemonClient || !isConnected}
@@ -917,45 +940,6 @@ function UpdateDaemonCard({ host }: { host: HostProfile }) {
           />
         </View>
       ) : null}
-    </View>
-  );
-}
-
-function InjectPaseoToolsCard({ serverId }: { serverId: string }) {
-  const { t } = useTranslation();
-  const isConnected = useHostRuntimeIsConnected(serverId);
-  const { config, patchConfig } = useDaemonConfig(serverId);
-
-  const handleValueChange = useCallback(
-    (next: boolean) => {
-      void patchConfig({
-        mcp: {
-          injectIntoAgents: next,
-        },
-      });
-    },
-    [patchConfig],
-  );
-
-  if (!isConnected) return null;
-
-  return (
-    <View style={settingsStyles.card} testID="host-page-inject-mcp-card">
-      <View style={settingsStyles.row}>
-        <View style={settingsStyles.rowContent}>
-          <Text style={settingsStyles.rowTitle}>
-            {t("settings.host.orchestration.enableTools.title")}
-          </Text>
-          <Text style={settingsStyles.rowHint}>
-            {t("settings.host.orchestration.enableTools.hint")}
-          </Text>
-        </View>
-        <Switch
-          value={config?.mcp.injectIntoAgents !== false}
-          onValueChange={handleValueChange}
-          accessibilityLabel={t("settings.host.orchestration.enableTools.accessibilityLabel")}
-        />
-      </View>
     </View>
   );
 }
@@ -1102,7 +1086,6 @@ function AppendSystemPromptCard({ serverId }: { serverId: string }) {
           </View>
           <Button
             variant="outline"
-            size="sm"
             onPress={handleOpen}
             testID="host-page-append-system-prompt-edit"
           >
@@ -1129,7 +1112,6 @@ function AppendSystemPromptCard({ serverId }: { serverId: string }) {
           <View style={styles.appendPromptActions}>
             <Button
               variant="ghost"
-              size="sm"
               onPress={handleReset}
               disabled={!hasChanges || isSaving}
               testID="host-page-append-system-prompt-reset"
@@ -1138,7 +1120,6 @@ function AppendSystemPromptCard({ serverId }: { serverId: string }) {
             </Button>
             <Button
               variant="default"
-              size="sm"
               onPress={handleSave}
               disabled={!hasChanges || isSaving}
               testID="host-page-append-system-prompt-save"
@@ -1151,39 +1132,6 @@ function AppendSystemPromptCard({ serverId }: { serverId: string }) {
         </AdaptiveModalSheet>
       ) : null}
     </>
-  );
-}
-
-function PairDeviceRow({ serverId }: { serverId: string }) {
-  const { t } = useTranslation();
-  const { theme } = useUnistyles();
-  const [isModalOpen, setIsModalOpen] = useState(false);
-
-  const handleOpen = useCallback(() => setIsModalOpen(true), []);
-  const handleClose = useCallback(() => setIsModalOpen(false), []);
-
-  return (
-    <View style={settingsStyles.card}>
-      <Pressable
-        style={settingsStyles.row}
-        onPress={handleOpen}
-        accessibilityRole="button"
-        testID="host-page-pair-device-row"
-      >
-        <View style={settingsStyles.rowContent}>
-          <Text style={settingsStyles.rowTitle}>{t("settings.host.pairDevices.rowTitle")}</Text>
-          <Text style={settingsStyles.rowHint}>{t("settings.host.pairDevices.rowHint")}</Text>
-        </View>
-        <ChevronRight size={theme.iconSize.sm} color={theme.colors.foregroundMuted} />
-      </Pressable>
-
-      <PairDeviceModal
-        serverId={serverId}
-        visible={isModalOpen}
-        onClose={handleClose}
-        testID="host-page-pair-device-card"
-      />
-    </View>
   );
 }
 
@@ -1326,7 +1274,6 @@ function RemoveHostSection({
           </View>
           <Button
             variant="outline"
-            size="sm"
             leftIcon={removeIcon}
             textStyle={destructiveTextStyle}
             onPress={handleOpenConfirm}
@@ -1352,7 +1299,6 @@ function RemoveHostSection({
           <View style={styles.confirmActions}>
             <Button
               variant="secondary"
-              size="sm"
               style={FLEX_1_STYLE}
               onPress={handleCancel}
               disabled={isRemoving}
@@ -1361,7 +1307,6 @@ function RemoveHostSection({
             </Button>
             <Button
               variant="destructive"
-              size="sm"
               style={FLEX_1_STYLE}
               onPress={handleConfirmRemove}
               disabled={isRemoving}
@@ -1457,7 +1402,6 @@ function TerminalProfileRow({
       <View style={terminalProfileStyles.rowActions}>
         <Button
           variant="ghost"
-          size="sm"
           leftIcon={moveUpIcon}
           onPress={handleMoveUp}
           disabled={isFirst}
@@ -1466,7 +1410,6 @@ function TerminalProfileRow({
         />
         <Button
           variant="ghost"
-          size="sm"
           leftIcon={moveDownIcon}
           onPress={handleMoveDown}
           disabled={isLast}
@@ -1475,7 +1418,6 @@ function TerminalProfileRow({
         />
         <Button
           variant="ghost"
-          size="sm"
           leftIcon={editProfileIcon}
           onPress={handleEdit}
           accessibilityLabel={t("settings.host.terminalProfiles.editProfile")}
@@ -1483,7 +1425,6 @@ function TerminalProfileRow({
         />
         <Button
           variant="ghost"
-          size="sm"
           leftIcon={removeProfileIcon}
           onPress={handleRemove}
           accessibilityLabel={t("settings.host.terminalProfiles.remove")}
@@ -1649,7 +1590,6 @@ function TerminalProfilesSection({ serverId }: { serverId: string }) {
     () => (
       <Button
         variant="ghost"
-        size="sm"
         leftIcon={addProfileIcon}
         onPress={handleAddOpen}
         disabled={!isConnected || !profiles}

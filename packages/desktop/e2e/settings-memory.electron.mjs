@@ -9,6 +9,7 @@ const MAX_TRANSIENT_DETACHED_PANES = 2;
 // Fulcra's Settings menu: every entry except the first two sits behind "Show advanced settings".
 // `title` is the label of the row and the title of the detail header.
 const SETTINGS_DESTINATIONS = [
+<<<<<<< HEAD
   { testId: "settings-section-general", title: "Appearance & language" },
   { testId: "settings-section-notifications", title: "Notifications" },
   { testId: "settings-section-behaviour", title: "Sending & opening" },
@@ -33,6 +34,32 @@ const SETTINGS_DESTINATIONS = [
   { testId: "settings-host-section-usage", title: "Usage" },
   { testId: "settings-host-section-terminals", title: "Terminal profiles" },
   { testId: "settings-host-section-plugins", title: "Plugins" },
+=======
+  "General",
+  "Appearance",
+  "Sidebar",
+  "Chat",
+  "Terminal",
+  "Browser",
+  "Editor",
+  "Shortcuts",
+  "Integrations",
+  "Notifications",
+  "Permissions",
+  "Diagnostics",
+  "About",
+  "Overview",
+  "Projects",
+  "Connections",
+  "Devices",
+  "Agents",
+  "Metadata",
+  "Workspaces",
+  "Providers",
+  "Usage",
+  "Terminals",
+  "Plugins",
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
 ];
 
 function assert(condition, message) {

@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
-import type { AutocompleteOption } from "@/components/ui/autocomplete";
+import type { AutocompleteOption, AutocompleteStatus } from "@/components/ui/autocomplete";
+import { findHighlightRanges } from "@/components/ui/highlighted-text-segments";
 import {
   useAutocompleteCommands,
   type AgentSlashCommand,
@@ -12,8 +13,15 @@ import {
 import { orderAutocompleteOptions } from "@/components/ui/autocomplete-utils";
 import { useAutocomplete } from "./use-autocomplete";
 import { useSessionStore } from "@/stores/session-store";
+<<<<<<< HEAD
 import { useHostRuntimeClient, useHostRuntimeIsConnected, useHosts } from "@/runtime/host-runtime";
 import { hostDisplayName } from "@/hosts/host-display-name";
+=======
+import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
+import { useProvidersSnapshot } from "@/hooks/use-providers-snapshot";
+import { pluginDisplayName, usePluginList } from "@/plugins/plugin-list";
+import { resolveProviderLabel } from "@/utils/provider-definitions";
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
 import { CLIENT_SLASH_COMMANDS, type ClientSlashCommand } from "@/client-slash-commands";
 import type { PluginClientSlashCommand } from "@/plugins/client-slash-commands";
 import { mergeSlashCommandSources } from "@/plugins/client-slash-commands/model";
@@ -72,10 +80,8 @@ interface AgentAutocompleteResult {
   isVisible: boolean;
   options: AutocompleteOption[];
   selectedIndex: number;
-  isLoading: boolean;
-  errorMessage?: string;
-  loadingText: string;
-  emptyText: string;
+  /** Shown in place of options; set exactly when `options` is empty. */
+  status: AutocompleteStatus | null;
   onSelectOption: (option: AutocompleteOption, input?: AgentAutocompleteInputSnapshot) => void;
   onKeyPress: (event: AgentAutocompleteKeyPressEvent) => boolean;
 }
@@ -134,14 +140,14 @@ function resolveDraftQueryConfig(draft?: DraftCommandTarget): DraftCommandConfig
   const modeId = draftConfig.modeId?.trim() ?? "";
   const model = draftConfig.model?.trim() ?? "";
   const thinkingOptionId = draftConfig.thinkingOptionId?.trim() ?? "";
-  const featureValues = draftConfig.featureValues;
+  const providerOptions = draftConfig.providerOptions;
   return {
     provider: draftConfig.provider,
     cwd,
     ...(modeId ? { modeId } : {}),
     ...(model ? { model } : {}),
     ...(thinkingOptionId ? { thinkingOptionId } : {}),
-    ...(featureValues && Object.keys(featureValues).length > 0 ? { featureValues } : {}),
+    ...(providerOptions && Object.keys(providerOptions).length > 0 ? { providerOptions } : {}),
   };
 }
 
@@ -168,39 +174,69 @@ function mapDirectorySuggestionsToEntries(payload: {
   }));
 }
 
-function mapCommandToOption(entry: AvailableCommand, t: TFunction): AgentAutocompleteOption {
+const CLIENT_COMMAND_ICONS = {
+  "archive-agent": "archive",
+  "replace-agent-with-draft": "new-draft",
+} as const satisfies Record<ClientSlashCommand["kind"], AutocompleteOption["icon"]>;
+
+interface CommandOptionContext {
+  query: string;
+  pluginNames: ReadonlyMap<string, string>;
+  t: TFunction;
+}
+
+function mapCommandToOption(
+  entry: AvailableCommand,
+  context: CommandOptionContext,
+): AgentAutocompleteOption {
   const command = entry.command;
   const base = {
     id: command.name,
     label: `/${command.name}`,
-    detail: command.argumentHint || undefined,
-    description:
-      entry.source === "client" ? t(entry.command.descriptionKey) : entry.command.description,
-    kind: "command" as const,
+    // The label carries a leading slash the query does not.
+    labelMatches: findHighlightRanges(context.query, command.name).map((range) => ({
+      start: range.start + 1,
+      length: range.length,
+    })),
+    argumentHint: command.argumentHint || undefined,
   };
   if (entry.source === "client") {
     return {
       ...base,
       type: "client_command",
       command: entry.command,
+      icon: CLIENT_COMMAND_ICONS[entry.command.kind],
+      description: context.t(entry.command.descriptionKey),
+      tag: "Paseo",
     };
   }
   if (entry.source === "plugin") {
-    return { ...base, type: "plugin_command", command: entry.command };
+    return {
+      ...base,
+      type: "plugin_command",
+      command: entry.command,
+      icon: "plugin",
+      description: entry.command.description,
+      tag: context.pluginNames.get(entry.command.pluginId) ?? entry.command.pluginId,
+    };
   }
+  const isSkill = entry.command.kind === "skill";
   return {
     ...base,
     type: "provider_command",
+    icon: isSkill ? "skill" : "command",
+    description: entry.command.description,
+    tag: isSkill ? context.t("agentAutocomplete.skillTag") : undefined,
   };
 }
 
 type AutocompleteMode = "command" | "file" | null;
 
 interface BuildAutocompleteOptionsInput {
-  isVisible: boolean;
   mode: AutocompleteMode;
   commands: AgentSlashCommand[];
   pluginCommands: readonly PluginClientSlashCommand[];
+  pluginNames: ReadonlyMap<string, string>;
   isDraftContext: boolean;
   commandFilterQuery: string;
   activeSlashCommand: SlashCommandRange | null;
@@ -209,11 +245,7 @@ interface BuildAutocompleteOptionsInput {
   t: TFunction;
 }
 
-function buildCommandAutocompleteOptions(input: BuildAutocompleteOptionsInput) {
-  if (!input.isVisible) {
-    return [];
-  }
-
+function buildAutocompleteOptions(input: BuildAutocompleteOptionsInput): AgentAutocompleteOption[] {
   if (input.mode === "command") {
     const providerCommands = input.commands.map((command) => ({
       source: "provider" as const,
@@ -242,8 +274,12 @@ function buildCommandAutocompleteOptions(input: BuildAutocompleteOptionsInput) {
       availableCommands,
       input.commandFilterQuery,
     );
-    const orderedMatches = orderAutocompleteOptions(matches);
-    return orderedMatches.map((entry) => mapCommandToOption(entry, input.t));
+    const context = {
+      query: input.commandFilterQuery,
+      pluginNames: input.pluginNames,
+      t: input.t,
+    };
+    return orderAutocompleteOptions(matches).map((entry) => mapCommandToOption(entry, context));
   }
 
   const activeFileMention = input.activeFileMention;
@@ -253,7 +289,7 @@ function buildCommandAutocompleteOptions(input: BuildAutocompleteOptionsInput) {
       type: "workspace_entry" as const,
       id: `${entry.kind}:${entry.path}`,
       label: entry.path,
-      kind: entry.kind,
+      icon: entry.kind,
       entryPath: entry.path,
       mention: activeFileMention,
     }));
@@ -301,42 +337,140 @@ function resolveCanLoadCommands(args: {
   return Boolean(args.agentId) || args.isDraftContext;
 }
 
-function resolveAutocompleteIsLoading(args: {
-  mode: AutocompleteMode;
-  isCommandsLoading: boolean;
-  fileSuggestionsIsPending: boolean;
-  fileSuggestionsIsLoading: boolean;
-  optionsLength: number;
-}): boolean {
-  if (args.mode === "command") {
-    return args.isCommandsLoading && args.optionsLength === 0;
-  }
-  if (args.mode === "file") {
-    return (
-      args.fileSuggestionsIsPending || (args.fileSuggestionsIsLoading && args.optionsLength === 0)
-    );
-  }
-  return false;
+type CommandsState = "ready" | "loading" | "error";
+
+function resolveCommandsState(input: {
+  canListCommands: boolean;
+  isLoading: boolean;
+  isError: boolean;
+}): CommandsState {
+  if (!input.canListCommands) return "ready";
+  if (input.isError) return "error";
+  if (input.isLoading) return "loading";
+  return "ready";
 }
 
-function resolveAutocompleteErrorMessage(args: {
-  mode: AutocompleteMode;
-  isCommandError: boolean;
-  commandError: Error | null;
-  fileSuggestionsError: unknown;
+interface AutocompleteMenu {
+  options: AgentAutocompleteOption[];
+  status: AutocompleteStatus | null;
+}
+
+/**
+ * One state for the open menu, so options and a loading or error row cannot both claim it:
+ * while a status row shows there are no options for Enter or Tab to pick.
+ */
+function resolveCommandMenu(input: {
+  commandsState: CommandsState;
+  options: () => AgentAutocompleteOption[];
+  providerLabel: string | null;
+  error: Error | null;
+  onRetry: () => void;
+  emptyText: string;
   t: TFunction;
-}): string | undefined {
-  if (args.mode === "command") {
-    return args.isCommandError
-      ? (args.commandError?.message ?? args.t("agentAutocomplete.failedToLoad"))
-      : undefined;
+}): AutocompleteMenu {
+  const { t } = input;
+  if (input.commandsState === "loading") {
+    const message = input.providerLabel
+      ? t("agentAutocomplete.loadingProviderCommands", { provider: input.providerLabel })
+      : t("agentAutocomplete.loadingCommands");
+    return { options: [], status: { kind: "loading", message } };
   }
-  if (args.mode === "file") {
-    return args.fileSuggestionsError instanceof Error
-      ? args.fileSuggestionsError.message
-      : undefined;
+  if (input.commandsState === "error") {
+    const title = input.providerLabel
+      ? t("agentAutocomplete.providerCommandsFailed", { provider: input.providerLabel })
+      : t("agentAutocomplete.commandsFailed");
+    return {
+      options: [],
+      status: { kind: "error", title, reason: input.error?.message, onRetry: input.onRetry },
+    };
   }
-  return undefined;
+  return withEmptyStatus(input.options(), input.emptyText);
+}
+
+function resolveFileMenu(input: {
+  options: () => AgentAutocompleteOption[];
+  isPending: boolean;
+  isLoading: boolean;
+  error: unknown;
+  t: TFunction;
+}): AutocompleteMenu {
+  const options = input.options();
+  if (input.isPending || (input.isLoading && options.length === 0)) {
+    return {
+      options: [],
+      status: { kind: "loading", message: input.t("agentAutocomplete.searchingWorkspace") },
+    };
+  }
+  if (input.error instanceof Error) {
+    return {
+      options: [],
+      status: {
+        kind: "error",
+        title: input.t("agentAutocomplete.filesFailed"),
+        reason: input.error.message,
+      },
+    };
+  }
+  return withEmptyStatus(options, input.t("agentAutocomplete.noFiles"));
+}
+
+function withEmptyStatus(options: AgentAutocompleteOption[], emptyText: string): AutocompleteMenu {
+  return options.length > 0
+    ? { options, status: null }
+    : { options, status: { kind: "empty", message: emptyText } };
+}
+
+/** How long a command menu waits for commands before it opens on a loading row. */
+const COMMANDS_LOADING_REVEAL_MS = 300;
+
+/**
+ * Whether the open command menu has waited long enough to show a loading row. Commands that
+ * arrive sooner paint the list as the first frame; once the wait is over, loading (a retry)
+ * shows at once so the open menu never closes on itself.
+ */
+function useLoadingRevealed(isMenuOpen: boolean): boolean {
+  const [revealed, setRevealed] = useState(false);
+  useEffect(() => {
+    if (!isMenuOpen) {
+      setRevealed(false);
+      return undefined;
+    }
+    const timer = setTimeout(() => setRevealed(true), COMMANDS_LOADING_REVEAL_MS);
+    return () => clearTimeout(timer);
+  }, [isMenuOpen]);
+  return revealed;
+}
+
+/** The names command rows and status rows show: the provider's label and each plugin's name. */
+function useCommandSourceNames(input: {
+  serverId: string;
+  agentId: string;
+  draftConfig: DraftCommandConfig | undefined;
+  cwd: string;
+  isCommandMenuOpen: boolean;
+  commandsState: CommandsState;
+  pluginCommandCount: number;
+}): { providerLabel: string | null; pluginNames: ReadonlyMap<string, string> } {
+  const agentProvider = useSessionStore(
+    (state) => state.sessions[input.serverId]?.agents?.get(input.agentId)?.provider,
+  );
+  const provider = input.draftConfig?.provider ?? agentProvider;
+  // Only a loading or error row names the provider; only plugin rows need plugin names.
+  const { entries: providerEntries } = useProvidersSnapshot(input.serverId, {
+    cwd: input.cwd,
+    enabled: input.isCommandMenuOpen && input.commandsState !== "ready",
+  });
+  const pluginList = usePluginList(input.serverId, {
+    enabled: input.isCommandMenuOpen && input.pluginCommandCount > 0,
+  });
+  const pluginNames = useMemo(
+    () => new Map((pluginList.data ?? []).map((plugin) => [plugin.id, pluginDisplayName(plugin)])),
+    [pluginList.data],
+  );
+  return {
+    providerLabel: provider ? resolveProviderLabel(provider, providerEntries) : null,
+    pluginNames,
+  };
 }
 
 // A draft's agentId is a draft key the daemon does not know, so a draft lists
@@ -351,20 +485,29 @@ function resolveDraftCommandContext(draft: DraftCommandTarget | undefined) {
   };
 }
 
+<<<<<<< HEAD
 function resolveAutocompleteEmptyText(input: {
   mode: AutocompleteMode;
+=======
+function resolveCommandsEmptyText(args: {
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
   draft: DraftCommandTarget | undefined;
   query: string;
   pluginCommands: readonly PluginClientSlashCommand[];
   hostName: string | null;
   t: TFunction;
 }): string {
+<<<<<<< HEAD
   if (input.mode === "file") return input.t("agentAutocomplete.noFiles");
   if (input.draft?.status === "needs-project") {
     return input.t("agentAutocomplete.chooseProjectForCommands");
   }
   if (input.draft?.status === "needs-provider") {
     return input.t("agentAutocomplete.chooseModelForCommands");
+=======
+  if (args.draft?.status === "needs-project") {
+    return args.t("agentAutocomplete.chooseProjectForCommands");
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
   }
   const offered = input.pluginCommands.map((command) => command.name);
   if (!isUnofferedAccountCommand(input.query, offered))
@@ -456,10 +599,25 @@ export function useAgentAutocomplete(input: UseAgentAutocompleteInput): AgentAut
     enabled: mode === "command" && canLoadCommands && canListCommands,
     draftConfig: queryDraftConfig,
   });
-  const { commands, isError, error } = commandsQuery;
-  const isCommandsLoading = canListCommands && commandsQuery.isLoading;
-
-  const isVisible = canShowAutocomplete && !(mode === "command" && isCommandsLoading);
+  const commandsState = resolveCommandsState({
+    canListCommands,
+    isLoading: commandsQuery.isLoading,
+    isError: commandsQuery.isError,
+  });
+  const isCommandMenuOpen = mode === "command" && canShowAutocomplete;
+  const isLoadingRevealed = useLoadingRevealed(isCommandMenuOpen);
+  const isVisible =
+    canShowAutocomplete &&
+    !(isCommandMenuOpen && commandsState === "loading" && !isLoadingRevealed);
+  const { providerLabel, pluginNames } = useCommandSourceNames({
+    serverId,
+    agentId,
+    draftConfig: queryDraftConfig,
+    cwd: autocompleteCwd,
+    isCommandMenuOpen,
+    commandsState,
+    pluginCommandCount: pluginClientSlashCommands.length,
+  });
 
   const fileSuggestionsQuery = useQuery({
     queryKey: [
@@ -497,33 +655,67 @@ export function useAgentAutocomplete(input: UseAgentAutocompleteInput): AgentAut
     placeholderData: keepPreviousData,
   });
 
-  const options = useMemo<AgentAutocompleteOption[]>(
-    () =>
-      buildCommandAutocompleteOptions({
+  const commandsEmptyText = resolveCommandsEmptyText({ draft, t });
+  const retryCommandsQuery = commandsQuery.retry;
+  const retryCommands = useCallback(() => {
+    retryCommandsQuery();
+    // Pressing Retry takes focus on web; hand it back so the user keeps typing the command.
+    onAutocompleteApplied?.();
+  }, [onAutocompleteApplied, retryCommandsQuery]);
+  const { options, status } = useMemo<AutocompleteMenu>(() => {
+    if (!isVisible) return { options: [], status: null };
+    const buildOptions = () =>
+      buildAutocompleteOptions({
         activeFileMention,
         commandFilterQuery,
-        commands,
+        commands: commandsQuery.commands,
         pluginCommands: pluginClientSlashCommands,
+        pluginNames,
         activeSlashCommand,
         fileSuggestions: fileSuggestionsQuery.data ?? [],
         isDraftContext,
-        isVisible,
         mode,
         t,
-      }),
-    [
-      activeFileMention,
-      activeSlashCommand,
-      commandFilterQuery,
-      commands,
-      pluginClientSlashCommands,
-      fileSuggestionsQuery.data,
-      isDraftContext,
-      isVisible,
-      mode,
+      });
+    if (mode === "file") {
+      return resolveFileMenu({
+        options: buildOptions,
+        isPending: fileSuggestionsQuery.isPending,
+        isLoading: fileSuggestionsQuery.isLoading,
+        error: fileSuggestionsQuery.error,
+        t,
+      });
+    }
+    return resolveCommandMenu({
+      commandsState,
+      options: buildOptions,
+      providerLabel,
+      error: commandsQuery.error,
+      onRetry: retryCommands,
+      emptyText: commandsEmptyText,
       t,
-    ],
-  );
+    });
+  }, [
+    activeFileMention,
+    activeSlashCommand,
+    commandFilterQuery,
+    commandsEmptyText,
+    commandsQuery.commands,
+    commandsQuery.error,
+    commandsState,
+    fileSuggestionsQuery.data,
+    fileSuggestionsQuery.error,
+    fileSuggestionsQuery.isLoading,
+    fileSuggestionsQuery.isPending,
+    isDraftContext,
+    isVisible,
+    mode,
+    pluginClientSlashCommands,
+    pluginNames,
+    providerLabel,
+    retryCommands,
+    t,
+  ]);
 
   const onSelectOption = useCallback(
     (option: AutocompleteOption, snapshot?: AgentAutocompleteInputSnapshot) => {
@@ -621,6 +813,7 @@ export function useAgentAutocomplete(input: UseAgentAutocompleteInput): AgentAut
         : undefined,
   });
 
+<<<<<<< HEAD
   const isLoading = resolveAutocompleteIsLoading({
     mode,
     isCommandsLoading,
@@ -649,14 +842,13 @@ export function useAgentAutocomplete(input: UseAgentAutocompleteInput): AgentAut
     t,
   });
 
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
   return {
     isVisible,
     options,
     selectedIndex,
-    isLoading,
-    errorMessage,
-    loadingText,
-    emptyText,
+    status,
     onSelectOption,
     onKeyPress,
   };

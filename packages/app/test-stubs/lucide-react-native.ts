@@ -11,7 +11,11 @@ const StubIcon: LucideIcon = () => null;
 export const Activity = StubIcon;
 export const AlertTriangle = StubIcon;
 export const Archive = StubIcon;
+<<<<<<< HEAD
 export const Network = StubIcon;
+=======
+export const ArrowDown = StubIcon;
+>>>>>>> refs/remotes/upstream/tags/v0.17.5
 export const ArrowDownUp = StubIcon;
 export const ArrowLeft = StubIcon;
 export const ArrowLeftToLine = StubIcon;
@@ -22,6 +26,7 @@ export const AudioLines = StubIcon;
 export const Blocks = StubIcon;
 export const Bot = StubIcon;
 export const Brain = StubIcon;
+export const ChartNoAxesColumn = StubIcon;
 export const Check = StubIcon;
 export const CheckCircle = StubIcon;
 export const CheckCircle2 = StubIcon;
@@ -43,6 +48,7 @@ export const EyeOff = StubIcon;
 export const File = StubIcon;
 export const FileText = StubIcon;
 export const Folder = StubIcon;
+export const FolderOpen = StubIcon;
 export const FolderPlus = StubIcon;
 export const FolderTree = StubIcon;
 export const Gift = StubIcon;
@@ -84,6 +90,7 @@ export const PinOff = StubIcon;
 export const Play = StubIcon;
 export const Plug = StubIcon;
 export const Plus = StubIcon;
+export const Puzzle = StubIcon;
 export const QrCode = StubIcon;
 export const RefreshCcw = StubIcon;
 export const RefreshCw = StubIcon;
@@ -101,9 +108,11 @@ export const Smartphone = StubIcon;
 export const Split = StubIcon;
 export const Square = StubIcon;
 export const SquarePen = StubIcon;
+export const SquareSlash = StubIcon;
 export const SquareTerminal = StubIcon;
 export const Star = StubIcon;
 export const Sun = StubIcon;
+export const Tag = StubIcon;
 export const Terminal = StubIcon;
 export const Trash2 = StubIcon;
 export const TriangleAlert = StubIcon;
@@ -207,6 +216,7 @@ export const WrapText = StubIcon;
 export const Zap = StubIcon;
 export const ZoomIn = StubIcon;
 export const ZoomOut = StubIcon;
+<<<<<<< HEAD
 export const Users = StubIcon;
 export const SendHorizontal = StubIcon;
 
@@ -222,3 +232,35 @@ export const Summary = StubIcon;
 export function LucideProvider({ children }: { children?: ReactNode }): ReactNode {
   return children ?? null;
 }
+=======
+export const ListTodo = StubIcon;
+export const Shield = StubIcon;
+export const ShieldEllipsis = StubIcon;
+export const ShieldPlus = StubIcon;
+export const Zap = StubIcon;
+export const CheckSquare = StubIcon;
+export const Circle = StubIcon;
+export const FileSymlink = StubIcon;
+export const MessageSquareCode = StubIcon;
+export const MicVocal = StubIcon;
+export const Scissors = StubIcon;
+export const Sparkles = StubIcon;
+export const TriangleAlertIcon = StubIcon;
+export const ArrowRightToLine = StubIcon;
+export const Columns2 = StubIcon;
+export const CopyX = StubIcon;
+export const Ellipsis = StubIcon;
+export const Maximize = StubIcon;
+export const Minimize = StubIcon;
+export const Rows2 = StubIcon;
+export const Gauge = StubIcon;
+export const GripVertical = StubIcon;
+export const Cloud = StubIcon;
+export const Computer = StubIcon;
+export const Container = StubIcon;
+export const Cpu = StubIcon;
+export const Laptop = StubIcon;
+export const Network = StubIcon;
+export const PcCase = StubIcon;
+export const Waypoints = StubIcon;
+>>>>>>> refs/remotes/upstream/tags/v0.17.5

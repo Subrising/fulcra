@@ -12,6 +12,7 @@ import { AgentManager } from "../agent-manager.js";
 import { AgentStorage } from "../agent-storage.js";
 import type { CreatePaseoWorktreeWorkflowResult } from "../../worktree-session.js";
 import { createAgentCommand } from "./create.js";
+import { ForegroundPromptStart } from "../agent-run-state.js";
 import type { ManagedAgent } from "../agent-manager.js";
 import type { AgentSessionConfig } from "../agent-sdk-types.js";
 
@@ -99,9 +100,12 @@ test("session create forwards clientMessageId to the initial prompt run options"
     firstAgentContext: { attachments: [] },
   });
 
-  expect(streamAgent).toHaveBeenCalledWith("agent-1", "hello from create", {
-    clientMessageId: "msg-create-1",
-  });
+  expect(streamAgent).toHaveBeenCalledWith(
+    "agent-1",
+    "hello from create",
+    { clientMessageId: "msg-create-1" },
+    expect.any(ForegroundPromptStart),
+  );
 });
 
 test("session create logs whether it armed a finish notice", async () => {
@@ -214,7 +218,7 @@ test("session create applies the resolved mode from the provider create config",
   const stub = createProviderSnapshotManagerStub();
   stub.resolveCreateConfig.mockResolvedValue({
     modeId: "build",
-    featureValues: { auto_accept: true },
+    providerOptions: { auto_accept: true },
   });
   const dependencies: Parameters<typeof createAgentCommand>[0] = {
     agentManager: {
@@ -238,7 +242,7 @@ test("session create applies the resolved mode from the provider create config",
   expect(createAgent).toHaveBeenCalledWith(
     expect.objectContaining({
       modeId: "build",
-      featureValues: { auto_accept: true },
+      providerOptions: { auto_accept: true },
     }),
     undefined,
     expect.anything(),
