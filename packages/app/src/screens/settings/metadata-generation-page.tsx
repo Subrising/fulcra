@@ -18,12 +18,15 @@ export function MetadataGenerationPage({ serverId }: { serverId: string }) {
   const { t } = useTranslation();
   const { config, isLoading: isConfigLoading, patchConfig } = useDaemonConfig(serverId);
   const snapshot = useProvidersSnapshot(serverId);
-  const providers = useMemo(
-    () => buildSelectableProviderSelectorProviders(snapshot.entries),
-    [snapshot.entries],
-  );
   const configuredProviders = config?.metadataGeneration.providers;
   const configuredProvider = configuredProviders?.[0] ?? null;
+  const providers = useMemo(
+    () =>
+      buildSelectableProviderSelectorProviders(snapshot.entries, {
+        selectedProvider: configuredProvider?.provider ?? null,
+      }),
+    [configuredProvider?.provider, snapshot.entries],
+  );
   const savedMode: SelectionMode = configuredProvider ? "preferred" : "automatic";
   const [draftMode, setDraftMode] = useState<SelectionMode | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -87,6 +90,13 @@ export function MetadataGenerationPage({ serverId }: { serverId: string }) {
     (provider: AgentProvider) => snapshot.refresh([provider]),
     [snapshot],
   );
+<<<<<<< HEAD
+=======
+  const docsLink = useMemo(
+    () => ({ href: METADATA_GENERATION_DOCS_URL, label: t("settings.metadataGeneration.docs") }),
+    [t],
+  );
+>>>>>>> refs/remotes/upstream/tags/v0.17.4
 
   if (isConfigLoading || !config) {
     return (
@@ -100,6 +110,10 @@ export function MetadataGenerationPage({ serverId }: { serverId: string }) {
     <SettingsSection
       title={t("settings.metadataGeneration.title")}
       info={t("settings.metadataGeneration.description")}
+<<<<<<< HEAD
+=======
+      link={docsLink}
+>>>>>>> refs/remotes/upstream/tags/v0.17.4
       testID="metadata-generation-settings"
     >
       <View style={settingsStyles.card}>
@@ -118,7 +132,6 @@ export function MetadataGenerationPage({ serverId }: { serverId: string }) {
             options={modeOptions}
             value={mode}
             onValueChange={handleModeChange}
-            size="sm"
             testID="metadata-generation-mode"
           />
         </View>

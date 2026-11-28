@@ -1,7 +1,11 @@
+<<<<<<< HEAD
 import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
+=======
+import { PressHighlight as Pressable } from "@/components/ui/press-highlight";
+>>>>>>> refs/remotes/upstream/tags/v0.17.4
 import { useMemo, type ReactNode } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react-native";
-import { Pressable, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { DensityIcon } from "@/components/ui/density-icon";
 import { useIsCompactFormFactor } from "@/constants/layout";

@@ -1,3 +1,4 @@
+import { getPluginClientApi } from "./client-state/api";
 import { filePanelTitle } from "@/file-panels/choice/presentation";
 import { i18n } from "@/i18n/i18next";
 import { createPluginHosts } from "./hosts";
@@ -51,7 +52,7 @@ function registry(
           },
           installation.lifetime.signal,
         ),
-        paseo: installation.paseo,
+        paseo: getPluginClientApi(installation).paseo,
         i18n: installation.i18n,
         device: undefined,
         rpc: async () => {
@@ -59,11 +60,15 @@ function registry(
         },
         openScreen: () => {},
         openSurface: () => {},
+        composers: () => [],
         openSettings: () => {},
         playAudio: async () => {},
         openPanel: () => {},
         addComposerPill: () => ({ update() {}, remove() {} }),
         addHeaderButton: () => ({ update() {}, remove() {} }),
+        subscribe: () => {
+          throw new Error("Subscriptions are not used here");
+        },
       };
     },
   });

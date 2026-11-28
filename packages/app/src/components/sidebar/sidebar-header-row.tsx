@@ -1,6 +1,10 @@
+<<<<<<< HEAD
 import type { StyleProp, ViewStyle } from "react-native";
+=======
+import { PressHighlight as Pressable } from "@/components/ui/press-highlight";
+>>>>>>> refs/remotes/upstream/tags/v0.17.4
 import { useCallback, useState, type ComponentType, type ReactNode, type Ref } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { HEADER_INNER_HEIGHT, HEADER_INNER_HEIGHT_MOBILE } from "@/constants/layout";
 import { DensityIcon } from "@/components/ui/density-icon";

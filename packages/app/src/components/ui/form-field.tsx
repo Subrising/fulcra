@@ -22,18 +22,15 @@ import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import {
   createControlGeometry,
   resolveControlInteractionStyles,
-  type FieldControlSize,
+  type ControlSize,
 } from "@/components/ui/control-geometry";
 import { useContainedControlSize } from "@/components/ui/control-size";
 
-const FIELD_CHROME = { xs: "chromeXs", sm: "chromeSm", md: "chromeMd" } as const satisfies Record<
-  FieldControlSize,
+const FIELD_CHROME = { sm: "chromeSm", md: "chromeMd" } as const satisfies Record<
+  ControlSize,
   string
 >;
-const FIELD_TEXT = { xs: "inputXs", sm: "inputSm", md: "inputMd" } as const satisfies Record<
-  FieldControlSize,
-  string
->;
+const FIELD_TEXT = { sm: "inputSm", md: "inputMd" } as const satisfies Record<ControlSize, string>;
 
 interface FieldProps {
   label: string;
@@ -78,7 +75,7 @@ export function Field({ label, children, trailing, hint, error, testID }: FieldP
 }
 
 type FormTextInputProps = AdaptiveTextInputProps & {
-  size?: FieldControlSize;
+  size?: ControlSize;
 };
 
 type FlatFormTextInputStyle = ViewStyle & TextStyle;
@@ -282,9 +279,6 @@ const formInputStyles = StyleSheet.create((theme) => {
     chrome: {
       backgroundColor: theme.colors.surface2,
     },
-    chromeXs: {
-      ...geometry.fieldControlXs,
-    },
     chromeSm: {
       ...geometry.fieldControlSm,
     },
@@ -311,9 +305,6 @@ const formInputStyles = StyleSheet.create((theme) => {
       paddingVertical: 0,
       outlineColor: "transparent",
       outlineWidth: 0,
-    },
-    inputXs: {
-      ...geometry.fieldTextXs,
     },
     inputSm: {
       ...geometry.fieldTextSm,

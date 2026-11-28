@@ -1,6 +1,17 @@
 import { expect, test, type Page } from "../support/fixtures";
 import { gotoAppShell, openSettings } from "../support/helpers/app";
 import { openSettingsSection } from "../support/helpers/settings";
+<<<<<<< HEAD
+=======
+import {
+  allChangesToggle,
+  hideAllChanges,
+  openWhatsNew,
+  release,
+  serveChangelog,
+  showAllChanges,
+} from "../support/helpers/changelog";
+>>>>>>> refs/remotes/upstream/tags/v0.17.4
 
 // The name and the version are separate cells of a key/value row, so they meet with no space
 // between them in the row's text content.
@@ -53,6 +64,7 @@ test("opens troubleshooting and the licence notices", async ({ page }) => {
     await expect(page.getByTestId("sidebar-help-changelog")).toHaveCount(0);
   });
 
+<<<<<<< HEAD
   await test.step("opens the upstream licence and attribution notices", async () => {
     await page.getByTestId("sidebar-help-licenses").click();
     await expect(page.getByTestId("settings-licenses-notice")).toContainText(
@@ -60,6 +72,73 @@ test("opens troubleshooting and the licence notices", async ({ page }) => {
     );
     await expect(page.getByTestId("settings-licenses-license")).toContainText("Apache License");
   });
+=======
+test("renders the changelog in the app and links the website", async ({ page }) => {
+  // Highlights, a section name the app has never seen, a callout, and a fenced
+  // sample whose contents look like a release heading.
+  await serveChangelog(page, [
+    "# Changelog",
+    "",
+    "## 9.1.0 - 2026-03-04",
+    "",
+    "- **Background tasks:** Paseo now shows the tasks an agent is running.",
+    "",
+    "### Sparkles",
+    "",
+    "- Added a brand new thing",
+    "",
+    "> [!WARNING]",
+    "> Read this before upgrading.",
+    "",
+    "```md",
+    "## 0.0.0 - 1999-01-01",
+    "```",
+    "",
+    "### Fixed",
+    "",
+    "- Fixed a crash",
+    "",
+    "## 9.0.0 - 2026-02-01",
+    "",
+    "### Fixed",
+    "",
+    "- Fixed an older thing",
+    "",
+  ]);
+  await gotoAppShell(page);
+
+  const sheet = await openWhatsNew(page);
+  const latest = release(sheet, "9.1.0");
+  const older = release(sheet, "9.0.0");
+
+  await test.step("leads a release with its highlights and tucks the rest away", async () => {
+    await expect(latest.getByText("March 4, 2026", { exact: true })).toBeVisible();
+    await expect(latest.getByText("Paseo now shows the tasks an agent is running.")).toBeVisible();
+    await expect(latest.getByText("Added a brand new thing")).toHaveCount(0);
+    await expect(latest.getByText("Fixed a crash")).toHaveCount(0);
+  });
+
+  await test.step("shows every section on request and tucks them away again", async () => {
+    await showAllChanges(latest);
+    await expect(latest.getByText("Sparkles", { exact: true })).toBeVisible();
+    await expect(latest.getByText("Added a brand new thing")).toBeVisible();
+    await expect(latest.getByText("Read this before upgrading.")).toBeVisible();
+    await expect(latest.getByText("Fixed a crash")).toBeVisible();
+    await expect(release(sheet, "0.0.0")).toHaveCount(0);
+
+    await hideAllChanges(latest);
+    await expect(latest.getByText("Added a brand new thing")).toHaveCount(0);
+    await expect(latest.getByText("Paseo now shows the tasks an agent is running.")).toBeVisible();
+  });
+
+  await test.step("shows a release without highlights whole", async () => {
+    await expect(older.getByText("Fixed an older thing")).toBeVisible();
+    await expect(allChangesToggle(older)).toHaveCount(0);
+  });
+
+  await expectExternalPage(page, "changelog-open-website", CHANGELOG_DESTINATION);
+  await closeSheet(page, "changelog-sheet");
+>>>>>>> refs/remotes/upstream/tags/v0.17.4
 });
 
 test("searches keyboard shortcuts from the sidebar help menu", async ({ page }) => {

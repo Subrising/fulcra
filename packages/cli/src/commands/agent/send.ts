@@ -1,10 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
 import { type Command, Option } from "commander";
+<<<<<<< HEAD
 import type { PaseoAgentSendOptions } from "@getpaseo/client";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
 import { readPromptFile } from "../../utils/prompt-file.js";
+=======
+import type { AgentActiveTurnBehavior } from "@getpaseo/protocol/messages";
+>>>>>>> refs/remotes/upstream/tags/v0.17.4
 import { collectMultiple } from "../../utils/command-options.js";
 import { connectToDaemon } from "../../utils/client.js";
+import type { AgentMessageReceipt } from "@getpaseo/client/internal/daemon-client";
 import type {
   CommandOptions,
   SingleResult,
@@ -20,6 +25,7 @@ import { readSendRoute, sshSend, readRemoteSendHost } from "../../utils/send-rou
 /** Result type for agent send command */
 export interface AgentSendResult {
   agentId: string;
+<<<<<<< HEAD
   status:
     | "sent"
     | "held"
@@ -37,6 +43,11 @@ export interface AgentSendResult {
   messageId?: string;
   pendingCount?: number;
   providerTurnId?: string;
+=======
+  status: "queued" | "sent" | "completed" | "timeout" | "permission" | "error";
+  /** What the host applied to an agent's message with a running turn. */
+  activeTurnBehavior?: AgentActiveTurnBehavior;
+>>>>>>> refs/remotes/upstream/tags/v0.17.4
   message: string;
 }
 
@@ -51,10 +62,14 @@ export const agentSendSchema: OutputSchema<AgentSendResult> = {
 };
 
 export interface AgentSendOptions extends CommandOptions {
+<<<<<<< HEAD
   notifyOnFinish?: boolean;
   steer?: boolean;
   queue?: boolean;
   behavior?: ActiveTurnBehavior | "queue";
+=======
+  behavior?: AgentActiveTurnBehavior;
+>>>>>>> refs/remotes/upstream/tags/v0.17.4
   wait?: boolean;
   nativeQueue?: boolean;
   messageId?: string;
@@ -82,8 +97,13 @@ export function addSendOptions(cmd: Command): Command {
     .addOption(
       new Option(
         "--behavior <behavior>",
+<<<<<<< HEAD
         "Active-turn behavior (agent default: steer; otherwise: interrupt; queue waits for the turn end)",
       ).choices(["interrupt", "steer", "queue"]),
+=======
+        "Leave out unless the message cannot wait. From an agent (PASEO_AGENT_ID set): queue (default) waits for the running turn to end, steer joins it, interrupt replaces it. From a person: interrupt (default) or steer",
+      ).choices(["queue", "steer", "interrupt"]),
+>>>>>>> refs/remotes/upstream/tags/v0.17.4
     )
     .option("--steer", "Inject into the running turn; queue if native steering is unavailable")
     .option("--queue", "Queue agent messages for one combined delivery after the current turn")
@@ -223,6 +243,7 @@ function buildSendResult(agentIdArg: string, state: SendWaitState): AgentSendRes
   return { agentId, status: "completed", message: "Agent completed processing the message" };
 }
 
+<<<<<<< HEAD
 function validateNativeQueueOptions(
   options: AgentSendOptions,
   nativeQueue: boolean,
@@ -532,6 +553,22 @@ async function checkSendAdmission(input: {
   )
     throw new Error("Update the host to enforce the source reporting-line restriction.");
   return undefined;
+=======
+export function buildNoWaitResult(agentId: string, receipt: AgentMessageReceipt): AgentSendResult {
+  return {
+    agentId,
+    status: receipt.deliveryStatus ?? "sent",
+    ...(receipt.activeTurnBehavior ? { activeTurnBehavior: receipt.activeTurnBehavior } : {}),
+    message: sendReceiptMessage(receipt),
+  };
+}
+
+function sendReceiptMessage(receipt: AgentMessageReceipt): string {
+  if (receipt.deliveryStatus !== "queued") return "Message sent, not waiting for completion";
+  // COMPAT(agentActiveTurnBehaviors): added in v0.17.2, remove after 2027-05-22 once daemon
+  // floor >= v0.17.2. Older hosts return no guidance.
+  return receipt.guidance ?? "Message queued for delivery after the current turn ends";
+>>>>>>> refs/remotes/upstream/tags/v0.17.4
 }
 
 export async function runSendCommand(
@@ -610,6 +647,7 @@ export async function runSendCommand(
     const policy = completionPolicy(options, sender, agentIdArg, promptInput);
     const completionMessageId = policy.messageId;
     const receipt = await client.sendAgentMessage(agentIdArg, promptInput, {
+<<<<<<< HEAD
       ...sendOptions(
         options,
         sender,
@@ -625,6 +663,11 @@ export async function runSendCommand(
       ),
       ...(completionMessageId ? { messageId: completionMessageId } : {}),
       ...(policy.remote ? { issuedAt: Date.now() } : {}),
+=======
+      images,
+      sourceAgentId,
+      activeTurnBehavior: options.behavior,
+>>>>>>> refs/remotes/upstream/tags/v0.17.4
     });
 
     if (deliveryState === "held") {
@@ -639,6 +682,7 @@ export async function runSendCommand(
     if (policy.background) {
       return {
         type: "single",
+<<<<<<< HEAD
         data: {
           agentId: agentIdArg,
           status: receipt?.deliveryStatus ?? "sent",
@@ -648,6 +692,9 @@ export async function runSendCommand(
               ? "Message queued for delivery after two quiet seconds"
               : "Message sent, not waiting for completion"),
         },
+=======
+        data: buildNoWaitResult(agentIdArg, receipt),
+>>>>>>> refs/remotes/upstream/tags/v0.17.4
         schema: agentSendSchema,
       };
     }

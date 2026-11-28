@@ -5,7 +5,6 @@ import type { AgentManager, ManagedAgent } from "./agent-manager.js";
 import type { AgentStorage, StoredAgentRecord } from "./agent-storage.js";
 import {
   buildConfigOverrides,
-  buildSessionConfig,
   extractAttention,
   extractTimestamps,
   isStoredAgentProviderAvailable,
@@ -33,7 +32,7 @@ export function agentLoadInProgress(agentId: string): boolean {
 
 export type AgentLoaderManager = Pick<
   AgentManager,
-  | "createAgent"
+  | "createAgentFromRecord"
   | "getAgent"
   | "getRegisteredProviderIds"
   | "hydrateTimelineFromProvider"
@@ -47,6 +46,7 @@ export interface EnsureAgentLoadedDeps {
   agentStorage: AgentStorage;
   validProviders?: Iterable<AgentProvider>;
   broadcastTimeline?: boolean;
+  purpose?: "history" | "interactive";
   logger: Logger;
   /** Refusal-only freshness check for a delayed automatic message. */
   requireRecord?: (record: StoredAgentRecord | null) => void;
@@ -131,13 +131,18 @@ export async function ensureAgentLoaded(
         { ...buildConfigOverrides(record), ...deps.configOverrides },
         agentId,
         { ...extractTimestamps(record), attention: extractAttention(record) },
+<<<<<<< HEAD
         record.archivedAt ? { purpose: "history" } : undefined,
         ...(deps.requireRecord ? ([deps.requireRecord] as const) : ([] as const)),
+=======
+        deps.purpose ? { purpose: deps.purpose } : undefined,
+>>>>>>> refs/remotes/upstream/tags/v0.17.4
       );
       deps.logger.info({ agentId, provider: record.provider }, "Agent resumed from persistence");
     } else {
       // No provider handle to resume: this starts the agent's first session rather than
       // bringing one back, so it stamps activity and carries no stored attention. Records
+<<<<<<< HEAD
       // without a handle never got far enough to accumulate either.
       const config = buildSessionConfig(record, {
         validProviders,
@@ -153,6 +158,11 @@ export async function ensureAgentLoaded(
         fromStoredRecord: true,
         env: record.launchEnv,
       });
+=======
+      // without a handle never got far enough to accumulate either. The manager rereads the
+      // record inside the agent's lane, so a write that lands after this read is not lost.
+      snapshot = await deps.agentManager.createAgentFromRecord(agentId);
+>>>>>>> refs/remotes/upstream/tags/v0.17.4
       deps.logger.info({ agentId, provider: record.provider }, "Agent created from stored config");
     }
 

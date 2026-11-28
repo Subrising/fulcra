@@ -135,6 +135,7 @@ const buildPermissionDetails = (
   if (!request) {
     return null;
   }
+<<<<<<< HEAD
   if (request.kind === "question") {
     const title = buildNotificationPreview(request.title);
     // A description can continue a value introduced in the title.
@@ -143,6 +144,20 @@ const buildPermissionDetails = (
       (part, index, all): part is string => Boolean(part) && all.indexOf(part) === index,
     );
     if (details.length > 0) return details.join(" - ");
+=======
+
+  const title = request.title?.trim();
+  const description = request.description?.trim();
+  const details: string[] = [];
+
+  if (title) {
+    details.push(title);
+  } else if (description && request.input) {
+    const inputPreview = safeStringify(request.input);
+    if (inputPreview) {
+      details.push(inputPreview);
+    }
+>>>>>>> refs/remotes/upstream/tags/v0.17.4
   }
   const name = request.name?.trim();
   return name ? `Wants to use ${name}` : `Needs your approval (${request.kind})`;

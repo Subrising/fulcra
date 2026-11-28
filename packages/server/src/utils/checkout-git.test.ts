@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll } from "vitest";
 import { execFileSync, execSync, spawnSync } from "child_process";
 import {
+  cpSync,
   existsSync,
   mkdtempSync,
   rmSync,
@@ -31,8 +32,10 @@ import {
   getCheckoutShortstat,
   getPullRequestStatus,
   getCheckoutStatus,
+  getCheckoutWorktreeState,
   checkoutResolvedBranch,
   listBranchSuggestions,
+  setCheckoutBaseBranch,
   mergeToBase,
   mergeFromBase,
   MergeConflictError,
@@ -97,9 +100,37 @@ import {
   writePaseoWorktreeMetadata,
 } from "./worktree-metadata.js";
 
+let templateRepoRoot: string | null = null;
+let templateRepoDir: string | null = null;
+
+function getTemplateRepoDir(): string {
+  if (templateRepoDir) return templateRepoDir;
+  templateRepoRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "checkout-git-template-")));
+  templateRepoDir = join(templateRepoRoot, "repo");
+  mkdirSync(templateRepoDir, { recursive: true });
+  execFileSync("git", ["init", "-b", "main"], { cwd: templateRepoDir });
+  execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: templateRepoDir });
+  execFileSync("git", ["config", "user.name", "Test"], { cwd: templateRepoDir });
+  writeFileSync(join(templateRepoDir, "file.txt"), "hello\n");
+  execFileSync("git", ["add", "."], { cwd: templateRepoDir });
+  execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "initial"], {
+    cwd: templateRepoDir,
+  });
+  return templateRepoDir;
+}
+
+afterAll(() => {
+  if (templateRepoRoot) {
+    rmSync(templateRepoRoot, { recursive: true, force: true });
+    templateRepoRoot = null;
+    templateRepoDir = null;
+  }
+});
+
 function initRepo(): { tempDir: string; repoDir: string } {
   const tempDir = realpathSync.native(mkdtempSync(join(tmpdir(), "checkout-git-test-")));
   const repoDir = join(tempDir, "repo");
+<<<<<<< HEAD
   mkdirSync(repoDir, { recursive: true });
   execFileSync("git", ["init", "-b", "main"], { cwd: repoDir });
   execFileSync("git", ["config", "user.email", "noreply@fulcra.ai"], { cwd: repoDir });
@@ -107,6 +138,9 @@ function initRepo(): { tempDir: string; repoDir: string } {
   writeFileSync(join(repoDir, "file.txt"), "hello\n");
   execFileSync("git", ["add", "."], { cwd: repoDir });
   execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "initial"], { cwd: repoDir });
+=======
+  cpSync(getTemplateRepoDir(), repoDir, { recursive: true });
+>>>>>>> refs/remotes/upstream/tags/v0.17.4
   return { tempDir, repoDir };
 }
 
@@ -177,6 +211,7 @@ function createPullRequestStatus(overrides?: Partial<CurrentPullRequestStatus>) 
 
 interface RequestedPullRequestTarget {
   headRef: string;
+  currentBranch?: string;
   headSha?: string;
   headRepositoryOwner?: string;
 }
@@ -193,6 +228,7 @@ function createGitHubServiceRecordingPullRequestTargets(
   github.getCurrentPullRequestStatus = async (request) => {
     options.requestedTargets.push({
       headRef: request.headRef,
+      ...(request.currentBranch ? { currentBranch: request.currentBranch } : {}),
       ...(request.headSha ? { headSha: request.headSha } : {}),
       ...(request.headRepositoryOwner ? { headRepositoryOwner: request.headRepositoryOwner } : {}),
     });
@@ -265,6 +301,56 @@ describe("checkout git utilities", () => {
     __resetCheckoutShortstatCacheForTests();
     __resetPullRequestStatusCacheForTests();
     rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("rejects changing the base of a local checkout without creating metadata", async () => {
+    await expect(setCheckoutBaseBranch({ cwd: repoDir, baseRef: "main" })).rejects.toThrow();
+    expect(existsSync(await getPaseoWorktreeMetadataPath(repoDir))).toBe(false);
+  });
+
+  it("changing a managed worktree base preserves its runtime and PR identity", async () => {
+    const worktree = await createLegacyWorktreeForTest({
+      cwd: repoDir,
+      branchName: "feature/base",
+      baseBranch: "main",
+      worktreeSlug: "base",
+      paseoHome,
+      runSetup: false,
+    });
+    const original = await readPaseoWorktreeMetadata(worktree.worktreePath);
+    execFileSync("git", ["branch", "release"], { cwd: repoDir });
+    await setCheckoutBaseBranch({
+      cwd: worktree.worktreePath,
+      baseRef: "release",
+      context: { paseoHome },
+    });
+    expect(await readPaseoWorktreeMetadata(worktree.worktreePath)).toEqual({
+      ...original,
+      baseRefName: "release",
+      baseRef: "refs/heads/release",
+    });
+    expect(await getCheckoutSnapshotFacts(worktree.worktreePath, { paseoHome })).toMatchObject({
+      storedBaseRef: "refs/heads/release",
+    });
+  });
+
+  it("lists exact local and all remote refs separately for the base picker", async () => {
+    execFileSync("git", ["branch", "release"], { cwd: repoDir });
+    execFileSync("git", ["update-ref", "refs/remotes/origin/release", "HEAD"], { cwd: repoDir });
+    execFileSync("git", ["update-ref", "refs/remotes/upstream/release", "HEAD"], { cwd: repoDir });
+    const suggestions = await listBranchSuggestions(repoDir, {
+      refMode: "exact",
+      query: "release",
+    });
+    expect(suggestions.map((entry) => entry.name).sort()).toEqual([
+      "refs/heads/release",
+      "refs/remotes/origin/release",
+      "refs/remotes/upstream/release",
+    ]);
+    expect(suggestions.find((entry) => entry.name === "refs/heads/release")).toMatchObject({
+      hasLocal: true,
+      hasRemote: false,
+    });
   });
 
   it("throws NotGitRepoError for non-git directories", async () => {
@@ -523,6 +609,15 @@ describe("checkout git utilities", () => {
       .toString()
       .trim();
     expect(message).toBe("update file");
+  });
+
+  it("counts untracked files as dirty when the repository hides them from status", async () => {
+    execFileSync("git", ["config", "status.showUntrackedFiles", "no"], { cwd: repoDir });
+    writeFileSync(join(repoDir, "new-file.txt"), "not yet added\n");
+    expect(execFileSync("git", ["status", "--porcelain"], { cwd: repoDir }).toString()).toBe("");
+
+    expect((await getCheckoutStatus(repoDir)).isDirty).toBe(true);
+    expect((await getCheckoutWorktreeState(repoDir, {})).isDirty).toBe(true);
   });
 
   it("honors commit signing configuration", async () => {
@@ -843,15 +938,23 @@ const x = 1;
   });
 
   it("exposes hasRemote when origin is configured", async () => {
+    const withoutRemote = await getCheckoutStatus(repoDir);
+    expect(withoutRemote).toMatchObject({
+      isGit: true,
+      hasRemote: false,
+      upstreamState: "none",
+    });
+
     const remoteDir = join(tempDir, "remote.git");
     execFileSync("git", ["init", "--bare", "-b", "main", remoteDir]);
     execFileSync("git", ["remote", "add", "origin", remoteDir], { cwd: repoDir });
 
     const status = await getCheckoutStatus(repoDir);
-    expect(status.isGit).toBe(true);
-    if (status.isGit) {
-      expect(status.hasRemote).toBe(true);
-    }
+    expect(status).toMatchObject({
+      isGit: true,
+      hasRemote: true,
+      upstreamState: "none",
+    });
   });
 
   it("reports ahead/behind relative to origin on the base branch", async () => {
@@ -924,6 +1027,7 @@ const x = 1;
       return;
     }
     expect(status.upstreamRef).toBe("refs/remotes/upstream/main");
+    expect(status.upstreamState).toBe("tracked");
   });
 
   it("reports the upstream branch name when it differs from the local branch name", async () => {
@@ -953,6 +1057,191 @@ const x = 1;
     }
     expect(status.upstreamRef).toBe("refs/remotes/upstream/main");
     expect(status.aheadOfOrigin).toBe(0);
+    expect(status.hasRemote).toBe(false);
+    expect(status.upstreamState).toBe("tracked");
+  });
+
+  it("reports origin as the first push remote for a never-pushed branch", async () => {
+    setupRemoteTrackingMain(repoDir, tempDir);
+    execFileSync("git", ["checkout", "-b", "feature"], { cwd: repoDir });
+    commitFile(repoDir, "feature.txt", "feature\n", "feature commit");
+
+    const status = await getCheckoutStatus(repoDir);
+
+    expect(status).toMatchObject({ upstreamState: "none", firstPushRemote: "origin" });
+  });
+
+  // The daemon's first push goes to origin. When git would send the branch to a fork instead,
+  // the status must not present origin as the place to publish it, and Push must not send it.
+  it.each([
+    { name: "the branch's pushRemote", key: "branch.feature.pushRemote" },
+    { name: "remote.pushDefault", key: "remote.pushDefault" },
+  ])("does not publish to origin when $name sends the branch to a fork", async ({ key }) => {
+    const { remoteDir } = setupRemoteTrackingMain(repoDir, tempDir);
+    const forkDir = join(tempDir, "fork.git");
+    execFileSync("git", ["init", "--bare", "-b", "main", forkDir]);
+    execFileSync("git", ["remote", "add", "fork", forkDir], { cwd: repoDir });
+    execFileSync("git", ["checkout", "-b", "feature"], { cwd: repoDir });
+    execFileSync("git", ["config", key, "fork"], { cwd: repoDir });
+    commitFile(repoDir, "feature.txt", "feature\n", "feature commit");
+
+    const status = await getCheckoutStatus(repoDir);
+    await expect(pushCurrentBranch(repoDir)).rejects.toThrow(
+      "Git is set to push this branch to 'fork'",
+    );
+
+    expect(status).toMatchObject({
+      upstreamState: "none",
+      hasRemote: true,
+      firstPushRemote: null,
+    });
+    const originBranches = execFileSync("git", ["--git-dir", remoteDir, "branch", "--list"])
+      .toString()
+      .trim();
+    expect(originBranches).toBe("* main");
+  });
+
+  it("still publishes a branch that tracks a local branch to origin", async () => {
+    const { remoteDir } = setupRemoteTrackingMain(repoDir, tempDir);
+    execFileSync("git", ["checkout", "-b", "feature", "--track", "main"], { cwd: repoDir });
+    commitFile(repoDir, "feature.txt", "feature\n", "feature commit");
+
+    await pushCurrentBranch(repoDir);
+
+    const localHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoDir })
+      .toString()
+      .trim();
+    const remoteHead = execFileSync("git", [
+      "--git-dir",
+      remoteDir,
+      "rev-parse",
+      "refs/heads/feature",
+    ])
+      .toString()
+      .trim();
+    expect(remoteHead).toBe(localHead);
+  });
+
+  // With a tag of the same name, git spells the current branch "heads/release". Its settings and
+  // its ref are still stored under "release".
+  describe("a branch that shares its name with a tag", () => {
+    it("does not publish to origin when the branch's pushRemote sends it to a fork", async () => {
+      const { remoteDir } = setupRemoteTrackingMain(repoDir, tempDir);
+      const forkDir = join(tempDir, "fork.git");
+      execFileSync("git", ["init", "--bare", "-b", "main", forkDir]);
+      execFileSync("git", ["remote", "add", "fork", forkDir], { cwd: repoDir });
+      execFileSync("git", ["checkout", "-b", "release"], { cwd: repoDir });
+      execFileSync("git", ["config", "branch.release.pushRemote", "fork"], { cwd: repoDir });
+      commitFile(repoDir, "release.txt", "release\n", "release commit");
+      execFileSync("git", ["tag", "release"], { cwd: repoDir });
+
+      const status = await getCheckoutStatus(repoDir);
+      await expect(pushCurrentBranch(repoDir)).rejects.toThrow(
+        "Git is set to push this branch to 'fork'",
+      );
+
+      expect(status).toMatchObject({ upstreamState: "none", firstPushRemote: null });
+      const originBranches = execFileSync("git", ["--git-dir", remoteDir, "branch", "--list"])
+        .toString()
+        .trim();
+      expect(originBranches).toBe("* main");
+    });
+
+    it("does not report a branch whose remote copy was deleted as never pushed", async () => {
+      setupRemoteTrackingMain(repoDir, tempDir);
+      execFileSync("git", ["checkout", "-b", "release"], { cwd: repoDir });
+      commitFile(repoDir, "release.txt", "release\n", "release commit");
+      execFileSync("git", ["push", "-u", "origin", "release"], { cwd: repoDir });
+      execFileSync("git", ["tag", "release"], { cwd: repoDir });
+      execFileSync("git", ["push", "origin", "--delete", "refs/heads/release"], { cwd: repoDir });
+      execFileSync("git", ["fetch", "--prune", "origin"], { cwd: repoDir });
+
+      const status = await getCheckoutStatus(repoDir);
+
+      expect(status).toMatchObject({ upstreamState: "gone", aheadOfOrigin: null });
+    });
+
+    it("pushes a branch that tracks a fork to the fork", async () => {
+      const { remoteDir } = setupRemoteTrackingMain(repoDir, tempDir);
+      const forkDir = join(tempDir, "fork.git");
+      execFileSync("git", ["init", "--bare", "-b", "main", forkDir]);
+      execFileSync("git", ["remote", "add", "fork", forkDir], { cwd: repoDir });
+      execFileSync("git", ["checkout", "-b", "release"], { cwd: repoDir });
+      commitFile(repoDir, "release.txt", "release\n", "release commit");
+      execFileSync("git", ["push", "-u", "fork", "release"], { cwd: repoDir });
+      execFileSync("git", ["tag", "release"], { cwd: repoDir });
+      commitFile(repoDir, "release.txt", "release two\n", "second release commit");
+
+      await pushCurrentBranch(repoDir);
+
+      const localHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoDir })
+        .toString()
+        .trim();
+      const forkHead = execFileSync("git", [
+        "--git-dir",
+        forkDir,
+        "rev-parse",
+        "refs/heads/release",
+      ])
+        .toString()
+        .trim();
+      expect(forkHead).toBe(localHead);
+      const originBranches = execFileSync("git", ["--git-dir", remoteDir, "branch", "--list"])
+        .toString()
+        .trim();
+      expect(originBranches).toBe("* main");
+    });
+  });
+
+  it("still publishes a never-pushed Paseo worktree branch to origin in a fork setup", async () => {
+    const { remoteDir } = setupRemoteTrackingMain(repoDir, tempDir);
+    const forkDir = join(tempDir, "fork.git");
+    execFileSync("git", ["init", "--bare", "-b", "main", forkDir]);
+    execFileSync("git", ["remote", "add", "fork", forkDir], { cwd: repoDir });
+    execFileSync("git", ["config", "remote.pushDefault", "fork"], { cwd: repoDir });
+    const worktree = await createLegacyWorktreeForTest({
+      branchName: "worktree-feature",
+      cwd: repoDir,
+      baseBranch: "main",
+      worktreeSlug: "worktree-feature",
+      paseoHome,
+    });
+    const worktreeDir = worktree.worktreePath;
+    commitFile(worktreeDir, "feature.txt", "feature\n", "feature commit");
+
+    await pushCurrentBranch(worktreeDir, undefined, { paseoHome });
+
+    const localHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: worktreeDir })
+      .toString()
+      .trim();
+    const remoteHead = execFileSync("git", [
+      "--git-dir",
+      remoteDir,
+      "rev-parse",
+      "refs/heads/worktree-feature",
+    ])
+      .toString()
+      .trim();
+    expect(remoteHead).toBe(localHead);
+  });
+
+  // Push's first push targets origin, so without origin a never-pushed branch has nowhere to go.
+  it("reports a never-pushed branch and refuses its first push when origin is missing", async () => {
+    const forkDir = join(tempDir, "fork.git");
+    execFileSync("git", ["init", "--bare", "-b", "main", forkDir]);
+    execFileSync("git", ["remote", "add", "upstream", forkDir], { cwd: repoDir });
+    execFileSync("git", ["checkout", "-b", "local-only"], { cwd: repoDir });
+    commitFile(repoDir, "local-only.txt", "local\n", "local commit");
+
+    const status = await getCheckoutStatus(repoDir);
+
+    expect(status).toMatchObject({
+      isGit: true,
+      upstreamState: "none",
+      hasRemote: false,
+      firstPushRemote: null,
+    });
+    await expect(pushCurrentBranch(repoDir)).rejects.toThrow("Remote 'origin' is not configured.");
   });
 
   // A legal local branch named "origin/main" shadows the short form "origin/main" in git's
@@ -986,6 +1275,8 @@ const x = 1;
     }
     expect(status.upstreamRef).toBeNull();
     expect(status.aheadOfOrigin).toBeNull();
+    expect(status.upstreamState).toBe("none");
+    expect(status.aheadBehind).toEqual({ ahead: 1, behind: 0 });
   });
 
   it("reports a PR worktree as not ahead when its branch is pushed to the configured PR remote", async () => {
@@ -1089,6 +1380,79 @@ const x = 1;
     }
     expect(status.aheadOfOrigin).toBeNull();
     expect(status.behindOfOrigin).toBeNull();
+    expect(status.upstreamRef).toBeNull();
+    expect(status.upstreamState).toBe("gone");
+  });
+
+  it("does not report a published branch as never pushed when the clone fetches only main", async () => {
+    setupRemoteTrackingMain(repoDir, tempDir);
+    // What `git clone --single-branch` and `--depth` leave behind: no tracking ref for other branches.
+    execFileSync(
+      "git",
+      ["config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main"],
+      { cwd: repoDir },
+    );
+    execFileSync("git", ["checkout", "-b", "feature"], { cwd: repoDir });
+    commitFile(repoDir, "feature.txt", "feature\n", "feature commit");
+    execFileSync("git", ["push", "-u", "origin", "feature"], { cwd: repoDir });
+    execFileSync("git", ["push", "origin", "--delete", "feature"], { cwd: repoDir });
+    execFileSync("git", ["fetch", "--prune", "origin"], { cwd: repoDir });
+
+    const status = await getCheckoutStatus(repoDir);
+
+    expect(status).toMatchObject({
+      isGit: true,
+      aheadBehind: { ahead: 1, behind: 0 },
+      upstreamRef: null,
+      aheadOfOrigin: null,
+      upstreamState: "unknown",
+    });
+  });
+
+  it("re-publishes a Paseo worktree branch whose remote copy was deleted and pruned", async () => {
+    const { remoteDir } = setupRemoteTrackingMain(repoDir, tempDir);
+    const worktree = await createLegacyWorktreeForTest({
+      branchName: "merged-feature",
+      cwd: repoDir,
+      baseBranch: "main",
+      worktreeSlug: "merged-feature",
+      paseoHome,
+    });
+    const worktreeDir = worktree.worktreePath;
+    commitFile(worktreeDir, "feature.txt", "feature\n", "feature commit");
+    execFileSync("git", ["push", "-u", "origin", "merged-feature"], { cwd: worktreeDir });
+    execFileSync("git", ["push", "origin", "--delete", "merged-feature"], { cwd: worktreeDir });
+    execFileSync("git", ["fetch", "--prune", "origin"], { cwd: worktreeDir });
+
+    const gone = await getCheckoutStatus(worktreeDir, { paseoHome });
+    expect(gone).toMatchObject({
+      isPaseoOwnedWorktree: true,
+      aheadBehind: { ahead: 1, behind: 0 },
+      aheadOfOrigin: null,
+      upstreamState: "gone",
+    });
+
+    await pushCurrentBranch(worktreeDir);
+
+    const localHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: worktreeDir })
+      .toString()
+      .trim();
+    const remoteHead = execFileSync("git", [
+      "--git-dir",
+      remoteDir,
+      "rev-parse",
+      "refs/heads/merged-feature",
+    ])
+      .toString()
+      .trim();
+    expect(remoteHead).toBe(localHead);
+    const republished = await getCheckoutStatus(worktreeDir, { paseoHome });
+    expect(republished).toMatchObject({
+      upstreamRef: "refs/remotes/origin/merged-feature",
+      upstreamState: "tracked",
+      aheadOfOrigin: 0,
+      behindOfOrigin: 0,
+    });
   });
 
   it("does not report full history as unpushed for fresh no-track Paseo worktrees", async () => {
@@ -1923,6 +2287,13 @@ const x = 1;
     expect(status.isPaseoOwnedWorktree).toBe(false);
     expect(realpathSync.native(status.mainRepoRoot ?? "")).toBe(realpathSync.native(repoDir));
     expect(status.currentBranch).toBe("feature/plain");
+  });
+
+  it("rejects merging a branch into its own same-named remote base", async () => {
+    execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: repoDir });
+    await expect(mergeToBase(repoDir, { baseRef: "refs/remotes/origin/main" })).rejects.toThrow(
+      "Cannot merge a branch into itself",
+    );
   });
 
   it("merges the current branch into base from a worktree checkout", async () => {
@@ -3397,7 +3768,7 @@ const x = 1;
       { paseoHome },
     );
 
-    expect(requestedTargets).toEqual([factsTarget]);
+    expect(requestedTargets).toEqual([{ ...factsTarget, currentBranch: "tender-parrot" }]);
   });
 
   it("uses the tracked fork branch for PR worktree status lookup", async () => {
@@ -3427,7 +3798,11 @@ const x = 1;
     const status = await getPullRequestStatus(repoDir, github);
 
     expect(requestedTargets).toEqual([
-      expect.objectContaining({ headRef: "main", headRepositoryOwner: "chethanuk" }),
+      expect.objectContaining({
+        headRef: "main",
+        currentBranch: "chethanuk/main",
+        headRepositoryOwner: "chethanuk",
+      }),
     ]);
     expect(status.status?.number).toBe(345);
     expect(status.status?.headRefName).toBe("main");
@@ -3456,6 +3831,20 @@ const x = 1;
     expect(status.status?.headRefName).toBe("feature");
     expect(status.status?.isMerged).toBe(false);
     expect(status.status?.state).toBe("closed");
+  });
+
+  it("looks up PR status again when switching branches at the same commit", async () => {
+    execFileSync("git", ["checkout", "-b", "feature"], { cwd: repoDir });
+    const requestedTargets: RequestedPullRequestTarget[] = [];
+    const forge = createGitHubServiceRecordingPullRequestTargets({ requestedTargets });
+
+    const feature = await getPullRequestStatus(repoDir, forge);
+    execFileSync("git", ["checkout", "main"], { cwd: repoDir });
+    const main = await getPullRequestStatus(repoDir, forge);
+
+    expect(feature.status?.headRefName).toBe("feature");
+    expect(main.status?.headRefName).toBe("main");
+    expect(requestedTargets.map(({ headRef }) => headRef)).toEqual(["feature", "main"]);
   });
 
   it("caches PR status results for duplicate lookups", async () => {

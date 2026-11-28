@@ -65,6 +65,7 @@ class Observation implements ManagedObservation, ObservationHost {
   }
 
   async start(): Promise<void> {
+<<<<<<< HEAD
     const rootStats = await stat(this.root);
     if (!rootStats.isDirectory()) {
       throw new Error(`File observation requires a directory: ${this.root}`);
@@ -72,7 +73,15 @@ class Observation implements ManagedObservation, ObservationHost {
     // An aborted subscription can close the observation while the root is being read; the backend
     // must not start after its close has already finished.
     if (!this.isActive()) return;
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.17.4
     try {
+      const rootStats = await stat(this.root);
+      if (!rootStats.isDirectory()) {
+        throw new Error(`File observation requires a directory: ${this.root}`);
+      }
+      // Shutdown can close the observation while stat is pending.
+      if (!this.isActive()) return;
       await this.backend.start();
     } catch (error) {
       await this.close();
