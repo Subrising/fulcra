@@ -11,11 +11,18 @@ import { i18n } from "@/i18n/i18next";
 
 const DESKTOP_SETTINGS_QUERY_KEY = ["desktop-settings"] as const;
 
+<<<<<<< HEAD
 export const DIGEST_MINUTES = [5, 15, 30, 60] as const;
 export type DigestMinutes = (typeof DIGEST_MINUTES)[number];
+=======
+export type DesktopUpdateMode = "automatic" | "notify" | "off";
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
 
 export interface DesktopSettings {
   releaseChannel: ReleaseChannel;
+  updates: {
+    mode: DesktopUpdateMode;
+  };
   notifications: {
     playSound: boolean;
     delivery: "immediate" | "digest";
@@ -30,12 +37,16 @@ export interface DesktopSettings {
 
 export interface DesktopSettingsPatch {
   releaseChannel?: ReleaseChannel;
+  updates?: Partial<DesktopSettings["updates"]>;
   notifications?: Partial<DesktopSettings["notifications"]>;
   daemon?: Partial<DesktopSettings["daemon"]>;
 }
 
 export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   releaseChannel: "stable",
+  updates: {
+    mode: "automatic",
+  },
   notifications: {
     playSound: true,
     delivery: "immediate",
@@ -158,13 +169,24 @@ export async function migrateLegacyDesktopSettings(input: {
   await invokeDesktopCommand("migrate_legacy_desktop_settings", input);
 }
 
+function parseUpdateMode(value: unknown): DesktopUpdateMode {
+  if (value === "automatic" || value === "notify" || value === "off") {
+    return value;
+  }
+  return DEFAULT_DESKTOP_SETTINGS.updates.mode;
+}
+
 function parseDesktopSettings(raw: unknown): DesktopSettings {
   const record = isRecord(raw) ? raw : {};
+  const updates = isRecord(record.updates) ? record.updates : {};
   const notifications = isRecord(record.notifications) ? record.notifications : {};
   const daemon = isRecord(record.daemon) ? record.daemon : {};
 
   return {
     releaseChannel: record.releaseChannel === "beta" ? "beta" : "stable",
+    updates: {
+      mode: parseUpdateMode(updates.mode),
+    },
     notifications: {
       playSound:
         typeof notifications.playSound === "boolean"
@@ -195,6 +217,10 @@ function mergeDesktopSettings(
 ): DesktopSettings {
   return {
     releaseChannel: updates.releaseChannel ?? current.releaseChannel,
+    updates: {
+      ...current.updates,
+      ...updates.updates,
+    },
     notifications: {
       ...current.notifications,
       ...updates.notifications,
@@ -209,6 +235,7 @@ function mergeDesktopSettings(
 function normalizePatch(updates: DesktopSettingsPatch): Record<string, unknown> {
   return {
     ...(updates.releaseChannel ? { releaseChannel: updates.releaseChannel } : {}),
+    ...(updates.updates ? { updates: updates.updates } : {}),
     ...(updates.notifications ? { notifications: updates.notifications } : {}),
     ...(updates.daemon ? { daemon: updates.daemon } : {}),
   };

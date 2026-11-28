@@ -1,9 +1,11 @@
 import { preparePluginCatalog } from "./bundle-trust";
 import { useVoiceAudioEngineOptional } from "@/contexts/voice-context";
 import { useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { useHostFeatureAvailability } from "@/runtime/host-features";
 import { useHostRuntimeIsConnected } from "@/runtime/host-runtime";
+import { pluginListQueryKey } from "./plugin-list";
 import { pluginRegistry } from "./registry";
 import { sha256Hex } from "./catalog-hash";
 import { pluginSettingsKey, pluginSettingsPrefix } from "./settings/query";
@@ -24,6 +26,7 @@ export function PluginCatalogSync({
   const audio = useVoiceAudioEngineOptional();
   const connected = useHostRuntimeIsConnected(serverId);
   const supported = useHostFeatureAvailability(serverId, "plugins");
+<<<<<<< HEAD
   const paging = useHostFeatureAvailability(serverId, "pluginCatalogPaging");
 
   useEffect(() => {
@@ -170,6 +173,25 @@ export function PluginCatalogSync({
         .catch((error) => console.warn("[Plugins] Failed to release catalog", error));
     };
   }, [audio, client, connected, serverId, supported, paging]);
+=======
+  const queryClient = useQueryClient();
+
+  useEffect(
+    () =>
+      syncPluginCatalog({
+        serverId,
+        client,
+        audio,
+        connected,
+        supported,
+        registry: pluginRegistry,
+        onCatalogChanged: () => {
+          void queryClient.invalidateQueries({ queryKey: pluginListQueryKey(serverId) });
+        },
+      }),
+    [audio, client, connected, queryClient, serverId, supported],
+  );
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
 
   useEffect(() => () => pluginRegistry.removeHost(serverId), [serverId]);
   return null;

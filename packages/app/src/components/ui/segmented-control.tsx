@@ -4,11 +4,12 @@ import type { StyleProp, TextStyle, ViewStyle } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import {
   createControlGeometry,
-  segmentedIconSize,
-  type SegmentedControlSize,
+  controlIconSize,
+  type ControlSize,
 } from "@/components/ui/control-geometry";
 import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { useContainedControlSize } from "@/components/ui/control-size";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Theme } from "@/styles/theme";
 
 type SegmentedControlIconRenderer = (props: { color: string; size: number }) => ReactNode;
@@ -19,14 +20,18 @@ export interface SegmentedControlOption<T extends string> {
   icon?: SegmentedControlIconRenderer;
   disabled?: boolean;
   testID?: string;
+  /** Shown below the segment while the pointer is over it. */
+  tooltip?: string;
 }
 
 interface SegmentedControlProps<T extends string> {
   options: SegmentedControlOption<T>[];
-  value: T;
+  value: T | null;
   onValueChange: (value: T) => void;
-  size?: SegmentedControlSize;
+  size?: ControlSize;
   hideLabels?: boolean;
+  /** Share the container's width equally between the segments, for a control that heads a surface. */
+  fill?: boolean;
   style?: StyleProp<ViewStyle>;
   testID?: string;
 }
@@ -52,20 +57,20 @@ export function SegmentedControl<T extends string>({
   onValueChange,
   size: sizeProp,
   hideLabels = false,
+  fill = false,
   style,
   testID,
 }: SegmentedControlProps<T>) {
   const containedSize = useContainedControlSize();
   const size = sizeProp ?? containedSize ?? "md";
   const sizeStyles = {
-    xs: { container: styles.containerXs, segment: styles.segmentXs, label: styles.labelXs },
     sm: { container: styles.containerSm, segment: styles.segmentSm, label: styles.labelSm },
     md: { container: styles.containerMd, segment: styles.segmentMd, label: styles.labelMd },
   }[size];
   const containerSizeStyle = sizeStyles.container;
   const segmentSizeStyle = sizeStyles.segment;
   const labelSizeStyle = sizeStyles.label;
-  const iconSize = segmentedIconSize[size];
+  const iconSize = controlIconSize[size];
 
   const containerStyle = useMemo(
     () => [styles.container, containerSizeStyle, style],
@@ -84,6 +89,7 @@ export function SegmentedControl<T extends string>({
             isSelected={isSelected}
             iconSize={iconSize}
             hideLabels={hideLabels}
+            fill={fill}
             segmentSizeStyle={segmentSizeStyle}
             labelSizeStyle={labelSizeStyle}
             currentValue={value}
@@ -100,6 +106,7 @@ function SegmentItem<T extends string>({
   isSelected,
   iconSize,
   hideLabels,
+  fill,
   segmentSizeStyle,
   labelSizeStyle,
   currentValue,
@@ -109,9 +116,10 @@ function SegmentItem<T extends string>({
   isSelected: boolean;
   iconSize: number;
   hideLabels: boolean;
+  fill: boolean;
   segmentSizeStyle: StyleProp<ViewStyle>;
   labelSizeStyle: StyleProp<TextStyle>;
-  currentValue: T;
+  currentValue: T | null;
   onValueChange: (value: T) => void;
 }) {
   const touch = useTouchTargets();
@@ -128,19 +136,24 @@ function SegmentItem<T extends string>({
     ({ hovered, pressed }: PressableStateCallbackType & { hovered?: boolean }) => [
       styles.segment,
       segmentSizeStyle,
+      fill && styles.segmentFill,
       isSelected && styles.segmentSelected,
       Boolean(hovered) && !isSelected && styles.segmentHover,
       pressed && !isSelected && styles.segmentPressed,
       option.disabled && styles.segmentDisabled,
       touch && touchTargetStyles.iconButton,
     ],
+<<<<<<< HEAD
     [isSelected, option.disabled, segmentSizeStyle, touch],
+=======
+    [fill, isSelected, option.disabled, segmentSizeStyle],
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
   );
   const accessibilityState = useMemo(
     () => ({ selected: isSelected, disabled: option.disabled }),
     [isSelected, option.disabled],
   );
-  return (
+  const segment = (
     <Pressable
       accessibilityRole="button"
       accessibilityState={accessibilityState}
@@ -164,6 +177,15 @@ function SegmentItem<T extends string>({
       )}
     </Pressable>
   );
+  if (!option.tooltip) return segment;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{segment}</TooltipTrigger>
+      <TooltipContent side="bottom" offset={8}>
+        <Text style={styles.tooltipText}>{option.tooltip}</Text>
+      </TooltipContent>
+    </Tooltip>
+  );
 }
 
 const styles = StyleSheet.create((theme) => {
@@ -175,9 +197,6 @@ const styles = StyleSheet.create((theme) => {
       alignItems: "center",
       backgroundColor: "transparent",
       gap: theme.spacing[1],
-    },
-    containerXs: {
-      ...geometry.segmentedContainerXs,
     },
     containerSm: {
       ...geometry.segmentedContainerSm,
@@ -192,14 +211,17 @@ const styles = StyleSheet.create((theme) => {
       flexShrink: 0,
       gap: theme.spacing[1],
     },
-    segmentXs: {
-      ...geometry.segmentedSegmentXs,
-    },
     segmentSm: {
       ...geometry.segmentedSegmentSm,
     },
     segmentMd: {
       ...geometry.segmentedSegmentMd,
+    },
+    segmentFill: {
+      flexGrow: 1,
+      flexBasis: 0,
+      flexShrink: 1,
+      minWidth: 0,
     },
     segmentSelected: {
       backgroundColor: theme.colors.surface3,
@@ -221,9 +243,6 @@ const styles = StyleSheet.create((theme) => {
       color: theme.colors.foregroundMuted,
       fontWeight: theme.fontWeight.normal,
     },
-    labelXs: {
-      ...geometry.segmentedLabelXs,
-    },
     labelSm: {
       ...geometry.segmentedLabelSm,
     },
@@ -232,6 +251,10 @@ const styles = StyleSheet.create((theme) => {
     },
     labelSelected: {
       color: theme.colors.foreground,
+    },
+    tooltipText: {
+      fontSize: theme.fontSize.base,
+      color: theme.colors.popoverForeground,
     },
   };
 });

@@ -1,6 +1,10 @@
 {
   "name": "@getpaseo/builtin-plugins",
+<<<<<<< HEAD
   "version": "0.15.0",
+=======
+  "version": "0.18.0",
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
   "private": true,
   "type": "module",
   "scripts": {

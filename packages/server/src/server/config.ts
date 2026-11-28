@@ -36,6 +36,7 @@ export {
   editPersistedConfig,
   type PersistedConfig,
 } from "./persisted-config.js";
+export { getMainListenAddress } from "./listeners.js";
 
 const DEFAULT_PORT = 6767;
 import { DEFAULT_RELAY_ENDPOINT, relayUsesTls } from "@getpaseo/protocol/daemon-endpoints";
@@ -480,11 +481,11 @@ function resolveTrustedProxiesConfig(
 }
 
 // PASEO_LISTEN can be:
-// - host:port (TCP)
+// - host:port (TCP), with optional comma-separated extra TCP listeners
 // - /path/to/socket (Unix socket)
 // - unix:///path/to/socket (Unix socket)
 // Default is TCP at 127.0.0.1:6767
-function resolveListenAddress(
+export function resolveListenAddress(
   env: NodeJS.ProcessEnv,
   cli: CliConfigOverrides | undefined,
   persisted: ReturnType<typeof loadPersistedConfig>,

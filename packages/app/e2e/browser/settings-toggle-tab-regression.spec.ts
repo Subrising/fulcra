@@ -6,6 +6,7 @@ import { createMockIdleAgent, openWorkspaceWithAgents } from "../support/helpers
 import { waitForTabBar, expectAgentTabActive } from "../support/helpers/launcher";
 import { seedWorkspace } from "../support/helpers/seed-client";
 import { getServerId } from "../support/helpers/server-id";
+import { openSettingsSection } from "../support/helpers/settings";
 
 async function pressSettingsToggleShortcut(page: import("@playwright/test").Page) {
   const modifier = process.platform === "darwin" ? "Meta" : "Control";
@@ -135,7 +136,11 @@ test.describe("Settings toggle tab regression", () => {
 
       await pressSettingsToggleShortcut(page);
       await expect(page).toHaveURL(/\/settings\/general$/);
+<<<<<<< HEAD
       await openSettingsSection(page, "behaviour");
+=======
+      await openSettingsSection(page, "chat");
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
 
       const defaultSendTrigger = page.getByRole("button", {
         name: "Default send: Steer",
@@ -326,8 +331,12 @@ test("send shortcut selection persists and controls the composer", async ({ page
     });
     await test.step("choose the explicit modifier shortcut and retain it after reload", async () => {
       await pressSettingsToggleShortcut(page);
+<<<<<<< HEAD
       // FULCRA(FU-657): Fulcra keeps the send options in its "Sending & opening" section, not on the first settings page.
       await openSettingsSection(page, "behaviour");
+=======
+      await openSettingsSection(page, "chat");
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
       await expect(
         page.getByRole("button", { name: "Send shortcut: Enter", exact: true }),
       ).toBeVisible();
@@ -355,8 +364,12 @@ test("send shortcut selection persists and controls the composer", async ({ page
     });
     await test.step("switch back to Enter without changing the default send behavior", async () => {
       await pressSettingsToggleShortcut(page);
+<<<<<<< HEAD
       // FULCRA(FU-657): Fulcra keeps the send options in its "Sending & opening" section, not on the first settings page.
       await openSettingsSection(page, "behaviour");
+=======
+      await openSettingsSection(page, "chat");
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
       await selectSendingOption(page, "Send shortcut", "Enter");
       await pressSettingsToggleShortcut(page);
       await composer.fill("Shift still edits");
@@ -381,8 +394,12 @@ for (const behavior of ["Steer", "Interrupt", "Queue"] as const) {
       await openAgentRoute(page, agent);
       await expect(page.getByRole("textbox", { name: "Message agent..." })).toBeVisible();
       await pressSettingsToggleShortcut(page);
+<<<<<<< HEAD
       // FULCRA(FU-657): Fulcra keeps the send options in its "Sending & opening" section, not on the first settings page.
       await openSettingsSection(page, "behaviour");
+=======
+      await openSettingsSection(page, "chat");
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
       await selectSendingOption(page, "Send shortcut", `${modifierLabel}+Enter`);
       await selectSendingOption(page, "Default send", behavior);
       await pressSettingsToggleShortcut(page);

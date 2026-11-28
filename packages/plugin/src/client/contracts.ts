@@ -1,10 +1,23 @@
+import type { WorkspaceRef, AgentRef, ProjectRef, TerminalRef } from "../refs.js";
 import type { PluginText } from "../text.js";
 import type { ComponentType } from "react";
-import type { PaseoApi } from "@getpaseo/client";
+import type { PluginPaseoApi } from "./reference-api.js";
 import type { AgentTimelineItem, JsonValue } from "@getpaseo/protocol/agent-types";
 import type { ZodType, input as ZodInput, output as ZodOutput } from "zod";
 import type { PluginFile } from "./file.js";
-import type { PluginRpcContract } from "../rpc.js";
+import type {
+  PluginComposer,
+  PluginComposerItemContribution,
+  PluginComposerSelector,
+} from "./composer.js";
+import type { PluginNewWorkspaceItemContribution } from "./new-workspace.js";
+import type {
+  PluginRpcContract,
+  PluginSubscribeOptions,
+  PluginSubscriptionContract,
+  PluginSubscriptionHandle,
+  PluginWireInput,
+} from "../rpc.js";
 import type {
   PluginButtonRegistration,
   PluginHeaderButtonContribution,
@@ -20,6 +33,7 @@ import type {
   PluginCleanup,
 } from "../contracts.js";
 import type { PluginIconProps, PluginSerializableIcon } from "../icons.js";
+import type { PluginNotificationOpenHandler } from "./notifications.js";
 
 export interface PluginHostProps {
   theme: PluginTheme;
@@ -33,15 +47,33 @@ export interface PluginHostProps {
   };
 }
 
+export interface PluginHostNavigationActions {
+  readonly openAgent: (input: {
+    readonly agentId: string;
+    readonly serverId?: string;
+    /** Select only the destination host in the sidebar and clear project/label filters. */
+    readonly focusHost?: boolean;
+  }) => void;
+  readonly openWorkspace: (input: {
+    readonly workspaceId: string;
+    readonly serverId?: string;
+    /** Select only the destination host in the sidebar and clear project/label filters. */
+    readonly focusHost?: boolean;
+  }) => void;
+}
+
 interface PluginNavigableHostProps extends PluginHostProps {
   /** Client-owned navigation. Undefined on older hosts; hide dependent affordances when absent. */
-  readonly navigation?: {
+  readonly navigation?: PluginHostNavigationActions & {
+    /** This client supports the focusHost option on agent/workspace navigation. */
+    readonly supportsFocusHost?: boolean;
     /** Present only on Electron. The browser runs locally; serverId selects workspace ownership. */
     readonly openBrowser?: (input: {
       readonly url: string;
       readonly workspaceId: string;
       readonly serverId?: string;
     }) => void;
+<<<<<<< HEAD
     /** Opens the app's main architecture map for a workspace. Absent on older apps. */
     readonly openArchitectureMap?: (input: {
       readonly workspaceId: string;
@@ -73,6 +105,8 @@ interface PluginNavigableHostProps extends PluginHostProps {
       readonly serverId: string;
       readonly agentId: string;
     }) => "requested" | "host-unavailable";
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
   };
 }
 
@@ -114,6 +148,40 @@ export interface PluginSidebarItemContribution<Text extends PluginText = string>
   /** Settings row label, accessibility label, and default label for SidebarRow. */
   title: Text;
   Component: ComponentType<PluginSidebarItemProps>;
+}
+
+export interface PluginSidebarViewProps extends Pick<PluginHostProps, "theme" | "layout"> {
+  active: { workspace: WorkspaceRef | null; agent: AgentRef | null };
+  navigation: {
+    openWorkspace(ref: WorkspaceRef): void;
+    openAgent(ref: AgentRef): void;
+    openTerminal(ref: TerminalRef): void;
+    openProject(ref: ProjectRef): void;
+  };
+  dismiss(): void;
+}
+
+export interface PluginSidebarViewContribution<Text extends PluginText = string> {
+  id: string;
+  title: Text;
+  description?: Text;
+  Component: ComponentType<PluginSidebarViewProps>;
+}
+
+export interface PluginWorkspaceRowBadgeItemProps extends PluginHostProps {
+  workspaceId: string;
+}
+
+/**
+ * Part of the line under a workspace's title in the sidebar, on every workspace of the plugin's host.
+ * Render `WorkspaceRowBadge`, or nothing when there is nothing to say about this workspace.
+ */
+export interface PluginWorkspaceRowBadgeItemContribution<Text extends PluginText = string> {
+  id: string;
+  /** The item's toggle in the sidebar's Show menu. */
+  title: Text;
+  icon: PluginIcon;
+  Component: ComponentType<PluginWorkspaceRowBadgeItemProps>;
 }
 
 /**
@@ -268,9 +336,13 @@ export interface PluginClientContext extends PluginCommandCapabilities, PluginCl
   playAudio(source: { base64: string; mimeType: string }): Promise<void>;
   addSettingsScreen(contribution: PluginSettingsScreenContribution<PluginText>): PluginCleanup;
   addScreen(contribution: PluginScreenContribution<PluginText>): PluginCleanup;
+  addSidebarView(contribution: PluginSidebarViewContribution<PluginText>): PluginCleanup;
   addSidebarHeaderItem(contribution: PluginSidebarItemContribution<PluginText>): PluginCleanup;
   addSidebarFooterItem(contribution: PluginSidebarItemContribution<PluginText>): PluginCleanup;
   addAgentPanel(contribution: PluginAgentPanelContribution<PluginText>): PluginCleanup;
+  addWorkspaceRowBadgeItem(
+    contribution: PluginWorkspaceRowBadgeItemContribution<PluginText>,
+  ): PluginCleanup;
   addWorkspacePanel(contribution: PluginWorkspacePanelContribution<PluginText>): PluginCleanup;
   addCommandCenterItem(
     contribution: PluginCommandCenterItemContribution<PluginText>,
@@ -283,6 +355,8 @@ export interface PluginClientContext extends PluginCommandCapabilities, PluginCl
     contribution: PluginComposerPillContribution<PluginText>,
   ): PluginButtonRegistration<PluginText>;
   addAttachmentSource(contribution: PluginAttachmentSourceContribution<PluginText>): PluginCleanup;
+  addComposerItem(contribution: PluginComposerItemContribution): PluginCleanup;
+  addNewWorkspaceItem(contribution: PluginNewWorkspaceItemContribution): PluginCleanup;
   addTheme(contribution: PluginThemeContribution<PluginText>): PluginCleanup;
   addFilePanel(contribution: PluginFilePanelContribution<PluginText>): PluginCleanup;
   addTimelineTransformer<ItemType extends AgentTimelineItem["type"]>(
@@ -291,9 +365,23 @@ export interface PluginClientContext extends PluginCommandCapabilities, PluginCl
   addTimelineRenderer<Schema extends ZodType>(
     contribution: PluginTimelineRendererContribution<Schema>,
   ): PluginCleanup;
+<<<<<<< HEAD
   // FULCRA(plugin-host): turn-footer seam. Optional so plugins feature-detect it on older apps.
   addTurnFooter?(contribution: PluginTurnFooterContribution): PluginCleanup;
+=======
+  onNotificationOpen(handler: PluginNotificationOpenHandler): PluginCleanup;
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
   openPanel(id: string, options: PluginClientOpenPanelOptions): void;
+  /**
+   * Subscribes to a plugin subscription on this client's host. Paseo re-subscribes after a
+   * reconnect and releases what is left when the plugin stops.
+   */
+  subscribe<InputSchema extends ZodType, EventSchema extends ZodType>(
+    contract: PluginSubscriptionContract<InputSchema, EventSchema>,
+    input: PluginWireInput<ZodInput<InputSchema>>,
+    onEvent: (event: ZodOutput<EventSchema>) => void,
+    options?: PluginSubscribeOptions,
+  ): PluginSubscriptionHandle;
 }
 
 export type PluginClientContribution = (client: PluginClientContext) => PluginCleanup;
@@ -404,12 +492,14 @@ export interface PluginTimelineRendererContribution<Schema extends ZodType = Zod
 }
 
 export interface PluginCommandCapabilities {
-  paseo: PaseoApi;
+  paseo: PluginPaseoApi;
   rpc<InputSchema extends ZodType, OutputSchema extends ZodType>(
     contract: PluginRpcContract<InputSchema, OutputSchema>,
-    input: ZodInput<InputSchema>,
+    input: PluginWireInput<ZodInput<InputSchema>>,
   ): Promise<ZodOutput<OutputSchema>>;
   openScreen(input: PluginOpenScreenInput): void;
+  /** The composers `selector` names, whether or not their tabs are open; see `useComposers`. */
+  composers(selector: PluginComposerSelector): readonly PluginComposer[];
   /** @deprecated Use `openScreen`. */
   openSurface(id: string): void;
   openSettings(id: string): void;

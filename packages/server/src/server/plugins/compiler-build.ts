@@ -252,9 +252,10 @@ function wrapCommonJsBundle(code: string): string {
   return `(function(require) {\nvar module = { exports: {} };\nvar exports = module.exports;\n${code}\nreturn module.exports;\n})`;
 }
 
-function makeHermesInteropEager(code: string): string {
-  // Hermes evaluates esbuild's lazy CommonJS interop getters from a string with
+function fixHermesInteropLoopBinding(code: string): string {
+  // Hermes evaluates esbuild's CommonJS interop getters from a string with
   // the final loop binding, so every named import can resolve to the last export.
+<<<<<<< HEAD
   // Plugin bundles execute once and do not need live bindings from host modules.
   // esbuild renames `key` (key10) when the plugin has its own top-level `key`.
   return code.replace(/get: ?\(\) ?=> ?from\[(key\d*)\]/g, "value: from[$1]");
@@ -280,12 +281,17 @@ function lowerForHermes(code: string, minifyWhitespace: boolean): string {
   });
   if (!result?.code) throw new Error("Plugin client compilation produced no output");
   return result.code;
+=======
+  // Bind each key in its own closure while keeping host module getters lazy so
+  // enumerating a host namespace (such as react-native) never triggers unrelated getters.
+  return code.replaceAll("get: () => from[key]", "get: ((k) => () => from[k])(key)");
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
 }
 
 async function minifyClientBundle(code: string): Promise<string> {
   const { transform } = loadEsbuild();
-  // Minify after the eager replace. Whitespace minify rewrites the getter this
-  // replace matches, and identifier minify can delete the helper entirely.
+  // Minify after the loop-binding rewrite. Whitespace minify rewrites the getter
+  // this replace matches, and identifier minify can delete the helper entirely.
   const result = await transform(code, {
     minifyWhitespace: true,
     minifySyntax: true,
@@ -416,9 +422,15 @@ async function compileTarget(
   checkSharedDependencies(result.metafile.inputs, pluginDirectory);
   const output = result.outputFiles[0]?.text;
   if (!output) throw new Error(`Plugin ${target} compilation produced no output`);
+<<<<<<< HEAD
   const eager = makeHermesInteropEager(output);
   let prepared = eager;
   if (target === "client") prepared = lowerForHermes(await minifyClientBundle(eager), true);
+=======
+  const hermesSafe = fixHermesInteropLoopBinding(output);
+  let prepared = hermesSafe;
+  if (target === "client") prepared = await minifyClientBundle(hermesSafe);
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
   return wrapCommonJsBundle(prepared);
 }
 
@@ -434,6 +446,7 @@ export async function compilePlugin(
   clientBundle: string | null;
   serverBundle: string | null;
 }> {
+<<<<<<< HEAD
   const [clientBundle, serverBundle] = await Promise.all([
     entryPaths.client
       ? compileTarget(entryPaths.client, "client", options.minifyWhitespace === true)
@@ -441,8 +454,17 @@ export async function compilePlugin(
     entryPaths.server
       ? compileTarget(entryPaths.server, "server", options.minifyWhitespace === true)
       : null,
+=======
+  // Settle both targets before rethrowing so the compiler worker has no build
+  // left in flight when it replies with an error and can stay warm for reuse.
+  const [clientResult, serverResult] = await Promise.allSettled([
+    entryPaths.client ? compileTarget(entryPaths.client, "client") : Promise.resolve(null),
+    entryPaths.server ? compileTarget(entryPaths.server, "server") : Promise.resolve(null),
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
   ]);
-  return { clientBundle, serverBundle };
+  if (clientResult.status === "rejected") throw clientResult.reason;
+  if (serverResult.status === "rejected") throw serverResult.reason;
+  return { clientBundle: clientResult.value, serverBundle: serverResult.value };
 }
 
 const CLIENT_ENTRY_FILENAMES = ["index.client.ts", "index.client.tsx"] as const;

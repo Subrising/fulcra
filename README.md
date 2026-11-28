@@ -25,9 +25,21 @@
 
 Fulcra keeps your Claude Code and Codex sessions running on your Mac and gives you one place to lead them. Each session keeps its conversation, its own Git worktree and its diffs. The Command Centre shows what needs you, a prime and project leads organise the work, and your phone picks up the same chat while the Mac keeps working. Your code, providers and credentials stay on the host.
 
+<<<<<<< HEAD
 ## Features
+=======
+- **Parallel agents:** Run many agents at once, each in its own worktree.
+- **Built-in orchestration:** Agents in Paseo can create worktrees, launch other agents, and talk to them, across providers.
+- **Complete development workflow:** Edit files, review diffs, open pull requests, and run terminals, in split panes you arrange how you want.
+- **Self-hosted:** Agents run on your machine with your full dev environment. Use your tools, your configs, and your skills.
+- **Multi-provider:** Claude Code, Codex, Copilot, OpenCode, Pi, Antigravity, and Muse Code through the same interface. Pick the right model for each job.
+- **Voice control:** Dictate tasks or talk through problems in voice mode. Hands-free when you need it.
+- **Cross-device:** iOS, Android, desktop, web, and CLI. Start work at your desk, check in from your phone, script it from the terminal.
+- **Privacy-first:** No telemetry, tracking, or forced login. Remote access uses an optional end-to-end encrypted relay.
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
 
 <table>
+<<<<<<< HEAD
   <tr>
     <td width="50%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/features/sessions-dark.png"><img src="docs/assets/features/sessions-light.png" alt="Persistent sessions: Claude Code and Codex conversations that keep their history and survive restarts."></picture></td>
     <td width="50%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/features/worktrees-dark.png"><img src="docs/assets/features/worktrees-light.png" alt="Worktrees and diffs: isolated Git worktrees per task, with the changes and diff beside the chat."></picture></td>
@@ -43,6 +55,12 @@ Fulcra keeps your Claude Code and Codex sessions running on your Mac and gives y
   <tr>
     <td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/features/phone-dark.png"><img src="docs/assets/features/phone-light.png" alt="Check in from your phone: pair a phone and continue a chat while the Mac keeps working."></picture></td>
     <td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/features/git-dark.png"><img src="docs/assets/features/git-light.png" alt="AI Git help: draft commit subjects and PR descriptions with an editable preview."></picture></td>
+=======
+  <tr valign="top">
+    <td align="center" width="33%"><a href="https://hoplite.sh/?utm_source=paseo&utm_medium=readme&utm_campaign=sponsor"><picture><source media="(prefers-color-scheme: dark)" srcset="packages/website/public/sponsors/hoplite-on-dark.svg"><img src="packages/website/public/sponsors/hoplite-on-light.svg" alt="Hoplite" height="56"></picture></a><br><sub>Cloud coding agents</sub></td>
+    <td align="center" width="33%"><a href="https://encore.dev/?utm_source=paseo&utm_medium=readme&utm_campaign=sponsor"><picture><source media="(prefers-color-scheme: dark)" srcset="packages/website/public/sponsors/encore-on-dark.svg"><img src="packages/website/public/sponsors/encore-on-light.svg" alt="Encore" height="56"></picture></a><br><sub>Encore lets AI agents ship to production safely, at scale, in your own cloud.</sub></td>
+    <td align="center" width="33%"><a href="https://paseo.sh/sponsor">Become a sponsor</a></td>
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
   </tr>
 </table>
 
@@ -96,12 +114,26 @@ Fulcra keeps your Claude Code and Codex sessions running on your Mac and gives y
 
 ## How it works
 
+<<<<<<< HEAD
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/how-it-works-dark.png">
     <img src="docs/assets/how-it-works-light.png" width="900" alt="The Mac app and paired phone or web clients connect to the Fulcra host daemon on your Mac, directly or through an optional end-to-end encrypted relay. The daemon starts and resumes Claude Code and Codex CLI sessions and hosts the Command Centre.">
   </picture>
 </p>
+=======
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
+- [Codex](https://github.com/openai/codex)
+- [GitHub Copilot](https://github.com/features/copilot/cli/)
+- [OpenCode](https://github.com/anomalyco/opencode)
+- [Pi](https://pi.dev)
+- [Antigravity](https://paseo.sh/docs/supported-providers/antigravity)
+- [Muse Code](https://paseo.sh/docs/supported-providers/muse-code)
+- [fx](https://paseo.sh/docs/supported-providers/fx)
+- [Hoplite](https://paseo.sh/docs/supported-providers/hoplite)
+
+Paseo also runs Cursor, Gemini CLI, and many other agents. See [Supported providers](https://paseo.sh/docs/supported-providers) for the full list and setup steps.
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
 
 The daemon on your Mac owns the sessions, worktrees and terminals and starts the provider CLIs. Clients authenticate to the host. The Command Centre controller requests work through the daemon bridge; it does not bypass the daemon to acquire provider or device authority. The relay transports encrypted frames and still sees connection metadata. Provider CLIs may send prompts and code to their configured provider services.
 

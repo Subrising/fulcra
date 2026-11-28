@@ -82,7 +82,12 @@ describe("desktop-settings", () => {
 
     expect(settings).toEqual({
       releaseChannel: "stable",
+<<<<<<< HEAD
       notifications: { playSound: true, delivery: "immediate", digestMinutes: 15 },
+=======
+      updates: { mode: "automatic" },
+      notifications: { playSound: true },
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
       daemon: {
         commandCentreEnabled: false,
         manageBuiltInDaemon: false,
@@ -99,13 +104,19 @@ describe("desktop-settings", () => {
     await store.get();
     const next = await store.patch({
       releaseChannel: "beta",
+      updates: { mode: "notify" },
       daemon: { keepRunningAfterQuit: false },
     });
     const files = await readdir(userDataPath);
 
     expect(next).toEqual({
       releaseChannel: "beta",
+<<<<<<< HEAD
       notifications: { playSound: true, delivery: "immediate", digestMinutes: 15 },
+=======
+      updates: { mode: "notify" },
+      notifications: { playSound: true },
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
       daemon: {
         commandCentreEnabled: false,
         manageBuiltInDaemon: false,
@@ -113,6 +124,65 @@ describe("desktop-settings", () => {
       },
     });
     expect(files).toEqual(["desktop-settings.json"]);
+  });
+
+  it("defaults updates.mode to automatic and persists explicit choices across restarts", async () => {
+    const userDataPath = await createTempUserDataDir();
+    directories.add(userDataPath);
+    await writeFile(
+      settingsFilePath(userDataPath),
+      JSON.stringify({
+        version: 1,
+        settings: {
+          releaseChannel: "stable",
+          updates: { mode: "invalid" },
+        },
+        migrations: {
+          legacyRendererSettingsImported: true,
+          daemonStopOnQuitDefaultApplied: true,
+        },
+      }),
+    );
+
+    const defaulted = await createDesktopSettingsStore({ userDataPath }).get();
+    expect(defaulted.updates.mode).toBe("automatic");
+
+    await createDesktopSettingsStore({ userDataPath }).patch({ updates: { mode: "off" } });
+    const persisted = await createDesktopSettingsStore({ userDataPath }).get();
+    expect(persisted.updates.mode).toBe("off");
+  });
+
+  it("serializes overlapping patches so neither update mode nor release channel is lost", async () => {
+    const userDataPath = await createTempUserDataDir();
+    directories.add(userDataPath);
+    const store = createDesktopSettingsStore({ userDataPath });
+
+    const [offResult, betaResult] = await Promise.all([
+      store.patch({ updates: { mode: "off" } }),
+      store.patch({ releaseChannel: "beta" }),
+    ]);
+
+    expect(offResult.updates.mode).toBe("off");
+    expect(betaResult.updates.mode).toBe("off");
+    expect(betaResult.releaseChannel).toBe("beta");
+
+    const reloaded = await createDesktopSettingsStore({ userDataPath }).get();
+    expect(reloaded.updates.mode).toBe("off");
+    expect(reloaded.releaseChannel).toBe("beta");
+  });
+
+  it("waits for an in-flight patch before resolving get() from cache", async () => {
+    const userDataPath = await createTempUserDataDir();
+    directories.add(userDataPath);
+    const store = createDesktopSettingsStore({ userDataPath });
+
+    await store.patch({ updates: { mode: "off" } });
+    const patchPromise = store.patch({ updates: { mode: "automatic" } });
+    const readDuringPatch = store.get();
+
+    const [patched, read] = await Promise.all([patchPromise, readDuringPatch]);
+    expect(patched.updates.mode).toBe("automatic");
+    expect(read.updates.mode).toBe("automatic");
   });
 
   it("defaults notification sounds on for existing settings documents", async () => {
@@ -303,7 +373,12 @@ describe("desktop-settings", () => {
 
     expect(migrated).toEqual({
       releaseChannel: "beta",
+<<<<<<< HEAD
       notifications: { playSound: true, delivery: "immediate", digestMinutes: 15 },
+=======
+      updates: { mode: "automatic" },
+      notifications: { playSound: true },
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
       daemon: {
         commandCentreEnabled: false,
         manageBuiltInDaemon: false,
@@ -349,12 +424,18 @@ describe("desktop-settings", () => {
     expect(persisted.settings.releaseChannel).toBe("beta");
     expect(next).toEqual({
       releaseChannel: "beta",
+<<<<<<< HEAD
       notifications: { playSound: false, delivery: "immediate", digestMinutes: 15 },
       daemon: {
         manageBuiltInDaemon: true,
         keepRunningAfterQuit: false,
         commandCentreEnabled: false,
       },
+=======
+      updates: { mode: "automatic" },
+      notifications: { playSound: false },
+      daemon: { manageBuiltInDaemon: true, keepRunningAfterQuit: false },
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
     });
   });
 

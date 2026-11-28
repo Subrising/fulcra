@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import { CommandCentreSection } from "@/desktop/components/desktop-updates-section";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
@@ -12,6 +13,18 @@ import {
 import { useRouter } from "expo-router";
 import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { useFocusEffect } from "expo-router/react-navigation";
+=======
+import { useSettingsContentPresented } from "@/navigation/settings-presentation";
+import { registerRouteLeaveGuard } from "@/navigation/route-leave-guard";
+import { AppearanceText as Text } from "@/appearance/text";
+import { useHardwareKeyboardPresent } from "@/keyboard";
+import { useAddHost } from "@/hosts/add-host";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ComponentType, ReactNode } from "react";
+import { Alert, Pressable, ScrollView, View, type PressableStateCallbackType } from "react-native";
+import { useNavigation, useRouter } from "expo-router";
+import { useFocusEffect, usePreventRemove } from "expo-router/react-navigation";
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
@@ -21,33 +34,41 @@ import {
   ArrowLeft,
   Palette,
   Server,
-  Network,
-  Bot,
   Boxes,
   Gauge,
   Keyboard,
-  Stethoscope,
   Info,
   Bell,
-  Shield,
-  Puzzle,
   Plus,
+  FolderOpen,
   FolderGit2,
   SquareTerminal,
+<<<<<<< HEAD
   Code2,
   Files,
   Mic,
   Globe,
+=======
+  Smartphone,
+  Sparkles,
+  Mic,
+  Blocks,
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
   PanelLeft,
   MessageSquare,
   Smartphone,
   Sparkles,
   Blocks,
   ChevronRight,
+<<<<<<< HEAD
   ChevronDown,
   SlidersHorizontal,
   SendHorizontal,
   Users,
+=======
+  Layers,
+  Laptop,
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
 } from "lucide-react-native";
 import { DropdownTrigger } from "@/components/ui/dropdown-trigger";
 import { ComboboxTrigger } from "@/components/ui/combobox-trigger";
@@ -68,8 +89,7 @@ import {
   type AppSettings,
   type Settings as EffectiveSettings,
 } from "@/hooks/use-settings";
-import { useHostRuntimeIsConnected, useHosts } from "@/runtime/host-runtime";
-import { useSessionStore } from "@/stores/session-store";
+import { useHosts } from "@/runtime/host-runtime";
 import {
   orderHostsLocalFirst,
   resolveActiveHostServerId,
@@ -80,10 +100,6 @@ import { WindowChromeRegion, WindowChromeSafeArea } from "@/utils/desktop-window
 import { confirmDialog } from "@/utils/confirm-dialog";
 import { BackHeader } from "@/components/headers/back-header";
 import { PageLayout } from "@/components/page-layout";
-import { AddHostMethodModal } from "@/components/add-host-method-modal";
-import { AddHostModal } from "@/components/add-host-modal";
-import { AddRemoteSshHostModal } from "@/components/add-remote-ssh-host-modal";
-import { PairLinkModal } from "@/components/pair-link-modal";
 import { KeyboardShortcutsSection } from "@/screens/settings/keyboard-shortcuts-section";
 import { EditorSection } from "@/screens/settings/editor-section";
 import { LicensesSection } from "@/screens/settings/licenses-section";
@@ -92,10 +108,11 @@ import { Button } from "@/components/ui/button";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { DesktopPermissionsSection } from "@/desktop/components/desktop-permissions-section";
-import { DesktopNotificationsSection } from "@/desktop/components/desktop-notifications-section";
+import { NotificationsSection } from "@/components/settings/notifications-section";
 import { BrowserDataSection } from "@/desktop/browser/settings/browser-data-section";
 import { IntegrationsSection } from "@/desktop/components/integrations-section";
 import { isElectronRuntime } from "@/desktop/host";
+import { useDesktopSettings, type DesktopUpdateMode } from "@/desktop/settings/desktop-settings";
 import { useDesktopAppUpdater } from "@/desktop/updates/use-desktop-app-updater";
 import { formatVersionWithPrefix } from "@/desktop/updates/desktop-updates";
 import { resolveAppVersion } from "@/utils/app-version";
@@ -111,15 +128,16 @@ import {
   type SupportedLocale,
 } from "@/i18n/locales";
 import {
-  HostConnectionsPage,
-  HostPairDevicePage,
-  HostAgentsPage,
-  HostSettingsPage,
+  HostDevicesPage,
+  HostToolsPage,
+  HostAgentProfilesPage,
+  HostDaemonPage,
+  HostWorkspacesPage,
   HostProvidersPage,
   HostUsagePage,
-  HostWorkspacesPage,
   HostTerminalsPage,
 } from "@/screens/settings/host-page";
+<<<<<<< HEAD
 import { PluginSettingsContent } from "@/plugins/settings";
 import { useInstalledPlugins } from "@/plugins/registry";
 import { pluginIconComponent } from "@/plugins/icons";
@@ -142,21 +160,32 @@ import {
 } from "@/screens/settings/settings-menu";
 import { HostPluginsPage } from "@/screens/settings/plugins-page";
 import { MetadataGenerationPage } from "@/screens/settings/metadata-generation-page";
+=======
+import { ClientHostDetailPage, ClientHostsSection } from "@/screens/settings/client-hosts-page";
+import {
+  PluginGalleryMenu,
+  PluginGalleryPage,
+  PluginPage,
+  type PluginPageSubject,
+} from "@/plugins/gallery";
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
 import { HostVoicePage } from "@/screens/settings/voice/voice-page";
 import ProjectsScreen from "@/screens/projects-screen";
 import ProjectSettingsScreen from "@/screens/project-settings-screen";
+import { ProviderDetailPage } from "@/provider-settings";
 import {
   SETTINGS_DESKTOP_DETAIL_MIN_WIDTH,
   SETTINGS_DESKTOP_SIDEBAR_WIDTH,
   useIsCompactFormFactor,
 } from "@/constants/layout";
-import { densityIconBox, densityIconSize } from "@/styles/density";
+import { density, densityIconBox, densityIconSize } from "@/styles/density";
 import { useLocalDaemonServerId } from "@/hooks/use-is-local-daemon";
 import {
   type EnableBuiltInDaemonOption,
   useEnableBuiltInDaemonOption,
 } from "@/desktop/hooks/use-enable-built-in-daemon-option";
 import {
+  buildClientHostSettingsRoute,
   buildSettingsHostSectionRoute,
   buildSettingsSectionRoute,
   type HostSectionSlug,
@@ -168,7 +197,8 @@ import {
   useSettingsSidebarScroll,
 } from "@/navigation/settings-presentation";
 import { returnFromSettings, type SettingsView } from "@/navigation/settings-navigation";
-import { isWeb } from "@/constants/platform";
+import { isNative, isWeb } from "@/constants/platform";
+import { useOpenOnboarding } from "@/onboarding";
 
 // ---------------------------------------------------------------------------
 // View model
@@ -180,12 +210,18 @@ interface SidebarSectionItem {
   icon: ComponentType<{ size: number; color: string; strokeWidth?: number }>;
   desktopOnly?: boolean;
   webOnly?: boolean;
+  hardwareKeyboardOnly?: boolean;
   /** The page body, for pages that need nothing from the settings screen. */
   Content?: ComponentType;
 }
 
 const SIDEBAR_SECTION_ITEMS: SidebarSectionItem[] = [
+<<<<<<< HEAD
   { id: "general", labelKey: SECTION_LABEL_KEYS.general, icon: Palette },
+=======
+  { id: "general", labelKey: "settings.sections.general", icon: Settings },
+  { id: "hosts", labelKey: "settings.sections.hosts", icon: Laptop },
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
   {
     id: "notifications",
     labelKey: SECTION_LABEL_KEYS.notifications,
@@ -206,6 +242,7 @@ const SIDEBAR_SECTION_ITEMS: SidebarSectionItem[] = [
     icon: PanelLeft,
     Content: SidebarNavSection,
   },
+<<<<<<< HEAD
   {
     id: "terminal",
     labelKey: SECTION_LABEL_KEYS.terminal,
@@ -227,14 +264,18 @@ const SIDEBAR_SECTION_ITEMS: SidebarSectionItem[] = [
     Content: EditorSection,
   },
   { id: "files", labelKey: SECTION_LABEL_KEYS.files, icon: Files, Content: FilesSection },
+=======
+  { id: "chat", labelKey: "settings.sections.chatAndPanes", icon: MessageSquare },
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
   {
     id: "shortcuts",
     labelKey: SECTION_LABEL_KEYS.shortcuts,
     icon: Keyboard,
-    desktopOnly: true,
+    hardwareKeyboardOnly: true,
     Content: KeyboardShortcutsSection,
   },
   {
+<<<<<<< HEAD
     id: "integrations",
     labelKey: SECTION_LABEL_KEYS.integrations,
     icon: Puzzle,
@@ -259,6 +300,24 @@ const SIDEBAR_SECTION_ITEMS: SidebarSectionItem[] = [
   { id: "about", labelKey: SECTION_LABEL_KEYS.about, icon: Info },
 ];
 
+=======
+    id: "notifications",
+    labelKey: "settings.sections.notifications",
+    icon: Bell,
+  },
+  { id: "about", labelKey: "settings.sections.about", icon: Info },
+];
+
+function isSectionAvailable(
+  item: SidebarSectionItem,
+  isDesktopApp: boolean,
+  hardwareKeyboardPresent: boolean,
+): boolean {
+  if (item.hardwareKeyboardOnly && !hardwareKeyboardPresent) return false;
+  return (!item.desktopOnly || isDesktopApp) && (!item.webOnly || isWeb);
+}
+
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
 interface HostSectionItem {
   id: HostSectionSlug;
   labelKey: string;
@@ -266,6 +325,7 @@ interface HostSectionItem {
 }
 
 const HOST_SECTION_ITEMS: HostSectionItem[] = [
+<<<<<<< HEAD
   { id: "host", labelKey: HOST_SECTION_LABEL_KEYS.host, icon: Server },
   { id: "projects", labelKey: HOST_SECTION_LABEL_KEYS.projects, icon: FolderGit2 },
   { id: "connections", labelKey: HOST_SECTION_LABEL_KEYS.connections, icon: Network },
@@ -321,31 +381,46 @@ function renderHostSettingsContent(
   view: Extract<SettingsView, { kind: "host" }>,
   onHostRemoved: () => void,
 ): ReactNode {
+=======
+  { id: "providers", labelKey: "settings.hostSections.providers", icon: Boxes },
+  { id: "agent-profiles", labelKey: "settings.hostSections.agentProfiles", icon: Layers },
+  { id: "tools", labelKey: "settings.hostSections.tools", icon: Sparkles },
+  { id: "projects", labelKey: "settings.projects", icon: FolderOpen },
+  { id: "workspaces", labelKey: "settings.hostSections.workspaces", icon: FolderGit2 },
+  { id: "voice", labelKey: "settings.hostSections.voice", icon: Mic },
+  { id: "usage", labelKey: "settings.hostSections.usage", icon: Gauge },
+  { id: "terminals", labelKey: "settings.hostSections.terminals", icon: SquareTerminal },
+  { id: "plugins", labelKey: "settings.hostSections.plugins", icon: Blocks },
+  { id: "devices", labelKey: "devices.title", icon: Smartphone },
+  { id: "daemon", labelKey: "settings.hostSections.daemon", icon: Server },
+];
+
+function renderHostSettingsContent(view: Extract<SettingsView, { kind: "host" }>): ReactNode {
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
   switch (view.section) {
-    case "projects":
-      return <ProjectsScreen serverId={view.serverId} />;
-    case "connections":
-      return <HostConnectionsPage serverId={view.serverId} />;
-    case "pair-device":
-      return <HostPairDevicePage serverId={view.serverId} />;
-    case "agents":
-      return <HostAgentsPage serverId={view.serverId} />;
-    case "metadata":
-      return <MetadataGenerationPage serverId={view.serverId} />;
-    case "voice":
-      return <HostVoicePage serverId={view.serverId} />;
-    case "workspaces":
-      return <HostWorkspacesPage serverId={view.serverId} />;
     case "providers":
       return <HostProvidersPage serverId={view.serverId} />;
+    case "agent-profiles":
+      // Rendered directly in SettingsScreen so AgentProfilesPage owns its wide PageLayout + drawer split.
+      return null;
+    case "tools":
+      return <HostToolsPage serverId={view.serverId} />;
+    case "projects":
+      return <ProjectsScreen serverId={view.serverId} />;
+    case "workspaces":
+      return <HostWorkspacesPage serverId={view.serverId} />;
+    case "voice":
+      return <HostVoicePage serverId={view.serverId} />;
     case "usage":
       return <HostUsagePage serverId={view.serverId} />;
     case "terminals":
       return <HostTerminalsPage serverId={view.serverId} />;
     case "plugins":
-      return <HostPluginsPage serverId={view.serverId} />;
-    case "host":
-      return <HostSettingsPage serverId={view.serverId} onHostRemoved={onHostRemoved} />;
+      return <PluginGalleryPage serverId={view.serverId} />;
+    case "devices":
+      return <HostDevicesPage serverId={view.serverId} />;
+    case "daemon":
+      return <HostDaemonPage serverId={view.serverId} />;
   }
 }
 
@@ -452,8 +527,25 @@ function GeneralSection({ settings, handleLanguageChange }: GeneralSectionProps)
             </DropdownMenuContent>
           </DropdownMenu>
         </View>
+        {isNative ? null : <ShowSetupAgainRow />}
       </View>
     </SettingsSection>
+  );
+}
+
+function ShowSetupAgainRow() {
+  const { t } = useTranslation();
+  const openOnboarding = useOpenOnboarding();
+  return (
+    <View style={[settingsStyles.row, settingsStyles.rowBorder]}>
+      <View style={settingsStyles.rowContent}>
+        <Text style={settingsStyles.rowTitle}>{t("settings.general.setup.label")}</Text>
+        <Text style={settingsStyles.rowHint}>{t("settings.general.setup.description")}</Text>
+      </View>
+      <Button variant="secondary" onPress={openOnboarding ?? undefined} disabled={!openOnboarding}>
+        {t("settings.general.setup.action")}
+      </Button>
+    </View>
   );
 }
 
@@ -483,7 +575,7 @@ function DiagnosticsSection({
             <Text style={settingsStyles.rowTitle}>{t("settings.diagnostics.app.rowTitle")}</Text>
             <Text style={settingsStyles.rowHint}>{t("settings.diagnostics.app.rowHint")}</Text>
           </View>
-          <Button variant="secondary" size="sm" onPress={openAppDiagnostic}>
+          <Button variant="secondary" onPress={openAppDiagnostic}>
             {t("settings.diagnostics.app.run")}
           </Button>
         </View>
@@ -496,7 +588,6 @@ function DiagnosticsSection({
           </View>
           <Button
             variant="secondary"
-            size="sm"
             onPress={handlePlayPress}
             disabled={!voiceAudioEngine || isPlaybackTestRunning}
           >
@@ -511,12 +602,12 @@ function DiagnosticsSection({
 }
 
 interface AboutSectionProps {
-  appVersion: string | null;
   appVersionText: string;
   isDesktopApp: boolean;
+  diagnostics: DiagnosticsSectionProps;
 }
 
-function AboutSection({ appVersion, appVersionText, isDesktopApp }: AboutSectionProps) {
+function AboutSection({ appVersionText, isDesktopApp, diagnostics }: AboutSectionProps) {
   const { t } = useTranslation();
   return (
     <>
@@ -533,7 +624,14 @@ function AboutSection({ appVersion, appVersionText, isDesktopApp }: AboutSection
           {isDesktopApp ? <DesktopAppUpdateRow /> : null}
         </View>
       </SettingsSection>
+<<<<<<< HEAD
       <ConnectedHostsSection clientVersion={appVersion} />
+=======
+      <DiagnosticsSection {...diagnostics} />
+      <View style={styles.aboutCommunity}>
+        <CommunityLinks />
+      </View>
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
     </>
   );
 }
@@ -569,109 +667,94 @@ function LicensesRow() {
   );
 }
 
-function normalizeVersion(version: string | null | undefined): string | null {
-  const trimmed = version?.trim();
-  if (!trimmed) return null;
-  return trimmed.replace(/^v/i, "");
-}
-
-function ConnectedHostsSection({ clientVersion }: { clientVersion: string | null }) {
-  const { t } = useTranslation();
-  const hosts = useHosts();
-  if (hosts.length === 0) {
-    return null;
-  }
-  return (
-    <SettingsSection title={t("settings.about.connectedHosts")}>
-      <View style={settingsStyles.card}>
-        {hosts.map((host, index) => (
-          <HostVersionRow
-            key={host.serverId}
-            host={host}
-            showBorder={index > 0}
-            clientVersion={clientVersion}
-          />
-        ))}
-      </View>
-    </SettingsSection>
-  );
-}
-
-function HostVersionRow({
-  host,
-  showBorder,
-  clientVersion,
-}: {
-  host: HostProfile;
-  showBorder: boolean;
-  clientVersion: string | null;
-}) {
-  const { t } = useTranslation();
-  const isConnected = useHostRuntimeIsConnected(host.serverId);
-  const daemonVersion = useSessionStore(
-    (state) => state.sessions[host.serverId]?.serverInfo?.version ?? null,
-  );
-
-  const rowStyle = useMemo(
-    () => [settingsStyles.row, showBorder && settingsStyles.rowBorder],
-    [showBorder],
-  );
-
-  const normalizedHost = normalizeVersion(daemonVersion);
-  const normalizedClient = normalizeVersion(clientVersion);
-  const isMismatch =
-    normalizedHost !== null && normalizedClient !== null && normalizedHost !== normalizedClient;
-
-  let valueText: string;
-  if (!isConnected) {
-    valueText = t("settings.about.offline");
-  } else if (normalizedHost) {
-    valueText = formatVersionWithPrefix(normalizedHost);
-  } else {
-    valueText = "—";
-  }
-
-  const valueStyle = useMemo(
-    () => [styles.aboutValue, isMismatch && styles.aboutVersionMismatch],
-    [isMismatch],
-  );
-
-  return (
-    <View style={rowStyle}>
-      <View style={settingsStyles.rowContent}>
-        <Text style={settingsStyles.rowTitle} numberOfLines={1}>
-          {host.label}
-        </Text>
-        {isMismatch ? (
-          <Text style={settingsStyles.rowHint}>{t("settings.about.versionDiffers")}</Text>
-        ) : null}
-      </View>
-      <Text style={valueStyle}>{valueText}</Text>
-    </View>
-  );
-}
-
 function getUpdateButtonLabel(
   t: TFunction,
-  isInstalling: boolean,
-  latestVersion: string | null | undefined,
+  input: {
+    isInstalling: boolean;
+    isDownloading: boolean;
+    isActionable: boolean;
+    readyToInstall: boolean;
+    latestVersion: string | null | undefined;
+  },
 ): string {
-  if (isInstalling) return t("settings.about.updates.installing");
-  if (latestVersion) {
+  if (input.isInstalling) {
+    return input.isDownloading
+      ? t("settings.about.updates.downloading")
+      : t("settings.about.updates.installing");
+  }
+  if (input.isActionable && !input.readyToInstall) {
+    if (input.latestVersion) {
+      return t("settings.about.updates.downloadTo", {
+        version: formatVersionWithPrefix(input.latestVersion),
+      });
+    }
+    return t("settings.about.updates.download");
+  }
+  if (input.latestVersion) {
     return t("settings.about.updates.updateTo", {
-      version: formatVersionWithPrefix(latestVersion),
+      version: formatVersionWithPrefix(input.latestVersion),
     });
   }
   return t("settings.about.updates.update");
+}
+
+function getUpdateModeDescription(t: TFunction, mode: DesktopUpdateMode): string {
+  if (mode === "off") return t("settings.about.autoUpdate.descriptions.off");
+  if (mode === "notify") return t("settings.about.autoUpdate.descriptions.notify");
+  return t("settings.about.autoUpdate.descriptions.automatic");
+}
+
+function getUpdateConfirmDialogCopy(t: TFunction, isUpdateReady: boolean) {
+  if (isUpdateReady) {
+    return {
+      title: t("settings.about.updates.installTitle"),
+      message: t("settings.about.updates.installMessage"),
+      confirmLabel: t("settings.about.updates.installConfirm"),
+      cancelLabel: t("common.actions.cancel"),
+    };
+  }
+  return {
+    title: t("settings.about.updates.downloadTitle"),
+    message: t("settings.about.updates.downloadMessage"),
+    confirmLabel: t("settings.about.updates.downloadConfirm"),
+    cancelLabel: t("common.actions.cancel"),
+  };
+}
+
+function DesktopUpdateProgressBar({ percent }: { percent: number }) {
+  const accessibilityValue = useMemo(() => ({ min: 0, max: 100, now: percent }), [percent]);
+  const fillStyle = useMemo(
+    () => [styles.aboutUpdateProgressFill, { width: `${percent}%` as const }],
+    [percent],
+  );
+
+  return (
+    <View
+      style={styles.aboutUpdateProgressTrack}
+      accessibilityRole="progressbar"
+      accessibilityValue={accessibilityValue}
+      testID="settings-about-update-progress"
+    >
+      <View style={fillStyle} />
+    </View>
+  );
 }
 
 function DesktopAppUpdateRow() {
   const { t } = useTranslation();
   const { settings, updateSettings } = useSettings();
   const {
+    settings: desktopSettings,
+    isLoading: isLoadingDesktopSettings,
+    updateSettings: updateDesktopSettings,
+  } = useDesktopSettings();
+  const updateMode = desktopSettings.updates.mode;
+  const {
     isDesktopApp,
+    status,
     statusText,
     availableUpdate,
+    downloadProgress,
     errorMessage,
     isChecking,
     isInstalling,
@@ -681,12 +764,12 @@ function DesktopAppUpdateRow() {
 
   useFocusEffect(
     useCallback(() => {
-      if (!isDesktopApp) {
+      if (!isDesktopApp || isLoadingDesktopSettings || updateMode === "off") {
         return undefined;
       }
       void checkForUpdates({ intent: "automatic", silent: true });
       return undefined;
-    }, [checkForUpdates, isDesktopApp]),
+    }, [checkForUpdates, isDesktopApp, isLoadingDesktopSettings, updateMode]),
   );
 
   const handleCheckForUpdates = useCallback(() => {
@@ -710,17 +793,36 @@ function DesktopAppUpdateRow() {
     [t],
   );
 
+  const handleUpdateModeChange = useCallback(
+    (mode: DesktopUpdateMode) => {
+      void updateDesktopSettings({ updates: { mode } });
+    },
+    [updateDesktopSettings],
+  );
+  const updateModeOptions = useMemo(
+    () => [
+      { value: "automatic" as const, label: t("settings.about.autoUpdate.options.automatic") },
+      { value: "notify" as const, label: t("settings.about.autoUpdate.options.notify") },
+      { value: "off" as const, label: t("settings.about.autoUpdate.options.off") },
+    ],
+    [t],
+  );
+
+  const isUpdateReady = availableUpdate?.readyToInstall === true;
+  const isUpdateActionable = status === "available" && availableUpdate?.hasUpdate === true;
+  const readyUpdateVersion = isUpdateReady ? availableUpdate?.latestVersion : null;
+  const actionableVersion = isUpdateActionable ? availableUpdate?.latestVersion : null;
+  const downloadPercent =
+    (isInstalling || status === "pending") && downloadProgress
+      ? Math.max(0, Math.min(100, Math.round(downloadProgress.percent)))
+      : null;
+
   const handleInstallUpdate = useCallback(() => {
     if (!isDesktopApp) {
       return;
     }
 
-    void confirmDialog({
-      title: t("settings.about.updates.installTitle"),
-      message: t("settings.about.updates.installMessage"),
-      confirmLabel: t("settings.about.updates.installConfirm"),
-      cancelLabel: t("common.actions.cancel"),
-    })
+    void confirmDialog(getUpdateConfirmDialogCopy(t, isUpdateReady))
       .then((confirmed) => {
         if (!confirmed) {
           return;
@@ -735,10 +837,7 @@ function DesktopAppUpdateRow() {
           t("settings.about.updates.alertMessage"),
         );
       });
-  }, [installUpdate, isDesktopApp, t]);
-
-  const isUpdateReady = availableUpdate?.readyToInstall === true;
-  const readyUpdateVersion = isUpdateReady ? availableUpdate?.latestVersion : null;
+  }, [installUpdate, isDesktopApp, isUpdateReady, t]);
 
   if (!isDesktopApp) {
     return null;
@@ -754,10 +853,21 @@ function DesktopAppUpdateRow() {
           </Text>
         </View>
         <SegmentedControl
-          size="sm"
           value={settings.releaseChannel}
           onValueChange={handleReleaseChannelChange}
           options={releaseChannelOptions}
+        />
+      </View>
+      <View style={[settingsStyles.row, settingsStyles.rowBorder]}>
+        <View style={settingsStyles.rowContent}>
+          <Text style={settingsStyles.rowTitle}>{t("settings.about.autoUpdate.label")}</Text>
+          <Text style={settingsStyles.rowHint}>{getUpdateModeDescription(t, updateMode)}</Text>
+        </View>
+        <SegmentedControl
+          value={updateMode}
+          onValueChange={handleUpdateModeChange}
+          options={updateModeOptions}
+          testID="settings-about-update-mode"
         />
       </View>
       <View style={[settingsStyles.row, settingsStyles.rowBorder]}>
@@ -771,12 +881,12 @@ function DesktopAppUpdateRow() {
               })}
             </Text>
           ) : null}
+          {downloadPercent !== null ? <DesktopUpdateProgressBar percent={downloadPercent} /> : null}
           {errorMessage ? <Text style={styles.aboutErrorText}>{errorMessage}</Text> : null}
         </View>
         <View style={styles.aboutUpdateActions}>
           <Button
             variant="outline"
-            size="sm"
             onPress={handleCheckForUpdates}
             disabled={isChecking || isInstalling}
           >
@@ -784,11 +894,16 @@ function DesktopAppUpdateRow() {
           </Button>
           <Button
             variant="default"
-            size="sm"
             onPress={handleInstallUpdate}
-            disabled={isChecking || isInstalling || !isUpdateReady}
+            disabled={isChecking || isInstalling || !isUpdateActionable}
           >
-            {getUpdateButtonLabel(t, isInstalling, readyUpdateVersion)}
+            {getUpdateButtonLabel(t, {
+              isInstalling,
+              isDownloading: isInstalling && downloadProgress != null,
+              isActionable: isUpdateActionable,
+              readyToInstall: isUpdateReady,
+              latestVersion: actionableVersion,
+            })}
           </Button>
         </View>
       </View>
@@ -845,10 +960,16 @@ function MenuRow({
     <Pressable
       accessibilityRole="button"
       accessibilityState={accessibilityState}
+<<<<<<< HEAD
       accessibilityHint={description}
       onPress={onPress}
       testID={testID}
       style={rowStyle}
+=======
+      onPress={handlePress}
+      testID={`settings-section-${itemId}`}
+      style={isSelected ? selectedSidebarItemStyle : sidebarItemStyle}
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
     >
       <IconComponent
         size={densityIconSize(rt, "md")}
@@ -1040,8 +1161,12 @@ function HostPicker({
       showActiveConnection
       searchable={false}
       title={t("settings.hostPicker.switchHost")}
+<<<<<<< HEAD
       desktopPlacement="top-start"
       desktopMinWidth={240}
+=======
+      desktopMinWidth={328}
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
       addHostTestID="settings-add-host"
       hostOptionTestID={hostOptionTestID}
     >
@@ -1110,8 +1235,14 @@ function SettingsSidebar({
   const hasHosts = sortedHosts.length > 0;
   const enableBuiltInDaemonOption = useEnableBuiltInDaemonOption();
   const isDesktopApp = isElectronRuntime();
+<<<<<<< HEAD
   const items = SIDEBAR_SECTION_ITEMS.filter(
     (item) => (!item.desktopOnly || isDesktopApp) && (!item.webOnly || isWeb),
+=======
+  const hardwareKeyboardPresent = useHardwareKeyboardPresent();
+  const items = SIDEBAR_SECTION_ITEMS.filter((item) =>
+    isSectionAvailable(item, isDesktopApp, hardwareKeyboardPresent),
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
   );
   const insets = useSafeAreaInsets();
   const isDesktop = layout === "desktop";
@@ -1124,6 +1255,7 @@ function SettingsSidebar({
     () => [{ flex: 1 }, isDesktop ? { paddingTop: insets.top } : null],
     [insets.top, isDesktop],
   );
+<<<<<<< HEAD
   const selectedSectionId = view.kind === "section" ? menuSectionFor(view.section) : null;
   let selectedHostSection: HostSectionSlug | null = null;
   if (view.kind === "host") selectedHostSection = view.section;
@@ -1132,6 +1264,19 @@ function SettingsSidebar({
     view.kind === "plugin" ? `${view.serverId}/${view.pluginId}/${view.screenId}` : null;
   const isPluginScreenSelected = (entry: PluginScreenEntry) =>
     selectedPluginScreen === `${entry.serverId}/${entry.pluginId}/${entry.screenId}`;
+=======
+  let selectedSectionId: SettingsSectionSlug | null = null;
+  if (view.kind === "section") {
+    selectedSectionId = view.section;
+  } else if (view.kind === "clientHost") {
+    selectedSectionId = "hosts";
+  }
+  let selectedHostSection: HostSectionSlug | null = null;
+  if (view.kind === "host") selectedHostSection = view.section;
+  if (view.kind === "project") selectedHostSection = "projects";
+  if (view.kind === "provider") selectedHostSection = "providers";
+  if (view.kind === "plugin" || view.kind === "pluginListing") selectedHostSection = "plugins";
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
 
   const pluginScreens = usePluginScreenEntries(activeHostServerId);
   const accountsScreen = pluginScreens.find(
@@ -1341,31 +1486,161 @@ function SettingsSidebar({
   );
 }
 
+interface SettingsBeforeLeaveGuard {
+  isDirty: () => boolean;
+  confirmDiscard: () => Promise<boolean>;
+  subscribeDirty?: (listener: () => void) => () => void;
+}
+
+/**
+ * Lets an active Settings editor (such as Agent profiles) veto both in-app
+ * section switches and route-boundary exits (browser Back, native swipe-back,
+ * hardware Back) with a single discard confirmation.
+ *
+ * Uses `usePreventRemove` so native stacks set `preventNativeDismiss` before
+ * iOS can interactively dismiss the screen on a back swipe.
+ */
+function useSettingsBeforeLeaveGuard() {
+  const navigation = useNavigation();
+  const beforeLeaveRef = useRef<SettingsBeforeLeaveGuard | null>(null);
+  const dirtyUnsubRef = useRef<(() => void) | null>(null);
+  const [preventRemove, setPreventRemove] = useState(false);
+
+  const registerBeforeLeave = useCallback((guard: SettingsBeforeLeaveGuard | null) => {
+    dirtyUnsubRef.current?.();
+    dirtyUnsubRef.current = null;
+    beforeLeaveRef.current = guard;
+    const syncDirty = () => {
+      setPreventRemove(Boolean(beforeLeaveRef.current?.isDirty()));
+    };
+    syncDirty();
+    if (guard?.subscribeDirty) {
+      dirtyUnsubRef.current = guard.subscribeDirty(syncDirty);
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      dirtyUnsubRef.current?.();
+      dirtyUnsubRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    return registerRouteLeaveGuard({
+      isDirty: () => Boolean(beforeLeaveRef.current?.isDirty()),
+      confirmDiscard: async () => (await beforeLeaveRef.current?.confirmDiscard()) ?? true,
+    });
+  }, []);
+
+  usePreventRemove(preventRemove, ({ data }) => {
+    const guard = beforeLeaveRef.current;
+    if (!guard?.isDirty()) {
+      navigation.dispatch(data.action);
+      return;
+    }
+    const confirmAndLeave = async () => {
+      if (await guard.confirmDiscard()) {
+        navigation.dispatch(data.action);
+      }
+    };
+    void confirmAndLeave();
+  });
+
+  const guardNavigation = useCallback((navigate: () => void) => {
+    const guard = beforeLeaveRef.current;
+    if (!guard?.isDirty()) {
+      navigate();
+      return;
+    }
+    const run = async () => {
+      if (await guard.confirmDiscard()) {
+        navigate();
+      }
+    };
+    void run();
+  }, []);
+
+  return { registerBeforeLeave, guardNavigation };
+}
+
+function SettingsDetailPane({
+  view,
+  isCompactLayout,
+  detailTitle,
+  detailActions,
+  detailWidth,
+  onBack,
+  onRegisterBeforeLeave,
+  content,
+}: {
+  view: SettingsView;
+  isCompactLayout: boolean;
+  detailTitle: string | undefined;
+  detailActions: React.ReactNode;
+  detailWidth: React.ComponentProps<typeof PageLayout>["width"];
+  onBack: () => void;
+  onRegisterBeforeLeave: (guard: SettingsBeforeLeaveGuard | null) => void;
+  content: React.ReactNode;
+}) {
+  const isStandaloneAgentProfilesView = view.kind === "host" && view.section === "agent-profiles";
+  const pageTitle =
+    !isCompactLayout &&
+    (view.kind === "project" || view.kind === "provider" || view.kind === "clientHost")
+      ? undefined
+      : detailTitle;
+
+  return (
+    <WindowChromeRegion corners={isCompactLayout ? "both" : "top-right"}>
+      <View
+        style={isCompactLayout ? desktopStyles.compactContentPane : desktopStyles.contentPane}
+        testID={isCompactLayout ? undefined : "settings-detail-pane"}
+      >
+        {isStandaloneAgentProfilesView ? (
+          <HostAgentProfilesPage
+            serverId={view.serverId}
+            onBack={isCompactLayout ? onBack : undefined}
+            onRegisterBeforeLeave={onRegisterBeforeLeave}
+          />
+        ) : (
+          <PageLayout
+            // A project or provider page draws its own title on desktop, naming the list it came from.
+            title={pageTitle}
+            onBack={isCompactLayout ? onBack : undefined}
+            actions={detailActions}
+            width={detailWidth}
+            titleTestID={isCompactLayout ? undefined : "settings-detail-header-title"}
+            testID={isCompactLayout ? undefined : "settings-detail-scroll-body"}
+          >
+            {content}
+          </PageLayout>
+        )}
+      </View>
+    </WindowChromeRegion>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Main screen
 // ---------------------------------------------------------------------------
 
 export interface SettingsScreenProps {
   view: SettingsView;
-  openAddHostIntent?: string | null;
 }
 
-export default function SettingsScreen({ view, openAddHostIntent = null }: SettingsScreenProps) {
+export default function SettingsScreen({ view }: SettingsScreenProps) {
   const router = useRouter();
   const { t } = useTranslation();
   const voiceAudioEngine = useVoiceAudioEngineOptional();
   const { settings, isLoading: settingsLoading, updateSettings } = useAppSettings();
-  const [isAddHostMethodVisible, setIsAddHostMethodVisible] = useState(false);
-  const [isDirectHostVisible, setIsDirectHostVisible] = useState(false);
-  const [isRemoteSshVisible, setIsRemoteSshVisible] = useState(false);
-  const [isPasteLinkVisible, setIsPasteLinkVisible] = useState(false);
   const [isPlaybackTestRunning, setIsPlaybackTestRunning] = useState(false);
   const [playbackTestResult, setPlaybackTestResult] = useState<string | null>(null);
-  const lastOpenedAddHostIntentRef = useRef<string | null>(null);
   const isDesktopApp = isElectronRuntime();
+  const hardwareKeyboardPresent = useHardwareKeyboardPresent();
   const appVersion = resolveAppVersion();
   const appVersionText = formatVersionWithPrefix(appVersion);
   const isCompactLayout = useIsCompactFormFactor();
+  const onContentLayout = useSettingsContentPresented();
   const insets = useSafeAreaInsets();
   const insetBottomStyle = useMemo(() => ({ paddingBottom: insets.bottom }), [insets.bottom]);
   const hosts = useHosts();
@@ -1376,7 +1651,13 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
   // The host the four sections scope to: the host on the active view, otherwise
   // the picker choice, otherwise the connected local daemon, otherwise the first host.
   const activeHostServerId = useMemo(() => {
-    if (view.kind === "host" || view.kind === "project" || view.kind === "plugin")
+    if (
+      view.kind === "host" ||
+      view.kind === "project" ||
+      view.kind === "plugin" ||
+      view.kind === "pluginListing" ||
+      view.kind === "provider"
+    )
       return view.serverId;
     return resolveActiveHostServerId({
       selectedServerId: selectedSettingsHostServerId,
@@ -1422,50 +1703,25 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
     }
   }, [isPlaybackTestRunning, t, voiceAudioEngine]);
 
-  const closeAddConnectionFlow = useCallback(() => {
-    setIsAddHostMethodVisible(false);
-    setIsDirectHostVisible(false);
-    setIsRemoteSshVisible(false);
-    setIsPasteLinkVisible(false);
-  }, []);
-
-  const goBackToAddConnectionMethods = useCallback(() => {
-    setIsDirectHostVisible(false);
-    setIsRemoteSshVisible(false);
-    setIsPasteLinkVisible(false);
-    setIsAddHostMethodVisible(true);
-  }, []);
-
-  const handleAddHost = useCallback(() => {
-    setIsAddHostMethodVisible(true);
-  }, []);
-
-  useEffect(() => {
-    if (!openAddHostIntent || lastOpenedAddHostIntentRef.current === openAddHostIntent) {
-      return;
-    }
-    lastOpenedAddHostIntentRef.current = openAddHostIntent;
-    handleAddHost();
-  }, [handleAddHost, openAddHostIntent]);
-
-  const handleSelectDirectConnection = useCallback(() => {
-    setIsAddHostMethodVisible(false);
-    setIsDirectHostVisible(true);
-  }, []);
-
-  const handleSelectRemoteSsh = useCallback(() => {
-    setIsAddHostMethodVisible(false);
-    setIsRemoteSshVisible(true);
-  }, []);
-
-  const handleSelectPasteLink = useCallback(() => {
-    setIsAddHostMethodVisible(false);
-    setIsPasteLinkVisible(true);
-  }, []);
-
   const handleHostAdded = useCallback(
-    ({ serverId }: { serverId: string }) => {
-      const target = buildSettingsHostSectionRoute(serverId, "connections");
+    (serverId: string) => {
+      selectSettingsHost(serverId);
+      const target = buildClientHostSettingsRoute(serverId);
+      if (isCompactLayout) {
+        router.push(target);
+      } else {
+        router.replace(target);
+      }
+    },
+    [isCompactLayout, router],
+  );
+
+  const handleAddHost = useAddHost({ onAdded: handleHostAdded });
+  const enableBuiltInDaemonOption = useEnableBuiltInDaemonOption();
+  const { registerBeforeLeave, guardNavigation } = useSettingsBeforeLeaveGuard();
+
+  const navigateRoute = useCallback(
+    (target: Parameters<typeof router.push>[0]) => {
       if (isCompactLayout) {
         router.push(target);
       } else {
@@ -1477,84 +1733,94 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
 
   const handleSelectSection = useCallback(
     (section: SettingsSectionSlug) => {
-      const target = buildSettingsSectionRoute(section);
-      if (isCompactLayout) {
-        router.push(target);
-      } else {
-        router.replace(target);
+      if (view.kind === "section" && view.section === section) {
+        return;
       }
+      const target = buildSettingsSectionRoute(section);
+      guardNavigation(() => navigateRoute(target));
     },
-    [isCompactLayout, router],
+    [guardNavigation, navigateRoute, view],
   );
 
   // Picker: choose the host for host-section rows. If the user is already on a
   // host detail route, keep that detail section and swap only the host segment.
   const handleSelectHost = useCallback(
     (serverId: string) => {
-      selectSettingsHost(serverId);
-      if (view.kind === "project") {
-        const target = buildSettingsHostSectionRoute(serverId, "projects");
-        if (isCompactLayout) {
-          router.push(target);
-        } else {
-          router.replace(target);
+      if (view.kind === "host" && view.serverId === serverId) {
+        return;
+      }
+      const applySelection = () => {
+        selectSettingsHost(serverId);
+        if (view.kind === "project" || view.kind === "provider") {
+          // The detail belongs to the old host; open the same list on the new one.
+          navigateRoute(
+            buildSettingsHostSectionRoute(
+              serverId,
+              view.kind === "project" ? "projects" : "providers",
+            ),
+          );
+          return;
         }
-        return;
-      }
-      if (view.kind !== "host") {
-        return;
-      }
-      const target = buildSettingsHostSectionRoute(serverId, view.section);
-      if (isCompactLayout) {
-        router.push(target);
-      } else {
-        router.replace(target);
-      }
+        if (view.kind === "host") {
+          navigateRoute(buildSettingsHostSectionRoute(serverId, view.section));
+        }
+      };
+      guardNavigation(applySelection);
     },
-    [isCompactLayout, router, view],
+    [guardNavigation, navigateRoute, view],
   );
 
   const handleSelectHostSection = useCallback(
     (section: HostSectionSlug) => {
       if (!activeHostServerId) {
-        handleAddHost();
+        guardNavigation(handleAddHost);
+        return;
+      }
+      if (
+        view.kind === "host" &&
+        view.serverId === activeHostServerId &&
+        view.section === section
+      ) {
         return;
       }
       const target = buildSettingsHostSectionRoute(activeHostServerId, section);
-      if (isCompactLayout) {
-        router.push(target);
-      } else {
-        router.replace(target);
-      }
+      guardNavigation(() => navigateRoute(target));
     },
-    [activeHostServerId, handleAddHost, isCompactLayout, router],
+    [activeHostServerId, guardNavigation, handleAddHost, navigateRoute, view],
   );
 
-  const handleScanQr = useCallback(() => {
-    closeAddConnectionFlow();
-    router.push({
-      pathname: "/pair-scan",
-      params: { source: "settings" },
-    });
-  }, [closeAddConnectionFlow, router]);
+  const handleSelectClientHost = useCallback(
+    (serverId: string) => {
+      const target = buildClientHostSettingsRoute(serverId);
+      guardNavigation(() => navigateRoute(target));
+    },
+    [guardNavigation, navigateRoute],
+  );
 
   const handleHostRemoved = useCallback(() => {
-    const fallback = buildSettingsSectionRoute("general");
+    const target = buildSettingsSectionRoute("hosts");
     if (isCompactLayout) {
-      router.replace("/settings");
+      router.dismissTo(target);
     } else {
-      router.replace(fallback);
+      router.replace(target);
     }
   }, [isCompactLayout, router]);
 
   const handleBackFromDetail = useCallback(() => {
-    returnFromSettings(view);
-  }, [view]);
+    guardNavigation(() => {
+      if (view.kind === "clientHost" && !isCompactLayout) {
+        router.replace(buildSettingsSectionRoute("hosts"));
+        return;
+      }
+      returnFromSettings(view);
+    });
+  }, [guardNavigation, isCompactLayout, router, view]);
 
   const handleBackToWorkspace = useCallback(() => {
-    returnFromSettings({ kind: "root" });
-  }, []);
+    guardNavigation(() => returnFromSettings({ kind: "root" }));
+  }, [guardNavigation]);
 
+<<<<<<< HEAD
   const installedPlugins = useInstalledPlugins();
   const detailHeader = ((): {
     title: string;
@@ -1572,6 +1838,22 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
         description: descriptionKey ? t(descriptionKey) : undefined,
       };
     }
+=======
+  // A plugin's page draws its own header; the compact back header names the plugin.
+  const pluginPage = useMemo((): { serverId: string; subject: PluginPageSubject } | null => {
+    if (view.kind === "plugin")
+      return {
+        serverId: view.serverId,
+        subject: { kind: "installed", pluginId: view.pluginId, screenId: view.screenId },
+      };
+    if (view.kind === "pluginListing")
+      return { serverId: view.serverId, subject: { kind: "listing", listingId: view.listingId } };
+    return null;
+  }, [view]);
+  const detailTitle = ((): string | undefined => {
+    // The plugin page heads itself with the plugin's name and icon.
+    if (pluginPage) return undefined;
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
     if (view.kind === "host") {
       const item = HOST_SECTION_ITEMS.find((s) => s.id === view.section);
       if (!item) return null;
@@ -1586,9 +1868,13 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
         description: t(SECTION_DESCRIPTION_KEYS[view.section]),
       };
     }
+    if (view.kind === "clientHost") {
+      return t("settings.sections.hosts");
+    }
     if (view.kind === "project") {
       return { title: t("settings.projects") };
     }
+<<<<<<< HEAD
     return null;
   })();
 
@@ -1602,10 +1888,53 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
           onBackToPlugins={handleBackFromDetail}
           // Accounts & models is an everyday entry, not a page under Plugins.
           showBackToPlugins={!isCompactLayout && view.screenId !== ACCOUNTS_PLUGIN_SCREEN_ID}
+=======
+    if (view.kind === "provider") return t("settings.hostSections.providers");
+    return undefined;
+  })();
+
+  const pluginGalleryServerId =
+    view.kind === "host" && view.section === "plugins" ? view.serverId : null;
+  const detailActions = useMemo(
+    () =>
+      pluginGalleryServerId ? <PluginGalleryMenu serverId={pluginGalleryServerId} /> : undefined,
+    [pluginGalleryServerId],
+  );
+  // The gallery and a plugin's page share one width, so opening a plugin keeps the page edges put.
+  const detailWidth = pluginGalleryServerId || pluginPage ? "wide" : "default";
+
+  const aboutDiagnostics = useMemo(
+    () => ({
+      voiceAudioEngine,
+      isPlaybackTestRunning,
+      playbackTestResult,
+      handlePlaybackTest,
+    }),
+    [handlePlaybackTest, isPlaybackTestRunning, playbackTestResult, voiceAudioEngine],
+  );
+
+  const content: ReactNode = (() => {
+    if (pluginPage)
+      return (
+        <PluginPage
+          serverId={pluginPage.serverId}
+          subject={pluginPage.subject}
+          onBack={handleBackFromDetail}
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
         />
       );
+    if (view.kind === "clientHost") {
+      return (
+        <ClientHostDetailPage
+          serverId={view.serverId}
+          onBack={handleBackFromDetail}
+          onAddHost={handleAddHost}
+          onHostRemoved={handleHostRemoved}
+        />
+      );
+    }
     if (view.kind === "host") {
-      return renderHostSettingsContent(view, handleHostRemoved);
+      return renderHostSettingsContent(view);
     }
     if (view.kind === "project") {
       return (
@@ -1613,11 +1942,20 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
           serverId={view.serverId}
           projectId={view.projectId}
           onBackToProjects={handleBackFromDetail}
-          showBackToProjects={!isCompactLayout}
+        />
+      );
+    }
+    if (view.kind === "provider") {
+      return (
+        <ProviderDetailPage
+          serverId={view.serverId}
+          provider={view.providerId}
+          onBack={handleBackFromDetail}
         />
       );
     }
     if (view.kind === "section") {
+<<<<<<< HEAD
       const PropFreeSection = PROP_FREE_SECTIONS[view.section];
       if (PropFreeSection) return <PropFreeSection />;
       const menuPage = renderCombinedSection(view.section, {
@@ -1638,20 +1976,51 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
         case "permissions":
           return isDesktopApp ? <DesktopPermissionsSection /> : null;
         case "diagnostics":
+=======
+      const item = SIDEBAR_SECTION_ITEMS.find((candidate) => candidate.id === view.section);
+      if (!item || !isSectionAvailable(item, isDesktopApp, hardwareKeyboardPresent)) return null;
+      switch (view.section) {
+        case "general":
           return (
-            <DiagnosticsSection
-              voiceAudioEngine={voiceAudioEngine}
-              isPlaybackTestRunning={isPlaybackTestRunning}
-              playbackTestResult={playbackTestResult}
-              handlePlaybackTest={handlePlaybackTest}
+            <>
+              <GeneralSection settings={settings} handleLanguageChange={handleLanguageChange} />
+              {isDesktopApp ? <IntegrationsSection /> : null}
+            </>
+          );
+        case "hosts":
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
+          return (
+            <ClientHostsSection
+              onSelectHost={handleSelectClientHost}
+              onAddHost={handleAddHost}
+              enableBuiltInDaemonOption={enableBuiltInDaemonOption}
             />
+          );
+        case "chat":
+          return (
+            <>
+              <SendingSection />
+              <ChatSection />
+              {isDesktopApp ? <OpenLocationSection /> : null}
+              {isWeb ? <EditorSection /> : null}
+              <TerminalSection />
+              <FilesSection />
+              {isDesktopApp ? <BrowserDataSection /> : null}
+            </>
+          );
+        case "notifications":
+          return (
+            <>
+              <NotificationsSection />
+              {isDesktopApp ? <DesktopPermissionsSection /> : null}
+            </>
           );
         case "about":
           return (
             <AboutSection
-              appVersion={appVersion}
               appVersionText={appVersionText}
               isDesktopApp={isDesktopApp}
+              diagnostics={aboutDiagnostics}
             />
           );
       }
@@ -1661,47 +2030,16 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
 
   if (settingsLoading) {
     return (
-      <View style={styles.loadingContainer}>
+      <View style={styles.loadingContainer} onLayout={onContentLayout}>
         <Text style={styles.loadingText}>{t("settings.loading")}</Text>
       </View>
     );
   }
 
-  const addHostModals = (
-    <>
-      <AddHostMethodModal
-        visible={isAddHostMethodVisible}
-        onClose={closeAddConnectionFlow}
-        onDirectConnection={handleSelectDirectConnection}
-        onRemoteSsh={handleSelectRemoteSsh}
-        onPasteLink={handleSelectPasteLink}
-        onScanQr={handleScanQr}
-      />
-      <AddHostModal
-        visible={isDirectHostVisible}
-        onClose={closeAddConnectionFlow}
-        onCancel={goBackToAddConnectionMethods}
-        onSaved={handleHostAdded}
-      />
-      <AddRemoteSshHostModal
-        visible={isRemoteSshVisible}
-        onClose={closeAddConnectionFlow}
-        onCancel={goBackToAddConnectionMethods}
-        onSaved={handleHostAdded}
-      />
-      <PairLinkModal
-        visible={isPasteLinkVisible}
-        onClose={closeAddConnectionFlow}
-        onCancel={goBackToAddConnectionMethods}
-        onSaved={handleHostAdded}
-      />
-    </>
-  );
-
   // Mobile root: full-screen sidebar-as-list.
   if (isCompactLayout && view.kind === "root") {
     return (
-      <View style={styles.container}>
+      <View style={styles.container} onLayout={onContentLayout}>
         <BackHeader title={t("settings.title")} onBack={handleBackToWorkspace} />
         <ScrollView style={styles.scrollView} contentContainerStyle={insetBottomStyle}>
           <SettingsSidebar
@@ -1715,11 +2053,11 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
             layout="mobile"
           />
         </ScrollView>
-        {addHostModals}
       </View>
     );
   }
 
+<<<<<<< HEAD
   if (isCompactLayout) {
     return (
       <View style={styles.container}>
@@ -1737,9 +2075,15 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
   // Desktop split view — mirrors AppContainer: sidebar owns the titlebar drag
   // region + traffic-light padding; detail pane renders whatever header the
   // selected section provides.
+=======
+  // Desktop split view and compact detail view share one wrapper tree around the
+  // detail pane so resizing across the compact breakpoint never unmounts active
+  // detail screens or discards in-progress edits (e.g., Agent profiles drawer → sheet).
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
   return (
-    <View style={styles.container}>
+    <View style={styles.container} onLayout={onContentLayout}>
       <View style={desktopStyles.row}>
+<<<<<<< HEAD
         <WindowChromeRegion corners="top-left">
           <SettingsSidebar
             view={view}
@@ -1766,8 +2110,33 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
             </PageLayout>
           </View>
         </WindowChromeRegion>
+=======
+        {isCompactLayout ? null : (
+          <WindowChromeRegion corners="top-left">
+            <SettingsSidebar
+              view={view}
+              onSelectSection={handleSelectSection}
+              onSelectHostSection={handleSelectHostSection}
+              onSelectHost={handleSelectHost}
+              onAddHost={handleAddHost}
+              onBackToWorkspace={handleBackToWorkspace}
+              activeHostServerId={activeHostServerId}
+              layout="desktop"
+            />
+          </WindowChromeRegion>
+        )}
+        <SettingsDetailPane
+          view={view}
+          isCompactLayout={isCompactLayout}
+          detailTitle={detailTitle}
+          detailActions={detailActions}
+          detailWidth={detailWidth}
+          onBack={handleBackFromDetail}
+          onRegisterBeforeLeave={registerBeforeLeave}
+          content={content}
+        />
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
       </View>
-      {addHostModals}
     </View>
   );
 }
@@ -1803,9 +2172,6 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.base,
   },
-  aboutVersionMismatch: {
-    color: theme.colors.palette.amber[500],
-  },
   aboutErrorText: {
     color: theme.colors.palette.red[300],
     fontSize: theme.fontSize.sm,
@@ -1816,6 +2182,7 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     gap: theme.spacing[2],
   },
+<<<<<<< HEAD
   themeTrigger: {
     flexDirection: "row",
     alignItems: "center",
@@ -1842,6 +2209,20 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foreground,
     fontSize: theme.fontSize.base,
     textAlign: "right",
+=======
+  aboutUpdateProgressTrack: {
+    marginTop: theme.spacing[2],
+    height: 4,
+    maxWidth: 260,
+    borderRadius: theme.borderRadius.full,
+    backgroundColor: theme.colors.surface3,
+    overflow: "hidden",
+  },
+  aboutUpdateProgressFill: {
+    height: "100%",
+    borderRadius: theme.borderRadius.full,
+    backgroundColor: theme.colors.accent,
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
   },
   placeholder: {
     flex: 1,
@@ -1864,10 +2245,18 @@ const desktopStyles = StyleSheet.create((theme) => ({
     flex: 1,
     minWidth: SETTINGS_DESKTOP_DETAIL_MIN_WIDTH,
   },
+<<<<<<< HEAD
   detailLeft: {
     gap: theme.spacing[2],
   },
 }));
+=======
+  compactContentPane: {
+    flex: 1,
+    minWidth: 0,
+  },
+});
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
 
 const sidebarStyles = StyleSheet.create((theme) => ({
   desktopContainer: {
@@ -1890,6 +2279,7 @@ const sidebarStyles = StyleSheet.create((theme) => ({
     width: "100%",
     maxWidth: 720,
   },
+<<<<<<< HEAD
   // A phone list row: a card row with a divider above it, as on the settings detail pages.
   compactRow: {
     minHeight: 56,
@@ -1926,6 +2316,13 @@ const sidebarStyles = StyleSheet.create((theme) => ({
   },
   list: {
     paddingVertical: theme.spacing[2],
+=======
+  // Compact values draw each group as an island of tiles; desktop keeps a plain list.
+  // Use vertical margin rather than padding so trailing empty group padding cannot
+  // intersect the scrollport top alone and capture browser scroll anchoring.
+  group: {
+    marginVertical: theme.spacing[2],
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
     paddingHorizontal: theme.spacing[2],
     gap: theme.spacing[1],
   },
@@ -1939,11 +2336,20 @@ const sidebarStyles = StyleSheet.create((theme) => ({
   item: {
     flexDirection: "row",
     alignItems: "center",
+<<<<<<< HEAD
     gap: theme.spacing[2],
     minHeight: 36,
     paddingVertical: theme.spacing[2],
     paddingHorizontal: theme.spacing[2],
     borderRadius: theme.borderRadius.lg,
+=======
+    gap: { xs: theme.spacing[3], md: theme.spacing[2] },
+    minHeight: { xs: 52, md: density.tightRowHeight.md },
+    paddingVertical: theme.spacing[1],
+    paddingHorizontal: { xs: theme.spacing[4], md: theme.spacing[2] },
+    borderRadius: { xs: 0, md: theme.borderRadius.lg },
+    backgroundColor: { xs: theme.colors.surface1, md: "transparent" },
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
   },
   itemHovered: {
     backgroundColor: theme.colors.surfaceSidebarHover,
@@ -1987,11 +2393,20 @@ const sidebarStyles = StyleSheet.create((theme) => ({
   pickerTrigger: {
     flexDirection: "row",
     alignItems: "center",
+<<<<<<< HEAD
     gap: theme.spacing[2],
     minHeight: 36,
     paddingVertical: theme.spacing[2],
     paddingHorizontal: theme.spacing[2],
     borderRadius: theme.borderRadius.lg,
+=======
+    gap: { xs: theme.spacing[3], md: theme.spacing[2] },
+    minHeight: { xs: 52, md: density.tightRowHeight.md },
+    paddingVertical: theme.spacing[1],
+    paddingHorizontal: { xs: theme.spacing[4], md: theme.spacing[2] },
+    borderRadius: { xs: 0, md: theme.borderRadius.lg },
+    backgroundColor: { xs: theme.colors.surface1, md: "transparent" },
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
   },
   pickerTriggerHovered: {
     backgroundColor: theme.colors.surfaceSidebarHover,

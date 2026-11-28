@@ -38,6 +38,7 @@ export function useHostFeature(
   return useSessionStore((state) => selectHostFeature(state, normalizedServerId, feature));
 }
 
+<<<<<<< HEAD
 /**
  * Null while the host has not sent its server info yet. `selectHostFeature` answers false there,
  * which is right for "can I use this now" and wrong for "does this host have it" - a caller that
@@ -52,14 +53,23 @@ export function selectHostFeatureAvailability(
   return serverInfo ? hostSupportsFeature(serverInfo, feature) : null;
 }
 
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
 export function useHostFeatureAvailability(
   serverId: string | null | undefined,
   feature: HostFeatureName,
 ): boolean | null {
   const normalizedServerId = serverId?.trim() ?? "";
+<<<<<<< HEAD
   return useSessionStore((state) =>
     selectHostFeatureAvailability(state, normalizedServerId, feature),
   );
+=======
+  return useSessionStore((state) => {
+    const serverInfo = state.sessions[normalizedServerId]?.serverInfo;
+    return serverInfo ? hostSupportsFeature(serverInfo, feature) : null;
+  });
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
 }
 
 export function useHostFeatureMap(

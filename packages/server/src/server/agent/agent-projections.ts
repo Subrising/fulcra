@@ -12,8 +12,9 @@ import type {
 import type { SerializableAgentConfig, StoredAgentRecord } from "./agent-storage.js";
 import type {
   AgentCapabilityFlags,
-  AgentFeature,
+  AgentOptionControl,
   AgentMetadata,
+  AgentMetric,
   AgentMode,
   AgentPermissionRequest,
   AgentPersistenceHandle,
@@ -23,7 +24,9 @@ import type {
   AgentUsage,
   ImportableProviderSession,
 } from "./agent-sdk-types.js";
+import type { ProviderOptions } from "@getpaseo/protocol/agent-types";
 import type { ManagedAgent } from "./agent-manager.js";
+import { featuresFromControls } from "@getpaseo/protocol/option-controls";
 import type { JsonValue } from "../json-utils.js";
 import {
   isStoredAgentProviderAvailable,
@@ -98,13 +101,15 @@ export function toStoredAgentRecord(
     lastUserMessageAt: validatedTimestamp(agent.lastUserMessageAt),
     title: options?.title ?? null,
     labels: agent.labels,
+    metadata: agent.metadata,
     lastStatus: agent.lifecycle,
     lastModeId: agent.currentModeId ?? config?.modeId ?? null,
     config: config ?? null,
     launchEnv: agent.launchEnv ? { ...agent.launchEnv } : undefined,
     runtimeInfo,
-    features: normalizeFeatures(agent.features),
+    controls: normalizeControls(agent.controls),
     persistence,
+    ...projectSessionMetrics(agent.sessionMetrics),
     lastError: agent.lastError ?? undefined,
     requiresAttention: agent.attention.requiresAttention,
     attentionReason: agent.attention.requiresAttention ? agent.attention.attentionReason : null,
@@ -112,10 +117,12 @@ export function toStoredAgentRecord(
       ? agent.attention.attentionTimestamp.toISOString()
       : null,
     internal: options?.internal,
+    ...(agent.background ? { background: true } : {}),
     owner: agent.owner,
   } satisfies StoredAgentRecord;
 }
 
+<<<<<<< HEAD
 /** Refresh display observations after an awaited host read, without changing action authority. */
 export function refreshAgentRuntimeObservation(
   payload: AgentSnapshotPayload,
@@ -124,6 +131,12 @@ export function refreshAgentRuntimeObservation(
   payload.status = agent.lifecycle;
   if (agent.backgroundWork) payload.backgroundWork = structuredClone(agent.backgroundWork);
   else delete payload.backgroundWork;
+=======
+/** Account discovery depends on the harness session and its model, so the key follows both. */
+function projectUsageScopeKey(agent: ManagedAgent): string | undefined {
+  const usageSession = agent.session?.usageSession?.();
+  return usageSession ? `${usageSession.sessionKey}:${usageSession.model ?? ""}` : undefined;
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
 }
 
 export function toAgentPayload(
@@ -163,10 +176,16 @@ export function toAgentPayload(
     capabilities: cloneCapabilities(agent.capabilities),
     currentModeId: agent.currentModeId,
     availableModes: cloneAvailableModes(agent.availableModes),
-    features: normalizeFeatures(agent.features),
+    // COMPAT(featureValues): added in v0.15.0, remove after 2027-05-01.
+    features: featuresFromControls({ controls: agent.controls, options: agent.effectiveOptions }),
+    ...(agent.effectiveOptions
+      ? { options: sanitizeEffectiveOptions(agent.effectiveOptions) }
+      : {}),
+    controls: normalizeControls(agent.controls),
     pendingPermissions: sanitizePendingPermissions(agent.pendingPermissions),
     persistence: projectPersistenceHandleForWire(agent.persistence),
     title: options?.title ?? null,
+<<<<<<< HEAD
     labels: (() => {
       const labels = { ...agent.labels };
       delete labels["fulcra.account-name"];
@@ -174,12 +193,25 @@ export function toAgentPayload(
       if (account) labels["fulcra.account-name"] = account.slice(0, 60);
       return labels;
     })(),
+=======
+    labels: agent.labels,
+    metadata: agent.metadata,
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
     archivedAt: options?.archivedAt ?? null,
-    ...(agent.internal ? { internal: true } : {}),
+    ...visibilityFlags(agent),
+    ...projectSessionMetrics(agent.sessionMetrics),
   };
 
+<<<<<<< HEAD
   const cost = sessionCost(agent.costRecords);
   if (cost) payload.sessionCost = cost;
+=======
+  const usageScopeKey = projectUsageScopeKey(agent);
+  if (usageScopeKey !== undefined) {
+    payload.usageScopeKey = usageScopeKey;
+  }
+
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
   const usage = sanitizeUsage(agent.lastUsage);
   if (usage !== undefined) {
     payload.lastUsage = usage;
@@ -245,6 +277,7 @@ function buildStoredPersistenceHandle(
   return toAgentPersistenceHandle(validProviders, record.persistence);
 }
 
+<<<<<<< HEAD
 // Orca R3a backstop: a stored payload is built only for an agent no process has loaded, and nothing runs a turn
 // for such an agent, so a stored running/initializing is projected as idle (as handleWaitForFinish already treats
 // it). The boot normalisation makes this unreachable for records that existed at boot.
@@ -258,11 +291,53 @@ function interruptedTurnField(
   record: StoredAgentRecord,
 ): Pick<AgentSnapshotPayload, "interruptedTurn"> {
   return record.interruptedTurn ? { interruptedTurn: record.interruptedTurn } : {};
+=======
+/** The wire carries `internal` and `background` only when set. */
+function visibilityFlags(agent: {
+  internal?: boolean;
+  background?: boolean;
+}): Pick<AgentSnapshotPayload, "internal" | "background"> {
+  return {
+    ...(agent.internal ? { internal: true } : {}),
+    ...(agent.background ? { background: true } : {}),
+  };
+}
+
+/** The options an agent runs with, given the options it owns; see `toAgentPayload`. */
+export type EffectiveOptionsResolver = (
+  provider: AgentProvider,
+  own: ProviderOptions | undefined,
+) => ProviderOptions;
+
+function buildStoredOptionControls(
+  record: StoredAgentRecord,
+  effectiveOptionsFor: EffectiveOptionsResolver,
+): Pick<AgentSnapshotPayload, "features" | "options" | "controls"> {
+  const controls = normalizeControls(record.controls);
+  const options = sanitizeEffectiveOptions(
+    effectiveOptionsFor(record.provider, record.config?.providerOptions ?? undefined),
+  );
+  return {
+    // COMPAT(featureValues): added in v0.15.0, remove after 2027-05-01.
+    features: featuresFromControls({ controls, options }),
+    options,
+    controls,
+  };
+}
+
+function visibleStoredBackgroundWork(
+  record: StoredAgentRecord,
+  summary: AgentSnapshotPayload["backgroundWork"],
+): AgentSnapshotPayload["backgroundWork"] {
+  return record.internal || record.archivedAt ? undefined : summary;
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
 }
 
 export function buildStoredAgentPayload(
   record: StoredAgentRecord,
   validProviders: Iterable<AgentProvider>,
+  effectiveOptionsFor: EffectiveOptionsResolver,
+  backgroundWork?: AgentSnapshotPayload["backgroundWork"],
 ): AgentSnapshotPayload {
   const defaultCapabilities = {
     supportsStreaming: false,
@@ -281,6 +356,7 @@ export function buildStoredAgentPayload(
   const lastUserMessageAt = record.lastUserMessageAt ? new Date(record.lastUserMessageAt) : null;
 
   const runtimeInfo = buildStoredRuntimeInfo(record);
+  const optionControls = buildStoredOptionControls(record, effectiveOptionsFor);
   const providerAvailable = isStoredAgentProviderAvailable(record, validProviders);
   const persistence = projectPersistenceHandleForWire(
     buildStoredPersistenceHandle(record, validProviders),
@@ -302,11 +378,17 @@ export function buildStoredAgentPayload(
     createdAt: createdAt.toISOString(),
     updatedAt: updatedAt.toISOString(),
     lastUserMessageAt: lastUserMessageAt ? lastUserMessageAt.toISOString() : null,
+<<<<<<< HEAD
     status: storedAgentStatus(record),
     nativeLifecycle: "closed",
+=======
+    status: record.lastStatus,
+    backgroundWork: visibleStoredBackgroundWork(record, backgroundWork),
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
     capabilities: defaultCapabilities,
     currentModeId: record.lastModeId ?? null,
     availableModes: [],
+    ...optionControls,
     pendingPermissions: [],
     persistence,
     title: record.title ?? null,
@@ -314,9 +396,11 @@ export function buildStoredAgentPayload(
     attentionReason: record.attentionReason ?? null,
     attentionTimestamp: record.attentionTimestamp ?? null,
     archivedAt: record.archivedAt ?? null,
-    ...(record.internal ? { internal: true } : {}),
+    ...visibilityFlags(record),
     labels: normalizeLabels(record.labels),
+    metadata: record.metadata,
     ...(typeof record.lastError === "string" ? { lastError: record.lastError } : {}),
+    ...projectSessionMetrics(record.sessionMetrics),
     ...(providerAvailable ? {} : { providerUnavailable: true }),
     ...interruptedTurnField(record),
   };
@@ -332,7 +416,11 @@ export function toAgentListItemPayload(agent: AgentSnapshotPayload): AgentListIt
     thinkingOptionId: agent.thinkingOptionId,
     effectiveThinkingOptionId: agent.effectiveThinkingOptionId,
     status: agent.status,
+<<<<<<< HEAD
     nativeLifecycle: agent.nativeLifecycle,
+=======
+    ...(agent.backgroundWork ? { backgroundWork: agent.backgroundWork } : {}),
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
     cwd: agent.cwd,
     createdAt: agent.createdAt,
     updatedAt: agent.updatedAt,
@@ -433,12 +521,6 @@ function buildSerializableConfig(config: AgentSessionConfig): SerializableAgentC
   if (config.thinkingOptionId) {
     serializable.thinkingOptionId = config.thinkingOptionId;
   }
-  if (Object.prototype.hasOwnProperty.call(config, "featureValues")) {
-    const featureValues = sanitizeMetadata(config.featureValues);
-    if (featureValues !== undefined) {
-      serializable.featureValues = featureValues;
-    }
-  }
   if (config.providerOptions !== undefined) {
     const providerOptions = sanitizeOptionalJson(config.providerOptions);
     if (providerOptions && isJsonObject(providerOptions)) {
@@ -503,6 +585,9 @@ function projectPersistenceHandleForWire(
     return projected;
   }
   delete projected.metadata.mcpServers;
+  delete projected.metadata.pluginAppendSystemPrompt;
+  delete projected.metadata.daemonAppendSystemPrompt;
+  delete projected.metadata.paseoInstructionReceipt;
   if (Object.keys(projected.metadata).length === 0) {
     delete projected.metadata;
   }
@@ -517,8 +602,15 @@ function cloneAvailableModes(modes: AgentMode[]): AgentMode[] {
   return modes.map((mode) => ({ ...mode }));
 }
 
-function normalizeFeatures(features: AgentFeature[] | null | undefined): AgentFeature[] {
-  return Array.isArray(features) ? features.map((feature) => ({ ...feature })) : [];
+function normalizeControls(
+  controls: AgentOptionControl[] | null | undefined,
+): AgentOptionControl[] {
+  return Array.isArray(controls) ? controls.map((control) => ({ ...control })) : [];
+}
+
+function sanitizeEffectiveOptions(options: Record<string, unknown>): ProviderOptions {
+  const sanitized = sanitizeOptionalJson(options);
+  return sanitized && isJsonObject(sanitized) ? sanitized : {};
 }
 
 function sanitizeOptionalJson(value: unknown): JsonValue | undefined {
@@ -575,7 +667,18 @@ function sanitizeMetadataArray(value: unknown): AgentMetadata[] | undefined {
   return sanitized.length > 0 ? sanitized : undefined;
 }
 
+<<<<<<< HEAD
 type UsageNumericField = Exclude<keyof AgentUsage, "recorded">;
+=======
+/** A session with no metrics carries no field, on the wire and on disk. */
+function projectSessionMetrics(metrics: AgentMetric[] | undefined): {
+  sessionMetrics?: AgentMetric[];
+} {
+  return metrics?.length ? { sessionMetrics: metrics.map((metric) => ({ ...metric })) } : {};
+}
+
+type UsageNumericField = Exclude<keyof AgentUsage, never>;
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
 
 function assignFiniteNumber(
   source: { [key: string]: JsonValue },

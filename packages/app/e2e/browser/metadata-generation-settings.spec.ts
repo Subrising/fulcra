@@ -13,8 +13,13 @@ async function openMetadataGenerationSettings(page: Page) {
   await gotoAppShell(page);
   await openSettings(page);
   await openSettingsHost(page, serverId);
+<<<<<<< HEAD
   await openHostSection(page, serverId, "metadata");
   await expectSettingsHeader(page, "Auto titles & messages");
+=======
+  await openHostSection(page, serverId, "workspaces");
+  await expectSettingsHeader(page, "Workspaces");
+>>>>>>> refs/remotes/upstream/tags/v0.18.0
 }
 
 async function openManualMetadataModelPicker(page: Page) {
