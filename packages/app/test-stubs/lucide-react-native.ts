@@ -11,7 +11,11 @@ const StubIcon: LucideIcon = () => null;
 export const Activity = StubIcon;
 export const AlertTriangle = StubIcon;
 export const Archive = StubIcon;
+<<<<<<< HEAD
 export const Network = StubIcon;
+=======
+export const ArrowDown = StubIcon;
+>>>>>>> refs/remotes/upstream/tags/v0.16.0
 export const ArrowDownUp = StubIcon;
 export const ArrowLeft = StubIcon;
 export const ArrowLeftToLine = StubIcon;
@@ -84,6 +88,7 @@ export const PinOff = StubIcon;
 export const Play = StubIcon;
 export const Plug = StubIcon;
 export const Plus = StubIcon;
+export const Puzzle = StubIcon;
 export const QrCode = StubIcon;
 export const RefreshCcw = StubIcon;
 export const RefreshCw = StubIcon;
@@ -101,6 +106,7 @@ export const Smartphone = StubIcon;
 export const Split = StubIcon;
 export const Square = StubIcon;
 export const SquarePen = StubIcon;
+export const SquareSlash = StubIcon;
 export const SquareTerminal = StubIcon;
 export const Star = StubIcon;
 export const Sun = StubIcon;
@@ -207,6 +213,7 @@ export const WrapText = StubIcon;
 export const Zap = StubIcon;
 export const ZoomIn = StubIcon;
 export const ZoomOut = StubIcon;
+<<<<<<< HEAD
 export const Users = StubIcon;
 export const SendHorizontal = StubIcon;
 
@@ -222,3 +229,18 @@ export const Summary = StubIcon;
 export function LucideProvider({ children }: { children?: ReactNode }): ReactNode {
   return children ?? null;
 }
+=======
+export const ListTodo = StubIcon;
+export const Shield = StubIcon;
+export const ShieldEllipsis = StubIcon;
+export const ShieldPlus = StubIcon;
+export const Zap = StubIcon;
+export const CheckSquare = StubIcon;
+export const Circle = StubIcon;
+export const FileSymlink = StubIcon;
+export const MessageSquareCode = StubIcon;
+export const MicVocal = StubIcon;
+export const Scissors = StubIcon;
+export const Sparkles = StubIcon;
+export const TriangleAlertIcon = StubIcon;
+>>>>>>> refs/remotes/upstream/tags/v0.16.0

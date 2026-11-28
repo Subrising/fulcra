@@ -10,6 +10,7 @@ import {
   type PluginProcessRequest,
 } from "./plugin-process-protocol.js";
 import type { UsageSourceRegistration } from "@getpaseo/plugin/server/usage";
+<<<<<<< HEAD
 import type { SettingsDefinition, PluginRpcContract } from "@getpaseo/plugin";
 import type {
   PluginCredentials,
@@ -19,6 +20,23 @@ import type {
   PluginServerContribution,
 } from "@getpaseo/plugin/server";
 import { randomUUID } from "node:crypto";
+=======
+import type {
+  SettingsDefinition,
+  PluginRpcContract,
+  PluginSubscriptionContract,
+} from "@getpaseo/plugin";
+import type {
+  PluginHandlerContext,
+  PluginServerContext,
+  PluginServerContribution,
+} from "@getpaseo/plugin/server";
+import { assertPluginWireValue } from "@getpaseo/protocol/binary-frames/index";
+import {
+  PluginSubscriptionHandlers,
+  type PluginSubscriptionHandler,
+} from "./subscription-handlers.js";
+>>>>>>> refs/remotes/upstream/tags/v0.16.0
 import { fileURLToPath } from "node:url";
 import type { ZodType } from "zod";
 import {
@@ -87,6 +105,7 @@ export function createPluginWorker(options: {
     send({ type: "hooks.changed", hooks: hooks.catalog() });
   }, agentTools);
   const handlers = new Map<string, RegisteredRpc>();
+  const subscriptions = new PluginSubscriptionHandlers({ send, sendAndWait });
   const providers = new Map<string, ProviderRegistration>();
   const usageSources = new Map<string, UsageSourceRegistration>();
   const providerConnections = new Map<
@@ -170,17 +189,45 @@ export function createPluginWorker(options: {
     if (!/^[a-z][a-z0-9._-]*$/.test(normalized)) {
       throw new Error(`Invalid plugin RPC method: ${method}`);
     }
-    if (handlers.has(normalized)) {
+    if (handlers.has(normalized) || subscriptions.has(normalized)) {
       throw new Error(`Duplicate plugin RPC method: ${normalized}`);
     }
     return normalized;
   }
 
+<<<<<<< HEAD
   function register(
     contract: PluginRpcContract,
     handler: RpcHandler,
     rpcOptions?: { readOnly?: boolean },
   ): void {
+=======
+  function registerSubscription(
+    contract: PluginSubscriptionContract,
+    handler: PluginSubscriptionHandler,
+  ): void {
+    if (typeof handler !== "function") {
+      throw new Error(`Plugin subscription ${contract.name} must provide a handler`);
+    }
+    const method = validateMethod(contract.name);
+    subscriptions.register({ ...contract, name: method }, handler);
+  }
+
+  // One name serves either an RPC or a subscription; the contract says which.
+  const handle = ((
+    contract: PluginRpcContract | PluginSubscriptionContract,
+    handler: (input: unknown, context: never) => unknown,
+  ) => {
+    if ("event" in contract) {
+      // The subscription handlers parse the input once and pass the result here.
+      registerSubscription(contract, handler as PluginSubscriptionHandler);
+      return;
+    }
+    register(contract, (input, context) => handler(input, context as never));
+  }) as PluginServerContext["handle"];
+
+  function register(contract: PluginRpcContract, handler: RpcHandler): void {
+>>>>>>> refs/remotes/upstream/tags/v0.16.0
     if (typeof handler !== "function") {
       throw new Error(`Plugin RPC ${contract.name} must provide a handler`);
     }
@@ -366,6 +413,7 @@ export function createPluginWorker(options: {
     secretStore = createPluginSecretStore({ pluginId: message.pluginId });
     hostCapabilities = message.capabilities ?? { notify: false, credentials: false };
     const contributedCleanup = contribute({
+<<<<<<< HEAD
       ...untrustedHostHooks,
       handle: (contract, handler, rpcOptions?: { readOnly?: boolean }) =>
         register(
@@ -376,6 +424,9 @@ export function createPluginWorker(options: {
       secrets: secretStore?.secrets,
       ...(hostCapabilities.notify ? { notify } : {}),
       ...(hostCapabilities.credentials ? { credentials } : {}),
+=======
+      handle,
+>>>>>>> refs/remotes/upstream/tags/v0.16.0
       registerProvider,
       registerUsageSource,
       registerSettings,
@@ -401,10 +452,14 @@ export function createPluginWorker(options: {
     send({
       type: "ready",
       methods: [...handlers.keys()].sort(),
+<<<<<<< HEAD
       readMethods: [...handlers]
         .filter(([, registered]) => registered.readOnly)
         .map(([method]) => method)
         .sort(),
+=======
+      subscriptions: subscriptions.catalog(),
+>>>>>>> refs/remotes/upstream/tags/v0.16.0
       hooks: hooks.catalog(),
       providers: [...providers.values()]
         .sort((left, right) => left.id.localeCompare(right.id))
@@ -421,6 +476,7 @@ export function createPluginWorker(options: {
       .catch((error) => console.error("Plugin API cleanup failed", error));
     hooks.close();
     agentTools.close();
+    subscriptions.releaseAll();
     for (const pending of pendingProviderConnections.values()) pending.tombstoned = true;
     for (const pending of pendingHostCalls.values())
       pending.reject(new Error("Plugin is stopping"));
@@ -462,7 +518,8 @@ export function createPluginWorker(options: {
       message.type === "provider.status" ||
       message.type === "provider.catalog_key" ||
       message.type === "usage.fetch" ||
-      message.type === "usage.discover"
+      message.type === "usage.discover" ||
+      message.type === "subscribe"
     ) {
       send({ type: "error", requestId: message.requestId, error: "Plugin is stopping" });
     } else if (message.type === "provider.connect") {
@@ -519,7 +576,18 @@ export function createPluginWorker(options: {
     return false;
   }
 
+<<<<<<< HEAD
   // oxlint-disable-next-line complexity -- FULCRA: upstream body plus the named core patch seams; split on the next upstream merge.
+=======
+  function handleSubscriptionMessage(
+    message: Extract<PluginProcessRequest, { type: "subscribe" | "unsubscribe" }>,
+  ): void {
+    if (message.type === "unsubscribe") subscriptions.release(message.subscriptionId);
+    else if (paseo) subscriptions.start(message, paseo);
+    else send({ type: "error", requestId: message.requestId, error: "Plugin API unavailable" });
+  }
+
+>>>>>>> refs/remotes/upstream/tags/v0.16.0
   function handleMessage(rawMessage: unknown): void {
     const parsed = PluginProcessRequestSchema.safeParse(rawMessage);
     if (!parsed.success) {
@@ -627,6 +695,11 @@ export function createPluginWorker(options: {
       handleHookMessage(message);
       return;
     }
+    if (message.type === "invoke") invoke(message);
+    else handleSubscriptionMessage(message);
+  }
+
+  function invoke(message: Extract<PluginProcessRequest, { type: "invoke" }>): void {
     const registered = handlers.get(message.method);
     if (!registered) {
       send({
@@ -677,9 +750,16 @@ export function createPluginWorker(options: {
           ...(management ? { management: management.context } : {}),
         });
       })
+<<<<<<< HEAD
       .finally(() => management?.close())
       .then((output) => registered.contract.output.parseAsync(output))
       .then((output) => guardPluginOutput(secretStore, output))
+=======
+      .then((output: unknown) => {
+        assertPluginWireValue(output, "output");
+        return output;
+      })
+>>>>>>> refs/remotes/upstream/tags/v0.16.0
       .then(
         (output) => send({ type: "result", requestId: message.requestId, output }),
         (error) => send({ type: "error", requestId: message.requestId, error: redact(error) }),

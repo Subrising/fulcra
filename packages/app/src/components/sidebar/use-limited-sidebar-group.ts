@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   selectSidebarGroupVisibility,
   type SidebarGroupItem,
@@ -38,6 +38,11 @@ export function limitRowsPerHost<T>(
 interface LimitedSidebarGroupInput<T> {
   items: readonly T[];
   selection: ActiveWorkspaceSelection | null;
+  /**
+   * Whether the user revealed the whole group. The caller owns it: a native drop remounts the
+   * rows it moved, and a reveal held inside a row would reset with them.
+   */
+  expanded: boolean;
   policy?: SidebarGroupVisibilityPolicy<T>;
   /**
    * Fulcra: when set, the policy limit applies to each host's rows on its own, and the shown rows
@@ -84,7 +89,9 @@ function selectPerHostVisibility<T extends SidebarGroupItem>(
 export function useLimitedSidebarGroup<T extends SidebarGroupItem>({
   items,
   selection,
+  expanded,
   policy = PINNED_POLICY,
+<<<<<<< HEAD
   hostOf,
 }: LimitedSidebarGroupInput<T>): SidebarGroupVisibility<T> & {
   expanded: boolean;
@@ -98,4 +105,11 @@ export function useLimitedSidebarGroup<T extends SidebarGroupItem>({
   const toggleExpanded = useCallback(() => setExpanded((current) => !current), []);
 
   return { ...visibility, expanded, toggleExpanded };
+=======
+}: LimitedSidebarGroupInput<T>): SidebarGroupVisibility<T> {
+  return useMemo(
+    () => selectSidebarGroupVisibility({ items, expanded, policy, selection }),
+    [expanded, items, policy, selection],
+  );
+>>>>>>> refs/remotes/upstream/tags/v0.16.0
 }
