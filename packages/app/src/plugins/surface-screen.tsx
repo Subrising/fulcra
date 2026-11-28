@@ -16,19 +16,32 @@ import { ScreenHeader } from "@/components/headers/screen-header";
 import { ScreenTitle } from "@/components/headers/screen-title";
 import { HostFilter } from "@/components/hosts/host-filter";
 import type { HostPickerHost } from "@/components/hosts/host-picker";
+import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { useIsCompactFormFactor } from "@/constants/layout";
+<<<<<<< HEAD
 import { useHostRuntimeClient, useHosts, useHostRuntimeSnapshot } from "@/runtime/host-runtime";
+=======
+import {
+  useHostRuntimeClient,
+  useHostRuntimeConnectionStatus,
+  useHosts,
+} from "@/runtime/host-runtime";
+>>>>>>> refs/remotes/upstream/tags/v0.17.1
 import type { Theme } from "@/styles/theme";
 import type { ShortcutKey } from "@/utils/format-shortcut";
 import { usePluginHostNavigation } from "./host-navigation";
 import { PluginIconView } from "./icons";
 import { toPluginTheme } from "./theme";
+<<<<<<< HEAD
 import {
   pluginRegistry,
   usePluginEvaluationError,
   useInstalledPlugin,
   usePluginInstallations,
 } from "./registry";
+=======
+import { useInstalledPlugin, usePluginCatalogStatus, usePluginInstallations } from "./registry";
+>>>>>>> refs/remotes/upstream/tags/v0.17.1
 import { buildPluginSurfaceRoute, pluginScreenParamsFromRoute } from "./routes";
 import {
   legacySidebarItemHostKey,
@@ -46,7 +59,9 @@ import {
   resolvePluginScreenTitle,
   surfaceIdTitle,
   resolvePluginSurfaceContribution,
+  resolvePluginSurfacePlaceholder,
   type PluginSurfaceContributionIdentity,
+  type PluginSurfacePlaceholderStatus,
 } from "./surface-contribution";
 import { resolvePluginPlatform } from "./platform";
 
@@ -56,6 +71,28 @@ const pluginThemeMapping = (theme: Theme) => ({
   theme: toPluginTheme(theme),
 });
 const ThemedX = withUnistyles(X);
+const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
+const SURFACE_ERRORS = {
+  offline: "Plugin host is offline.",
+  error: "Could not load plugins. Reconnect to try again.",
+  unavailable: "This plugin surface is unavailable.",
+} as const;
+
+function PluginSurfacePlaceholder({ status }: { status: PluginSurfacePlaceholderStatus }) {
+  if (status === "loading") {
+    return (
+      <View
+        testID="plugin-surface-loading"
+        accessibilityRole="progressbar"
+        accessibilityLabel="Loading plugin"
+        style={styles.loading}
+      >
+        <ThemedLoadingSpinner size="large" uniProps={mutedColorMapping} />
+      </View>
+    );
+  }
+  return <Text style={styles.errorText}>{SURFACE_ERRORS[status]}</Text>;
+}
 
 function routeParam(value: string | string[] | undefined): string {
   return typeof value === "string" ? value : "";
@@ -167,8 +204,14 @@ export function PluginSurfaceScreen() {
   const installations = usePluginInstallations(pluginId);
   const hosts = useHosts();
   const client = useHostRuntimeClient(serverId);
+<<<<<<< HEAD
   const connectionError = pluginConnectionRefusal(useHostRuntimeSnapshot(serverId));
   const retryConnection = useCallback(() => client?.ensureConnected(), [client]);
+=======
+  const connectionStatus = useHostRuntimeConnectionStatus(serverId);
+  const catalogStatus = usePluginCatalogStatus(serverId);
+  const placeholderStatus = resolvePluginSurfacePlaceholder({ connectionStatus, catalogStatus });
+>>>>>>> refs/remotes/upstream/tags/v0.17.1
   const compact = useIsCompactFormFactor();
   const { sidebarItem, surface } = useMemo(
     () => resolvePluginSurfaceContribution(plugin, identity),
@@ -288,9 +331,13 @@ export function PluginSurfaceScreen() {
             />
           </SurfaceErrorBoundary>
         ) : (
+<<<<<<< HEAD
           <Text style={styles.errorText}>
             {pluginSurfaceUnavailable(connectionError, !!evaluationError, !!(plugin && surface))}
           </Text>
+=======
+          <PluginSurfacePlaceholder status={placeholderStatus} />
+>>>>>>> refs/remotes/upstream/tags/v0.17.1
         )}
       </View>
     </View>
@@ -304,6 +351,11 @@ const styles = StyleSheet.create((theme) => ({
   },
   body: {
     flex: 1,
+  },
+  loading: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
   },
   errorText: {
     color: theme.colors.statusDanger,

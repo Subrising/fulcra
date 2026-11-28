@@ -10,6 +10,8 @@ log.initialize({ spyRendererConsole: true });
 import { inheritLoginShellEnv } from "./login-shell-env.js";
 
 import path from "node:path";
+import { randomBytes, randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import { pathToFileURL } from "node:url";
 import { existsSync } from "node:fs";
 import { execGitCommandSync } from "@getpaseo/plugin/server/git";
@@ -45,10 +47,14 @@ import {
   buildStandardContextMenuItems,
 } from "./window/window-manager.js";
 import { setupDarwinCompositorWatchdog } from "./window/compositor-watchdog/index.js";
+<<<<<<< HEAD
 import {
   logChildProcessGone,
   setupRendererCrashRecovery,
 } from "./window/renderer-crash-recovery.js";
+=======
+import { reloadWhenRendererExits } from "./window/renderer-recovery.js";
+>>>>>>> refs/remotes/upstream/tags/v0.17.1
 import { showWindowWhenReady } from "./window/show-when-ready.js";
 import { resolveDesktopWindowChromeMode, windowChromeModeArgument } from "./window/chrome.js";
 import { registerDialogHandlers } from "./features/dialogs.js";
@@ -681,6 +687,14 @@ function getWorkAreasPrimaryFirst(): Electron.Rectangle[] {
   return [primary, ...others].map((display) => display.workArea);
 }
 
+const browserHostComputerName =
+  hostname()
+    .replace(/\.local$/i, "")
+    .trim()
+    .slice(0, 120) || "Desktop";
+const browserHostSessionCode = randomBytes(3).toString("hex").toUpperCase();
+let browserHostWindowNumber = 0;
+
 async function createWindow(
   options: {
     initialRoute?: string | null;
@@ -704,7 +718,12 @@ async function createWindow(
     ? clampWindowStateToWorkAreas(savedWindowState, getWorkAreasPrimaryFirst())
     : null;
 
+<<<<<<< HEAD
   const title = devWorktreeName ? `${APP_DISPLAY_NAME} (${devWorktreeName})` : APP_DISPLAY_NAME;
+=======
+  const title = devWorktreeName ? `${APP_NAME} (${devWorktreeName})` : APP_NAME;
+  const browserHostLabel = `${browserHostComputerName} · Window ${++browserHostWindowNumber} (${browserHostSessionCode})`;
+>>>>>>> refs/remotes/upstream/tags/v0.17.1
   const mainWindow = new BrowserWindow({
     title,
     ...resolveWindowBounds(restoredWindowState),
@@ -717,7 +736,11 @@ async function createWindow(
     }),
     webPreferences: {
       preload: getPreloadPath(),
-      additionalArguments: [windowChromeModeArgument(DESKTOP_WINDOW_CHROME_MODE)],
+      additionalArguments: [
+        windowChromeModeArgument(DESKTOP_WINDOW_CHROME_MODE),
+        `--paseo-browser-host-label=${browserHostLabel}`,
+        `--paseo-browser-host-instance-id=${randomUUID()}`,
+      ],
       contextIsolation: true,
       nodeIntegration: false,
       webviewTag: true,
@@ -749,7 +772,11 @@ async function createWindow(
   }
 
   setupDarwinCompositorWatchdog(mainWindow);
+<<<<<<< HEAD
   setupRendererCrashRecovery(mainWindow, { logger: log });
+=======
+  reloadWhenRendererExits(mainWindow);
+>>>>>>> refs/remotes/upstream/tags/v0.17.1
   setupWindowResizeEvents(mainWindow);
   if (windowStateStore) {
     setupWindowStatePersistence(mainWindow, windowStateStore);

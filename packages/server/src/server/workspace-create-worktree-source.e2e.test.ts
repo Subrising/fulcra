@@ -75,6 +75,43 @@ test("workspace.create worktree source forwards action=checkout + refName into t
   }
 }, 180000);
 
+test("checkout.worktrees.list returns git worktrees Paseo did not create", async () => {
+  const daemon = await createTestPaseoDaemon();
+  const { repoDir, tempRoot } = createGitRepoWithBranch();
+  const manualPath = path.join(tempRoot, "manual");
+  execFileSync("git", ["worktree", "add", "-b", "feature/manual", manualPath], {
+    cwd: repoDir,
+    stdio: "pipe",
+  });
+  const client = new DaemonClient({
+    url: `ws://127.0.0.1:${daemon.port}/ws`,
+    appVersion: "0.1.82",
+  });
+
+  try {
+    await client.connect();
+    const created = await client.createWorkspace({
+      source: { kind: "worktree", cwd: repoDir, action: "branch-off", branchName: "feature/paseo" },
+    });
+    expect(created.error).toBeNull();
+
+    const worktrees = await client.listCheckoutWorktrees(repoDir);
+
+    expect(worktrees.map(({ branchName, containsCwd }) => ({ branchName, containsCwd }))).toEqual(
+      expect.arrayContaining([
+        { branchName: "main", containsCwd: true },
+        { branchName: "feature/manual", containsCwd: false },
+        { branchName: "feature/paseo", containsCwd: false },
+      ]),
+    );
+    expect(worktrees).toHaveLength(3);
+  } finally {
+    await client.close().catch(() => undefined);
+    await daemon.close();
+    await rm(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+}, 180000);
+
 test.each([false, true])(
   "workspace.create opens worktree.terminals (setup service: %s)",
   async (withSetupService) => {
@@ -243,9 +280,18 @@ test("existing branch changes remain visible after archive and restore", async (
   expect(before.files.map((file) => file.path)).toEqual(["feature.txt"]);
   expect((await client.getCheckoutStatus(cwd)).baseRef).toBe("main");
   const gitStatus = { cwd, isGit: true, baseRef: "main" };
+<<<<<<< HEAD
   const keeps = watchCleanupKeeps();
   expect((await client.archiveWorkspace(workspace.id)).error).toBeNull();
   expectKeptByCleanupGuard(keeps, cwd);
+=======
+  await client.checkoutRefresh(cwd);
+  expect(updates).toContainEqual(expect.objectContaining(gitStatus));
+  expect((await client.archiveWorkspace(workspace.id)).error).toBeNull();
+  expect(existsSync(cwd)).toBe(false);
+  await client.checkoutRefresh(cwd);
+  expect((await client.getCheckoutStatus(cwd)).isGit).toBe(false);
+>>>>>>> refs/remotes/upstream/tags/v0.17.1
   updates.length = 0;
   await client.restoreWorkspace(workspace.id);
   expect(updates).toContainEqual(expect.objectContaining(gitStatus));

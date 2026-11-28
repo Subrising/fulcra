@@ -1,14 +1,30 @@
+<<<<<<< HEAD
 import type { AgentFeature, AgentFeatureToggle } from "../../agent-sdk-types.js";
 import { claudeManifestModelSupportsFastMode } from "./model-manifest.js";
 import { claudeRuntimeFastModeSupport } from "./model-discovery.js";
+=======
+import type { AgentOptionControl, AgentOptionToggleControl } from "../../agent-sdk-types.js";
+import {
+  claudeManifestModelSupportsFastMode,
+  claudeManifestModelSupportsUltracode,
+} from "./model-manifest.js";
+>>>>>>> refs/remotes/upstream/tags/v0.17.1
 
-export const CLAUDE_FAST_MODE_FEATURE: Omit<AgentFeatureToggle, "value"> = {
+export const CLAUDE_FAST_MODE_CONTROL: AgentOptionToggleControl = {
   type: "toggle",
-  id: "fast_mode",
+  key: "fast_mode",
   label: "Fast",
-  description: "Lower latency Opus responses at higher token cost",
+  description: "Lower latency responses at higher token cost",
   tooltip: "Toggle fast mode",
   icon: "zap",
+};
+
+const CLAUDE_ULTRACODE_CONTROL: AgentOptionToggleControl = {
+  type: "toggle",
+  key: "ultracode",
+  label: "Ultracode",
+  description: "Let Claude plan workflows for substantive tasks",
+  icon: "Workflow",
 };
 
 export function claudeModelSupportsFastMode(modelId: string | null | undefined): boolean {
@@ -16,18 +32,14 @@ export function claudeModelSupportsFastMode(modelId: string | null | undefined):
   return claudeRuntimeFastModeSupport(modelId) ?? claudeManifestModelSupportsFastMode(modelId);
 }
 
-export function buildClaudeFeatures(input: {
-  modelId: string | null | undefined;
-  fastModeEnabled: boolean;
-}): AgentFeature[] {
-  if (!claudeModelSupportsFastMode(input.modelId)) {
-    return [];
-  }
-
+export function buildClaudeControls(
+  modelId: string | null | undefined,
+  independentUltracode: boolean,
+): AgentOptionControl[] {
   return [
-    {
-      ...CLAUDE_FAST_MODE_FEATURE,
-      value: input.fastModeEnabled,
-    },
+    ...(claudeModelSupportsFastMode(modelId) ? [{ ...CLAUDE_FAST_MODE_CONTROL }] : []),
+    ...(independentUltracode && claudeManifestModelSupportsUltracode(modelId)
+      ? [{ ...CLAUDE_ULTRACODE_CONTROL }]
+      : []),
   ];
 }

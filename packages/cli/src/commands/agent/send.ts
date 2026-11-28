@@ -82,8 +82,13 @@ export function addSendOptions(cmd: Command): Command {
     .addOption(
       new Option(
         "--behavior <behavior>",
+<<<<<<< HEAD
         "Active-turn behavior (agent default: steer; otherwise: interrupt; queue waits for the turn end)",
       ).choices(["interrupt", "steer", "queue"]),
+=======
+        "Active-turn behavior (agent default: steer waits for turn end; otherwise: interrupt). An agent's interrupt delivers the messages queued before it first",
+      ).choices(["interrupt", "steer"]),
+>>>>>>> refs/remotes/upstream/tags/v0.17.1
     )
     .option("--steer", "Inject into the running turn; queue if native steering is unavailable")
     .option("--queue", "Queue agent messages for one combined delivery after the current turn")
@@ -643,10 +648,16 @@ export async function runSendCommand(
           agentId: agentIdArg,
           status: receipt?.deliveryStatus ?? "sent",
           message:
+<<<<<<< HEAD
             deliveryNote ??
             (receipt?.deliveryStatus === "queued"
               ? "Message queued for delivery after two quiet seconds"
               : "Message sent, not waiting for completion"),
+=======
+            receipt.deliveryStatus === "queued"
+              ? "Message queued for delivery after two quiet seconds and the current turn ends. An interrupt replaces the turn now, after the messages queued before it"
+              : "Message sent, not waiting for completion",
+>>>>>>> refs/remotes/upstream/tags/v0.17.1
         },
         schema: agentSendSchema,
       };

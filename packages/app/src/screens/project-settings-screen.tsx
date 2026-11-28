@@ -5,7 +5,7 @@ import { Pressable, Text, View } from "react-native";
 import { useFocusEffect } from "expo-router/react-navigation";
 import { StyleSheet } from "react-native-unistyles";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, MoreVertical, Pencil, Plus } from "lucide-react-native";
+import { MoreVertical, Pencil, Plus } from "lucide-react-native";
 import { ProjectIconView } from "@/components/project-icon-view";
 import type {
   PaseoConfigRaw,
@@ -29,6 +29,7 @@ import { EditingTextInput as TextInput } from "@/components/ui/text-input";
 import { SettingsTextAreaCard } from "@/components/settings-textarea";
 import { SettingsGroup } from "@/components/settings/headings/settings-group";
 import { SettingsSection } from "@/components/settings/headings/settings-section";
+import { SettingsBackLink, SettingsDetailHeader } from "@/components/settings";
 import { settingsStyles } from "@/styles/settings";
 import { useProjects } from "@/hooks/use-projects";
 import type { ProjectEditFormSnapshot } from "@/projects/edit-form";
@@ -157,7 +158,6 @@ function NoEditableTarget({
           testID="project-settings-back-button"
           onPress={onBackToProjects}
           variant="secondary"
-          size="md"
         >
           {t("settings.project.backToProjects")}
         </Button>
@@ -169,17 +169,11 @@ function NoEditableTarget({
 function BackToProjectsButton({ onPress }: { onPress: () => void }) {
   const { t } = useTranslation();
   return (
-    <Button
-      testID="project-settings-back-link"
-      accessibilityLabel={t("settings.project.backToProjects")}
+    <SettingsBackLink
+      label={t("settings.project.backToProjects")}
       onPress={onPress}
-      variant="ghost"
-      size="sm"
-      leftIcon={ArrowLeft}
-      style={styles.backButton}
-    >
-      {t("settings.project.backToProjects")}
-    </Button>
+      testID="project-settings-back-link"
+    />
   );
 }
 
@@ -260,33 +254,51 @@ function ProjectSettingsBody({
   const handleReload = useCallback(() => {
     void readQuery.refetch();
   }, [readQuery]);
+  const backLink = useMemo(
+    () =>
+      showBackToProjects
+        ? {
+            label: t("settings.project.backToProjects"),
+            onPress: onBackToProjects,
+            testID: "project-settings-back-link",
+          }
+        : undefined,
+    [onBackToProjects, showBackToProjects, t],
+  );
+  const titleIcon = useMemo(
+    () => (
+      <ProjectTitleIcon
+        iconDataUri={projectIconDataUri}
+        projectName={selectedHost.projectName}
+        projectViewKey={project.viewKey}
+      />
+    ),
+    [project.viewKey, projectIconDataUri, selectedHost.projectName],
+  );
+  const editButton = useMemo(
+    () => (
+      <Pressable
+        testID="project-edit-button"
+        accessibilityRole="button"
+        accessibilityLabel={t("settings.project.edit.title")}
+        onPress={openEditSheet}
+        hitSlop={8}
+        style={styles.editButton}
+      >
+        <Pencil size={ICON_SIZE} color={styles.iconColor.color} />
+      </Pressable>
+    ),
+    [openEditSheet, t],
+  );
 
   return (
     <View role="main" style={styles.body}>
-      {showBackToProjects ? <BackToProjectsButton onPress={onBackToProjects} /> : null}
-
-      <View style={styles.headerBlock}>
-        <View style={styles.titleRow}>
-          <ProjectTitleIcon
-            iconDataUri={projectIconDataUri}
-            projectName={selectedHost.projectName}
-            projectViewKey={project.viewKey}
-          />
-          <Text style={styles.projectTitle} numberOfLines={1}>
-            {selectedHost.projectName}
-          </Text>
-          <Pressable
-            testID="project-edit-button"
-            accessibilityRole="button"
-            accessibilityLabel={t("settings.project.edit.title")}
-            onPress={openEditSheet}
-            hitSlop={8}
-            style={styles.editButton}
-          >
-            <Pencil size={ICON_SIZE} color={styles.iconColor.color} />
-          </Pressable>
-        </View>
-      </View>
+      <SettingsDetailHeader
+        back={backLink}
+        icon={titleIcon}
+        title={selectedHost.projectName}
+        trailing={editButton}
+      />
 
       <ProjectEditSheet
         // A new instance per open seeds the form from the project as it stands now.
@@ -417,7 +429,7 @@ function ReadFailureCallout({ kind, error, onReload }: ReadFailureCalloutProps) 
   return (
     <View style={styles.errorBlock}>
       <Alert size="md" testID={testID} variant="error" title={title} description={description}>
-        <Button testID={`${testID}-action-0`} onPress={onReload} variant="outline" size="sm">
+        <Button testID={`${testID}-action-0`} onPress={onReload} variant="outline">
           {t("settings.project.actions.reload")}
         </Button>
       </Alert>
@@ -658,6 +670,28 @@ function ProjectConfigForm({
     [handleAddScript, t],
   );
 
+<<<<<<< HEAD
+=======
+  const setupDocsLink = useMemo(
+    () => ({
+      href: WORKTREE_DOCS_URL,
+      label: t("settings.project.worktree.docs"),
+      tooltip: t("settings.project.worktree.docsTooltip"),
+      testID: "worktree-setup-docs-link",
+    }),
+    [t],
+  );
+  const teardownDocsLink = useMemo(
+    () => ({
+      href: WORKTREE_DOCS_URL,
+      label: t("settings.project.worktree.docs"),
+      tooltip: t("settings.project.worktree.docsTooltip"),
+      testID: "worktree-teardown-docs-link",
+    }),
+    [t],
+  );
+
+>>>>>>> refs/remotes/upstream/tags/v0.17.1
   const isStale = writeError?.code === "stale_project_config";
   const isWriteFailed = writeError?.code === "write_failed";
   const saveDisabled = saveMutation.isPending || isStale || hasInvalidScripts;
@@ -672,6 +706,10 @@ function ProjectConfigForm({
         <SettingsSection
           title={t("settings.project.worktree.setup")}
           testID="worktree-setup-section"
+<<<<<<< HEAD
+=======
+          link={setupDocsLink}
+>>>>>>> refs/remotes/upstream/tags/v0.17.1
         >
           {hasUncommittedWorktreeSetupChanges ? (
             <Alert
@@ -693,6 +731,10 @@ function ProjectConfigForm({
         <SettingsSection
           title={t("settings.project.worktree.teardown")}
           testID="worktree-teardown-section"
+<<<<<<< HEAD
+=======
+          link={teardownDocsLink}
+>>>>>>> refs/remotes/upstream/tags/v0.17.1
           flush
         >
           <SettingsTextAreaCard
@@ -755,12 +797,7 @@ function ProjectConfigForm({
             title={t("settings.project.writeFailures.staleTitle")}
             description={t("settings.project.writeFailures.staleDescription")}
           >
-            <Button
-              testID="stale-callout-action-0"
-              onPress={handleReload}
-              variant="outline"
-              size="sm"
-            >
+            <Button testID="stale-callout-action-0" onPress={handleReload} variant="outline">
               {t("settings.project.actions.reload")}
             </Button>
           </Alert>
@@ -776,20 +813,10 @@ function ProjectConfigForm({
             title={t("settings.project.writeFailures.failedTitle")}
             description={t("settings.project.writeFailures.failedDescription")}
           >
-            <Button
-              testID="write-failed-callout-action-0"
-              onPress={handleSave}
-              variant="outline"
-              size="sm"
-            >
+            <Button testID="write-failed-callout-action-0" onPress={handleSave} variant="outline">
               {t("settings.project.actions.tryAgain")}
             </Button>
-            <Button
-              testID="write-failed-callout-action-1"
-              onPress={handleReload}
-              variant="outline"
-              size="sm"
-            >
+            <Button testID="write-failed-callout-action-1" onPress={handleReload} variant="outline">
               {t("settings.project.actions.reload")}
             </Button>
           </Alert>
@@ -801,7 +828,6 @@ function ProjectConfigForm({
           testID="save-button"
           accessibilityLabel={t("settings.project.actions.save")}
           variant="default"
-          size="md"
           disabled={saveDisabled}
           loading={saveMutation.isPending}
           onPress={handleSave}
@@ -1078,10 +1104,10 @@ function ScriptEditModal({ script, onChange, onCancel, onSave }: ScriptEditModal
         </View>
       </View>
       <View style={styles.modalFooter}>
-        <Button onPress={onCancel} variant="ghost" size="md" testID="script-edit-cancel">
+        <Button onPress={onCancel} variant="ghost" testID="script-edit-cancel">
           {t("settings.project.actions.cancel")}
         </Button>
-        <Button onPress={handleSavePress} variant="default" size="md" testID="script-edit-save">
+        <Button onPress={handleSavePress} variant="default" testID="script-edit-save">
           {t("settings.project.actions.save")}
         </Button>
       </View>
@@ -1102,26 +1128,6 @@ const styles = StyleSheet.create((theme) => ({
   body: {
     padding: theme.spacing[4],
     gap: theme.spacing[2],
-  },
-  backButton: {
-    alignSelf: "flex-start",
-    paddingHorizontal: 0,
-  },
-  headerBlock: {
-    marginTop: theme.spacing[2],
-    marginBottom: theme.spacing[4],
-    gap: theme.spacing[2],
-  },
-  titleRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[3],
-  },
-  projectTitle: {
-    color: theme.colors.foreground,
-    fontSize: theme.fontSize.base,
-    fontWeight: theme.fontWeight.medium,
-    flexShrink: 1,
   },
   editButton: {
     padding: theme.spacing[1],

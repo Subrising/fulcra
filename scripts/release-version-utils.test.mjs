@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  compareReleaseVersions,
   computeNextReleaseVersion,
   getReleaseInfoFromSourceTag,
   parseReleaseVersion,
@@ -53,6 +54,7 @@ test("rejects non-beta prerelease versions", () => {
   assert.throws(() => parseReleaseVersion("0.1.60-canary.1"), /Expected beta prerelease versions/);
 });
 
+<<<<<<< HEAD
 const ELECTRON_BUILDER_CHANNELS = new Set(["alpha", "beta", "dev", "rc", "stable"]);
 
 test("stable tags keep the latest update files and pass no electron-builder channel", () => {
@@ -69,4 +71,15 @@ test("every builder channel is one electron-builder accepts", () => {
       `${tag}: ${builderChannel}`,
     );
   }
+=======
+test("compares stable and beta release versions in semver order", () => {
+  assert.equal(compareReleaseVersions("0.17.0-beta.1", "0.16.2"), 1);
+  assert.equal(compareReleaseVersions("0.17.0-beta.2", "0.17.0-beta.1"), 1);
+  assert.equal(compareReleaseVersions("0.17.0", "0.17.0-beta.2"), 1);
+  assert.equal(compareReleaseVersions("0.17.0-beta.2", "0.17.0"), -1);
+  assert.equal(compareReleaseVersions("0.16.3", "0.17.0-beta.1"), -1);
+  assert.equal(compareReleaseVersions("0.16.3", "0.16.2"), 1);
+  assert.equal(compareReleaseVersions("0.17.0", "0.17.0"), 0);
+  assert.equal(compareReleaseVersions("0.17.0-beta.2", "0.17.0-beta.2"), 0);
+>>>>>>> refs/remotes/upstream/tags/v0.17.1
 });

@@ -62,6 +62,37 @@ test("Hub execute can steer ordinary agents while unrelated administration stays
   expect(hub.serverInfoPermissions()).toEqual([["hub.execute"]]);
 });
 
+test("Hub execute can list daemon projects but cannot rename them", async () => {
+  const hub = await launchRelationship();
+  await hub.createSiblingWorkspace(hub.repoRoot());
+  expect(hub.serverInfoPermissions()).toEqual([["hub.execute"]]);
+
+  const listed = await hub.requestOrdinary({
+    type: "project.list.request",
+    requestId: "list-projects",
+  });
+  expect(listed).toMatchObject({
+    type: "project.list.response",
+    payload: {
+      requestId: "list-projects",
+      projects: [{ projectId: expect.any(String), projectRootPath: hub.repoRoot() }],
+    },
+  });
+  if (listed.type !== "project.list.response") throw new Error("Expected project list response");
+
+  expect(
+    await hub.requestOrdinary({
+      type: "project.rename.request",
+      requestId: "rename-project",
+      projectId: listed.payload.projects[0]?.projectId,
+      customName: "Hub rename",
+    }),
+  ).toMatchObject({
+    type: "rpc_error",
+    payload: { requestId: "rename-project", code: "access_denied" },
+  });
+});
+
 test("Hub execute can title the workspace created with an agent", async () => {
   const hub = await launchRelationship();
   const created = await hub.requestOrdinary({
@@ -182,7 +213,51 @@ test("ordinary Hub create and message retries do not duplicate agents or prompts
   ).toMatchObject({ payload: { accepted: false } });
 });
 
+<<<<<<< HEAD
 test("ordinary Hub workspace recovery preserves its worker archive after daemon restart", async () => {
+=======
+test("Hub retries a message whose send failed before reaching the provider", async () => {
+  const hub = await launchRelationship();
+  const agentId = await hub.createUnrelatedLocalAgent();
+  const message = {
+    type: "send_agent_message_request",
+    agentId,
+    messageId: "mode-change-failed",
+    text: "retry me",
+    sessionMode: "full-access",
+  };
+  hub.failNextProviderModeChange();
+  expect(await hub.requestOrdinary({ ...message, requestId: "first-attempt" })).toMatchObject({
+    payload: { accepted: false, error: expect.stringContaining("mode change failure") },
+  });
+  expect(hub.providerPromptTexts().filter((text) => text === "retry me")).toHaveLength(0);
+
+  expect(await hub.requestOrdinary({ ...message, requestId: "retry" })).toMatchObject({
+    payload: { accepted: true, error: null },
+  });
+  expect(hub.providerPromptTexts().filter((text) => text === "retry me")).toHaveLength(1);
+});
+
+test("Hub never resubmits a message whose send failed after reaching the provider", async () => {
+  const hub = await launchRelationship();
+  const agentId = await hub.createUnrelatedLocalAgent();
+  const message = {
+    type: "send_agent_message_request",
+    agentId,
+    messageId: "turn-start-failed",
+    text: "do not repeat me",
+  };
+  hub.failProviderPromptStart("do not repeat me");
+  await hub.requestOrdinary({ ...message, requestId: "first-attempt" });
+
+  expect(await hub.requestOrdinary({ ...message, requestId: "retry" })).toMatchObject({
+    payload: { accepted: false, error: "agent_request_outcome_unknown" },
+  });
+  expect(hub.providerPromptTexts().filter((text) => text === "do not repeat me")).toHaveLength(0);
+});
+
+test("ordinary Hub requests survive daemon restart and restore an archived workspace", async () => {
+>>>>>>> refs/remotes/upstream/tags/v0.17.1
   const hub = await launchRelationship();
   const create = {
     type: "create_agent_request",
@@ -529,8 +604,13 @@ test("Hub resolves persisted execution ownership after daemon restart", async ()
   expect(await hub.ownedAgentArchivedAt(created.payload.agentId!)).toEqual(expect.any(String));
   expect(workspaceId).toEqual(expect.any(String));
   expect(await hub.archivedWorkspaceAt(workspaceId!)).toEqual(expect.any(String));
+<<<<<<< HEAD
   expect(await hub.worktreeState(worktreeCwd)).toEqual({ exists: true, listed: true });
 }, 20_000);
+=======
+  expect(await hub.worktreeState(worktreeCwd)).toEqual({ exists: false, listed: false });
+}, 60_000);
+>>>>>>> refs/remotes/upstream/tags/v0.17.1
 
 test("Hub treats missing and foreign executions as already controlled without exposing ownership", async () => {
   const hub = await launchRelationship();

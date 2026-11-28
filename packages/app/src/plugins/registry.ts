@@ -15,6 +15,7 @@ import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { assertPluginCompatibility } from "@getpaseo/protocol/plugin-requirements";
 import { resolveAppVersion } from "@/utils/app-version";
 import { createPluginClientRuntime } from "./client-runtime";
+import { createPluginSubscribe } from "./subscriptions";
 import { runPluginClientBundle } from "./evaluate";
 import type { InstalledPlugin, UntrustedPlugin } from "./types";
 import { PluginReconnectState } from "./reconnect-state";
@@ -25,6 +26,7 @@ import {
   needsDirectConnection,
 } from "./command-centre-connection";
 
+<<<<<<< HEAD
 type TrustedCatalogPlugins = Awaited<
   ReturnType<DaemonClient["getPluginCatalog"]>
 >["trustedPlugins"];
@@ -37,6 +39,10 @@ function catalogInputPolicy(trustedPlugins: TrustedCatalogPlugins): HostInputPol
 }
 
 type CatalogPlugin = Awaited<ReturnType<DaemonClient["getPluginCatalog"]>>["plugins"][number];
+=======
+type CatalogPlugin = Awaited<ReturnType<DaemonClient["getPluginCatalog"]>>[number];
+export type PluginCatalogStatus = "loading" | "ready" | "error";
+>>>>>>> refs/remotes/upstream/tags/v0.17.1
 
 export class PluginRegistry {
   private readonly reconnectState = new PluginReconnectState();
@@ -50,6 +56,7 @@ export class PluginRegistry {
   // one query cache (and its fleet payload) behind for every reinstall while sidebar rows were mounted.
   private readonly queryClients = new Map<string, QueryClient>();
   private readonly evaluationErrors = new Map<string, string>();
+<<<<<<< HEAD
   // Hosts whose catalog question has been answered, however it was answered: loaded, declared
   // unsupported, or asked and failed. Routing needs "we do not know yet" to be distinct from
   // "there is nothing", and it must not stay unknown forever on a host that will never reply.
@@ -59,6 +66,9 @@ export class PluginRegistry {
     string,
     { client: DaemonClient; trustedPlugins: TrustedCatalogPlugins }
   >();
+=======
+  private readonly catalogStatuses = new Map<string, PluginCatalogStatus>();
+>>>>>>> refs/remotes/upstream/tags/v0.17.1
   /** The client each host's installations were bound to; their Paseo API and RPCs call it. */
   private readonly clientByHost = new Map<string, DaemonClient>();
 
@@ -125,7 +135,20 @@ export class PluginRegistry {
     return this.evaluationErrors.get(`${serverId}/${pluginId}`);
   }
 
+<<<<<<< HEAD
   // oxlint-disable-next-line complexity -- FULCRA: upstream body plus the named core patch seams; split on the next upstream merge.
+=======
+  getCatalogStatus(serverId: string): PluginCatalogStatus {
+    return this.catalogStatuses.get(serverId) ?? "loading";
+  }
+
+  setCatalogStatus(serverId: string, status: PluginCatalogStatus): void {
+    if (this.catalogStatuses.get(serverId) === status) return;
+    this.catalogStatuses.set(serverId, status);
+    for (const listener of this.listeners) listener();
+  }
+
+>>>>>>> refs/remotes/upstream/tags/v0.17.1
   installCatalog(
     serverId: string,
     catalog: CatalogPlugin[],
@@ -222,16 +245,26 @@ export class PluginRegistry {
           return [existing];
         }
         const client = options.client;
+        const lifetime = new AbortController();
         installation = {
-          lifetime: new AbortController(),
+          lifetime,
           locale: this.dependencies.localeSource.getLocale(),
           i18n: new PluginTranslationRuntime(this.dependencies.localeSource),
           paseo: createPaseoApi(client),
+<<<<<<< HEAD
           invoke: (method, input) =>
             // L46: never send a Command Centre read the relay cannot authenticate; say why instead.
             needsDirectConnection(entry.id, activeConnectionOfClient(client), client, method)
               ? Promise.reject(new CommandCentreNeedsDirectConnectionError())
               : client.invokePluginRpc(entry.id, method, input),
+=======
+          invoke: (method, input) => client.invokePluginRpc(entry.id, method, input),
+          subscribe: createPluginSubscribe({
+            client,
+            pluginId: entry.id,
+            lifetime: lifetime.signal,
+          }),
+>>>>>>> refs/remotes/upstream/tags/v0.17.1
           id: entry.id,
           serverId,
           clientBundle: entry.clientBundle,
@@ -240,9 +273,13 @@ export class PluginRegistry {
           cleanup: () => undefined,
           surfaces: [],
           settingsScreens: [],
+          sidebarViews: [],
           sidebarItems: { header: [], footer: [] },
           legacySidebarItems: [],
+          workspaceRowBadgeItems: [],
           filePanels: [],
+          composerItems: [],
+          newWorkspaceItems: [],
           workspacePanels: [],
           commandCenterItems: [],
           clientSlashCommands: [],
@@ -355,6 +392,7 @@ export class PluginRegistry {
   }
 
   removeHost(serverId: string): void {
+<<<<<<< HEAD
     this.reconnectState.removeHost(serverId);
     // Plugins are unsupported here. That is an answer, not a pending one.
     this.catalogSettled.add(serverId);
@@ -378,6 +416,14 @@ export class PluginRegistry {
     const installed = this.byHost.get(serverId);
     if (!installed) {
       if (removedUntrusted || removedPolicy) this.publish();
+=======
+    const hadCatalog = this.catalogStatuses.delete(serverId);
+    const installed = this.byHost.get(serverId);
+    if (!installed) {
+      if (hadCatalog) {
+        for (const listener of this.listeners) listener();
+      }
+>>>>>>> refs/remotes/upstream/tags/v0.17.1
       return;
     }
     for (const plugin of installed) this.dispose(plugin);
@@ -484,6 +530,7 @@ export function useInstalledPlugin(serverId: string, pluginId: string): Installe
   );
 }
 
+<<<<<<< HEAD
 /** The installed bundled controller on one host, by that host's configured ID. */
 export function useControllerPlugin(serverId: string): InstalledPlugin | null {
   return (
@@ -504,6 +551,20 @@ export function useControllerInstallations(): InstalledPlugin[] {
       ),
     [installed],
   );
+=======
+export function usePluginCatalogStatus(serverId: string): PluginCatalogStatus {
+  return useSyncExternalStore(
+    pluginRegistry.subscribe,
+    () => pluginRegistry.getCatalogStatus(serverId),
+    () => pluginRegistry.getCatalogStatus(serverId),
+  );
+}
+
+/** Why the app could not run the plugin's client bundle, updated when the host's catalog changes. */
+export function usePluginEvaluationError(serverId: string, pluginId: string): string | undefined {
+  const read = () => pluginRegistry.getEvaluationError(serverId, pluginId);
+  return useSyncExternalStore(pluginRegistry.subscribe, read, read);
+>>>>>>> refs/remotes/upstream/tags/v0.17.1
 }
 
 export function usePluginInstallations(pluginId: string): InstalledPlugin[] {

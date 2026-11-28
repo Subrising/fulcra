@@ -1,3 +1,4 @@
+import path from "node:path";
 import { defineConfig, devices } from "playwright/test";
 
 const baseURL = process.env.WEBSITE_TEST_URL ?? "http://127.0.0.1:8187";
@@ -18,14 +19,23 @@ export default defineConfig({
           url: "http://127.0.0.1:8188/index.json",
         },
         {
-          command: "npm run build && npm run preview -- --host 127.0.0.1 --port 8187 --strictPort",
+          command:
+            "node e2e/seed-cache.mjs && npm run build && npm run preview -- --host 127.0.0.1 --port 8187 --strictPort",
           // Probe the server without running the homepage loader's live GitHub requests.
           url: new URL("/logo.svg", baseURL).href,
           stdout: "pipe",
           env: {
+            WEBSITE_E2E_PERSIST_PATH: path.resolve(
+              import.meta.dirname,
+              "../../.artifacts/website-e2e-cache",
+            ),
             CLOUDFLARE_INCLUDE_PROCESS_ENV: "true",
             PLUGINS_REGISTRY_URL: "http://127.0.0.1:8188",
+<<<<<<< HEAD
             GITHUB_API_URL: "http://127.0.0.1:8188/github",
+=======
+            VITE_HUB_PLANS_URL: "http://127.0.0.1:8188/hub-plans",
+>>>>>>> refs/remotes/upstream/tags/v0.17.1
           },
         },
       ],

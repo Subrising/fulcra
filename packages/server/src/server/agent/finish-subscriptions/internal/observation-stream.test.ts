@@ -31,6 +31,7 @@ class Host implements HostObservation {
     };
   }
   emit(status: "idle" | "running", event?: AgentStreamEvent) {
+<<<<<<< HEAD
     const payload = buildStoredAgentPayload(
       {
         id: "child",
@@ -42,6 +43,24 @@ class Host implements HostObservation {
         updatedAt: "2026-01-01",
       },
       ["codex"],
+=======
+    this.handler!(
+      buildStoredAgentPayload(
+        {
+          id: "child",
+          cwd: "/tmp",
+          provider: "codex",
+          labels: {},
+          lastStatus: status,
+          createdAt: "2026-01-01",
+          updatedAt: "2026-01-01",
+        },
+        ["codex"],
+        (_provider, own) => own ?? {},
+      ),
+      event,
+      "Last response",
+>>>>>>> refs/remotes/upstream/tags/v0.17.1
     );
     // FULCRA(FU-657): Fulcra projects a stored running record as idle (no process runs it). The host
     // emits a live agent here, so the fixture keeps the live status.
@@ -133,6 +152,7 @@ test("late initial permission snapshot cannot resurrect an already resolved requ
         updatedAt: "2026-01-01",
       },
       ["codex"],
+      (_provider, own) => own ?? {},
     );
     if (requestEvent.type !== "permission_requested") throw new Error("Expected permission");
     final.pendingPermissions = [requestEvent.request];
