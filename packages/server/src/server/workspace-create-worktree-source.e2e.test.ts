@@ -1,9 +1,13 @@
 import { execFileSync } from "node:child_process";
+<<<<<<< HEAD
 import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+=======
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, onTestFinished, test } from "vitest";
+import { afterAll, expect, onTestFinished, test } from "vitest";
 
 import { DaemonClient } from "./test-utils/index.js";
 import { WebSocket } from "ws";
@@ -24,22 +28,50 @@ import { expectKeptByCleanupGuard, watchCleanupKeeps } from "./test-utils/cleanu
 // the created worktree's observable branch is the only honest evidence the
 // request fields reached git.
 
-function createGitRepoWithBranch(): { repoDir: string; tempRoot: string } {
-  const tempRoot = mkdtempSync(path.join(tmpdir(), "workspace-create-worktree-source-"));
-  const repoDir = path.join(tempRoot, "repo");
-  execFileSync("git", ["init", "-b", "main", repoDir], { stdio: "pipe" });
-  execFileSync("git", ["config", "core.autocrlf", "false"], { cwd: repoDir, stdio: "pipe" });
-  execFileSync("git", ["config", "user.email", "test@getpaseo.local"], {
-    cwd: repoDir,
+let templateRepoRoot: string | null = null;
+let templateRepoDir: string | null = null;
+
+function getTemplateGitRepoWithBranch(): string {
+  if (templateRepoDir) return templateRepoDir;
+  templateRepoRoot = mkdtempSync(path.join(tmpdir(), "workspace-create-worktree-source-template-"));
+  templateRepoDir = path.join(templateRepoRoot, "repo");
+  execFileSync("git", ["init", "-b", "main", templateRepoDir], { stdio: "pipe" });
+  execFileSync("git", ["config", "core.autocrlf", "false"], {
+    cwd: templateRepoDir,
     stdio: "pipe",
   });
-  execFileSync("git", ["config", "user.name", "Paseo Test"], { cwd: repoDir, stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "test@getpaseo.local"], {
+    cwd: templateRepoDir,
+    stdio: "pipe",
+  });
+  execFileSync("git", ["config", "user.name", "Paseo Test"], {
+    cwd: templateRepoDir,
+    stdio: "pipe",
+  });
   execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "initial"], {
-    cwd: repoDir,
+    cwd: templateRepoDir,
     stdio: "pipe",
   });
   // An existing branch the checkout action must target by refName.
-  execFileSync("git", ["branch", "feature/existing-branch"], { cwd: repoDir, stdio: "pipe" });
+  execFileSync("git", ["branch", "feature/existing-branch"], {
+    cwd: templateRepoDir,
+    stdio: "pipe",
+  });
+  return templateRepoDir;
+}
+
+afterAll(() => {
+  if (templateRepoRoot) {
+    rmSync(templateRepoRoot, { recursive: true, force: true });
+    templateRepoRoot = null;
+    templateRepoDir = null;
+  }
+});
+
+function createGitRepoWithBranch(): { repoDir: string; tempRoot: string } {
+  const tempRoot = mkdtempSync(path.join(tmpdir(), "workspace-create-worktree-source-"));
+  const repoDir = path.join(tempRoot, "repo");
+  cpSync(getTemplateGitRepoWithBranch(), repoDir, { recursive: true });
   return { repoDir, tempRoot };
 }
 
@@ -68,6 +100,43 @@ test("workspace.create worktree source forwards action=checkout + refName into t
     // slug instead of checking out the named branch. The created worktree being
     // on feature/existing-branch is the observable proof both fields forwarded.
     expect(result.workspace?.gitRuntime?.currentBranch).toBe("feature/existing-branch");
+  } finally {
+    await client.close().catch(() => undefined);
+    await daemon.close();
+    await rm(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+}, 180000);
+
+test("checkout.worktrees.list returns git worktrees Paseo did not create", async () => {
+  const daemon = await createTestPaseoDaemon();
+  const { repoDir, tempRoot } = createGitRepoWithBranch();
+  const manualPath = path.join(tempRoot, "manual");
+  execFileSync("git", ["worktree", "add", "-b", "feature/manual", manualPath], {
+    cwd: repoDir,
+    stdio: "pipe",
+  });
+  const client = new DaemonClient({
+    url: `ws://127.0.0.1:${daemon.port}/ws`,
+    appVersion: "0.1.82",
+  });
+
+  try {
+    await client.connect();
+    const created = await client.createWorkspace({
+      source: { kind: "worktree", cwd: repoDir, action: "branch-off", branchName: "feature/paseo" },
+    });
+    expect(created.error).toBeNull();
+
+    const worktrees = await client.listCheckoutWorktrees(repoDir);
+
+    expect(worktrees.map(({ branchName, containsCwd }) => ({ branchName, containsCwd }))).toEqual(
+      expect.arrayContaining([
+        { branchName: "main", containsCwd: true },
+        { branchName: "feature/manual", containsCwd: false },
+        { branchName: "feature/paseo", containsCwd: false },
+      ]),
+    );
+    expect(worktrees).toHaveLength(3);
   } finally {
     await client.close().catch(() => undefined);
     await daemon.close();
@@ -243,9 +312,18 @@ test("existing branch changes remain visible after archive and restore", async (
   expect(before.files.map((file) => file.path)).toEqual(["feature.txt"]);
   expect((await client.getCheckoutStatus(cwd)).baseRef).toBe("main");
   const gitStatus = { cwd, isGit: true, baseRef: "main" };
+<<<<<<< HEAD
   const keeps = watchCleanupKeeps();
   expect((await client.archiveWorkspace(workspace.id)).error).toBeNull();
   expectKeptByCleanupGuard(keeps, cwd);
+=======
+  await client.checkoutRefresh(cwd);
+  expect(updates).toContainEqual(expect.objectContaining(gitStatus));
+  expect((await client.archiveWorkspace(workspace.id)).error).toBeNull();
+  expect(existsSync(cwd)).toBe(false);
+  await client.checkoutRefresh(cwd);
+  expect((await client.getCheckoutStatus(cwd)).isGit).toBe(false);
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
   updates.length = 0;
   await client.restoreWorkspace(workspace.id);
   expect(updates).toContainEqual(expect.objectContaining(gitStatus));

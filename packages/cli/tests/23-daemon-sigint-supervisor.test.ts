@@ -159,12 +159,16 @@ try {
         resumeOnStartup: true,
         resumePrompt,
         providers: {
+<<<<<<< HEAD
           // Fulcra: a generic ACP provider, because the antigravity plugin is not available here.
           "supervisor-acp": {
             extends: "acp",
             label: "Supervisor ACP",
             command: [process.execPath, provider, eventsPath],
           },
+=======
+          antigravity: { command: [process.execPath, provider, eventsPath] },
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
         },
       },
     }),
@@ -174,9 +178,15 @@ try {
   if (process.platform === "win32") {
     await interruptForeground(daemon);
   } else {
+<<<<<<< HEAD
     const idle = await daemon.client.createAgent({ provider: "supervisor-acp", cwd });
     const running = await daemon.client.createAgent({ provider: "supervisor-acp", cwd });
     const crashing = await daemon.client.createAgent({ provider: "supervisor-acp", cwd });
+=======
+    const idle = await daemon.client.createAgent({ provider: "antigravity", cwd });
+    const running = await daemon.client.createAgent({ provider: "antigravity", cwd });
+    const crashing = await daemon.client.createAgent({ provider: "antigravity", cwd });
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
     const opened = (await readEvents()).filter((event) => event.type === "session");
     const sessions = [idle, running, crashing].map((agent) => {
       const handle = agent.persistence?.sessionId;
@@ -185,8 +195,20 @@ try {
       return session;
     });
 
+<<<<<<< HEAD
     // Fulcra: upstream also kills one provider here and expects error attention. Fulcra reports a
     // provider exit differently, and that check is not part of the shutdown behavior under test.
+=======
+    // Exit just this provider while the host is up to prove failure reporting remains active.
+    process.kill(sessions[2].pid, "SIGTERM");
+    await waitFor(async () => {
+      const { agent } = (await daemon!.client.fetchAgent(crashing.id)) ?? {};
+      if (agent?.status === "error" && agent.attentionReason === "error") return agent;
+    }, "unexpected provider exit did not raise error attention");
+    const failure = await daemon.client.fetchAgentTimeline(crashing.id, { limit: 20 });
+    assert.match(JSON.stringify(failure.entries), /\[System Error\].*ACP process exited/);
+    console.log("Unexpected ACP exit raised error attention and added a timeline entry.");
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
 
     await daemon.client.sendMessage(running.id, "Hold the turn open.");
     await waitFor(async () => {
@@ -208,6 +230,7 @@ try {
     console.log("Foreground SIGINT reached the supervisor. The worker and ACP processes exited.");
 
     daemon = await startSupervisor();
+<<<<<<< HEAD
     // Fulcra: recovery is Fulcra revive-on-restart, which continues a cut-off turn with its own
     // prompt after a settle time. The shutdown must still have captured the running turn.
     await waitFor(async () => {
@@ -217,6 +240,25 @@ try {
         : undefined;
     }, "the restart did not capture the interrupted ACP turn");
     console.log("The restart captured the interrupted ACP turn.");
+=======
+    const restoredIdle = (await daemon.client.fetchAgentTimeline(idle.id)).agent;
+    assert.equal(restoredIdle?.status, "idle");
+    assert.equal(restoredIdle?.requiresAttention, false);
+    await waitFor(async () => {
+      const { agent } = (await daemon!.client.fetchAgent(running.id)) ?? {};
+      if (agent?.status === "idle" && agent.attentionReason === "finished") return agent;
+    }, "interrupted agent did not finish the restart prompt");
+    assert.deepEqual(
+      (await readEvents()).filter((event) => event.type === "prompt"),
+      [
+        { type: "prompt", sessionId: sessions[1].sessionId, text: "Hold the turn open." },
+        { type: "prompt", sessionId: sessions[1].sessionId, text: resumePrompt },
+      ],
+    );
+    console.log(
+      "Idle ACP reopened without error attention. The interrupted ACP turn resumed once.",
+    );
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
     await interruptForeground(daemon);
   }
 } catch (error) {

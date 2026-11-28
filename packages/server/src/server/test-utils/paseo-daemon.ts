@@ -69,8 +69,13 @@ interface TestPaseoDaemonOptions {
   /** FU-834: a worker's turn end reaches its lead (report-up). Off unless a test asks for it. */
   reportUpOnTurnEnd?: boolean;
   pluginsEnabled?: PaseoDaemonConfig["pluginsEnabled"];
+<<<<<<< HEAD
   bundledPluginsDirectory?: string;
+=======
+  pluginRegistryUrl?: PaseoDaemonConfig["pluginRegistryUrl"];
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
   builtinPlugins?: BuiltinPluginLoader;
+  lazyTerminalWorker?: boolean;
   plugins?: PaseoDaemonConfig["plugins"];
   timelineStoreStep?: PaseoDaemonDependencies["timelineStoreStep"];
 }
@@ -125,6 +130,7 @@ export async function createTestPaseoDaemon(
     const logger = options.logger ?? pino({ level: "silent" });
     const daemon = await createPaseoDaemon(config, logger, {
       builtinPlugins: options.builtinPlugins ?? new BuiltinPluginLoader(undefined, []),
+      lazyTerminalWorker: options.lazyTerminalWorker ?? true,
       serverFeatureOverrides: {
         daemonStatusRpc: options.daemonStatusRpcCapability,
         relayConfig: options.relayConfigCapability,
@@ -260,6 +266,7 @@ async function prepareTestDaemonConfig(
     pluginsEnabled: options.pluginsEnabled,
     bundledPluginsDirectory: options.bundledPluginsDirectory,
     plugins: options.plugins,
+    pluginRegistryUrl: options.pluginRegistryUrl,
   };
   return { config, paseoHomeRoot, paseoHome, staticDir, createdDirs };
 }

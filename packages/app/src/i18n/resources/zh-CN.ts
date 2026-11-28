@@ -3,6 +3,7 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const zhCN: TranslationResources = {
+<<<<<<< HEAD
   plugins: {
     // Fulcra 0.2.9: English until translated; the old text gave the host-password route.
     commandCentreRelay: en.plugins.commandCentreRelay,
@@ -12,6 +13,12 @@ export const zhCN: TranslationResources = {
     unknownProject: "项目未知",
     reportsTo: "汇报给 {{leader}}",
     unknownAccessibility: "所属项目未知",
+=======
+  pluginCombobox: {
+    searching: "搜索中…",
+    empty: "无结果",
+    failed: "搜索失败：{{message}}",
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
   },
   paneFind: {
     connectionFailure: "无法搜索此聊天。请检查主机连接后重试。",
@@ -96,14 +103,23 @@ export const zhCN: TranslationResources = {
       close: "关闭菜单",
     },
     commandCenter: {
-      placeholder: "搜索命令、文件、工作区和 Agent...",
+      placeholder: "搜索工作区、文件和操作...",
+      placeholderWithoutFiles: "搜索工作区和操作...",
       filePlaceholder: "搜索文件...",
+      workspacePlaceholder: "搜索工作区...",
+      actionPlaceholder: "搜索操作...",
       searchingFiles: "正在搜索文件...",
       noMatches: "没有匹配项",
       actions: "操作",
       files: "文件",
       workspaces: "工作区",
-      agents: "Agents",
+      recentWorkspaces: "最近的工作区",
+      tabs: {
+        all: "全部",
+        workspaces: "工作区",
+        files: "文件",
+        actions: "操作",
+      },
       newAgent: "新建 Agent",
       open: "打开{{name}}",
       openInSidePane: "在侧边面板中打开{{name}}",
@@ -112,6 +128,7 @@ export const zhCN: TranslationResources = {
       home: "首页",
       groupByProject: "按项目分组",
       groupByStatus: "按状态分组",
+      copyBrowserHostName: "复制浏览器宿主名称",
       modelGroupLabel: "模型",
       modelSearchKeywords: "切换模型 更改模型 设置模型 选择模型",
       thinkingGroupLabel: "思考",
@@ -271,7 +288,7 @@ export const zhCN: TranslationResources = {
     states: {
       notFound: "未找到 Agent",
       failedToLoad: "加载 Agent 失败",
-      reconnecting: "正在重新连接主机",
+      reconnecting: "正在重新连接",
       updating: "正在更新消息",
       timelineSyncFailed: "无法刷新代理历史记录。",
       timelineSyncRetrying: "正在重试…",
@@ -350,6 +367,7 @@ export const zhCN: TranslationResources = {
       copyTurn: "复制回合",
       copyMessage: "复制消息",
       forkMenu: "分叉消息",
+      turnStats: "回合统计",
       forkInNewTab: "分叉到新标签页",
       forkInNewWorkspace: "分叉到新工作区",
       forkUnavailable: "请更新主机以使用此功能。",
@@ -379,6 +397,11 @@ export const zhCN: TranslationResources = {
       details: "详情",
     },
     dictation: {
+      insecureContext: "请通过 HTTPS 或 localhost 打开 Paseo，以使用麦克风。",
+      unsupported: "此浏览器无法使用听写。",
+      noMicrophone: "请连接麦克风，然后重试。",
+      permissionDenied: "请允许访问麦克风，然后重试。",
+      startFailed: "无法开始听写。请重试。",
       paused: "麦克风已中断，正在等待恢复…",
       start: "开始语音听写",
       cancel: "取消听写",
@@ -394,6 +417,25 @@ export const zhCN: TranslationResources = {
       next: "下一步",
       answerPlaceholder: "输入你的回答...",
       otherPlaceholder: "其他...",
+    },
+    backgroundWork: {
+      heartbeat: "心跳",
+      pillOne: "1 个后台任务",
+      pillMany: "{{count}} 个后台任务",
+      notRunning: "已不再运行",
+      dismiss: "关闭",
+      stop: "停止",
+      stopping: "正在停止…",
+      stopError: "无法确认已停止。",
+      label: "后台",
+      title: "后台任务",
+      waiting: "正在等待后台任务详情",
+      error: "无法加载后台任务",
+      retry: "重试",
+      running: "后台任务运行中",
+      shell: "Shell",
+      monitor: "监控",
+      other: "其他任务",
     },
     todo: {
       title: "任务",
@@ -468,8 +510,7 @@ export const zhCN: TranslationResources = {
         archivedTitle: "Workspace 已归档",
         restoreDescription:
           "恢复 {{workspaceName}} 以返回其中的代理。worktree 将使用分支 {{branch}}。",
-        restoreWithoutBranchDescription:
-          "恢复 {{workspaceName}} 以返回其中的代理。新分支将从保存的基准分支或仓库默认分支创建。",
+        restoreWithoutBranchDescription: "恢复 {{workspaceName}} 以返回其中的代理。",
         unarchiveDescription: "{{workspaceName}} 已归档。取消归档以重新打开。",
         restoreAction: "恢复",
         unarchiveAction: "取消归档",
@@ -938,6 +979,9 @@ export const zhCN: TranslationResources = {
         },
       },
       diff: {
+        baseBranch: {
+          title: "基准分支",
+        },
         openChangesTab: "打开“更改”标签页",
         openDiffTab: "打开 Diff 标签页",
         closeChangesTab: "关闭“更改”标签页",
@@ -1159,6 +1203,8 @@ export const zhCN: TranslationResources = {
     title: "新功能",
     installed: "已安装",
     showMore: "显示更多",
+    showAllChanges: "显示全部变更",
+    hideAllChanges: "收起全部变更",
     openWebsite: "完整更新日志",
     error: {
       title: "无法加载更新日志",
@@ -1378,6 +1424,14 @@ export const zhCN: TranslationResources = {
     },
   },
   sidebar: {
+    view: {
+      failed: "无法加载侧边栏视图。",
+      useDefault: "使用默认视图",
+      readFailed: "无法加载侧边栏视图偏好设置。",
+      agentUnavailable: "此智能体已不可用",
+      terminalUnavailable: "此终端已不可用",
+      projectUnavailable: "此项目已不可用",
+    },
     statusGroupAccessibility: "{{label}} 分组",
     statusBucket: {
       needsInput: "需要输入",
@@ -1453,6 +1507,7 @@ export const zhCN: TranslationResources = {
       hosts: "Hosts",
       settings: "设置",
       closeSidebar: "关闭侧边栏",
+      moreActions: "更多操作",
     },
     footer: {
       usage: "使用情况",
@@ -1556,6 +1611,9 @@ export const zhCN: TranslationResources = {
         hostDisconnected: "Host 未连接",
         hideFailed: "隐藏 workspace 失败",
         archiveFailed: "归档工作区失败",
+        archived: "工作区已归档",
+        undoArchive: "撤销",
+        undoArchiveFailed: "无法撤销归档",
       },
     },
   },
@@ -1563,8 +1621,9 @@ export const zhCN: TranslationResources = {
     title: "新建 workspace",
     create: "创建",
     isolation: {
-      local: "本地",
+      local: "项目目录",
       worktree: "新建 worktree",
+      existing: "已有 worktree",
       label: "隔离",
     },
     fields: {
@@ -1579,12 +1638,17 @@ export const zhCN: TranslationResources = {
       createWorktreeFailed: "创建 worktree 失败",
       composerStateRequired: "Composer 状态必填",
       selectModel: "请选择模型",
+      branchInProjectDirectory:
+        "{{branch}} 已在项目目录中检出。选择“项目目录”以在其中工作，或从它创建新分支。",
+      branchInWorktree:
+        "{{branch}} 已在 {{path}} 中检出。在“已有 worktree”中选择该 worktree，或从它创建新分支。",
     },
     tooltips: {
       project: "Choose the project",
       host: "Choose the host",
       isolation: "Choose the isolation level",
       startingRef: "选择起始位置",
+      worktree: "选择要工作的 worktree",
       launch: "Choose what to launch",
     },
     refPicker: {
@@ -1592,8 +1656,31 @@ export const zhCN: TranslationResources = {
       intoBase: "进入 {{baseRef}}",
       searching: "正在搜索...",
       noMatchingRefs: "没有匹配的 refs。",
-      searchPlaceholder: "搜索分支和 PR",
+      searchBranches: "搜索分支",
+      searchPullRequests: "搜索 PR",
+      searchPullRequests_mr: "搜索 MR",
+      branches: "分支",
+      pullRequests: "Pull request",
+      pullRequests_mr: "Merge request",
+      pullRequestsShort: "PR",
+      pullRequestsShort_mr: "MR",
+      branchOff: "新建分支",
+      checkout: "检出",
+      branchOffHint: "从它创建一个新分支",
+      checkoutHint: "直接在它上面工作",
+      base: "基准",
+      from: "从",
+      branch: "分支",
+      pullRequest: "Pull request",
+      pullRequest_mr: "Merge request",
+      inProjectDirectory: "在项目目录中",
+      inWorktree: "在 worktree 中",
       title: "起始位置",
+    },
+    worktreePicker: {
+      title: "Worktree",
+      searchPlaceholder: "搜索 worktree",
+      empty: "没有匹配的 worktree。",
     },
     launch: {
       title: "What to launch",
@@ -1754,7 +1841,13 @@ export const zhCN: TranslationResources = {
     integrations: {
       cli: {
         statusFailed: "无法检查 CLI 安装状态。",
+<<<<<<< HEAD
         installFailed: "无法安装 Fulcra CLI。",
+=======
+        installFailed: "无法安装 Paseo CLI。",
+        uninstallFailed: "无法卸载 Paseo CLI。",
+        keptForeign: "已保留一个不是由 Paseo 安装的 paseo 命令。如需卸载，请手动删除。",
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
       },
     },
   },
@@ -1805,6 +1898,7 @@ export const zhCN: TranslationResources = {
     openPath: "打开路径",
   },
   branchSwitcher: {
+    failedToLoad: "无法加载分支，请重新打开选择器以重试。",
     triggerTooltip: "切换工作区分支",
     currentBranch: "当前分支：{{branchName}}。按下以切换分支。",
     placeholder: "切换分支...",
@@ -1827,9 +1921,17 @@ export const zhCN: TranslationResources = {
     loadingCommands: "正在加载 commands...",
     noFiles: "没有找到文件或目录",
     noCommands: "没有找到 commands",
+<<<<<<< HEAD
     accountUnavailable: "此计算机暂不支持账户命令。请在 {{host}} 上更新 Fulcra。",
     thisComputer: "此计算机",
     failedToLoad: "加载失败",
+=======
+    loadingProviderCommands: "正在加载 {{provider}} commands...",
+    commandsFailed: "无法加载 commands",
+    providerCommandsFailed: "无法加载 {{provider}} commands",
+    filesFailed: "无法搜索文件",
+    skillTag: "Skill",
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
     chooseProjectForCommands: "选择项目以查看命令",
     chooseModelForCommands: "选择模型以查看命令",
   },
@@ -1867,7 +1969,64 @@ export const zhCN: TranslationResources = {
     },
   },
   onboarding: {
+<<<<<<< HEAD
     title: "欢迎使用 Fulcra",
+=======
+    setup: {
+      title: "Paseo",
+      stepCounter: "第 {{current}} 步，共 {{total}} 步",
+      skip: "跳过设置",
+      continue: "继续",
+      finish: "完成",
+      steps: {
+        appearance: {
+          label: "外观",
+          title: "欢迎使用 Paseo",
+          description: "先选择一个外观",
+        },
+        providers: {
+          label: "提供方",
+          title: "你的提供方",
+          description: "Paseo 使用这台电脑上已安装的代理 CLI",
+        },
+        projects: {
+          label: "项目",
+          title: "添加项目",
+          description: "你希望代理在哪里工作",
+          addProject: "添加项目",
+          added: "已添加",
+          suggestions: {
+            loading: "正在查找你工作过的文件夹",
+            empty: "未找到最近的项目",
+            lastUsed: "上次使用 {{time}}",
+            addSelected_one: "添加 {{count}} 个项目",
+            addSelected_other: "添加 {{count}} 个项目",
+            adding: "正在添加…",
+            addFailed: "无法添加此文件夹",
+          },
+        },
+        orchestration: {
+          label: "编排",
+          title: "让代理使用 Paseo",
+          description: "让你的代理创建工作区并与其他代理对话",
+        },
+        phone: {
+          label: "移动端",
+          title: "随身带上你的代理",
+          description: "功能完整的原生移动应用让你可以在手机上控制任意一台 Paseo 电脑",
+          appStore: "App Store",
+          googlePlay: "Google Play",
+          connectTitle: "选择连接方式",
+          connectDocs: "文档",
+          openConnectDocs: "打开连接文档",
+          recommended: "推荐",
+          relay: { title: "中继", hint: "端到端加密，扫描二维码" },
+          tailscale: { title: "Tailscale", hint: "需要一些设置" },
+        },
+      },
+    },
+    title: "欢迎使用 Paseo",
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
     subtitle: "连接你的电脑即可开始",
     actions: {
       settings: "设置",
@@ -2101,7 +2260,13 @@ export const zhCN: TranslationResources = {
       notNow: "暂不",
       directConnectionHint:
         "不使用中继时，请通过 TCP、Tailscale 或其他 VPN 直接连接。不会生成二维码。",
+<<<<<<< HEAD
       updateRequired: "请更新主机，以便从 Fulcra Desktop 启用中继。",
+=======
+      tailscaleDocs: "设置 Tailscale",
+      tailscaleDocsAccessibility: "了解如何通过 Tailscale 连接",
+      updateRequired: "请更新主机，以便从 Paseo Desktop 启用中继。",
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
       unavailable: "配对 offer 不可用。",
       hint: "用手机上的 Fulcra 扫描此二维码，或复制下方链接。",
       securityWarning: "请像保管密码一样保管此配对链接。任何获得此链接的人都可以访问此守护进程。",
@@ -2146,6 +2311,7 @@ export const zhCN: TranslationResources = {
     hostUnavailable: "下载 Host 不可用。",
     cancelled: "下载已取消。",
     failed: "下载文件失败。",
+    httpFailed: "下载文件失败 (HTTP {{status}}).",
     shareFile: "共享文件",
     shareFileNamed: "共享 {{fileName}}",
   },
@@ -2592,6 +2758,7 @@ export const zhCN: TranslationResources = {
     turnOn: "开启",
 
     options: "设置",
+    host: "主机",
     refreshFailed: "无法刷新用量",
     noHosts: "没有已连接的主机",
     agentError: "无法加载用量：{{reason}}",
@@ -2608,6 +2775,12 @@ export const zhCN: TranslationResources = {
     loginExpired: "登录已于{{relativeTime}}过期。{{remedy}}",
     title: "套餐用量",
     refresh: "刷新",
+    reorderCard: "重新排序 {{source}}",
+    sources: "来源",
+    sourcesCount: "{{shown}} / {{total}}",
+    providerInactive: "提供商未启用",
+    allSourcesHidden: "未显示任何用量来源",
+    chooseSources: "选择来源",
     refreshAll: "全部刷新",
     refreshing: "刷新中...",
     loading: "正在加载用量...",
@@ -2648,8 +2821,9 @@ export const zhCN: TranslationResources = {
       resetsIn: "将在 {{duration}}后重置",
       resetsAtWeekday: "{{weekday}} {{time}}",
       resetsAtDate: "{{date}} {{time}}",
-      runsOutNow: "即将用尽",
-      runsOutIn: "将在 {{duration}}后用尽",
+      limitReached: "已达到上限",
+      mayHaveRunOut: "额度可能已用完",
+      runsOutAt: "将在 {{time}} 用尽",
       justNow: "刚刚",
       daysAgo: "{{value}}天前",
       hoursAgo: "{{value}}小时前",
@@ -2822,6 +2996,11 @@ export const zhCN: TranslationResources = {
     general: {
       title: "通用",
       sending: "发送",
+      setup: {
+        label: "首次设置",
+        description: "重新设置外观、提供方、项目和手机配对",
+        action: "再次显示设置",
+      },
       browserData: {
         title: "浏览器数据",
         siteData: "Cookie 和网站数据",
@@ -2983,6 +3162,12 @@ export const zhCN: TranslationResources = {
         description: "显示用于在提示词之间跳转的大纲",
       },
       sidebar: {
+        view: {
+          title: "侧边栏视图",
+          label: "视图",
+          default: "默认视图",
+          unavailable: "所选视图不可用或已禁用。正在显示默认视图。",
+        },
         header: {
           title: "顶部",
           description: "选择侧边栏顶部显示的项目及其顺序",
@@ -3016,10 +3201,11 @@ export const zhCN: TranslationResources = {
       layout: {
         title: "布局",
         contentWidth: "内容宽度",
-        contentWidthHint: "宽屏上聊天和 Markdown 文件的最大宽度",
-        contentWidthAccessibility: "内容宽度（像素）",
-        reset: "重置",
-        resetAccessibility: "将内容宽度重置为默认值",
+        contentWidthHint: "聊天、消息输入框和 Markdown 预览的宽度",
+        contentWidthDefault: "默认",
+        contentWidthWide: "宽版",
+        contentWidthFull: "全宽",
+        contentWidthCustom: "自定义宽度 · {{width}} px",
       },
       syntax: {
         title: "语法",
@@ -3089,6 +3275,8 @@ export const zhCN: TranslationResources = {
         toggleFocusMode: "切换专注模式",
         cycleTheme: "循环切换主题",
         focusMessageInput: "聚焦消息输入框",
+        toggleModelPicker: "打开或关闭模型选择器",
+        cycleEffort: "循环切换推理强度",
         cycleAgentMode: "循环切换代理模式",
         toggleVoiceMode: "切换语音模式",
         startStopDictation: "开始/停止听写",
@@ -3111,11 +3299,7 @@ export const zhCN: TranslationResources = {
       commandLine: {
         title: "命令行",
         description: "从终端控制 Agent 并运行脚本",
-      },
-      actions: {
-        install: "安装",
-        installing: "正在安装...",
-        installed: "已安装",
+        accessibilityLabel: "安装 Paseo CLI",
       },
     },
     permissions: {
@@ -3193,12 +3377,19 @@ export const zhCN: TranslationResources = {
         ...en.settings.host.skills,
         sectionTitle: "编排 skills",
         title: "编排 skills",
-        description: "教会 Agent 通过 CLI 编排任务",
+        description: "教你的代理如何使用 Paseo 工具",
         updateAvailable: "有更新可用",
+<<<<<<< HEAD
         updateTitle: "更新 Fulcra skills？",
         updateFallback: "将内置 skills 同步到你的机器。",
         uninstallTitle: "卸载 Fulcra skills？",
         uninstallMessage: "会从 ~/.agents、~/.claude、~/.codex 移除所有 Fulcra 编排 skills。",
+=======
+        updateTitle: "更新 Paseo skills？",
+        uninstallTitle: "卸载 Paseo skills？",
+        uninstallMessage:
+          "会从 ~/.agents、~/.claude、~/.codex、~/.gemini/config 移除所有 Paseo 编排 skills。",
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
         choose: "选择 skills",
         chooseAll: "全部 skills",
         chooseAllHint: "保持安装所有内置 skills，包括以后新增的。",
@@ -3206,16 +3397,13 @@ export const zhCN: TranslationResources = {
         chooseEmpty: "此版本未内置 skills。",
         removeTitle: "移除取消勾选的 skills？",
         removeMessage:
-          "将从 ~/.agents、~/.claude、~/.codex 中删除 {{skills}}。你在这些 skill 文件夹里添加的内容也会一并删除。",
+          "将从 ~/.agents、~/.claude、~/.codex、~/.gemini/config 中删除 {{skills}}。你在这些 skill 文件夹里添加的内容也会一并删除。",
         saveFailed: "无法保存你的 skills 选择。",
         statusFailed: "无法检查编排 skills 状态。",
         updateFailed: "无法更新编排 skills。",
         uninstallFailed: "无法卸载编排 skills。",
         saveSelectionFailed: "无法保存编排 skills 的选择。",
         actions: {
-          install: "安装",
-          installing: "正在安装...",
-          installed: "已安装",
           update: "更新",
           working: "处理中...",
           remove: "移除",
@@ -3236,7 +3424,12 @@ export const zhCN: TranslationResources = {
         enableTools: {
           title: "启用 Fulcra tools",
           hint: "Agent 将能够管理 worktree、Agent 和计划",
+<<<<<<< HEAD
           accessibilityLabel: "注入 Fulcra tools",
+=======
+          accessibilityLabel: "注入 Paseo tools",
+          updateFailed: "无法更新 Paseo 工具。",
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
         },
         systemPrompt: {
           title: "System prompt",
@@ -3401,7 +3594,27 @@ export const zhCN: TranslationResources = {
     providers: {
       title: "Providers",
       addProvider: "添加 Provider",
+<<<<<<< HEAD
       refreshModels: "刷新模型",
+=======
+      list: {
+        add: "Provider",
+        updatingTo: "正在更新到 {{version}}...",
+      },
+      detail: {
+        backToProviders: "返回 Provider 列表",
+        notOnHost: "此 Host 上没有这个 Provider",
+        enabled: "已启用",
+        unavailableTitle: "{{name}} 不可用",
+        troubleshooting: "故障排查",
+        status: "Provider 状态",
+        checked: "{{time}}检查",
+        diagnosticReport: "诊断报告",
+        docs: "文档",
+        dangerZone: "危险操作",
+        removeHint: "从 config.json 中删除此 Provider",
+      },
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
       providerDetails: "{{name}} Provider 详情",
       enableProvider: "启用 {{name}}",
       unavailable: "连接到这个 Host 以查看 Providers",
@@ -3443,9 +3656,30 @@ export const zhCN: TranslationResources = {
         retrying: "正在重试...",
         noSearchMatches: "没有匹配搜索的 Model",
         noneDetected: "未检测到 Model",
-        discovered: "已发现",
+        noCustom: "没有自定义模型",
+        title: "Models",
         custom: "自定义 Models",
         updated: "已更新 {{time}}",
+      },
+      installation: {
+        title: "安装",
+        version: "版本",
+        installed: "已安装",
+        notInstalled: "未安装",
+        install: "安装",
+        checking: "正在检查...",
+        failed: "无法检查安装状态",
+        updates: "更新",
+        upToDate: "已是最新",
+        updateAvailable: "有可用更新",
+        updateInstructions: "更新说明",
+        update: "更新",
+        updating: "正在更新...",
+        updated: "已更新",
+        updateFailed: "更新失败",
+        outputTruncated: "较早的输出已被丢弃。",
+        updatesFailed: "无法检查更新",
+        installInstructions: "安装说明",
       },
       diagnostic: {
         title: "诊断",

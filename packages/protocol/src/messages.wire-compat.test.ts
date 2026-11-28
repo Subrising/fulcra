@@ -5,6 +5,7 @@ import {
   MutableDaemonConfigPatchSchema,
   UsageReportEntrySchema,
   AgentSnapshotPayloadSchema,
+  AgentStreamEventPayloadSchema,
   AgentTimelineItemPayloadSchema,
   ServerInfoStatusPayloadSchema,
   SessionOutboundMessageSchema,
@@ -12,6 +13,7 @@ import {
   WorkspaceSetupSnapshotSchema,
   WorkspaceSetupProgressMessageSchema,
   AgentTimelineEntryPayloadSchema,
+<<<<<<< HEAD
   SendAgentMessageResponseMessageSchema,
   SendAgentMessageRequestSchema,
   AgentMessageRouteCheckRequestSchema,
@@ -34,10 +36,65 @@ test("send receipts retain legacy parsing while adding held and target-miss fiel
     payload: {
       requestId: "request",
       agentId: "target",
+=======
+  CheckoutStatusResponseSchema,
+  BranchSuggestionsRequestSchema,
+  WorkspaceBaseBranchSetRequestSchema,
+  WorkspaceBaseBranchSetResponseSchema,
+} from "./messages.js";
+
+test("base selection RPCs are correlated while older checkout and branch messages remain valid", () => {
+  const payload = {
+    cwd: "/repo",
+    requestId: "status",
+    error: null,
+    isGit: true,
+    isPaseoOwnedWorktree: false,
+    repoRoot: "/repo",
+    currentBranch: "feature",
+    isDirty: false,
+    baseRef: "release",
+    aheadBehind: null,
+    aheadOfOrigin: null,
+    behindOfOrigin: null,
+    hasRemote: false,
+    remoteUrl: null,
+  };
+  expect(
+    CheckoutStatusResponseSchema.safeParse({ type: "checkout_status_response", payload }).success,
+  ).toBe(true);
+  expect(
+    CheckoutStatusResponseSchema.parse({
+      type: "checkout_status_response",
+      payload: { ...payload, baseRefExact: "refs/remotes/upstream/release" },
+    }).payload.baseRefExact,
+  ).toBe("refs/remotes/upstream/release");
+  expect(
+    BranchSuggestionsRequestSchema.safeParse({
+      type: "branch_suggestions_request",
+      cwd: "/repo",
+      requestId: "branches",
+    }).success,
+  ).toBe(true);
+  const request = {
+    type: "workspace.base_branch.set.request",
+    workspaceId: "workspace",
+    baseRef: "refs/heads/release",
+    requestId: "base",
+  };
+  expect(WorkspaceBaseBranchSetRequestSchema.parse(request)).toEqual(request);
+  const response = {
+    type: "workspace.base_branch.set.response",
+    payload: {
+      workspaceId: "workspace",
+      baseRef: "refs/heads/release",
+      requestId: "base",
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
       accepted: true,
       error: null,
     },
   };
+<<<<<<< HEAD
   expect(SendAgentMessageResponseMessageSchema.parse(oldMessage)).toEqual(oldMessage);
   const held = {
     ...oldMessage,
@@ -58,6 +115,9 @@ test("send receipts retain legacy parsing while adding held and target-miss fiel
     "AGENT_NOT_FOUND",
   );
   expect(legacy.parse(missing).payload.accepted).toBe(false);
+=======
+  expect(WorkspaceBaseBranchSetResponseSchema.parse(response)).toEqual(response);
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
 });
 
 test("terminal listings accept older rows and retain new per-terminal directories", () => {
@@ -559,6 +619,9 @@ test("usage entries accept older failures and additive successful snapshots", ()
     successfulAt: "2026-10-17T10:00:15Z",
   };
   expect(UsageReportEntrySchema.parse(available)).toEqual(available);
+  const hintedOff = { ...available, defaultEnabled: false };
+  expect(UsageReportEntrySchema.parse(hintedOff)).toEqual(hintedOff);
+  expect(UsageReportEntrySchema.omit({ defaultEnabled: true }).parse(hintedOff)).toEqual(available);
   expect(
     UsageReportEntrySchema.omit({ lastSuccessful: true, successfulAt: true }).parse(available),
   ).toEqual({ ...oldEntry, report: available.report });
@@ -668,4 +731,92 @@ test("speech config reads remain compatible with clients before features and fut
       features: { voiceMode: { stt: { provider: "future", region: "eu" } } },
     }).features?.voiceMode?.stt,
   ).toEqual({ provider: "future", region: "eu" });
+});
+
+describe("provider metrics", () => {
+  const metrics = [
+    { label: "Model", value: "gpt-5.5" },
+    { label: "Cache", value: "82%", tone: "ok" },
+  ];
+  const snapshot = {
+    id: "agent-1",
+    provider: "codex",
+    cwd: "/tmp/project",
+    model: null,
+    thinkingOptionId: null,
+    effectiveThinkingOptionId: null,
+    createdAt: "2026-11-22T00:00:00.000Z",
+    updatedAt: "2026-11-22T00:00:00.000Z",
+    lastUserMessageAt: null,
+    status: "idle",
+    capabilities: {
+      supportsStreaming: true,
+      supportsSessionPersistence: true,
+      supportsDynamicModes: true,
+      supportsMcpServers: true,
+      supportsReasoningStream: true,
+      supportsToolInvocations: true,
+    },
+    currentModeId: null,
+    availableModes: [],
+    pendingPermissions: [],
+    persistence: null,
+    title: null,
+    labels: {},
+  };
+  const turnCompleted = { type: "turn_completed", provider: "codex", turnId: "turn-1" };
+  const entry = {
+    provider: "codex",
+    item: { type: "assistant_message", text: "Done" },
+    timestamp: "2026-11-22T00:00:00.000Z",
+    seqStart: 1,
+    seqEnd: 1,
+    sourceSeqRanges: [{ startSeq: 1, endSeq: 1 }],
+    collapsed: [],
+  };
+
+  test("new apps read session, turn and timeline metrics from a new daemon", () => {
+    expect(
+      AgentSnapshotPayloadSchema.parse({ ...snapshot, sessionMetrics: metrics }).sessionMetrics,
+    ).toEqual(metrics);
+    expect(AgentStreamEventPayloadSchema.parse({ ...turnCompleted, metrics })).toEqual({
+      ...turnCompleted,
+      metrics,
+    });
+    expect(AgentTimelineEntryPayloadSchema.parse({ ...entry, turnMetrics: metrics })).toEqual({
+      ...entry,
+      turnMetrics: metrics,
+    });
+  });
+
+  test("new apps accept payloads from daemons that send no metrics", () => {
+    expect(AgentSnapshotPayloadSchema.parse(snapshot).sessionMetrics).toBeUndefined();
+    expect(AgentStreamEventPayloadSchema.parse(turnCompleted)).toEqual(turnCompleted);
+    expect(AgentTimelineEntryPayloadSchema.parse(entry)).toEqual(entry);
+  });
+
+  test("apps released before metrics drop the fields they do not know", () => {
+    const legacySnapshot = AgentSnapshotPayloadSchema.omit({ sessionMetrics: true });
+    const legacyTurnCompleted = z.object({
+      type: z.literal("turn_completed"),
+      provider: z.string(),
+      turnId: z.string().optional(),
+    });
+    const legacyEntry = AgentTimelineEntryPayloadSchema.omit({ turnMetrics: true });
+
+    expect(legacySnapshot.parse({ ...snapshot, sessionMetrics: metrics })).not.toHaveProperty(
+      "sessionMetrics",
+    );
+    expect(legacyTurnCompleted.parse({ ...turnCompleted, metrics })).toEqual(turnCompleted);
+    expect(legacyEntry.parse({ ...entry, turnMetrics: metrics })).toEqual(entry);
+  });
+
+  test("metric tone is a closed set, so a new tone needs a capability gate", () => {
+    expect(
+      AgentTimelineEntryPayloadSchema.safeParse({
+        ...entry,
+        turnMetrics: [{ label: "Cache", value: "82%", tone: "sparkly" }],
+      }).success,
+    ).toBe(false);
+  });
 });

@@ -196,6 +196,7 @@ describe("ClaudeAgentSession persisted history load", () => {
     rmSync(tempRoot, { recursive: true, force: true });
   });
 
+<<<<<<< HEAD
   // FULCRA(FU-472, FU-657): a daemon with a stored timeline resumes without streamHistory. Resume
   // must read only session state; the full parse (ensureHistoryReady) waits for streamHistory.
   test("resume with a stored timeline does not run the full history parse (FU-472)", async () => {
@@ -502,6 +503,8 @@ describe("ClaudeAgentSession persisted history load", () => {
     }
   });
 
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
   test("resumes many records within a chunk-sized event-loop turn budget", async () => {
     const count = 3_072;
     const text = "🙂".repeat(128);

@@ -32,7 +32,9 @@ export async function expectComposerVisible(
   page: Page,
   options?: { timeout?: number },
 ): Promise<void> {
-  await expect(composerInput(page)).toBeVisible({ timeout: options?.timeout ?? 15_000 });
+  await expect(composerInput(page)).toBeVisible({
+    timeout: options?.timeout ?? 15_000,
+  });
 }
 
 export async function expectComposerDisabled(page: Page): Promise<void> {
@@ -157,7 +159,9 @@ export async function attachImageFromMenu(
 }
 
 export async function expectAttachmentPill(page: Page, testID: string): Promise<void> {
-  await expect(page.getByTestId(testID).first()).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId(testID).first()).toBeVisible({
+    timeout: 10_000,
+  });
 }
 
 export async function attachFileFromMenu(
@@ -219,18 +223,24 @@ export async function expectGithubAttachmentPill(
 
 export async function openImageLightbox(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Open image attachment" }).first().click();
-  await expect(page.getByTestId("attachment-lightbox-close")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByTestId("attachment-lightbox-close")).toBeVisible({
+    timeout: 5_000,
+  });
 }
 
 export async function closeImageLightbox(page: Page): Promise<void> {
   await page.keyboard.press("Escape");
-  await expect(page.getByTestId("attachment-lightbox-close")).not.toBeVisible({ timeout: 5_000 });
+  await expect(page.getByTestId("attachment-lightbox-close")).not.toBeVisible({
+    timeout: 5_000,
+  });
 }
 
 export async function openGithubPickerFromMenu(page: Page): Promise<void> {
   await openAttachmentMenu(page);
   await page.getByTestId("message-input-attachment-menu-item-github").click();
-  await expect(page.getByTestId("combobox-desktop-container")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByTestId("combobox-desktop-container")).toBeVisible({
+    timeout: 5_000,
+  });
 }
 
 /** Open picker, type a query, wait for the matching option by id (e.g. "issue:3", "change_request:1"), and click it. */
@@ -284,7 +294,10 @@ export async function startRunningMockAgent(
     model: opts.model,
     featureValues: opts.featureValues,
   });
-  const agentUrl = `${buildHostWorkspaceRoute(serverId, workspace.id)}?open=${encodeURIComponent(`agent:${agent.id}`)}`;
+  const agentUrl = `${buildHostWorkspaceRoute(
+    serverId,
+    workspace.id,
+  )}?open=${encodeURIComponent(`agent:${agent.id}`)}`;
   await page.goto(agentUrl);
   await expectComposerVisible(page);
   await client.sendAgentMessage(agent.id, opts.prompt);
@@ -348,7 +361,11 @@ export async function pasteComposerTestImage(page: Page): Promise<boolean> {
     const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
     const clipboardData = new DataTransfer();
     clipboardData.items.add(new File([bytes], "pasted.png", { type: "image/png" }));
-    const event = new ClipboardEvent("paste", { clipboardData, bubbles: true, cancelable: true });
+    const event = new ClipboardEvent("paste", {
+      clipboardData,
+      bubbles: true,
+      cancelable: true,
+    });
     input.dispatchEvent(event);
     return event.defaultPrevented;
   }, COMPOSER_TEST_IMAGE_BASE64);
@@ -506,7 +523,10 @@ export async function recordVisibleComposerGeometry(page: Page): Promise<void> {
 export async function expectNoCollapsedVisibleComposer(page: Page): Promise<void> {
   const frames = await page.evaluate(() => {
     Reflect.get(window, "__stopComposerGeometry")?.();
-    return Reflect.get(window, "__composerGeometryFrames") as { input: number; root: number }[];
+    return Reflect.get(window, "__composerGeometryFrames") as {
+      input: number;
+      root: number;
+    }[];
   });
   expect(frames.length).toBeGreaterThan(0);
   expect(frames.filter((frame) => frame.root < 42 || frame.input < 42)).toEqual([]);
@@ -517,8 +537,15 @@ export async function roundTripComposerTabBeforePaint(
   page: Page,
   activeChatTitle: string,
 ): Promise<void> {
+<<<<<<< HEAD
   // FULCRA(FU-657): the Fulcra sidebar lists sessions by title too; scope to the tab.
   const activeTab = workspaceAgentTabByTitle(page, activeChatTitle);
+=======
+  const activeTab = page.getByRole("button", {
+    name: activeChatTitle,
+    exact: true,
+  });
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
   await expect(activeTab).toHaveAttribute("aria-selected", "true");
   const result = await activeTab.evaluate((tab) => {
     const editor = document.activeElement;
@@ -558,7 +585,10 @@ export async function roundTripComposerTabBeforePaint(
           });
         }
       });
-      observer.observe(tab, { attributes: true, attributeFilter: ["aria-selected"] });
+      observer.observe(tab, {
+        attributes: true,
+        attributeFilter: ["aria-selected"],
+      });
       shortcut("BracketLeft");
     });
   });
@@ -567,4 +597,45 @@ export async function roundTripComposerTabBeforePaint(
     "tab round trip must finish before rendering the hidden pane",
   ).toBe(true);
   expect(result.focused, "returning on touch must leave the composer unfocused").toBe(false);
+}
+
+/** Paste both clipboard representations through the browser's normal paste command. */
+export async function pasteRichTextIntoComposer({
+  page,
+  html,
+  text,
+}: {
+  page: Page;
+  html: string;
+  text: string;
+}): Promise<void> {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.evaluate(
+    async ({ html: richHtml, text: plainText }) => {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "text/html": new Blob([richHtml], { type: "text/html" }),
+          "text/plain": new Blob([plainText], { type: "text/plain" }),
+        }),
+      ]);
+    },
+    { html, text },
+  );
+  await composerInput(page).press("ControlOrMeta+v");
+}
+
+export async function undoComposerEdit(page: Page): Promise<void> {
+  await composerInput(page).press("ControlOrMeta+z");
+}
+export async function redoComposerEdit(page: Page): Promise<void> {
+  await composerInput(page).press("ControlOrMeta+Shift+z");
+}
+
+/** Reuse the actual response Copy action and the browser's native paste. */
+export async function copyLatestTurnIntoComposer(page: Page): Promise<void> {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.getByRole("button", { name: "Copy turn", exact: true }).last().click();
+  await expect(page.getByRole("button", { name: "Copied", exact: true })).toBeVisible();
+  await composerInput(page).fill("");
+  await composerInput(page).press("ControlOrMeta+v");
 }

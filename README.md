@@ -96,12 +96,26 @@ Fulcra keeps your Claude Code and Codex sessions running on your Mac and gives y
 
 ## How it works
 
+<<<<<<< HEAD
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/how-it-works-dark.png">
     <img src="docs/assets/how-it-works-light.png" width="900" alt="The Mac app and paired phone or web clients connect to the Fulcra host daemon on your Mac, directly or through an optional end-to-end encrypted relay. The daemon starts and resumes Claude Code and Codex CLI sessions and hosts the Command Centre.">
   </picture>
 </p>
+=======
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
+- [Codex](https://github.com/openai/codex)
+- [GitHub Copilot](https://github.com/features/copilot/cli/)
+- [OpenCode](https://github.com/anomalyco/opencode)
+- [Pi](https://pi.dev)
+- [Antigravity](https://paseo.sh/docs/supported-providers/antigravity)
+- [Muse Code](https://paseo.sh/docs/supported-providers/muse-code)
+- [fx](https://paseo.sh/docs/supported-providers/fx)
+- [Hoplite](https://paseo.sh/docs/supported-providers/hoplite)
+
+Paseo also runs Cursor, Gemini CLI, and many other agents. See [Supported providers](https://paseo.sh/docs/supported-providers) for the full list and setup steps.
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
 
 The daemon on your Mac owns the sessions, worktrees and terminals and starts the provider CLIs. Clients authenticate to the host. The Command Centre controller requests work through the daemon bridge; it does not bypass the daemon to acquire provider or device authority. The relay transports encrypted frames and still sees connection metadata. Provider CLIs may send prompts and code to their configured provider services.
 

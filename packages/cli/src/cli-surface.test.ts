@@ -12,12 +12,19 @@ describe("canonical CLI surface", () => {
     expect(send.opts().behavior).toBe("interrupt");
     await send.parseAsync(["target", "message", "--behavior", "steer"], { from: "user" });
     expect(send.opts().behavior).toBe("steer");
+<<<<<<< HEAD
     // FULCRA(FU-657): Fulcra also accepts "queue" (it waits for the turn end); an unknown value refuses.
+=======
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
     await send.parseAsync(["target", "message", "--behavior", "queue"], { from: "user" });
     expect(send.opts().behavior).toBe("queue");
     send.exitOverride().configureOutput({ writeErr: () => {} });
     await expect(
+<<<<<<< HEAD
       send.parseAsync(["target", "message", "--behavior", "later"], { from: "user" }),
+=======
+      send.parseAsync(["target", "message", "--behavior", "wait"], { from: "user" }),
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
     ).rejects.toThrow();
   });
 

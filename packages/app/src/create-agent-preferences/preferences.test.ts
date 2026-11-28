@@ -80,7 +80,7 @@ describe("create agent preferences", () => {
         modelId: "gpt-5.5",
         modeId: "full-access",
         thinkingOptionId: "high",
-        featureValues: { fast_mode: true },
+        options: { service_tier: "fast" },
       }),
     );
 
@@ -97,8 +97,12 @@ describe("create agent preferences", () => {
           mode: "full-access",
           modeChosenByUser: true,
           thinkingByModel: { "gpt-5.5": "high" },
+<<<<<<< HEAD
           thinkingChosenByModel: { "gpt-5.5": true },
           featureValues: { fast_mode: true },
+=======
+          options: { service_tier: "fast" },
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
         },
       },
     });
@@ -122,7 +126,7 @@ describe("create agent preferences", () => {
           model: "gpt-5.6",
           mode: undefined,
           thinkingByModel: undefined,
-          featureValues: undefined,
+          options: undefined,
         },
       }),
     ).toEqual({
@@ -170,12 +174,13 @@ describe("create agent preferences", () => {
         modelId: "one-minute-stream",
         modeId: "approval-test",
         thinkingOptionId: "",
-        featureValues: {},
+        options: {},
       }),
     ).toEqual({
       provider: "mock",
       providerPreferences: {
         pi: { model: "anthropic/sonnet" },
+<<<<<<< HEAD
         mock: {
           model: "one-minute-stream",
           modelChosenByUser: true,
@@ -279,6 +284,9 @@ describe("create agent preferences", () => {
     ).toEqual({
       providerPreferences: {
         claude: { mode: "default", thinkingByModel: { "claude-opus-5": "high" } },
+=======
+        mock: { model: "one-minute-stream", mode: "approval-test", options: {} },
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
       },
     });
   });
@@ -311,6 +319,60 @@ describe("create agent preferences", () => {
         },
       },
     });
+  });
+
+  it("reads preferences saved as featureValues as options", () => {
+    expect(
+      parseFormPreferences({
+        provider: "codex",
+        providerPreferences: { codex: { featureValues: { service_tier: "priority" } } },
+      }),
+    ).toEqual({
+      provider: "codex",
+      providerPreferences: { codex: { options: { service_tier: "priority" } } },
+    });
+  });
+
+  it("reads a remembered Codex fast_mode as the service tier it meant, so the draft shows Fast", () => {
+    expect(
+      parseFormPreferences({
+        provider: "codex",
+        providerPreferences: {
+          codex: { options: { fast_mode: true, sandbox_mode: "read-only" } },
+          claude: { options: { fast_mode: true } },
+        },
+      }),
+    ).toEqual({
+      provider: "codex",
+      providerPreferences: {
+        codex: { options: { service_tier: "fast", sandbox_mode: "read-only" } },
+        claude: { options: { fast_mode: true } },
+      },
+    });
+
+    expect(
+      parseFormPreferences({
+        providerPreferences: { codex: { featureValues: { fast_mode: false } } },
+      }),
+    ).toEqual({ providerPreferences: { codex: { options: { service_tier: "default" } } } });
+
+    // A tier already remembered wins over the key it replaced.
+    expect(
+      parseFormPreferences({
+        providerPreferences: { codex: { options: { fast_mode: true, service_tier: "default" } } },
+      }),
+    ).toEqual({ providerPreferences: { codex: { options: { service_tier: "default" } } } });
+  });
+
+  it("keeps options that are not booleans or strings, such as a profile's sandbox settings", () => {
+    const options = {
+      sandbox_workspace_write: { network_access: true, writable_roots: ["/tmp"] },
+      max_turns: 3,
+    };
+
+    expect(
+      parseFormPreferences({ provider: "codex", providerPreferences: { codex: { options } } }),
+    ).toEqual({ provider: "codex", providerPreferences: { codex: { options } } });
   });
 
   it("rejects unknown persisted fields outside the explicit legacy shape", () => {

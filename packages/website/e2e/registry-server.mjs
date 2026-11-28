@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import registry from "./registry.fixture.json" with { type: "json" };
+import hubPlans from "../src/hub-plans.fixture.json" with { type: "json" };
 
 import securityPlugin from "./overview.fixture.json" with { type: "json" };
 
@@ -30,12 +31,17 @@ const githubReleases = [
 
 createServer((request, response) => {
   response.setHeader("Content-Type", "application/json");
+<<<<<<< HEAD
   if (request.url === "/github/repos/getpaseo/paseo/releases?per_page=10") {
     response.end(JSON.stringify(githubReleases));
     return;
   }
   if (request.url === "/github/repos/getpaseo/paseo") {
     response.end(JSON.stringify({ stargazers_count: 1234 }));
+=======
+  if (request.url === "/hub-plans") {
+    response.end(JSON.stringify(hubPlans));
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
     return;
   }
   if (request.url === "/index.json") {

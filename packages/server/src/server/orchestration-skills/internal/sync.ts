@@ -11,8 +11,7 @@ import {
 
 export interface SkillSyncOptions {
   sourceDir: string;
-  agentsDir: string;
-  claudeDir: string;
+  installDirs: readonly string[];
   codexDir: string;
   skillNames: readonly string[];
   onSkillError?: (skillName: string, error: unknown) => void;
@@ -284,12 +283,12 @@ async function syncDirectoryFiles(
 }
 
 export interface RemoveSkillTargets {
-  agentsDir: string;
-  claudeDir: string;
+  installDirs: readonly string[];
   codexDir: string;
 }
 
 export async function removeSkill(skillName: string, targets: RemoveSkillTargets): Promise<void> {
+<<<<<<< HEAD
   const paths = [
     path.join(targets.agentsDir, skillName),
     path.join(targets.claudeDir, skillName),
@@ -297,9 +296,26 @@ export async function removeSkill(skillName: string, targets: RemoveSkillTargets
       ? [path.join(targets.codexDir, skillName)]
       : []),
   ];
+=======
+  const paths = [...targets.installDirs, targets.codexDir].map((root) =>
+    path.join(root, skillName),
+  );
+  let hasError = false;
+  let firstError: unknown = null;
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
   for (const p of paths) {
-    await fs.rm(p, { recursive: true, force: true });
+    try {
+      await fs.rm(p, { recursive: true, force: true });
+    } catch (error) {
+      // If an ancestor is a regular file, no skill directory can exist below it.
+      if ((error as NodeJS.ErrnoException).code === "ENOTDIR") continue;
+      if (!hasError) {
+        hasError = true;
+        firstError = error;
+      }
+    }
   }
+  if (hasError) throw firstError;
 }
 
 async function isSameDirectory(a: string, b: string): Promise<boolean> {
@@ -309,7 +325,7 @@ async function isSameDirectory(a: string, b: string): Promise<boolean> {
 
 /**
  * Codex also discovers .agents/skills, so its dedicated copy is a leftover. When
- * the Codex skill directory resolves to the shared or Claude copy, it is that
+ * the Codex skill directory resolves to an active install target, it is that
  * copy, and retiring it would delete the install.
  */
 export async function isLegacyCodexCopy(
@@ -317,6 +333,7 @@ export async function isLegacyCodexCopy(
   targets: RemoveSkillTargets,
 ): Promise<boolean> {
   const codexSkillDir = path.join(targets.codexDir, skillName);
+<<<<<<< HEAD
   // Linked roots and individual skill folders belong to the user. Never retire
   // or offer updates through them, including links to external skill catalogs.
   for (const candidate of [targets.codexDir, codexSkillDir]) {
@@ -324,6 +341,9 @@ export async function isLegacyCodexCopy(
     if (info?.isSymbolicLink()) return false;
   }
   for (const root of [targets.agentsDir, targets.claudeDir]) {
+=======
+  for (const root of targets.installDirs) {
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
     if (await isSameDirectory(codexSkillDir, path.join(root, skillName))) return false;
   }
   return true;
@@ -366,6 +386,8 @@ export async function syncSkills(options: SkillSyncOptions): Promise<SkillSyncRe
   const shippedHashes = await readShippedSkillHashes(options.sourceDir);
   let changedFiles = 0;
   let processedSkills = 0;
+  let hasError = false;
+  let firstError: unknown = null;
 
   for (const skillName of options.skillNames) {
     const bundleSkillDir = path.join(options.sourceDir, skillName);
@@ -373,6 +395,7 @@ export async function syncSkills(options: SkillSyncOptions): Promise<SkillSyncRe
     const bundleStat = await fs.stat(bundleSkillDir).catch(() => null);
     if (!bundleStat?.isDirectory()) continue;
 
+<<<<<<< HEAD
     try {
       changedFiles += await syncDirectoryFiles(
         bundleSkillDir,
@@ -391,14 +414,49 @@ export async function syncSkills(options: SkillSyncOptions): Promise<SkillSyncRe
       // Retain user edits to the old dedicated Codex copy.
       if (await isLegacyCodexCopy(skillName, options)) {
         changedFiles += await retireManagedSkill(path.join(options.codexDir, skillName));
-      }
+=======
+    let skillFailed = false;
+    let skillError: unknown = null;
 
+    // Attempt every install root for every skill before throwing so one
+    // unwritable target does not stop updates from reaching healthy targets.
+    for (const installDir of options.installDirs) {
+      try {
+        changedFiles += await syncDirectoryFiles(bundleSkillDir, path.join(installDir, skillName));
+      } catch (error) {
+        if (!skillFailed) {
+          skillFailed = true;
+          skillError = error;
+        }
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
+      }
+    }
+
+    if (!skillFailed) {
+      try {
+        // Retain user edits to the old dedicated Codex copy.
+        if (await isLegacyCodexCopy(skillName, options)) {
+          changedFiles += await retireManagedSkill(path.join(options.codexDir, skillName));
+        }
+      } catch (error) {
+        skillFailed = true;
+        skillError = error;
+      }
+    }
+
+    if (skillFailed) {
+      if (options.onSkillError) {
+        options.onSkillError(skillName, skillError);
+      } else if (!hasError) {
+        hasError = true;
+        firstError = skillError;
+      }
+    } else {
       processedSkills++;
-    } catch (error) {
-      if (!options.onSkillError) throw error;
-      options.onSkillError(skillName, error);
     }
   }
+
+  if (hasError) throw firstError;
 
   return { changedFiles, processedSkills };
 }

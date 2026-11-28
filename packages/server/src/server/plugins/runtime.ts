@@ -11,11 +11,29 @@ import type { PluginWireBeforeRequests, PluginBeforeResults } from "./lifecycle/
 import type { SessionOpenWireRequest, AttachedAgentTool } from "./agent-tools.js";
 import type { UsageScope } from "@getpaseo/plugin/server/usage";
 import {
+  ProviderInspectionSchema,
+  ProviderUpdateCheckSchema,
+  ProviderUpdateResultSchema,
   ProviderStatusSchema,
+  type ProviderInspection,
+  type ProviderUpdateCheck,
+  type ProviderUpdateContext,
+  type ProviderUpdateReport,
+  type ProviderUpdateResult,
+  type ProviderInstallationContext,
+  type ProviderUpdateCheckContext,
   type ProviderStatus,
   type ProviderStatusRequest,
 } from "@getpaseo/plugin/server/provider";
-import type { PluginHookEvents, PluginHookAgent, AgentToolResult } from "@getpaseo/plugin/server";
+import type {
+  PluginHookEvents,
+  PluginHookAgent,
+  AgentToolResult,
+  PluginWorktreeCreateInput,
+  PluginWorktreeRemoveRequest,
+  PluginWorktreeRestoreRequest,
+} from "@getpaseo/plugin/server";
+import { z } from "zod";
 import { validateBeforeRequest, validateBeforeResult } from "./lifecycle/index.js";
 import { fork } from "node:child_process";
 import { stat, realpath } from "node:fs/promises";
@@ -42,15 +60,53 @@ import type {
   PluginProcessRequest,
   PluginProviderMetadata,
   PluginUsageSourceMetadata,
+  PluginWorktreeManagerCapabilities,
 } from "./plugin-process-protocol.js";
 import { PluginProcessMessageSchema } from "./plugin-process-protocol.js";
+import {
+  BufferedPluginSubscription,
+  type PluginRuntimeSubscription,
+} from "./runtime-subscription.js";
 import { PluginSessionSocket } from "./session-socket.js";
 import type { PluginHostCall } from "./plugin-host-calls.js";
 import { InternalPluginChild } from "./internal-child.js";
 import { evaluateBundle } from "./bundle-evaluator.js";
 
 const REQUEST_TIMEOUT_MS = 30_000;
+const WORKTREE_MANAGER_TIMEOUT_MS = 120_000;
 const TOOL_CALL_TIMEOUT_MS = 10 * 60_000;
+
+const worktreeCreateResultSchema = z
+  .object({ type: z.literal("created"), path: z.string().min(1) })
+  .strict()
+  .nullable();
+const worktreeRemoveResultSchema = z
+  .object({ type: z.literal("removed") })
+  .strict()
+  .nullable();
+const worktreeRestoreResultSchema = z
+  .object({ type: z.literal("restored"), path: z.string().min(1) })
+  .strict()
+  .nullable();
+
+export interface PluginWorktreeManagerRuntime {
+  hasWorktreeManager(options?: {
+    operation?: "create" | "remove" | "restore";
+    preferredPluginId?: string;
+  }): boolean;
+  createWorktree(
+    request: PluginWorktreeCreateInput,
+    options?: { signal?: AbortSignal },
+  ): Promise<{ pluginId: string; path: string } | null>;
+  removeWorktree(
+    request: PluginWorktreeRemoveRequest,
+    options?: { preferredPluginId?: string; signal?: AbortSignal },
+  ): Promise<{ pluginId: string } | null>;
+  restoreWorktree(
+    request: PluginWorktreeRestoreRequest,
+    options?: { preferredPluginId?: string; signal?: AbortSignal },
+  ): Promise<{ pluginId: string; path: string } | null>;
+}
 const MAX_LOG_ENTRIES = 500;
 const MAX_LOG_BYTES = 256 * 1024;
 const MAX_LOG_LINE_BYTES = 16 * 1024;
@@ -75,8 +131,22 @@ interface PluginChild {
 interface PendingInvocation {
   resolve: (output: unknown) => void;
   reject: (error: Error) => void;
+<<<<<<< HEAD
   timeout: ReturnType<typeof setTimeout>;
   management?: ManagementInvocation;
+=======
+  /** Absent for requests without a deadline. */
+  timeout?: ReturnType<typeof setTimeout>;
+  report?: (report: ProviderUpdateReport) => void;
+}
+
+interface PluginRequestOptions {
+  signal?: AbortSignal;
+  /** Receives `provider.installation.report` messages for the request. */
+  report?: (report: ProviderUpdateReport) => void;
+  /** Overrides the default per-message timeout (e.g. shared budget across serial worktree managers). */
+  timeoutMs?: number;
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
 }
 
 interface LoadedPlugin {
@@ -89,9 +159,15 @@ interface LoadedPlugin {
   /** Lets a client that already holds this bundle skip downloading it again. */
   clientBundleHash: string;
   methods: ReadonlySet<string>;
+<<<<<<< HEAD
   /** D13: the methods the plugin registered as reads. */
   readMethods: ReadonlySet<string>;
+=======
+  subscriptionMethods: ReadonlySet<string>;
+  subscriptions: Map<string, BufferedPluginSubscription>;
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
   hooks: string[];
+  worktreeManager: PluginWorktreeManagerCapabilities | null;
   providers: readonly PluginProviderMetadata[];
   usageSources: readonly PluginUsageSourceMetadata[];
   child: PluginChild | null;
@@ -259,8 +335,9 @@ function spawnPluginChild(): PluginChild {
   }) as PluginChild;
 }
 
+// Kill only. Node never emits "close" for a child whose IPC channel the parent disconnected, and
+// "close" is how the runtime learns that a plugin exited; the channel closes with the process.
 function terminatePluginChild(child: PluginChild): void {
-  if (child.connected) child.disconnect();
   if (!child.killed) child.kill();
 }
 
@@ -276,6 +353,30 @@ function jsonTransportValue<Value>(value: Value): Value {
   const encoded = JSON.stringify(value);
   if (encoded === undefined) throw new Error("Provider value is not JSON-serializable");
   return JSON.parse(encoded) as Value;
+}
+
+function isInstallationRequest(message: PluginProcessRequest): boolean {
+  return (
+    message.type === "provider.installation.inspect" ||
+    message.type === "provider.installation.check_updates" ||
+    message.type === "provider.installation.update"
+  );
+}
+
+function isWorktreeManagerRequest(message: PluginProcessRequest): boolean {
+  return (
+    message.type === "worktree.create" ||
+    message.type === "worktree.remove" ||
+    message.type === "worktree.restore"
+  );
+}
+
+function requestTimeoutMs(message: PluginProcessRequest): number | null {
+  if (message.type === "tool.call") return TOOL_CALL_TIMEOUT_MS;
+  if (isWorktreeManagerRequest(message)) return WORKTREE_MANAGER_TIMEOUT_MS;
+  // An updater runs as long as it needs; daemon shutdown aborts it.
+  if (message.type === "provider.installation.update") return null;
+  return REQUEST_TIMEOUT_MS;
 }
 
 function send(child: PluginChild, message: PluginProcessRequest): Promise<void> {
@@ -497,6 +598,69 @@ export class PluginRuntime {
     );
   }
 
+  async inspectProviderInstallation(
+    pluginId: string,
+    providerId: string,
+    context: ProviderInstallationContext,
+  ): Promise<ProviderInspection> {
+    const loaded = this.plugins.get(pluginId);
+    if (!loaded) throw new Error(`Plugin is not available: ${pluginId}`);
+    return ProviderInspectionSchema.parse(
+      await this.request(
+        loaded,
+        {
+          type: "provider.installation.inspect",
+          requestId: randomUUID(),
+          providerId,
+          request: { launch: context.launch },
+        },
+        { signal: context.signal },
+      ),
+    );
+  }
+
+  async checkProviderUpdates(
+    pluginId: string,
+    providerId: string,
+    context: ProviderUpdateCheckContext,
+  ): Promise<ProviderUpdateCheck> {
+    const loaded = this.plugins.get(pluginId);
+    if (!loaded) throw new Error(`Plugin is not available: ${pluginId}`);
+    return ProviderUpdateCheckSchema.parse(
+      await this.request(
+        loaded,
+        {
+          type: "provider.installation.check_updates",
+          requestId: randomUUID(),
+          providerId,
+          request: { launch: context.launch, installedVersion: context.installedVersion },
+        },
+        { signal: context.signal },
+      ),
+    );
+  }
+
+  async updateProvider(
+    pluginId: string,
+    providerId: string,
+    context: ProviderUpdateContext,
+  ): Promise<ProviderUpdateResult> {
+    const loaded = this.plugins.get(pluginId);
+    if (!loaded) throw new Error(`Plugin is not available: ${pluginId}`);
+    return ProviderUpdateResultSchema.parse(
+      await this.request(
+        loaded,
+        {
+          type: "provider.installation.update",
+          requestId: randomUUID(),
+          providerId,
+          request: { launch: context.launch },
+        },
+        { signal: context.signal, report: (report) => context.report(report) },
+      ),
+    );
+  }
+
   async connectProvider(
     pluginId: string,
     providerId: string,
@@ -624,6 +788,40 @@ export class PluginRuntime {
     }
   }
 
+  /** Starts one subscriber's handler in the plugin process. */
+  startSubscription(pluginId: string, method: string, input: unknown): PluginRuntimeSubscription {
+    const loaded = this.plugins.get(pluginId);
+    if (!loaded) throw new Error(`Plugin is not available: ${pluginId}`);
+    if (!loaded.subscriptionMethods.has(method))
+      throw new Error(`Plugin ${pluginId} does not contribute subscription ${method}`);
+    const subscriptionId = randomUUID();
+    const subscription = new BufferedPluginSubscription();
+    loaded.subscriptions.set(subscriptionId, subscription);
+    const ready = this.request(loaded, {
+      type: "subscribe",
+      requestId: randomUUID(),
+      subscriptionId,
+      method,
+      input,
+    }).then(
+      () => undefined,
+      (error: unknown) => {
+        loaded.subscriptions.delete(subscriptionId);
+        throw error;
+      },
+    );
+    return {
+      ready,
+      attach: (sink) => subscription.attach(sink),
+      release: () => {
+        subscription.released();
+        if (!loaded.subscriptions.delete(subscriptionId)) return;
+        if (loaded.child?.connected)
+          void send(loaded.child, { type: "unsubscribe", subscriptionId }).catch(() => undefined);
+      },
+    };
+  }
+
   emit<Name extends keyof PluginHookEvents>(name: Name, event: PluginHookEvents[Name]): void {
     for (const loaded of this.plugins.values()) {
       if (!loaded.hooks.includes(name)) {
@@ -633,7 +831,7 @@ export class PluginRuntime {
         type: "hook",
         requestId: randomUUID(),
         name,
-        input: event,
+        input: wireEvent(name, event),
       })
         .then(() => undefined)
         .catch((error) => {
@@ -725,6 +923,109 @@ export class PluginRuntime {
     return request;
   }
 
+  hasWorktreeManager(options?: {
+    operation?: "create" | "remove" | "restore";
+    preferredPluginId?: string;
+  }): boolean {
+    const operation = options?.operation ?? "create";
+    const supports = (manager: PluginWorktreeManagerCapabilities | null): boolean => {
+      if (!manager) return false;
+      if (operation === "remove") return manager.hasRemove;
+      if (operation === "restore") return manager.hasRestore;
+      return true;
+    };
+    if (options?.preferredPluginId) {
+      return supports(this.plugins.get(options.preferredPluginId)?.worktreeManager ?? null);
+    }
+    for (const loaded of this.plugins.values()) {
+      if (supports(loaded.worktreeManager)) return true;
+    }
+    return false;
+  }
+
+  async createWorktree(
+    request: PluginWorktreeCreateInput,
+    options?: { signal?: AbortSignal },
+  ): Promise<{ pluginId: string; path: string } | null> {
+    const plugins = [...this.plugins.values()]
+      .filter((plugin) => plugin.worktreeManager !== null)
+      .sort((left, right) => left.id.localeCompare(right.id));
+    // All create callbacks share one timeout budget.
+    const deadline = Date.now() + WORKTREE_MANAGER_TIMEOUT_MS;
+    for (const loaded of plugins) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        throw new Error("Worktree creation manager budget expired");
+      }
+      try {
+        const raw = await this.request(
+          loaded,
+          { type: "worktree.create", requestId: randomUUID(), request },
+          { signal: options?.signal, timeoutMs: remainingMs },
+        );
+        const parsed = worktreeCreateResultSchema.parse(raw ?? null);
+        if (parsed !== null) {
+          return { pluginId: loaded.id, path: parsed.path };
+        }
+      } catch (error) {
+        throw new Error(`Plugin ${loaded.id} worktree.create failed: ${describeError(error)}`, {
+          cause: error,
+        });
+      }
+    }
+    return null;
+  }
+
+  async removeWorktree(
+    request: PluginWorktreeRemoveRequest,
+    options?: { preferredPluginId?: string; signal?: AbortSignal },
+  ): Promise<{ pluginId: string } | null> {
+    if (!options?.preferredPluginId) return null;
+    const loaded = this.plugins.get(options.preferredPluginId);
+    if (!loaded?.worktreeManager?.hasRemove) return null;
+    try {
+      const raw = await this.request(
+        loaded,
+        { type: "worktree.remove", requestId: randomUUID(), request },
+        { signal: options.signal },
+      );
+      const parsed = worktreeRemoveResultSchema.parse(raw ?? null);
+      if (parsed !== null) {
+        return { pluginId: loaded.id };
+      }
+      return null;
+    } catch (error) {
+      throw new Error(`Plugin ${loaded.id} worktree.remove failed: ${describeError(error)}`, {
+        cause: error,
+      });
+    }
+  }
+
+  async restoreWorktree(
+    request: PluginWorktreeRestoreRequest,
+    options?: { preferredPluginId?: string; signal?: AbortSignal },
+  ): Promise<{ pluginId: string; path: string } | null> {
+    if (!options?.preferredPluginId) return null;
+    const loaded = this.plugins.get(options.preferredPluginId);
+    if (!loaded?.worktreeManager?.hasRestore) return null;
+    try {
+      const raw = await this.request(
+        loaded,
+        { type: "worktree.restore", requestId: randomUUID(), request },
+        { signal: options.signal },
+      );
+      const parsed = worktreeRestoreResultSchema.parse(raw ?? null);
+      if (parsed !== null) {
+        return { pluginId: loaded.id, path: parsed.path };
+      }
+      return null;
+    } catch (error) {
+      throw new Error(`Plugin ${loaded.id} worktree.restore failed: ${describeError(error)}`, {
+        cause: error,
+      });
+    }
+  }
+
   async getProviderCatalogCacheKey(
     pluginId: string,
     providerId: string,
@@ -801,8 +1102,12 @@ export class PluginRuntime {
       return (await this.request(
         loaded,
         { type: "tool.call", requestId, agent, name, input },
+<<<<<<< HEAD
         undefined,
         signal,
+=======
+        { signal },
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
       )) as AgentToolResult;
     } catch (error) {
       if (signal?.aborted) throw error;
@@ -813,9 +1118,14 @@ export class PluginRuntime {
   private request(
     loaded: LoadedPlugin,
     message: Extract<PluginProcessRequest, { requestId: string }>,
+<<<<<<< HEAD
     management?: ManagementInvocation,
     signal?: AbortSignal,
+=======
+    options: PluginRequestOptions = {},
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
   ): Promise<unknown> {
+    const { signal, report } = options;
     const child = loaded.child;
     const pluginId = loaded.id;
     if (!child) throw new Error(`Plugin ${pluginId} has no server entry`);
@@ -830,9 +1140,14 @@ export class PluginRuntime {
         loaded.pending.delete(requestId);
         if (message.type === "tool.call")
           void send(child, { type: "tool.cancel", requestId }).catch(() => {});
+        if (isWorktreeManagerRequest(message))
+          void send(child, { type: "worktree.cancel", requestId }).catch(() => {});
+        if (isInstallationRequest(message))
+          void send(child, { type: "provider.installation.cancel", requestId }).catch(() => {});
         signal?.removeEventListener("abort", cancel);
-        reject(signal?.reason ?? new Error("Tool call canceled"));
+        reject(signal?.reason ?? new Error("Plugin request canceled"));
       };
+<<<<<<< HEAD
       const timeout = setTimeout(() => {
         management?.close();
         loaded.pending.delete(requestId);
@@ -855,6 +1170,34 @@ export class PluginRuntime {
           ),
         );
       }, timeoutMs);
+=======
+      const timeoutMs = options.timeoutMs ?? requestTimeoutMs(message);
+      const timeout =
+        timeoutMs === null
+          ? undefined
+          : setTimeout(() => {
+              loaded.pending.delete(requestId);
+              signal?.removeEventListener("abort", cancel);
+              if (message.type === "tool.call")
+                void send(child, { type: "tool.cancel", requestId }).catch(() => {});
+              if (message.type === "hook") {
+                void send(child, { type: "hook.cancel", requestId }).catch(() => {});
+              }
+              if (isWorktreeManagerRequest(message)) {
+                void send(child, { type: "worktree.cancel", requestId }).catch(() => {});
+              }
+              // The handler may still start after the daemon gave up on it.
+              if (message.type === "subscribe") {
+                const { subscriptionId } = message;
+                void send(child, { type: "unsubscribe", subscriptionId }).catch(() => {});
+              }
+              if (isInstallationRequest(message))
+                void send(child, { type: "provider.installation.cancel", requestId }).catch(
+                  () => {},
+                );
+              reject(new Error(`Plugin RPC timed out: ${pluginId}.${message.type}`));
+            }, timeoutMs);
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
       signal?.addEventListener("abort", cancel, { once: true });
       loaded.pending.set(requestId, {
         resolve: (value) => {
@@ -866,7 +1209,11 @@ export class PluginRuntime {
           reject(error);
         },
         timeout,
+<<<<<<< HEAD
         management,
+=======
+        report,
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
       });
       void send(child, message).catch((error) => {
         clearTimeout(timeout);
@@ -940,8 +1287,14 @@ export class PluginRuntime {
         clientBundleHash: hashClientBundle(clientBundle),
         requirements: manifest.requirements,
         methods: new Set(),
+<<<<<<< HEAD
         readMethods: new Set(),
+=======
+        subscriptionMethods: new Set(),
+        subscriptions: new Map(),
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
         hooks: [],
+        worktreeManager: null,
         providers: [],
         usageSources: [],
         child: null,
@@ -1077,8 +1430,14 @@ export class PluginRuntime {
       clientBundleHash: hashClientBundle(clientBundle),
       requirements,
       methods: new Set(ready.methods),
+<<<<<<< HEAD
       readMethods: new Set((ready.readMethods ?? []).filter((m) => ready.methods.includes(m))),
+=======
+      subscriptionMethods: new Set(ready.subscriptions ?? []),
+      subscriptions: new Map(),
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
       hooks: ready.hooks ?? [],
+      worktreeManager: ready.worktreeManager ?? null,
       providers: ready.providers ?? [],
       usageSources: ready.usageSources ?? [],
       child,
@@ -1168,10 +1527,15 @@ export class PluginRuntime {
       }
       return;
     }
+    if (message.type === "worktree_manager.changed") {
+      loaded.worktreeManager = message.worktreeManager;
+      return;
+    }
     if (message.type === "settings.changed") {
       this.dependencies.onSettingsChanged?.(loaded.id, message.settingsId);
       return;
     }
+<<<<<<< HEAD
     if (message.type === "management.invoke") {
       const pending = [...loaded.pending.values()].find(
         (entry) => entry.management?.id === message.invocationId,
@@ -1238,10 +1602,24 @@ export class PluginRuntime {
     }
     if (message.type === "host.call") {
       this.handleHostCall(loaded, message);
+=======
+    if (message.type === "provider.installation.report") {
+      loaded.pending.get(message.requestId)?.report?.(message.report);
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
       return;
     }
     if (message.type.startsWith("provider.")) {
       this.handleProviderMessage(loaded, message);
+      return;
+    }
+    if (message.type === "subscription.event") {
+      loaded.subscriptions.get(message.subscriptionId)?.event(message.event);
+      return;
+    }
+    if (message.type === "subscription.closed") {
+      const subscription = loaded.subscriptions.get(message.subscriptionId);
+      loaded.subscriptions.delete(message.subscriptionId);
+      subscription?.closed(message.error);
       return;
     }
     if (message.type !== "result" && message.type !== "error") return;
@@ -1629,6 +2007,7 @@ export class PluginRuntime {
     this.appendLog(loaded.id, "stdout", "[paseo] Plugin stopped");
   }
 
+  /** Rejects in-flight requests and closes open subscriptions with the reason. */
   private rejectPending(loaded: LoadedPlugin, message: string): void {
     for (const invocation of loaded.pending.values()) {
       invocation.management?.close();
@@ -1636,6 +2015,9 @@ export class PluginRuntime {
       invocation.reject(new Error(message));
     }
     loaded.pending.clear();
+    const subscriptions = [...loaded.subscriptions.values()];
+    loaded.subscriptions.clear();
+    for (const subscription of subscriptions) subscription.closed(message);
   }
 
   private appendLog(pluginId: string, stream: PluginLogEntry["stream"], message: string): void {
@@ -1682,4 +2064,12 @@ function readConnectionId(value: unknown): string | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const connectionId = Reflect.get(value, "connectionId");
   return typeof connectionId === "string" ? connectionId : null;
+}
+
+// COMPAT(pluginTurnTimeline): added in v0.16.0-beta.3; plugins built before the field left the SDK type read `timeline`; remove after 2027-05-31
+function wireEvent<Name extends keyof PluginHookEvents>(
+  name: Name,
+  event: PluginHookEvents[Name],
+): PluginHookEvents[Name] {
+  return name === "agent.turn.after" ? { ...event, timeline: [] } : event;
 }

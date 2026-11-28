@@ -1,6 +1,10 @@
 {
   "name": "paseo",
+<<<<<<< HEAD
   "version": "0.15.0",
+=======
+  "version": "0.17.3",
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
   "private": true,
   "description": "Paseo: voice-controlled development environment for local AI coding agents",
   "keywords": [
@@ -111,11 +115,20 @@
     "version:all:beta:next": "node scripts/set-release-version.mjs --mode beta-next",
     "version:all:promote": "node scripts/set-release-version.mjs --mode promote",
     "release:check": "npm run release:prepare && npm run typecheck --workspace=@getpaseo/highlight && npm run typecheck --workspace=@getpaseo/relay && npm run typecheck --workspace=@getpaseo/protocol && npm run build:client:clean && npm run typecheck --workspace=@getpaseo/client && npm run typecheck --workspace=@getpaseo/plugin && npm run build:server:clean && npm run typecheck --workspace=@getpaseo/server && npm run typecheck --workspace=@getpaseo/cli && npm pack --dry-run --workspace=@getpaseo/highlight && npm pack --dry-run --workspace=@getpaseo/relay && npm pack --dry-run --workspace=@getpaseo/protocol && npm pack --dry-run --workspace=@getpaseo/client && npm pack --dry-run --workspace=@getpaseo/plugin && npm pack --dry-run --workspace=@getpaseo/server && npm pack --dry-run --workspace=@getpaseo/cli",
-    "release:publish:dry-run": "npm publish --dry-run --workspace=@getpaseo/highlight --access public && npm publish --dry-run --workspace=@getpaseo/relay --access public && npm publish --dry-run --workspace=@getpaseo/protocol --access public && npm publish --dry-run --workspace=@getpaseo/client --access public && npm publish --dry-run --workspace=@getpaseo/plugin --access public && npm publish --dry-run --workspace=@getpaseo/server --access public && npm publish --dry-run --workspace=@getpaseo/cli --access public",
-    "release:publish:beta:dry-run": "npm publish --dry-run --workspace=@getpaseo/highlight --access public --tag beta && npm publish --dry-run --workspace=@getpaseo/relay --access public --tag beta && npm publish --dry-run --workspace=@getpaseo/protocol --access public --tag beta && npm publish --dry-run --workspace=@getpaseo/client --access public --tag beta && npm publish --dry-run --workspace=@getpaseo/plugin --access public --tag beta && npm publish --dry-run --workspace=@getpaseo/server --access public --tag beta && npm publish --dry-run --workspace=@getpaseo/cli --access public --tag beta",
-    "release:publish": "npm publish --workspace=@getpaseo/highlight --access public && npm publish --workspace=@getpaseo/relay --access public && npm publish --workspace=@getpaseo/protocol --access public && npm publish --workspace=@getpaseo/client --access public && npm publish --workspace=@getpaseo/plugin --access public && npm publish --workspace=@getpaseo/server --access public && npm publish --workspace=@getpaseo/cli --access public",
-    "release:publish:beta": "npm publish --workspace=@getpaseo/highlight --access public --tag beta && npm publish --workspace=@getpaseo/relay --access public --tag beta && npm publish --workspace=@getpaseo/protocol --access public --tag beta && npm publish --workspace=@getpaseo/client --access public --tag beta && npm publish --workspace=@getpaseo/plugin --access public --tag beta && npm publish --workspace=@getpaseo/server --access public --tag beta && npm publish --workspace=@getpaseo/cli --access public --tag beta",
+    "release:prep:patch": "npm run release:check && npm run version:all:patch",
+    "release:prep:minor": "npm run release:check && npm run version:all:minor",
+    "release:prep:major": "npm run release:check && npm run version:all:major",
+    "release:prep:beta:patch": "npm run release:check && npm run version:all:beta:patch",
+    "release:prep:beta:minor": "npm run release:check && npm run version:all:beta:minor",
+    "release:prep:beta:major": "npm run release:check && npm run version:all:beta:major",
+    "release:prep:beta:next": "npm run release:check && npm run version:all:beta:next",
+    "release:prep:promote": "npm run release:check && npm run version:all:promote",
+    "release:publish:dry-run": "node scripts/publish-release-packages.mjs --dry-run",
+    "release:publish:beta:dry-run": "node scripts/publish-release-packages.mjs --beta --dry-run",
+    "release:publish": "node scripts/publish-release-packages.mjs",
+    "release:publish:beta": "node scripts/publish-release-packages.mjs --beta",
     "release:push": "node scripts/push-current-release-tag.mjs",
+<<<<<<< HEAD
     "release:beta:patch": "npm run release:check && npm run version:all:beta:patch && npm run release:publish:beta && npm run release:push",
     "release:beta:minor": "npm run release:check && npm run version:all:beta:minor && npm run release:publish:beta && npm run release:push",
     "release:beta:major": "npm run release:check && npm run version:all:beta:major && npm run release:publish:beta && npm run release:push",
@@ -127,6 +140,11 @@
     "test:clean-test-env": "node --test scripts/clean-test-env.test.mjs",
     "test:bundled-plugins": "node --test scripts/assert-bundled-plugins.test.mjs",
     "test:client-reproducibility": "node --test scripts/client-reproducibility.test.mjs"
+=======
+    "release:ship": "node scripts/push-current-release-tag.mjs --check && npm run release:publish && npm run release:push",
+    "release:ship:beta": "node scripts/push-current-release-tag.mjs --check && npm run release:publish:beta && npm run release:push",
+    "release:reconcile": "node scripts/reconcile-release.mjs"
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
   },
   "devDependencies": {
     "@types/ws": "^8.5.14",
@@ -135,6 +153,7 @@
     "concurrently": "^9.2.1",
     "cross-env": "^10.1.0",
     "electron": "44.2.0",
+    "electron-builder": "26.18.0",
     "expo-module-scripts": "^5.0.8",
     "get-port-cli": "^3.0.0",
     "js-yaml": "4.3.2",
@@ -152,6 +171,7 @@
   "overrides": {
     "@codemirror/language": "6.12.4",
     "@codemirror/view": "6.43.6",
+<<<<<<< HEAD
     "@hono/node-server": "1.19.15",
     "@vitest/browser": "4.1.11",
     "@vitest/browser-playwright": "4.1.11",
@@ -163,6 +183,11 @@
     "brace-expansion@^5": "5.0.12",
     "dompurify": "3.4.13",
     "electron-updater": "6.8.9",
+=======
+    "@electron/get@^3.0.0": {
+      "semver@^6": "6.3.1"
+    },
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
     "expo": "~57.0.30",
     "expo-router": "~57.0.28",
     "fast-uri@^3": "3.1.6",
@@ -171,17 +196,22 @@
     "js-yaml@^3": "3.15.2",
     "js-yaml@^4": "4.3.2",
     "lightningcss": "1.30.1",
+<<<<<<< HEAD
     "markdown-it": "15.0.2",
     "mermaid": {
       "uuid": "14.0.1"
     },
     "qs": "6.16.0",
+=======
+    "pkijs": "3.4.2",
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.86.3",
     "react-native-gesture-handler": "~2.32.0",
     "react-native-reanimated": "4.5.5",
     "react-native-worklets": "0.10.4",
+<<<<<<< HEAD
     "shell-quote": "1.10.0",
     "tar": "7.5.22",
     "uuid@^7": "11.1.1",
@@ -193,6 +223,10 @@
     "ws@^8": "8.21.0",
     "xcode": {
       "uuid": "11.1.1"
+=======
+    "tiny-async-pool": {
+      "semver@^5": "5.7.2"
+>>>>>>> refs/remotes/upstream/tags/v0.17.3
     }
   }
 }
